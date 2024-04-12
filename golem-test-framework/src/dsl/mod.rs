@@ -19,18 +19,19 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::ErrorsBody;
 use golem_api_grpc::proto::golem::worker::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::{
-    get_invocation_key_response, get_worker_metadata_response, interrupt_worker_response,
-    invoke_and_await_response, invoke_response, launch_new_worker_response, log_event,
-    resume_worker_response, worker_execution_error, CallingConvention, ConnectWorkerRequest,
-    DeleteWorkerRequest, GetInvocationKeyRequest, GetWorkerMetadataRequest, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeParameters, InvokeRequest,
-    LaunchNewWorkerRequest, LogEvent, ResumeWorkerRequest, StdErrLog, StdOutLog, WorkerError,
-    WorkerExecutionError,
+    get_invocation_key_response, get_worker_metadata_response, get_workers_metadata_response,
+    interrupt_worker_response, invoke_and_await_response, invoke_response,
+    launch_new_worker_response, log_event, resume_worker_response, worker_execution_error,
+    CallingConvention, ConnectWorkerRequest, DeleteWorkerRequest, GetInvocationKeyRequest,
+    GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeParameters,
+    InvokeRequest, LaunchNewWorkerRequest, LogEvent, ResumeWorkerRequest, StdErrLog, StdOutLog,
+    WorkerError, WorkerExecutionError,
 };
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    InvocationKey, TemplateId, Timestamp, VersionedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatusRecord,
+    InvocationKey, TemplateId, Timestamp, VersionedWorkerId, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatusRecord,
 };
 use golem_wasm_ast::analysis::AnalysisContext;
 use golem_wasm_ast::component::Component;
@@ -69,6 +70,14 @@ pub trait TestDsl {
         env: HashMap<String, String>,
     ) -> Result<WorkerId, Error>;
     async fn get_worker_metadata(&self, worker_id: &WorkerId) -> Option<WorkerMetadata>;
+    async fn get_workers_metadata(
+        &self,
+        template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: u64,
+        count: u64,
+        precise: bool,
+    ) -> (Option<u64>, Vec<WorkerMetadata>);
     async fn delete_worker(&self, worker_id: &WorkerId);
     async fn get_invocation_key(&self, worker_id: &WorkerId) -> InvocationKey;
     async fn invoke(
@@ -246,6 +255,37 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             })) => None,
             Some(get_worker_metadata_response::Result::Error(error)) => {
                 panic!("Failed to get worker metadata: {error:?}")
+            }
+        }
+    }
+
+    async fn get_workers_metadata(
+        &self,
+        template_id: &TemplateId,
+        filter: Option<WorkerFilter>,
+        cursor: u64,
+        count: u64,
+        precise: bool,
+    ) -> (Option<u64>, Vec<WorkerMetadata>) {
+        let template_id: golem_api_grpc::proto::golem::template::TemplateId =
+            template_id.clone().into();
+        let response = self
+            .worker_service()
+            .get_workers_metadata(GetWorkersMetadataRequest {
+                template_id: Some(template_id),
+                filter: filter.map(|f| f.into()),
+                cursor,
+                count,
+                precise,
+            })
+            .await;
+        match response.result {
+            None => panic!("No response from get_workers_metadata"),
+            Some(get_workers_metadata_response::Result::Success(
+                GetWorkersMetadataSuccessResponse { workers, cursor },
+            )) => (cursor, workers.iter().map(to_worker_metadata).collect()),
+            Some(get_workers_metadata_response::Result::Error(error)) => {
+                panic!("Failed to get workers metadata: {error:?}")
             }
         }
     }
