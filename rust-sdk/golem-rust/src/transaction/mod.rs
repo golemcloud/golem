@@ -39,13 +39,8 @@ pub trait Operation: Clone {
 }
 
 /// Constructs an `Operation` from two closures: one for executing the operation,
-/// and one for rolling it back. The rollback operation always sees the input of the operation,
-/// and in most cases also the operation's result, except if the rollback was initiated by
-/// a panic or an external executor failure. This can only happen when using
-/// `infallible_transaction_with_strong_rollback_guarantees`.
-///
-/// Use `operation_with_result` if you only want to handle the case when the operation's
-/// result is available.
+/// and one for rolling it back. The rollback operation always sees the input and
+/// the output of the operation.
 ///
 /// This operation can run the compensation in both fallible and infallible transactions.
 pub fn operation<In: Clone, Out: Clone, Err: Clone>(
@@ -121,7 +116,7 @@ impl<Err: Display> Display for TransactionFailure<Err> {
 }
 
 /// Fallible transaction execution. If any operation fails, all the already executed
-/// operation's compensation actions are executed in reverse order and the transaction
+/// successful operation's compensation actions are executed in reverse order and the transaction
 /// returns with a failure.
 pub fn fallible_transaction<Out, Err: Clone + 'static>(
     f: impl FnOnce(&mut FallibleTransaction<Err>) -> Result<Out, Err>,
@@ -134,7 +129,7 @@ pub fn fallible_transaction<Out, Err: Clone + 'static>(
 }
 
 /// Retry the transaction in case of failure. If any operation returns with a failure, all
-/// the already executed operation's compensation actions are executed in reverse order
+/// the already executed successful operation's compensation actions are executed in reverse order
 /// and the transaction gets retried, using Golem's active retry policy.
 pub fn infallible_transaction<Out>(f: impl FnOnce(&mut InfallibleTransaction) -> Out) -> Out {
     let oplog_index = get_oplog_index();
