@@ -65,53 +65,9 @@ where
         }
     }
 }
-//
-// impl<F, In, Out, Err> CompensationFunction<(In,), (Out,), (Err,)> for F
-// where
-//     F: FnOnce(Option<Result<Out, Err>>, In) -> Result<(), Err>,
-// {
-//     fn call(
-//         self,
-//         input: impl TupleOrUnit<(In,)>,
-//         result: Option<Result<impl TupleOrUnit<(Out,)>, (Err,)>>,
-//     ) -> Result<(), (Err,)> {
-//         let input = input.into();
-//         match result {
-//             Some(Ok(out)) => {
-//                 let (out,) = out.into();
-//                 self(Some(Ok(out)), input.0).map_err(|err| (err,))
-//             }
-//             Some(Err((err,))) => self(Some(Err(err)), input.0).map_err(|err| (err,)),
-//             None => self(None, input.0).map_err(|err| (err,)),
-//         }
-//     }
-// }
-//
-// impl<F, In1, In2, Out, Err> CompensationFunction<(In1, In2), (Out,), (Err,)> for F
-// where
-//     F: FnOnce(Option<Result<Out, Err>>, In1, In2) -> Result<(), Err>,
-// {
-//     fn call(
-//         self,
-//         input: impl TupleOrUnit<(In1, In2)>,
-//         result: Option<Result<impl TupleOrUnit<(Out,)>, (Err,)>>,
-//     ) -> Result<(), (Err,)> {
-//         let input = input.into();
-//         match result {
-//             Some(Ok(out)) => {
-//                 let (out,) = out.into();
-//                 self(Some(Ok(out)), input.0, input.1).map_err(|err| (err,))
-//             }
-//             Some(Err((err,))) => self(Some(Err(err)), input.0, input.1).map_err(|err| (err,)),
-//             None => self(None, input.0, input.1).map_err(|err| (err,)),
-//         }
-//     }
-// }
 
 impl<T> TupleOrUnit<()> for T {
-    fn into(self) -> () {
-        ()
-    }
+    fn into(self) {}
 }
 
 macro_rules! tuple_or_unit {
