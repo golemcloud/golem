@@ -39,7 +39,6 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
     }
 
     let ast: ItemFn = syn::parse(item).unwrap();
-    let body = ast.block.clone();
     let mut fnsig = ast.sig.clone();
 
     let (succ, err) = match fnsig.output {
@@ -109,10 +108,8 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
         _ => panic!("Expected function to have a return type of Result<_, _>"),
     };
 
-    let traitname = Ident::new(
-        &fnsig.ident.to_string().to_pascal_case(),
-        fnsig.ident.span(),
-    );
+    let fnname = fnsig.ident.clone();
+    let traitname = Ident::new(&fnname.to_string().to_pascal_case(), fnsig.ident.span());
 
     let result = quote! {
         #ast
@@ -126,7 +123,7 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
                 self.execute(
                     golem_rust::#operation(
                         |#input_pattern| {
-                            #body
+                            #fnname(#(#input_args), *)
                         },
                         |#compensation_pattern| {
                             #compensate(#(#compensation_args), *)
