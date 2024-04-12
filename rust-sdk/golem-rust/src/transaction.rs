@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::fmt::{Debug, Display, Formatter};
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::bindings::golem::api::host::{get_oplog_index, set_oplog_index, OplogIndex};
@@ -28,17 +27,50 @@ pub trait Operation: Clone {
     type Out;
     type Err;
 
+    /// Executes the operation which may fail with a domain error
     fn execute(&self, input: Self::In) -> Result<Self::Out, Self::Err>;
+
+    /// Executes a compensation action for the operation. This version has no access to the result
+    /// of the `execute` function, so it can be called in case of compensating advanced, non-domain level errors.
+    ///
+    /// If the operation is only used in `FallibleTransaction`s, this method can be no-op and the actual, result
+    /// dependent compensation can be implemented in `compensate_with_result`.
     fn compensate(&self, input: Self::In) -> Result<(), Self::Err>;
+
+    /// Executes a compensation action for the operation which ended up with the given result.
+    fn compensate_with_result(
+        &self,
+        input: Self::In,
+        _result: Result<Self::Out, Self::Err>,
+    ) -> Result<(), Self::Err> {
+        self.compensate(input)
+    }
 }
 
 /// Constructs an `Operation` from two closures: one for executing the operation,
-/// and one for rolling it back
+/// and one for rolling it back. The rollback operation only sees the input of the operation,
+/// not the operation's result.
+///
+/// This operation can run the compensation in both fallible and infallible transactions.
 pub fn operation<In: Clone, Out, Err>(
     execute_fn: impl Fn(In) -> Result<Out, Err> + 'static,
     compensate_fn: impl Fn(In) -> Result<(), Err> + 'static,
 ) -> impl Operation<In = In, Out = Out, Err = Err> {
     FnOperation {
+        execute_fn: Rc::new(execute_fn),
+        compensate_fn: Rc::new(compensate_fn),
+    }
+}
+
+/// Constructs an `Operation` from two closures: one for executing the operation,
+/// and one for rolling it back where the rollback operation can see the operation's result.
+///
+/// This operation can not be used with `infallible_transaction_with_strong_rollback_guarantees`.
+pub fn operation_with_result<In: Clone, Out, Err>(
+    execute_fn: impl Fn(In) -> Result<Out, Err> + 'static,
+    compensate_fn: impl Fn(In, Result<Out, Err>) -> Result<(), Err> + 'static,
+) -> impl Operation<In = In, Out = Out, Err = Err> {
+    FnOperationWithResult {
         execute_fn: Rc::new(execute_fn),
         compensate_fn: Rc::new(compensate_fn),
     }
@@ -72,20 +104,37 @@ impl<In: Clone, Out, Err> Operation for FnOperation<In, Out, Err> {
     }
 }
 
-/// Defines what guarantees the transaction execution provides in case of failures.
-pub enum TransactionMode {
-    /// Normal transaction execution. If any operation fails, all the already executed
-    /// operation's compensation actions are executed in reverse order and the transaction
-    /// returns with a failure.
-    Normal,
-    /// Retry the transaction in case of failure. If any operation returns with a failure, all
-    /// the already executed operation's compensation actions are executed in reverse order
-    /// and the transaction gets retried, using Golem's active retry policy.
-    RetryOnFailure,
-    /// Same as `RetryOnFailure`, but with strong rollback guarantees. The compensation actions
-    /// are guaranteed to be always executed before the transaction gets retried, even if it
-    /// fails due to a panic or an external executor failure.
-    RetryWithStrongRollbackGuarantees, // Not implemented yet
+#[allow(clippy::type_complexity)]
+struct FnOperationWithResult<In, Out, Err> {
+    execute_fn: Rc<dyn Fn(In) -> Result<Out, Err>>,
+    compensate_fn: Rc<dyn Fn(In, Result<Out, Err>) -> Result<(), Err>>,
+}
+
+impl<In, Out, Err> Clone for FnOperationWithResult<In, Out, Err> {
+    fn clone(&self) -> Self {
+        Self {
+            execute_fn: self.execute_fn.clone(),
+            compensate_fn: self.compensate_fn.clone(),
+        }
+    }
+}
+
+impl<In: Clone, Out, Err> Operation for FnOperationWithResult<In, Out, Err> {
+    type In = In;
+    type Out = Out;
+    type Err = Err;
+
+    fn execute(&self, input: In) -> Result<Out, Err> {
+        (self.execute_fn)(input)
+    }
+
+    fn compensate(&self, _input: Self::In) -> Result<(), Self::Err> {
+        Ok(())
+    }
+
+    fn compensate_with_result(&self, input: In, result: Result<Out, Err>) -> Result<(), Err> {
+        (self.compensate_fn)(input, result)
+    }
 }
 
 /// The result of a transaction execution.
@@ -121,37 +170,37 @@ impl<Err: Display> Display for TransactionFailure<Err> {
     }
 }
 
-/// Normal transaction execution. If any operation fails, all the already executed
+/// Fallible transaction execution. If any operation fails, all the already executed
 /// operation's compensation actions are executed in reverse order and the transaction
 /// returns with a failure.
-pub fn normal_transaction<Out, Err>(
-    f: impl FnOnce(&mut NormalTransaction<Err>) -> TransactionResult<Out, Err>,
+pub fn fallible_transaction<Out, Err: Clone + 'static>(
+    f: impl FnOnce(&mut FallibleTransaction<Err>) -> TransactionResult<Out, Err>,
 ) -> TransactionResult<Out, Err> {
-    let mut transaction = NormalTransaction::new();
+    let mut transaction = FallibleTransaction::new();
     f(&mut transaction)
 }
 
 /// Retry the transaction in case of failure. If any operation returns with a failure, all
 /// the already executed operation's compensation actions are executed in reverse order
 /// and the transaction gets retried, using Golem's active retry policy.
-pub fn retried_transaction<Out>(f: impl FnOnce(&mut RetriedTransaction) -> Out) -> Out {
+pub fn infallible_transaction<Out>(f: impl FnOnce(&mut InfallibleTransaction) -> Out) -> Out {
     let oplog_index = get_oplog_index();
     let _atomic_region = mark_atomic_operation();
-    let mut transaction = RetriedTransaction::new(oplog_index);
+    let mut transaction = InfallibleTransaction::new(oplog_index);
     f(&mut transaction)
 }
 
-/// Same as `retried_transaction`, but with strong rollback guarantees. The compensation actions
+/// Same as `infallible_transaction`, but with strong rollback guarantees. The compensation actions
 /// are guaranteed to be always executed before the transaction gets retried, even if it
 /// fails due to a panic or an external executor failure.
-pub fn retried_transaction_with_strong_rollback_guarantees<Out>(
-    _f: impl FnOnce(&mut RetriedTransaction) -> Out,
+pub fn infallible_transaction_with_strong_rollback_guarantees<Out>(
+    _f: impl FnOnce(&mut InfallibleTransaction) -> Out,
 ) -> Out {
     unimplemented!()
 }
 
 /// A generic interface for defining transactions, where the transaction mode is
-/// determined by the function's parameter (it can be `NormalTransaction` or `RetriedTransaction`).
+/// determined by the function's parameter (it can be `FallibleTransaction` or `InfallibleTransaction`).
 ///
 /// This makes switching between different transaction guarantees easier, but is more constrained
 /// than using the specific transaction functions where for retried transactions errors does
@@ -164,35 +213,63 @@ where
     T::run(f)
 }
 
-/// NormalTransaction is a sequence of operations that are executed in a way that if any of the
+/// Helper trait for coupling compensation action and the result of the operation.
+trait CompensationAction<Err> {
+    fn execute(&self) -> Result<(), Err>;
+}
+
+/// Helper struct for coupling compensation action and the result of the operation.
+#[allow(clippy::type_complexity)]
+struct CompensationActionCell<Out, Err> {
+    action: Box<dyn Fn(Result<Out, Err>) -> Result<(), Err>>,
+    result: Option<Result<Out, Err>>,
+}
+
+impl<Out: Clone, Err: Clone> CompensationAction<Err> for CompensationActionCell<Out, Err> {
+    fn execute(&self) -> Result<(), Err> {
+        let action = &*self.action;
+        action(
+            self.result
+                .clone()
+                .expect("Compensation action executed without a result"),
+        )
+    }
+}
+
+/// FallibleTransaction is a sequence of operations that are executed in a way that if any of the
 /// operations fails all the already performed operation's compensation actions got executed in
 /// reverse order.
 ///
 /// In case of fatal errors (panic) and external executor failures it does not perform the
 /// compensation actions and the whole transaction gets retried.
-pub struct NormalTransaction<Err> {
-    compensations: Vec<Box<dyn FnOnce() -> Result<(), Err>>>,
-    _err: PhantomData<Err>,
+pub struct FallibleTransaction<Err> {
+    compensations: Vec<Box<dyn CompensationAction<Err>>>,
 }
 
-impl<Err> NormalTransaction<Err> {
+impl<Err: Clone + 'static> FallibleTransaction<Err> {
     fn new() -> Self {
         Self {
             compensations: Vec::new(),
-            _err: PhantomData,
         }
     }
 
-    pub fn execute<OpIn: Clone + 'static, OpOut>(
+    pub fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> TransactionResult<OpOut, Err> {
         let cloned_op = operation.clone();
         let cloned_in = input.clone();
-        self.compensations
-            .push(Box::new(move || cloned_op.compensate(cloned_in)));
-        match operation.execute(input) {
+        let mut cell = CompensationActionCell {
+            action: Box::new(move |result| {
+                cloned_op.compensate_with_result(cloned_in.clone(), result)
+            }),
+            result: None,
+        };
+        let result = operation.execute(input);
+        cell.result = Some(result.clone());
+        self.compensations.push(Box::new(cell));
+        match result {
             Ok(output) => Ok(output),
             Err(error) => Err(self.fail(error).unwrap_err()),
         }
@@ -200,7 +277,7 @@ impl<Err> NormalTransaction<Err> {
 
     pub fn fail(&mut self, failure: Err) -> TransactionResult<(), Err> {
         for compensation_action in self.compensations.drain(..).rev() {
-            if let Err(compensation_failure) = compensation_action() {
+            if let Err(compensation_failure) = compensation_action.execute() {
                 return Err(TransactionFailure::FailedAndRolledBackPartially {
                     failure,
                     compensation_failure,
@@ -221,32 +298,42 @@ impl<Err> NormalTransaction<Err> {
 ///
 /// Fatal errors (panic) and external executor failures are currently cannot perform the
 /// rollback actions.
-pub struct RetriedTransaction {
+pub struct InfallibleTransaction {
     begin_oplog_index: OplogIndex,
-    rollback_actions: Vec<Box<dyn FnOnce()>>,
+    compensations: Vec<Box<dyn CompensationAction<()>>>,
 }
 
-impl RetriedTransaction {
+impl InfallibleTransaction {
     fn new(begin_oplog_index: OplogIndex) -> Self {
         Self {
             begin_oplog_index,
-            rollback_actions: Vec::new(),
+            compensations: Vec::new(),
         }
     }
 
-    pub fn execute<OpIn: Clone + 'static, OpOut, OpErr: Debug>(
+    pub fn execute<
+        OpIn: Clone + 'static,
+        OpOut: Clone + 'static,
+        OpErr: Debug + Clone + 'static,
+    >(
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = OpErr> + 'static,
         input: OpIn,
     ) -> OpOut {
         let cloned_op = operation.clone();
         let cloned_in = input.clone();
-        self.rollback_actions.push(Box::new(move || {
-            cloned_op
-                .compensate(cloned_in)
-                .expect("Compensation action failed")
-        }));
-        match operation.execute(input) {
+        let mut cell = CompensationActionCell {
+            action: Box::new(move |result| {
+                cloned_op
+                    .compensate_with_result(cloned_in.clone(), result)
+                    .expect("Compensation action failed");
+                Ok(())
+            }),
+            result: None,
+        };
+        let result = operation.execute(input);
+        cell.result = Some(result.clone());
+        match result {
             Ok(output) => output,
             Err(_) => {
                 self.fail();
@@ -256,8 +343,8 @@ impl RetriedTransaction {
     }
 
     pub fn fail(&mut self) {
-        for rollback_action in self.rollback_actions.drain(..).rev() {
-            rollback_action();
+        for compensation_action in self.compensations.drain(..).rev() {
+            let _ = compensation_action.execute();
         }
         set_oplog_index(self.begin_oplog_index);
     }
@@ -267,7 +354,7 @@ impl RetriedTransaction {
 /// easier to switch between different transactional guarantees but is more constrained in
 /// terms of error types.
 pub trait Transaction<Err> {
-    fn execute<OpIn: Clone + 'static, OpOut>(
+    fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
@@ -280,44 +367,44 @@ pub trait Transaction<Err> {
     ) -> TransactionResult<Out, Err>;
 }
 
-impl<Err> Transaction<Err> for NormalTransaction<Err> {
-    fn execute<OpIn: Clone + 'static, OpOut>(
+impl<Err: Clone + 'static> Transaction<Err> for FallibleTransaction<Err> {
+    fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> TransactionResult<OpOut, Err> {
-        NormalTransaction::execute(self, operation, input)
+        FallibleTransaction::execute(self, operation, input)
     }
 
     fn fail(&mut self, error: Err) -> TransactionResult<(), Err> {
-        NormalTransaction::fail(self, error)
+        FallibleTransaction::fail(self, error)
     }
 
     fn run<Out>(
         f: impl FnOnce(&mut Self) -> TransactionResult<Out, Err>,
     ) -> TransactionResult<Out, Err> {
-        normal_transaction(f)
+        fallible_transaction(f)
     }
 }
 
-impl<Err: Debug> Transaction<Err> for RetriedTransaction {
-    fn execute<OpIn: Clone + 'static, OpOut>(
+impl<Err: Debug + Clone + 'static> Transaction<Err> for InfallibleTransaction {
+    fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> TransactionResult<OpOut, Err> {
-        Ok(RetriedTransaction::execute(self, operation, input))
+        Ok(InfallibleTransaction::execute(self, operation, input))
     }
 
     fn fail(&mut self, error: Err) -> TransactionResult<(), Err> {
-        RetriedTransaction::fail(self);
+        InfallibleTransaction::fail(self);
         Err(TransactionFailure::FailedAndRolledBackCompletely(error)) // never reached
     }
 
     fn run<Out>(
         f: impl FnOnce(&mut Self) -> TransactionResult<Out, Err>,
     ) -> TransactionResult<Out, Err> {
-        Ok(retried_transaction(|tx| f(tx).unwrap()))
+        Ok(infallible_transaction(|tx| f(tx).unwrap()))
     }
 }
 
@@ -326,7 +413,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use crate::{normal_transaction, operation, retried_transaction};
+    use crate::{fallible_transaction, infallible_transaction, operation, operation_with_result};
 
     // Not a real test, just verifying that the code compiles
     #[test]
@@ -361,7 +448,7 @@ mod tests {
             },
         );
 
-        let result = normal_transaction(|tx| {
+        let result = fallible_transaction(|tx| {
             println!("First we execute op1");
             tx.execute(op1, "hello".to_string())?;
             println!("Then execute op2");
@@ -396,18 +483,20 @@ mod tests {
             },
         );
 
-        let op2 = operation(
+        let op2 = operation_with_result(
             move |_: ()| {
                 log3.clone().borrow_mut().push("op2 execute".to_string());
                 Err::<(), &str>("op2 error")
             },
-            move |_: ()| {
-                log4.clone().borrow_mut().push("op2 rollback".to_string());
+            move |_: (), r| {
+                log4.clone()
+                    .borrow_mut()
+                    .push(format!("op2 rollback {r:?}"));
                 Ok(())
             },
         );
 
-        let result = retried_transaction(|tx| {
+        let result = infallible_transaction(|tx| {
             println!("First we execute op1");
             tx.execute(op1, "hello".to_string());
             println!("Then execute op2");
@@ -426,7 +515,7 @@ mod tests {
 mod macro_tests {
     use golem_rust_macro::golem_operation;
 
-    use crate::normal_transaction;
+    use crate::{fallible_transaction, infallible_transaction};
 
     mod golem_rust {
         pub use crate::*;
@@ -447,10 +536,23 @@ mod macro_tests {
     #[test]
     #[ignore]
     fn tx_test_1() {
-        let result = normal_transaction(|tx| {
+        let result = fallible_transaction(|tx| {
             println!("Executing the annotated function as an operation directly");
             test_operation(tx, 1, 0.1)?;
             Ok(11)
+        });
+
+        println!("{result:?}");
+    }
+
+    // Not a real test, just verifying that the code compiles
+    #[test]
+    #[ignore]
+    fn tx_test_2() {
+        let result = infallible_transaction(|tx| {
+            println!("Executing the annotated function as an operation directly");
+            let _ = test_operation(tx, 1, 0.1);
+            11
         });
 
         println!("{result:?}");
