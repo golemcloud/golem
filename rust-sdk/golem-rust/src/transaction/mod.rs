@@ -264,7 +264,7 @@ impl<Err: Clone + 'static> FallibleTransaction<Err> {
     }
 }
 
-/// RetriedTransaction is a sequence of operations that are executed in a way that if any of the
+/// InfallibleTransaction is a sequence of operations that are executed in a way that if any of the
 /// operations or the underlying Golem executor fails, the whole transaction is going to
 /// be retried.
 ///
