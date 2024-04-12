@@ -464,7 +464,7 @@ impl WorkerService for WorkerServiceMock {
         unimplemented!()
     }
 
-    async fn update_status(&self, _worker_id: WorkerId, _status_value: &WorkerStatusRecord) {
+    async fn update_status(&self, _worker_id: &WorkerId, _status_value: &WorkerStatusRecord) {
         unimplemented!()
     }
 }

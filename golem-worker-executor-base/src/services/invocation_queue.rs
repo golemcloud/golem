@@ -14,9 +14,10 @@
 
 use async_trait::async_trait;
 use golem_wasm_rpc::Value;
+use std::collections::VecDeque;
 use std::ops::DerefMut;
-use std::sync::Arc;
 use std::sync::Weak;
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
@@ -51,37 +52,54 @@ pub trait InvocationQueue: Send + Sync {
 
 pub struct DefaultInvocationQueue<Ctx: WorkerCtx> {
     _handle: Option<JoinHandle<()>>,
-    sender: UnboundedSender<WorkerInvocation>,
+    sender: UnboundedSender<()>,
+    active: Arc<RwLock<VecDeque<WorkerInvocation>>>,
     _worker: Weak<Worker<Ctx>>,
 }
 
 impl<Ctx: WorkerCtx> DefaultInvocationQueue<Ctx> {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(worker: Arc<Worker<Ctx>>) -> Arc<dyn InvocationQueue> {
         let worker_id = worker.metadata.worker_id.worker_id.clone();
 
         let worker = Arc::downgrade(&worker);
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let active = Arc::new(RwLock::new(VecDeque::new()));
 
         let worker_clone = worker.clone();
+        let active_clone = active.clone();
         let handle = tokio::task::spawn(async move {
-            DefaultInvocationQueue::invocation_loop(receiver, worker_clone, worker_id).await;
+            DefaultInvocationQueue::invocation_loop(
+                receiver,
+                active_clone,
+                worker_clone,
+                worker_id,
+            )
+            .await;
         });
 
         Arc::new(DefaultInvocationQueue {
             _handle: Some(handle),
             sender,
+            active,
             _worker: worker,
         })
     }
 
     async fn invocation_loop(
-        mut receiver: UnboundedReceiver<WorkerInvocation>,
+        mut receiver: UnboundedReceiver<()>,
+        active: Arc<RwLock<VecDeque<WorkerInvocation>>>,
         worker: Weak<Worker<Ctx>>,
         worker_id: WorkerId,
     ) {
         debug!("Invocation queue loop for {worker_id} started");
 
-        while let Some(message) = receiver.recv().await {
+        while receiver.recv().await.is_some() {
+            let message = active
+                .write()
+                .unwrap()
+                .pop_front()
+                .expect("Message should be present");
             if let Some(worker) = worker.upgrade() {
                 debug!("Invocation queue processing {message:?} for {worker_id}");
 
@@ -128,18 +146,16 @@ impl<Ctx: WorkerCtx> InvocationQueue for DefaultInvocationQueue<Ctx> {
     ) {
         // TODO: direct invocation
         // TODO: write to oplog and status record
-        self.sender
-            .send(WorkerInvocation {
-                invocation_key,
-                full_function_name,
-                function_input,
-                calling_convention,
-            })
-            .unwrap()
+        self.active.write().unwrap().push_back(WorkerInvocation {
+            invocation_key,
+            full_function_name,
+            function_input,
+            calling_convention,
+        });
+        self.sender.send(()).unwrap()
     }
 
     fn pending_invocations(&self) -> Vec<WorkerInvocation> {
-        // TODO: we need to use some observable queue instead of the mpsc channel
-        todo!()
+        self.active.read().unwrap().iter().cloned().collect()
     }
 }

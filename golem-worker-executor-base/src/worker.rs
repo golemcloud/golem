@@ -215,8 +215,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )
                 })?;
 
-            Ctx::prepare_instance(&versioned_worker_id, &instance, &mut store).await?;
-
             let result = Arc::new(Worker {
                 metadata: worker_metadata.clone(),
                 instance,
@@ -229,6 +227,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             result
                 .public_state
                 .attach_invocation_queue(invocation_queue);
+
+            {
+                let mut store = result.store.lock().await;
+                Ctx::prepare_instance(&versioned_worker_id, &result.instance, &mut *store).await?;
+            }
 
             info!("Worker {}/{} activated", worker_id.slug(), template_version);
 

@@ -982,7 +982,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                             function_name.to_string(),
                             request,
                             invocation_key.clone(),
-                            calling_convention.clone(),
+                            *calling_convention,
                         )));
                     }
                     entry if entry.is_hint() => {}

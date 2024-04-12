@@ -827,6 +827,7 @@ pub fn to_worker_metadata(
             status: metadata.status.try_into().expect("invalid status"),
             overridden_retry_config: None, // not passed through gRPC
             deleted_regions: DeletedRegions::new(),
+            pending_invocations: vec![],
         },
     }
 }

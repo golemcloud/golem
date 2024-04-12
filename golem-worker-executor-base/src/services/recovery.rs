@@ -584,13 +584,14 @@ mod tests {
     use crate::services::blob_store::BlobStoreService;
     use crate::services::golem_config::GolemConfig;
     use crate::services::invocation_key::InvocationKeyService;
+    use crate::services::invocation_queue::InvocationQueue;
     use crate::services::key_value::KeyValueService;
     use crate::services::promise::PromiseService;
     use crate::services::worker::WorkerService;
     use crate::services::worker_event::WorkerEventService;
     use crate::services::{
         worker_enumeration, All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
-        HasInvocationKeyService, HasKeyValueService, HasPromiseService, HasRpc,
+        HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasPromiseService, HasRpc,
         HasRunningWorkerEnumerationService, HasTemplateService, HasWasmtimeEngine,
         HasWorkerEnumerationService, HasWorkerService,
     };
@@ -636,6 +637,16 @@ mod tests {
         }
 
         async fn enqueue(&self, _message: Bytes, _invocation_key: InvocationKey) {
+            unimplemented!()
+        }
+    }
+
+    impl HasInvocationQueue for EmptyPublicState {
+        fn invocation_queue(&self) -> Arc<dyn InvocationQueue> {
+            unimplemented!()
+        }
+
+        fn attach_invocation_queue(&self, _invocation_queue: Arc<dyn InvocationQueue>) {
             unimplemented!()
         }
     }
@@ -730,7 +741,7 @@ mod tests {
             &mut self,
             _full_function_name: &str,
             _function_input: &Vec<Value>,
-            _calling_convention: Option<&CallingConvention>,
+            _calling_convention: Option<CallingConvention>,
         ) -> anyhow::Result<()> {
             unimplemented!()
         }
