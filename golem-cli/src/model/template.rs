@@ -1,8 +1,10 @@
+use crate::model::GolemError;
 use golem_client::model::{
     Export, ExportFunction, ExportInstance, FunctionResult, NameOptionTypePair, NameTypePair,
     ResourceMode, Template, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use crate::model::wave::{function_wave_compatible, DisplayNamedFunc, WrapExportFunction};
 
@@ -152,6 +154,66 @@ fn custom_show_exported_function(prefix: &str, f: &ExportFunction) -> String {
         format!("{prefix}{name}({params}) -> {res_str}")
     } else {
         format!("{prefix}{name}({params}) -> ({res_str})")
+    }
+}
+
+fn resolve_function<'t>(
+    template: &'t Template,
+    function: &str,
+) -> Result<&'t ExportFunction, GolemError> {
+    let functions = template
+        .metadata
+        .exports
+        .iter()
+        .flat_map(export_to_functions)
+        .filter(|(name, _)| name == function)
+        .map(|(_, f)| f)
+        .collect::<Vec<_>>();
+
+    if functions.len() > 1 {
+        info!("Multiple function with the same name '{function}' declared");
+
+        Err(GolemError(
+            "Multiple function results with the same name declared".to_string(),
+        ))
+    } else if let Some(func) = functions.first() {
+        Ok(func)
+    } else {
+        info!("No function '{function}' declared for template");
+
+        Err(GolemError("Can't find function in template".to_string()))
+    }
+}
+
+pub fn function_result_types<'t>(
+    template: &'t Template,
+    function: &str,
+) -> Result<Vec<&'t Type>, GolemError> {
+    let func = resolve_function(template, function)?;
+
+    Ok(func.results.iter().map(|r| &r.typ).collect())
+}
+
+pub fn function_params_types<'t>(
+    template: &'t Template,
+    function: &str,
+) -> Result<Vec<&'t Type>, GolemError> {
+    let func = resolve_function(template, function)?;
+
+    Ok(func.parameters.iter().map(|r| &r.typ).collect())
+}
+
+fn export_to_functions(export: &Export) -> Vec<(String, &ExportFunction)> {
+    match export {
+        Export::Instance(inst) => {
+            let prefix = format!("{}/", inst.name);
+
+            inst.functions
+                .iter()
+                .map(|f| (format!("{prefix}{}", f.name), f))
+                .collect()
+        }
+        Export::Function(f) => vec![(f.name.clone(), f)],
     }
 }
 

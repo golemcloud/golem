@@ -29,6 +29,7 @@ pub trait TemplateClient {
         template_id: &TemplateId,
         version: i32,
     ) -> Result<Template, GolemError>;
+    async fn get_latest_metadata(&self, template_id: &TemplateId) -> Result<Template, GolemError>;
     async fn find(&self, name: Option<TemplateName>) -> Result<Vec<Template>, GolemError>;
     async fn add(&self, name: TemplateName, file: PathBufOrStdin) -> Result<Template, GolemError>;
     async fn update(&self, id: TemplateId, file: PathBufOrStdin) -> Result<Template, GolemError>;
@@ -51,6 +52,15 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
         Ok(self
             .client
             .get_template_metadata(&template_id.0, &version.to_string())
+            .await?)
+    }
+
+    async fn get_latest_metadata(&self, template_id: &TemplateId) -> Result<Template, GolemError> {
+        info!("Getting latest template version");
+
+        Ok(self
+            .client
+            .get_latest_template_metadata(&template_id.0)
             .await?)
     }
 

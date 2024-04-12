@@ -1,6 +1,7 @@
+use crate::model::template::function_result_types;
 use crate::model::wave::{type_to_analysed, type_wave_compatible};
 use crate::model::GolemError;
-use golem_client::model::{Export, ExportFunction, InvokeResult, Template, Type};
+use golem_client::model::{InvokeResult, Template, Type};
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value;
@@ -20,8 +21,7 @@ impl InvokeResultView {
         template: &Template,
         function: &str,
     ) -> InvokeResultView {
-        Self::try_parse(&res, template, function)
-            .unwrap_or_else(|_| InvokeResultView::Json(res.result))
+        Self::try_parse(&res, template, function).unwrap_or(InvokeResultView::Json(res.result))
     }
 
     fn try_parse(
@@ -40,60 +40,29 @@ impl InvokeResultView {
             Some(results) => results,
         };
 
-        let functions = template
-            .metadata
-            .exports
+        let result_types = function_result_types(template, function)?;
+
+        if results.len() != result_types.len() {
+            info!("Unexpected number of results.");
+
+            return Err(GolemError("Unexpected number of results.".to_string()));
+        }
+
+        if !result_types.iter().all(|typ| type_wave_compatible(typ)) {
+            debug!("Result type is not supported by wave");
+
+            return Err(GolemError(
+                "Result type is not supported by wave".to_string(),
+            ));
+        }
+
+        let wave = results
             .iter()
-            .flat_map(Self::export_to_functions)
-            .filter(|(name, _)| name == function)
-            .map(|(_, f)| f)
-            .collect::<Vec<_>>();
+            .zip(result_types.iter())
+            .map(|(json, typ)| Self::try_wave_format(json, typ))
+            .collect::<Result<Vec<_>, _>>()?;
 
-        if functions.len() > 1 {
-            info!("Multiple function with the same name '{function}' declared");
-
-            Err(GolemError(
-                "Multiple function results with the same name declared".to_string(),
-            ))
-        } else if let Some(func) = functions.first() {
-            if results.len() != func.results.len() {
-                info!("Unexpected number of results.");
-
-                return Err(GolemError("Unexpected number of results.".to_string()));
-            }
-
-            if !func.results.iter().all(|fr| type_wave_compatible(&fr.typ)) {
-                debug!("Result type is not supported by wave");
-
-                return Err(GolemError("Result type is not supported by wave".to_string()))
-            }
-
-            let wave = results
-                .iter()
-                .zip(func.results.iter())
-                .map(|(json, func_res)| Self::try_wave_format(json, &func_res.typ))
-                .collect::<Result<Vec<_>, _>>()?;
-
-            Ok(InvokeResultView::Wave(wave))
-        } else {
-            info!("No function '{function}' declared for template");
-
-            Err(GolemError("Can't find function in template".to_string()))
-        }
-    }
-
-    fn export_to_functions(export: &Export) -> Vec<(String, &ExportFunction)> {
-        match export {
-            Export::Instance(inst) => {
-                let prefix = format!("{}/", inst.name);
-
-                inst.functions
-                    .iter()
-                    .map(|f| (format!("{prefix}{}", f.name), f))
-                    .collect()
-            }
-            Export::Function(f) => vec![(f.name.clone(), f)],
-        }
+        Ok(InvokeResultView::Wave(wave))
     }
 
     fn try_wave_format(json: &Value, typ: &Type) -> Result<String, GolemError> {
@@ -127,7 +96,11 @@ impl InvokeResultView {
 mod tests {
     use crate::model::invoke_result_view::InvokeResultView;
     use crate::model::wave::type_to_analysed;
-    use golem_client::model::{Export, ExportFunction, FunctionResult, InvokeResult, ProtectedTemplateId, ResourceMode, Template, TemplateMetadata, Type, TypeBool, TypeHandle, UserTemplateId, VersionedTemplateId};
+    use golem_client::model::{
+        Export, ExportFunction, FunctionResult, InvokeResult, ProtectedTemplateId, ResourceMode,
+        Template, TemplateMetadata, Type, TypeBool, TypeHandle, UserTemplateId,
+        VersionedTemplateId,
+    };
     use golem_wasm_ast::analysis::AnalysedFunctionResult;
     use golem_wasm_rpc::Uri;
     use uuid::Uuid;
@@ -181,7 +154,10 @@ mod tests {
 
     #[test]
     fn represented_as_wave() {
-        let res = parse(vec![golem_wasm_rpc::Value::Bool(true)], vec![Type::Bool(TypeBool{})]);
+        let res = parse(
+            vec![golem_wasm_rpc::Value::Bool(true)],
+            vec![Type::Bool(TypeBool {})],
+        );
 
         assert!(matches!(res, InvokeResultView::Wave(_)))
     }

@@ -71,6 +71,8 @@ pub trait TemplateHandler {
         template_id: &TemplateId,
         version: i32,
     ) -> Result<Template, GolemError>;
+
+    async fn get_latest_metadata(&self, template_id: &TemplateId) -> Result<Template, GolemError>;
 }
 
 pub struct TemplateHandlerLive<C: TemplateClient + Send + Sync> {
@@ -116,7 +118,7 @@ impl<C: TemplateClient + Send + Sync> TemplateHandler for TemplateHandlerLive<C>
                 let templates = self.client.find(Some(name.clone())).await?;
                 let templates: Vec<Template> = templates
                     .into_iter()
-                    .group_by(|c| c.versioned_template_id.template_id.clone())
+                    .group_by(|c| c.versioned_template_id.template_id)
                     .into_iter()
                     .map(|(_, group)| {
                         group
@@ -145,9 +147,9 @@ impl<C: TemplateClient + Send + Sync> TemplateHandler for TemplateHandlerLive<C>
                             let template_name = name.0;
                             Err(GolemError(format!("Can't find template {template_name}")))
                         }
-                        Some(template) => Ok(TemplateId(
-                            template.versioned_template_id.template_id.clone(),
-                        )),
+                        Some(template) => {
+                            Ok(TemplateId(template.versioned_template_id.template_id))
+                        }
                     }
                 }
             }
@@ -160,5 +162,9 @@ impl<C: TemplateClient + Send + Sync> TemplateHandler for TemplateHandlerLive<C>
         version: i32,
     ) -> Result<Template, GolemError> {
         self.client.get_metadata(template_id, version).await
+    }
+
+    async fn get_latest_metadata(&self, template_id: &TemplateId) -> Result<Template, GolemError> {
+        self.client.get_latest_metadata(template_id).await
     }
 }
