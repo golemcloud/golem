@@ -20,14 +20,8 @@ impl Display for WorkerRequestExecutorError {
     }
 }
 
-impl From<&str> for WorkerRequestExecutorError {
-    fn from(err: &str) -> Self {
-        WorkerRequestExecutorError(err.to_string())
-    }
-}
-
-impl From<String> for WorkerRequestExecutorError {
-    fn from(err: String) -> Self {
-        WorkerRequestExecutorError(err)
+impl<T: AsRef<str>> From<T> for WorkerRequestExecutorError {
+    fn from(err: T) -> Self {
+        WorkerRequestExecutorError(err.as_ref().to_string())
     }
 }
