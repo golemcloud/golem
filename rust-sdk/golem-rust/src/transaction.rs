@@ -553,8 +553,9 @@ mod macro_tests {
     fn tx_test_1() {
         let result = fallible_transaction(|tx| {
             println!("Executing the annotated function as an operation directly");
-            test_operation(tx, 1, 0.1)?;
-            test_operation_2(tx, 1, 0.1)?;
+            tx.test_operation(1, 0.1)?;
+            tx.test_operation_2(1, 0.1)?;
+
             Ok(11)
         });
 
@@ -567,7 +568,7 @@ mod macro_tests {
     fn tx_test_2() {
         let result = infallible_transaction(|tx| {
             println!("Executing the annotated function as an operation directly");
-            let _ = test_operation(tx, 1, 0.1);
+            let _ = tx.test_operation(1, 0.1);
             11
         });
 

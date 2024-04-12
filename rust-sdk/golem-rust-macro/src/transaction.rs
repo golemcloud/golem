@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use heck::ToPascalCase;
 use proc_macro::TokenStream;
+use proc_macro2::Ident;
 
 use quote::quote;
 use syn::punctuated::Punctuated;
@@ -96,7 +98,7 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
     fnsig.inputs.insert(
         0,
         parse_quote! {
-            tx: &mut impl golem_rust::Transaction<#err>
+            self
         },
     );
 
@@ -107,19 +109,32 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
         _ => panic!("Expected function to have a return type of Result<_, _>"),
     };
 
+    let traitname = Ident::new(
+        &fnsig.ident.to_string().to_pascal_case(),
+        fnsig.ident.span(),
+    );
+
     let result = quote! {
-        #fnsig {
-            tx.execute(
-                golem_rust::#operation(
-                    |#input_pattern| {
-                        #body
-                    },
-                    |#compensation_pattern| {
-                        #compensate(#(#compensation_args), *)
-                    }
-                ),
-                (#(#input_args), *)
-            )
+        #ast
+
+        trait #traitname {
+            #fnsig;
+        }
+
+        impl<T: golem_rust::Transaction<#err>> #traitname for &mut T {
+            #fnsig {
+                self.execute(
+                    golem_rust::#operation(
+                        |#input_pattern| {
+                            #body
+                        },
+                        |#compensation_pattern| {
+                            #compensate(#(#compensation_args), *)
+                        }
+                    ),
+                    (#(#input_args), *)
+                )
+            }
         }
     };
 
