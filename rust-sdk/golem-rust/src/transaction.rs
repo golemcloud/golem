@@ -30,31 +30,31 @@ pub trait Operation: Clone {
     /// Executes the operation which may fail with a domain error
     fn execute(&self, input: Self::In) -> Result<Self::Out, Self::Err>;
 
-    /// Executes a compensation action for the operation. This version has no access to the result
-    /// of the `execute` function, so it can be called in case of compensating advanced, non-domain level errors.
+    /// Executes a compensation action for the operation.
     ///
-    /// If the operation is only used in `FallibleTransaction`s, this method can be no-op and the actual, result
-    /// dependent compensation can be implemented in `compensate_with_result`.
-    fn compensate(&self, input: Self::In) -> Result<(), Self::Err>;
-
-    /// Executes a compensation action for the operation which ended up with the given result.
-    fn compensate_with_result(
+    /// When using `infallible_transaction_with_strong_rollback_guarantees`, it is possible that there the compensation function
+    /// is called with no `result` provided.
+    /// It is the implementor's responsibility to decide if any action can be taken in such a case.
+    fn compensate(
         &self,
         input: Self::In,
-        _result: Result<Self::Out, Self::Err>,
-    ) -> Result<(), Self::Err> {
-        self.compensate(input)
-    }
+        result: Option<Result<Self::Out, Self::Err>>,
+    ) -> Result<(), Self::Err>;
 }
 
 /// Constructs an `Operation` from two closures: one for executing the operation,
-/// and one for rolling it back. The rollback operation only sees the input of the operation,
-/// not the operation's result.
+/// and one for rolling it back. The rollback operation always sees the input of the operation,
+/// and in most cases also the operation's result, except if the rollback was initiated by
+/// a panic or an external executor failure. This can only happen when using
+/// `infallible_transaction_with_strong_rollback_guarantees`.
+///
+/// Use `operation_with_result` if you only want to handle the case when the operation's
+/// result is available.
 ///
 /// This operation can run the compensation in both fallible and infallible transactions.
 pub fn operation<In: Clone, Out, Err>(
     execute_fn: impl Fn(In) -> Result<Out, Err> + 'static,
-    compensate_fn: impl Fn(In) -> Result<(), Err> + 'static,
+    compensate_fn: impl Fn(In, Option<Result<Out, Err>>) -> Result<(), Err> + 'static,
 ) -> impl Operation<In = In, Out = Out, Err = Err> {
     FnOperation {
         execute_fn: Rc::new(execute_fn),
@@ -70,15 +70,22 @@ pub fn operation_with_result<In: Clone, Out, Err>(
     execute_fn: impl Fn(In) -> Result<Out, Err> + 'static,
     compensate_fn: impl Fn(In, Result<Out, Err>) -> Result<(), Err> + 'static,
 ) -> impl Operation<In = In, Out = Out, Err = Err> {
-    FnOperationWithResult {
+    FnOperation {
         execute_fn: Rc::new(execute_fn),
-        compensate_fn: Rc::new(compensate_fn),
+        compensate_fn: Rc::new(move |input: In, maybe_result: Option<Result<Out, Err>>| {
+            if let Some(result) = maybe_result {
+                compensate_fn(input, result)
+            } else {
+                Ok(())
+            }
+        }),
     }
 }
 
+#[allow(clippy::type_complexity)]
 struct FnOperation<In, Out, Err> {
     execute_fn: Rc<dyn Fn(In) -> Result<Out, Err>>,
-    compensate_fn: Rc<dyn Fn(In) -> Result<(), Err>>,
+    compensate_fn: Rc<dyn Fn(In, Option<Result<Out, Err>>) -> Result<(), Err>>,
 }
 
 impl<In, Out, Err> Clone for FnOperation<In, Out, Err> {
@@ -99,40 +106,7 @@ impl<In: Clone, Out, Err> Operation for FnOperation<In, Out, Err> {
         (self.execute_fn)(input)
     }
 
-    fn compensate(&self, input: In) -> Result<(), Err> {
-        (self.compensate_fn)(input)
-    }
-}
-
-#[allow(clippy::type_complexity)]
-struct FnOperationWithResult<In, Out, Err> {
-    execute_fn: Rc<dyn Fn(In) -> Result<Out, Err>>,
-    compensate_fn: Rc<dyn Fn(In, Result<Out, Err>) -> Result<(), Err>>,
-}
-
-impl<In, Out, Err> Clone for FnOperationWithResult<In, Out, Err> {
-    fn clone(&self) -> Self {
-        Self {
-            execute_fn: self.execute_fn.clone(),
-            compensate_fn: self.compensate_fn.clone(),
-        }
-    }
-}
-
-impl<In: Clone, Out, Err> Operation for FnOperationWithResult<In, Out, Err> {
-    type In = In;
-    type Out = Out;
-    type Err = Err;
-
-    fn execute(&self, input: In) -> Result<Out, Err> {
-        (self.execute_fn)(input)
-    }
-
-    fn compensate(&self, _input: Self::In) -> Result<(), Self::Err> {
-        Ok(())
-    }
-
-    fn compensate_with_result(&self, input: In, result: Result<Out, Err>) -> Result<(), Err> {
+    fn compensate(&self, input: In, result: Option<Result<Out, Err>>) -> Result<(), Err> {
         (self.compensate_fn)(input, result)
     }
 }
@@ -264,9 +238,7 @@ impl<Err: Clone + 'static> FallibleTransaction<Err> {
         let cloned_op = operation.clone();
         let cloned_in = input.clone();
         let mut cell = CompensationActionCell {
-            action: Box::new(move |result| {
-                cloned_op.compensate_with_result(cloned_in.clone(), result)
-            }),
+            action: Box::new(move |result| cloned_op.compensate(cloned_in.clone(), Some(result))),
             result: None,
         };
         let result = operation.execute(input);
@@ -325,7 +297,7 @@ impl InfallibleTransaction {
         let mut cell = CompensationActionCell {
             action: Box::new(move |result| {
                 cloned_op
-                    .compensate_with_result(cloned_in.clone(), result)
+                    .compensate(cloned_in.clone(), Some(result))
                     .expect("Compensation action failed");
                 Ok(())
             }),
@@ -426,7 +398,7 @@ mod tests {
                 log1.borrow_mut().push(format!("op1 execute {input}"));
                 Ok(())
             },
-            move |input: String| {
+            move |input: String, _| {
                 log2.borrow_mut().push(format!("op1 rollback {input}"));
                 Ok(())
             },
@@ -437,7 +409,7 @@ mod tests {
                 log3.clone().borrow_mut().push("op2 execute".to_string());
                 Err::<(), &str>("op2 error")
             },
-            move |_: ()| {
+            move |_: (), _| {
                 log4.clone().borrow_mut().push("op2 rollback".to_string());
                 Ok(())
             },
@@ -472,7 +444,7 @@ mod tests {
                 log1.borrow_mut().push(format!("op1 execute {input}"));
                 Ok::<(), ()>(())
             },
-            move |input: String| {
+            move |input: String, _| {
                 log2.borrow_mut().push(format!("op1 rollback {input}"));
                 Ok(())
             },
@@ -522,12 +494,12 @@ mod macro_tests {
         Ok(true)
     }
 
-    fn test_compensation(input1: u64, input2: f32) -> Result<(), String> {
+    fn test_compensation(input1: u64, input2: f32, _: Result<bool, String>) -> Result<(), String> {
         println!("Compensation input: {input1}, {input2}");
         Ok(())
     }
 
-    #[golem_operation(compensation_with_result=test_compensation_2)]
+    #[golem_operation(compensation=test_compensation_2)]
     fn test_operation_2(input1: u64, input2: f32) -> Result<bool, String> {
         println!("Op input: {input1}, {input2}");
         Ok(true)
