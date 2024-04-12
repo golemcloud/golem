@@ -55,13 +55,15 @@ impl Guest for Component {
 
     fn start_polling(until: String) {
         let port = std::env::var("PORT").unwrap_or("9999".to_string());
+        let template_id = std::env::var("GOLEM_TEMPLATE_ID").unwrap_or("unknown".to_string());
+        let worker_name = std::env::var("GOLEM_WORKER_NAME").unwrap_or("unknown".to_string());
 
         println!("Polling until receiving {until}");
 
         let client = Client::builder().build().unwrap();
         loop {
             println!("Calling the poll endpoint");
-            match client.get(format!("http://localhost:{port}/poll")).send() {
+            match client.get(format!("http://localhost:{port}/poll?template_id={template_id}&worker_name={worker_name}")).send() {
                 Ok(response) => {
                     let s = response.text().unwrap();
                     println!("Received {s}");
