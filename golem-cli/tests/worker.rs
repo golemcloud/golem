@@ -1,5 +1,6 @@
 use crate::cli::{Cli, CliLive};
-use golem_cli::clients::template::TemplateView;
+use golem_cli::model::invoke_result_view::InvokeResultView;
+use golem_cli::model::template::TemplateView;
 use golem_cli::model::InvocationKey;
 use golem_client::model::{VersionedWorkerId, WorkersMetadataResponse};
 use golem_test_framework::config::TestDependencies;
@@ -32,7 +33,26 @@ fn make(
             ctx.clone(),
             worker_invoke_and_await,
         ),
-        Trial::test_in_context(format!("worker_invoke{suffix}"), ctx.clone(), worker_invoke),
+        Trial::test_in_context(
+            format!("worker_invoke_and_await_wave_params{suffix}"),
+            ctx.clone(),
+            worker_invoke_and_await_wave_params,
+        ),
+        Trial::test_in_context(
+            format!("worker_invoke_no_params{suffix}"),
+            ctx.clone(),
+            worker_invoke_no_params,
+        ),
+        Trial::test_in_context(
+            format!("worker_invoke_json_params{suffix}"),
+            ctx.clone(),
+            worker_invoke_json_params,
+        ),
+        Trial::test_in_context(
+            format!("worker_invoke_wave_params{suffix}"),
+            ctx.clone(),
+            worker_invoke_wave_params,
+        ),
         Trial::test_in_context(
             format!("worker_connect{suffix}"),
             ctx.clone(),
@@ -72,12 +92,13 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
     short_args
 }
 
-fn make_template(
+fn make_template_from_file(
     deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
     template_name: &str,
     cli: &CliLive,
+    file: &str,
 ) -> Result<TemplateView, Failed> {
-    let env_service = deps.template_directory().join("environment-service.wasm");
+    let env_service = deps.template_directory().join(file);
     let cfg = &cli.config;
     cli.run(&[
         "template",
@@ -86,6 +107,14 @@ fn make_template(
         &template_name,
         env_service.to_str().unwrap(),
     ])
+}
+
+fn make_template(
+    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+    template_name: &str,
+    cli: &CliLive,
+) -> Result<TemplateView, Failed> {
+    make_template_from_file(deps, template_name, cli, "environment-service.wasm")
 }
 
 fn worker_new_instance(
@@ -210,8 +239,6 @@ fn worker_invoke_and_await(
         &worker_name,
         &cfg.arg('f', "function"),
         "golem:it/api/get-environment",
-        &cfg.arg('j', "parameters"),
-        "[]",
         &cfg.arg('k', "invocation-key"),
         &env_key.0,
     ])?;
@@ -230,15 +257,115 @@ fn worker_invoke_and_await(
     Ok(())
 }
 
-fn worker_invoke(
+fn worker_invoke_and_await_wave_params(
     (deps, name, cli): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id = make_template(deps, &format!("{name} worker_invoke"), &cli)?.template_id;
-    let worker_name = format!("{name}_worker_invoke");
+    let template_id = make_template_from_file(
+        deps,
+        &format!("{name} worker_invoke_and_await_wave_params"),
+        &cli,
+        "key-value-service.wasm",
+    )?
+    .template_id;
+    let worker_name = format!("{name}_worker_invoke_and_await_wave_params");
+    let cfg = &cli.config;
+    let _: VersionedWorkerId = cli.run(&[
+        "worker",
+        "add",
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('T', "template-id"),
+        &template_id,
+    ])?;
+    let res_set: InvokeResultView = cli.run(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('H', "human-readable"),
+        &cfg.arg('T', "template-id"),
+        &template_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        "golem:it/api/set",
+        &cfg.arg('p', "param"),
+        r#""bucket name""#,
+        &cfg.arg('p', "param"),
+        r#""key name""#,
+        &cfg.arg('p', "param"),
+        r#"[1, 2, 3]"#,
+    ])?;
+    assert_eq!(res_set, InvokeResultView::Wave(Vec::new()));
+
+    let res_get: InvokeResultView = cli.run(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('H', "human-readable"),
+        &cfg.arg('T', "template-id"),
+        &template_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        "golem:it/api/get",
+        &cfg.arg('p', "param"),
+        r#""bucket name""#,
+        &cfg.arg('p', "param"),
+        r#""key name""#,
+    ])?;
+    assert_eq!(
+        res_get,
+        InvokeResultView::Wave(vec!["some([1, 2, 3])".to_string()])
+    );
+
+    Ok(())
+}
+
+fn worker_invoke_no_params(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let template_id =
+        make_template(deps, &format!("{name} worker_invoke_no_params"), &cli)?.template_id;
+    let worker_name = format!("{name}_worker_invoke_no_params");
+    let cfg = &cli.config;
+    let _: VersionedWorkerId = cli.run(&[
+        "worker",
+        "add",
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('T', "template-id"),
+        &template_id,
+    ])?;
+    cli.run_unit(&[
+        "worker",
+        "invoke",
+        &cfg.arg('T', "template-id"),
+        &template_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        "golem:it/api/get-arguments",
+    ])?;
+
+    Ok(())
+}
+
+fn worker_invoke_json_params(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let template_id =
+        make_template(deps, &format!("{name} worker_invoke_json_params"), &cli)?.template_id;
+    let worker_name = format!("{name}_worker_invoke_json_params");
     let cfg = &cli.config;
     let _: VersionedWorkerId = cli.run(&[
         "worker",
@@ -259,6 +386,50 @@ fn worker_invoke(
         "golem:it/api/get-arguments",
         &cfg.arg('j', "parameters"),
         "[]",
+    ])?;
+
+    Ok(())
+}
+
+fn worker_invoke_wave_params(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let template_id = make_template_from_file(
+        deps,
+        &format!("{name} worker_invoke_wave_params"),
+        &cli,
+        "key-value-service.wasm",
+    )?
+    .template_id;
+    let worker_name = format!("{name}_worker_invoke_wave_params");
+    let cfg = &cli.config;
+    let _: VersionedWorkerId = cli.run(&[
+        "worker",
+        "add",
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('T', "template-id"),
+        &template_id,
+    ])?;
+    cli.run_unit(&[
+        "worker",
+        "invoke",
+        &cfg.arg('T', "template-id"),
+        &template_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        "golem:it/api/set",
+        &cfg.arg('p', "param"),
+        r#""bucket name""#,
+        &cfg.arg('p', "param"),
+        r#""key name""#,
+        &cfg.arg('p', "param"),
+        r#"[1, 2, 3]"#,
     ])?;
 
     Ok(())

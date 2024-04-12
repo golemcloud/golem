@@ -14,13 +14,14 @@
 
 use async_trait::async_trait;
 use clap::Subcommand;
+use golem_client::model::Template;
 use indoc::formatdoc;
 use itertools::Itertools;
-use uuid::Uuid;
 
-use crate::clients::template::{TemplateClient, TemplateView};
+use crate::clients::template::TemplateClient;
+use crate::model::template::TemplateView;
 use crate::model::{
-    GolemError, GolemResult, PathBufOrStdin, RawTemplateId, TemplateIdOrName, TemplateName,
+    GolemError, GolemResult, PathBufOrStdin, TemplateId, TemplateIdOrName, TemplateName,
 };
 
 #[derive(Subcommand, Debug)]
@@ -63,7 +64,15 @@ pub enum TemplateSubcommand {
 pub trait TemplateHandler {
     async fn handle(&self, subcommand: TemplateSubcommand) -> Result<GolemResult, GolemError>;
 
-    async fn resolve_id(&self, reference: TemplateIdOrName) -> Result<RawTemplateId, GolemError>;
+    async fn resolve_id(&self, reference: TemplateIdOrName) -> Result<TemplateId, GolemError>;
+
+    async fn get_metadata(
+        &self,
+        template_id: &TemplateId,
+        version: i32,
+    ) -> Result<Template, GolemError>;
+
+    async fn get_latest_metadata(&self, template_id: &TemplateId) -> Result<Template, GolemError>;
 }
 
 pub struct TemplateHandlerLive<C: TemplateClient + Send + Sync> {
@@ -79,8 +88,9 @@ impl<C: TemplateClient + Send + Sync> TemplateHandler for TemplateHandlerLive<C>
                 template_file,
             } => {
                 let template = self.client.add(template_name, template_file).await?;
+                let view: TemplateView = template.into();
 
-                Ok(GolemResult::Ok(Box::new(template)))
+                Ok(GolemResult::Ok(Box::new(view)))
             }
             TemplateSubcommand::Update {
                 template_id_or_name,
@@ -88,32 +98,41 @@ impl<C: TemplateClient + Send + Sync> TemplateHandler for TemplateHandlerLive<C>
             } => {
                 let id = self.resolve_id(template_id_or_name).await?;
                 let template = self.client.update(id, template_file).await?;
+                let view: TemplateView = template.into();
 
-                Ok(GolemResult::Ok(Box::new(template)))
+                Ok(GolemResult::Ok(Box::new(view)))
             }
             TemplateSubcommand::List { template_name } => {
                 let templates = self.client.find(template_name).await?;
+                let views: Vec<TemplateView> = templates.into_iter().map(|t| t.into()).collect();
 
-                Ok(GolemResult::Ok(Box::new(templates)))
+                Ok(GolemResult::Ok(Box::new(views)))
             }
         }
     }
 
-    async fn resolve_id(&self, reference: TemplateIdOrName) -> Result<RawTemplateId, GolemError> {
+    async fn resolve_id(&self, reference: TemplateIdOrName) -> Result<TemplateId, GolemError> {
         match reference {
             TemplateIdOrName::Id(id) => Ok(id),
             TemplateIdOrName::Name(name) => {
                 let templates = self.client.find(Some(name.clone())).await?;
-                let templates: Vec<TemplateView> = templates
+                let templates: Vec<Template> = templates
                     .into_iter()
-                    .group_by(|c| c.template_id.clone())
+                    .group_by(|c| c.versioned_template_id.template_id)
                     .into_iter()
-                    .map(|(_, group)| group.max_by_key(|c| c.template_version).unwrap())
+                    .map(|(_, group)| {
+                        group
+                            .max_by_key(|c| c.versioned_template_id.version)
+                            .unwrap()
+                    })
                     .collect();
 
                 if templates.len() > 1 {
                     let template_name = name.0;
-                    let ids: Vec<String> = templates.into_iter().map(|c| c.template_id).collect();
+                    let ids: Vec<String> = templates
+                        .into_iter()
+                        .map(|c| c.versioned_template_id.template_id.to_string())
+                        .collect();
                     Err(GolemError(formatdoc!(
                         "
                         Multiple templates found for name {template_name}:
@@ -129,18 +148,23 @@ impl<C: TemplateClient + Send + Sync> TemplateHandler for TemplateHandlerLive<C>
                             Err(GolemError(format!("Can't find template {template_name}")))
                         }
                         Some(template) => {
-                            let parsed = Uuid::parse_str(&template.template_id);
-
-                            match parsed {
-                                Ok(id) => Ok(RawTemplateId(id)),
-                                Err(err) => {
-                                    Err(GolemError(format!("Failed to parse template id: {err}")))
-                                }
-                            }
+                            Ok(TemplateId(template.versioned_template_id.template_id))
                         }
                     }
                 }
             }
         }
+    }
+
+    async fn get_metadata(
+        &self,
+        template_id: &TemplateId,
+        version: i32,
+    ) -> Result<Template, GolemError> {
+        self.client.get_metadata(template_id, version).await
+    }
+
+    async fn get_latest_metadata(&self, template_id: &TemplateId) -> Result<Template, GolemError> {
+        self.client.get_latest_metadata(template_id).await
     }
 }
