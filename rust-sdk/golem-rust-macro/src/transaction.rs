@@ -23,16 +23,13 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
 
     let mut compensation = None;
     for arg in args {
-        match arg {
-            Meta::NameValue(name_value) => {
-                let name = name_value.path.get_ident().unwrap().to_string();
-                let value = name_value.value;
+        if let Meta::NameValue(name_value) = arg {
+            let name = name_value.path.get_ident().unwrap().to_string();
+            let value = name_value.value;
 
-                if name == "compensation" {
-                    compensation = Some(value);
-                }
+            if name == "compensation" {
+                compensation = Some(value);
             }
-            _ => {}
         }
     }
 
