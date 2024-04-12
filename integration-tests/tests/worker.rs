@@ -22,10 +22,12 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use golem_common::model::{
-    FilterComparator, StringFilterComparator, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    FilterComparator, StringFilterComparator, TemplateId, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerStatus,
 };
 use rand::seq::IteratorRandom;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
+use tokio::time::sleep;
 use warp::http::{Response, StatusCode};
 use warp::hyper::Body;
 use warp::Filter;
@@ -277,19 +279,32 @@ async fn get_workers() {
 #[tracing::instrument]
 async fn get_running_workers() {
     let template_id = DEPS.store_template("http-client-2").await;
-
-    let response = Arc::new(Mutex::new("initial".to_string()));
-    let response_clone = response.clone();
     let host_http_port = 8585;
 
+    let pooling_worker_ids: Arc<Mutex<HashSet<WorkerId>>> = Arc::new(Mutex::new(HashSet::new()));
+    let pooling_worker_ids_clone = pooling_worker_ids.clone();
+
     let http_server = tokio::spawn(async move {
-        let route = warp::path::path("poll").and(warp::get()).map(move || {
-            let body = response_clone.lock().unwrap();
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::from(body.clone()))
-                .unwrap()
-        });
+        let route = warp::path::path("poll")
+            .and(warp::get())
+            .and(warp::query::<HashMap<String, String>>())
+            .map(move |query: HashMap<String, String>| {
+                let template_id = query.get("template_id");
+                let worker_name = query.get("worker_name");
+                if let (Some(template_id), Some(worker_name)) = (template_id, worker_name) {
+                    let template_id: TemplateId = template_id.as_str().try_into().unwrap();
+                    let worker_id = WorkerId {
+                        template_id,
+                        worker_name: worker_name.clone(),
+                    };
+                    let mut ids = pooling_worker_ids_clone.lock().unwrap();
+                    ids.insert(worker_id.clone());
+                }
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .body(Body::from("initial"))
+                    .unwrap()
+            });
 
         warp::serve(route)
             .run(
@@ -329,7 +344,21 @@ async fn get_running_workers() {
                 vec![Value::String("first".to_string())],
             )
             .await;
+    }
 
+    let mut wait_counter = 0;
+
+    loop {
+        sleep(Duration::from_secs(2)).await;
+        wait_counter += 1;
+        let ids = pooling_worker_ids.lock().unwrap().clone();
+
+        if worker_ids.eq(&ids) || wait_counter >= 3 {
+            break;
+        }
+    }
+
+    for worker_id in worker_ids.clone() {
         let (_, values) = DEPS
             .get_workers_metadata(
                 &template_id,
