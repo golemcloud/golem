@@ -421,3 +421,39 @@ mod tests {
         println!("{result:?}");
     }
 }
+
+#[cfg(test)]
+#[cfg(feature = "macro")]
+mod macro_tests {
+    use golem_rust_macro::golem_operation;
+
+    use crate::normal_transaction;
+
+    mod golem_rust {
+        pub use crate::*;
+    }
+
+    #[golem_operation(compensation=test_compensation)]
+    fn test_operation(input1: u64, input2: f32) -> Result<bool, String> {
+        println!("Op input: {input1}, {input2}");
+        Ok(true)
+    }
+
+    fn test_compensation(input1: u64, input2: f32) -> Result<(), String> {
+        println!("Compensation input: {input1}, {input2}");
+        Ok(())
+    }
+
+    // Not a real test, just verifying that the code compiles
+    #[test]
+    #[ignore]
+    fn tx_test_1() {
+        let result = normal_transaction(|tx| {
+            println!("Executing the annotated function as an operation directly");
+            test_operation(tx, 1, 0.1)?;
+            Ok(11)
+        });
+
+        println!("{result:?}");
+    }
+}
