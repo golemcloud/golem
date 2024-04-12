@@ -67,8 +67,7 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
         None => quote! {},
     };
 
-    let compensation_pattern =
-        quote! { #input_pattern, op_result: Option<std::result::Result<#succ, #err>> };
+    let compensation_pattern = quote! { #input_pattern, op_result: #succ };
     let compensation_args = input_args.clone();
 
     let operation = quote! { operation };
@@ -105,12 +104,7 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
                             #fnname(#(#input_args), *)
                         },
                         |#compensation_pattern| {
-                            let op_result = match op_result {
-                                Some(Ok(ok)) => Some(Ok((ok,))),
-                                Some(Err(err)) => Some(Err((err,))),
-                                None => None,
-                            };
-                            #compensate(#compensation, op_result, (#(#compensation_args), *)).map_err(|err| err.0)
+                            #compensate(#compensation, (op_result,), (#(#compensation_args), *)).map_err(|err| err.0)
                         }
                     ),
                     (#(#input_args), *)

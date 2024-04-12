@@ -28,22 +28,14 @@ pub use compfn::*;
 /// Operations can also be constructed from closures using `operation`.
 pub trait Operation: Clone {
     type In: Clone;
-    type Out;
-    type Err;
+    type Out: Clone;
+    type Err: Clone;
 
     /// Executes the operation which may fail with a domain error
     fn execute(&self, input: Self::In) -> Result<Self::Out, Self::Err>;
 
     /// Executes a compensation action for the operation.
-    ///
-    /// When using `infallible_transaction_with_strong_rollback_guarantees`, it is possible that there the compensation function
-    /// is called with no `result` provided.
-    /// It is the implementor's responsibility to decide if any action can be taken in such a case.
-    fn compensate(
-        &self,
-        input: Self::In,
-        result: Option<Result<Self::Out, Self::Err>>,
-    ) -> Result<(), Self::Err>;
+    fn compensate(&self, input: Self::In, result: Self::Out) -> Result<(), Self::Err>;
 }
 
 /// Constructs an `Operation` from two closures: one for executing the operation,
@@ -56,9 +48,9 @@ pub trait Operation: Clone {
 /// result is available.
 ///
 /// This operation can run the compensation in both fallible and infallible transactions.
-pub fn operation<In: Clone, Out, Err>(
+pub fn operation<In: Clone, Out: Clone, Err: Clone>(
     execute_fn: impl Fn(In) -> Result<Out, Err> + 'static,
-    compensate_fn: impl Fn(In, Option<Result<Out, Err>>) -> Result<(), Err> + 'static,
+    compensate_fn: impl Fn(In, Out) -> Result<(), Err> + 'static,
 ) -> impl Operation<In = In, Out = Out, Err = Err> {
     FnOperation {
         execute_fn: Rc::new(execute_fn),
@@ -66,30 +58,10 @@ pub fn operation<In: Clone, Out, Err>(
     }
 }
 
-/// Constructs an `Operation` from two closures: one for executing the operation,
-/// and one for rolling it back where the rollback operation can see the operation's result.
-///
-/// This operation can not be used with `infallible_transaction_with_strong_rollback_guarantees`.
-pub fn operation_with_result<In: Clone, Out, Err>(
-    execute_fn: impl Fn(In) -> Result<Out, Err> + 'static,
-    compensate_fn: impl Fn(In, Result<Out, Err>) -> Result<(), Err> + 'static,
-) -> impl Operation<In = In, Out = Out, Err = Err> {
-    FnOperation {
-        execute_fn: Rc::new(execute_fn),
-        compensate_fn: Rc::new(move |input: In, maybe_result: Option<Result<Out, Err>>| {
-            if let Some(result) = maybe_result {
-                compensate_fn(input, result)
-            } else {
-                Ok(())
-            }
-        }),
-    }
-}
-
 #[allow(clippy::type_complexity)]
 struct FnOperation<In, Out, Err> {
     execute_fn: Rc<dyn Fn(In) -> Result<Out, Err>>,
-    compensate_fn: Rc<dyn Fn(In, Option<Result<Out, Err>>) -> Result<(), Err>>,
+    compensate_fn: Rc<dyn Fn(In, Out) -> Result<(), Err>>,
 }
 
 impl<In, Out, Err> Clone for FnOperation<In, Out, Err> {
@@ -101,7 +73,7 @@ impl<In, Out, Err> Clone for FnOperation<In, Out, Err> {
     }
 }
 
-impl<In: Clone, Out, Err> Operation for FnOperation<In, Out, Err> {
+impl<In: Clone, Out: Clone, Err: Clone> Operation for FnOperation<In, Out, Err> {
     type In = In;
     type Out = Out;
     type Err = Err;
@@ -110,7 +82,7 @@ impl<In: Clone, Out, Err> Operation for FnOperation<In, Out, Err> {
         (self.execute_fn)(input)
     }
 
-    fn compensate(&self, input: In, result: Option<Result<Out, Err>>) -> Result<(), Err> {
+    fn compensate(&self, input: In, result: Out) -> Result<(), Err> {
         (self.compensate_fn)(input, result)
     }
 }
@@ -194,26 +166,15 @@ where
     T::run(f)
 }
 
-/// Helper trait for coupling compensation action and the result of the operation.
-trait CompensationAction<Err> {
-    fn execute(&self) -> Result<(), Err>;
-}
-
 /// Helper struct for coupling compensation action and the result of the operation.
 #[allow(clippy::type_complexity)]
-struct CompensationActionCell<Out, Err> {
-    action: Box<dyn Fn(Result<Out, Err>) -> Result<(), Err>>,
-    result: Option<Result<Out, Err>>,
+struct CompensationAction<Err> {
+    action: Box<dyn Fn() -> Result<(), Err>>,
 }
 
-impl<Out: Clone, Err: Clone> CompensationAction<Err> for CompensationActionCell<Out, Err> {
-    fn execute(&self) -> Result<(), Err> {
-        let action = &*self.action;
-        action(
-            self.result
-                .clone()
-                .expect("Compensation action executed without a result"),
-        )
+impl<Err> CompensationAction<Err> {
+    pub fn execute(&self) -> Result<(), Err> {
+        (self.action)()
     }
 }
 
@@ -224,7 +185,7 @@ impl<Out: Clone, Err: Clone> CompensationAction<Err> for CompensationActionCell<
 /// In case of fatal errors (panic) and external executor failures it does not perform the
 /// compensation actions and the whole transaction gets retried.
 pub struct FallibleTransaction<Err> {
-    compensations: Vec<Box<dyn CompensationAction<Err>>>,
+    compensations: Vec<CompensationAction<Err>>,
 }
 
 impl<Err: Clone + 'static> FallibleTransaction<Err> {
@@ -239,15 +200,14 @@ impl<Err: Clone + 'static> FallibleTransaction<Err> {
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> Result<OpOut, Err> {
-        let cloned_op = operation.clone();
-        let cloned_in = input.clone();
-        let mut cell = CompensationActionCell {
-            action: Box::new(move |result| cloned_op.compensate(cloned_in.clone(), Some(result))),
-            result: None,
-        };
-        let result = operation.execute(input);
-        cell.result = Some(result.clone());
-        self.compensations.push(Box::new(cell));
+        let result = operation.execute(input.clone());
+        if let Ok(output) = &result {
+            let cloned_op = operation.clone();
+            let cloned_out = output.clone();
+            self.compensations.push(CompensationAction {
+                action: Box::new(move || cloned_op.compensate(input.clone(), cloned_out.clone())),
+            });
+        }
         result
     }
 
@@ -276,7 +236,7 @@ impl<Err: Clone + 'static> FallibleTransaction<Err> {
 /// rollback actions.
 pub struct InfallibleTransaction {
     begin_oplog_index: OplogIndex,
-    compensations: Vec<Box<dyn CompensationAction<()>>>,
+    compensations: Vec<CompensationAction<()>>,
 }
 
 impl InfallibleTransaction {
@@ -296,21 +256,20 @@ impl InfallibleTransaction {
         operation: impl Operation<In = OpIn, Out = OpOut, Err = OpErr> + 'static,
         input: OpIn,
     ) -> OpOut {
-        let cloned_op = operation.clone();
-        let cloned_in = input.clone();
-        let mut cell = CompensationActionCell {
-            action: Box::new(move |result| {
-                cloned_op
-                    .compensate(cloned_in.clone(), Some(result))
-                    .expect("Compensation action failed");
-                Ok(())
-            }),
-            result: None,
-        };
-        let result = operation.execute(input);
-        cell.result = Some(result.clone());
-        match result {
-            Ok(output) => output,
+        match operation.execute(input.clone()) {
+            Ok(output) => {
+                let cloned_op = operation.clone();
+                let cloned_out = output.clone();
+                self.compensations.push(CompensationAction {
+                    action: Box::new(move || {
+                        cloned_op
+                            .compensate(input.clone(), cloned_out.clone())
+                            .expect("Compensation action failed");
+                        Ok(())
+                    }),
+                });
+                output
+            }
             Err(_) => {
                 self.retry();
                 unreachable!()
@@ -327,7 +286,7 @@ impl InfallibleTransaction {
     }
 }
 
-/// A unified interface for the different types of transactions. Using it can makes the code
+/// A unified interface for the different types of transactions. Using it can make the code
 /// easier to switch between different transactional guarantees but is more constrained in
 /// terms of error types.
 pub trait Transaction<Err> {
@@ -384,7 +343,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use crate::{fallible_transaction, infallible_transaction, operation, operation_with_result};
+    use crate::{fallible_transaction, infallible_transaction, operation};
 
     // Not a real test, just verifying that the code compiles
     #[test]
@@ -454,7 +413,7 @@ mod tests {
             },
         );
 
-        let op2 = operation_with_result(
+        let op2 = operation(
             move |_: ()| {
                 log3.clone().borrow_mut().push("op2 execute".to_string());
                 Err::<(), &str>("op2 error")
@@ -498,11 +457,7 @@ mod macro_tests {
         Ok(true)
     }
 
-    fn test_compensation(
-        _: Option<Result<bool, String>>,
-        input1: u64,
-        input2: f32,
-    ) -> Result<(), String> {
+    fn test_compensation(_: bool, input1: u64, input2: f32) -> Result<(), String> {
         println!("Compensation input: {input1}, {input2}");
         Ok(())
     }
@@ -513,7 +468,7 @@ mod macro_tests {
         Ok(true)
     }
 
-    fn test_compensation_2(result: Option<Result<bool, String>>) -> Result<(), String> {
+    fn test_compensation_2(result: bool) -> Result<(), String> {
         println!("Compensation for operation result {result:?}");
         Ok(())
     }

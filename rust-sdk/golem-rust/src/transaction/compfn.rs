@@ -14,10 +14,10 @@
 
 pub fn call_compensation_function<In, Out, Err>(
     f: impl CompensationFunction<In, Out, Err>,
-    result: Option<Result<impl TupleOrUnit<Out>, Err>>,
+    result: impl TupleOrUnit<Out>,
     input: impl TupleOrUnit<In>,
 ) -> Result<(), Err> {
-    f.call(input, result)
+    f.call(result, input)
 }
 
 pub trait TupleOrUnit<T> {
@@ -25,11 +25,7 @@ pub trait TupleOrUnit<T> {
 }
 
 pub trait CompensationFunction<In, Out, Err> {
-    fn call(
-        self,
-        input: impl TupleOrUnit<In>,
-        result: Option<Result<impl TupleOrUnit<Out>, Err>>,
-    ) -> Result<(), Err>;
+    fn call(self, result: impl TupleOrUnit<Out>, input: impl TupleOrUnit<In>) -> Result<(), Err>;
 }
 
 impl<F, Err> CompensationFunction<(), (), (Err,)> for F
@@ -38,8 +34,8 @@ where
 {
     fn call(
         self,
+        _result: impl TupleOrUnit<()>,
         _input: impl TupleOrUnit<()>,
-        _result: Option<Result<impl TupleOrUnit<()>, (Err,)>>,
     ) -> Result<(), (Err,)> {
         self().map_err(|e| (e,))?;
         Ok(())
@@ -48,21 +44,15 @@ where
 
 impl<F, Out, Err> CompensationFunction<(), (Out,), (Err,)> for F
 where
-    F: FnOnce(Option<Result<Out, Err>>) -> Result<(), Err>,
+    F: FnOnce(Out) -> Result<(), Err>,
 {
     fn call(
         self,
+        out: impl TupleOrUnit<(Out,)>,
         _input: impl TupleOrUnit<()>,
-        result: Option<Result<impl TupleOrUnit<(Out,)>, (Err,)>>,
     ) -> Result<(), (Err,)> {
-        match result {
-            Some(Ok(out)) => {
-                let (out,) = out.into();
-                self(Some(Ok(out))).map_err(|err| (err,))
-            }
-            Some(Err((err,))) => self(Some(Err(err))).map_err(|err| (err,)),
-            None => self(None).map_err(|err| (err,)),
-        }
+        let (out,) = out.into();
+        self(out).map_err(|err| (err,))
     }
 }
 
@@ -70,37 +60,31 @@ impl<T> TupleOrUnit<()> for T {
     fn into(self) {}
 }
 
-macro_rules! tuple_or_unit {
+macro_rules! compensation_function {
     ($($ty:ident),*) => {
-        impl<$($ty),*> TupleOrUnit<($($ty,)*)> for ($($ty,)*) {
-            fn into(self) -> ($($ty,)*) {
-                self
+        impl<F, $($ty),*, Out, Err> CompensationFunction<($($ty),*,), (Out,), (Err,)> for F
+        where
+            F: FnOnce(Out, $($ty),*) -> Result<(), Err>,
+        {
+            fn call(
+                self,
+                out: impl TupleOrUnit<(Out,)>,
+                input: impl TupleOrUnit<($($ty),*,)>,
+            ) -> Result<(), (Err,)> {
+                #[allow(non_snake_case)]
+                let ( $($ty,)+ ) = input.into();
+                let (out,) = out.into();
+                self(out, $($ty),*).map_err(|err| (err,))
             }
         }
     }
 }
 
-macro_rules! compensation_function {
+macro_rules! tuple_or_unit {
     ($($ty:ident),*) => {
-        impl<F, $($ty),*, Out, Err> CompensationFunction<($($ty),*,), (Out,), (Err,)> for F
-        where
-            F: FnOnce(Option<Result<Out, Err>>, $($ty),*) -> Result<(), Err>,
-        {
-            fn call(
-                self,
-                input: impl TupleOrUnit<($($ty),*,)>,
-                result: Option<Result<impl TupleOrUnit<(Out,)>, (Err,)>>,
-            ) -> Result<(), (Err,)> {
-                #[allow(non_snake_case)]
-                let ( $($ty,)+ ) = input.into();
-                match result {
-                    Some(Ok(out)) => {
-                        let (out,) = out.into();
-                        self(Some(Ok(out)), $($ty),*).map_err(|err| (err,))
-                    }
-                    Some(Err((err,))) => self(Some(Err(err)), $($ty),*).map_err(|err| (err,)),
-                    None => self(None, $($ty),*).map_err(|err| (err,)),
-                }
+        impl<$($ty),*> TupleOrUnit<($($ty,)*)> for ($($ty,)*) {
+            fn into(self) -> ($($ty,)*) {
+                self
             }
         }
     }
