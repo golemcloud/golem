@@ -33,8 +33,9 @@ pub enum Expr {
     EqualTo(Box<Expr>, Box<Expr>),
     LessThan(Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
-    PatternMatch(Box<Expr>, Vec<ConstructorPatternExpr>),
-    Constructor0(ConstructorPattern), // Can exist standalone from pattern match
+    PatternMatch(Box<Expr>, Vec<MatchArm>),
+    Option(Option<Box<Expr>>),
+    Result(Result<Box<Expr>, Box<Expr>>),
 }
 
 impl Expr {
@@ -68,85 +69,96 @@ impl Display for InnerNumber {
     }
 }
 
+// Ex: Some(x) => foo
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
-pub struct ConstructorPatternExpr(pub (ConstructorPattern, Box<Expr>));
+pub struct MatchArm(pub (ArmPattern, Box<Expr>));
 
-// A constructor pattern by itself is an expr,
+// Ex: Some(x)
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
-pub enum ConstructorPattern {
+pub enum ArmPattern {
     WildCard,
-    As(String, Box<ConstructorPattern>),
-    Constructor(ConstructorTypeName, Vec<ConstructorPattern>),
+    As(String, Box<ArmPattern>),
+    Constructor(ConstructorTypeName, Vec<ArmPattern>),
     Literal(Box<Expr>),
 }
 
-impl ConstructorPattern {
-    pub fn constructor(
-        constructor_name: &str,
-        variables: Vec<ConstructorPattern>,
-    ) -> Result<ConstructorPattern, ParseError> {
-        if constructor_name == "ok" {
+impl ArmPattern {
+    pub fn from_expr(expr: Expr) -> ArmPattern {
+        match expr {
+            Expr::Option(Some(expr)) => ArmPattern::Constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Some),
+                vec![ArmPattern::Literal(expr)],
+            ),
+            Expr::Option(None) => ArmPattern::Constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::None),
+                vec![],
+            ),
+            Expr::Result(Ok(expr)) => ArmPattern::Constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Ok),
+                vec![ArmPattern::Literal(expr)],
+            ),
+            Expr::Result(Err(expr)) => ArmPattern::Constructor(
+                ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Err),
+                vec![ArmPattern::Literal(expr)],
+            ),
+            // Need to revisit, that we represented wild card with Expr::Empty
+            Expr::Multiple(exprs) if exprs.is_empty() => ArmPattern::WildCard,
+            _ => ArmPattern::Literal(Box::new(expr)),
+        }
+    }
+
+    pub fn from(pattern_name: &str, variables: Vec<ArmPattern>) -> Result<ArmPattern, ParseError> {
+        if pattern_name == "ok" {
             validate_single_variable_constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Ok),
                 variables,
             )
-        } else if constructor_name == "err" {
+        } else if pattern_name == "err" {
             validate_single_variable_constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Err),
                 variables,
             )
-        } else if constructor_name == "none" {
+        } else if pattern_name == "none" {
             validate_empty_constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::None),
                 variables,
             )
-        } else if constructor_name == "some" {
+        } else if pattern_name == "some" {
             validate_single_variable_constructor(
                 ConstructorTypeName::InBuiltConstructor(InBuiltConstructorInner::Some),
                 variables,
             )
         } else {
-            let constructor_type =
-                ConstructorTypeName::CustomConstructor(constructor_name.to_string());
-            Ok(ConstructorPattern::Constructor(constructor_type, variables))
+            let constructor_type = ConstructorTypeName::CustomConstructor(pattern_name.to_string());
+            Ok(ArmPattern::Constructor(constructor_type, variables))
         }
     }
 }
 
 fn validate_empty_constructor(
     constructor_type: ConstructorTypeName,
-    variables: Vec<ConstructorPattern>,
-) -> Result<ConstructorPattern, ParseError> {
+    variables: Vec<ArmPattern>,
+) -> Result<ArmPattern, ParseError> {
     if !variables.is_empty() {
         Err(ParseError::Message(
             "constructor should have zero variables".to_string(),
         ))
     } else {
-        Ok(ConstructorPattern::Constructor(constructor_type, variables))
+        Ok(ArmPattern::Constructor(constructor_type, variables))
     }
 }
 
 fn validate_single_variable_constructor(
     constructor_type: ConstructorTypeName,
-    variables: Vec<ConstructorPattern>,
-) -> Result<ConstructorPattern, ParseError> {
+    variables: Vec<ArmPattern>,
+) -> Result<ArmPattern, ParseError> {
     if variables.len() != 1 {
-        Err(ParseError::Message(
-            "constructor should have exactly one variable".to_string(),
-        ))
+        Err(ParseError::Message(format!(
+            "constructor should have exactly one variable for {}",
+            constructor_type
+        )))
     } else {
-        match variables.first().unwrap() {
-            ConstructorPattern::Literal(_) => {
-                Ok(ConstructorPattern::Constructor(constructor_type, variables))
-            }
-
-            ConstructorPattern::Constructor(_, _) => {
-                Ok(ConstructorPattern::Constructor(constructor_type, variables))
-            }
-            _ => Err(ParseError::Message(
-                "Ok constructor should have exactly one variable".to_string(),
-            )),
-        }
+        Ok(ArmPattern::Constructor(constructor_type, variables))
     }
 }
 
@@ -192,16 +204,6 @@ impl Expr {
             _ => false,
         }
     }
-
-    // A primitive string can be converted to Expr. Not that if the string is already as complex as yaml or json, use functions such as Expr::from_yaml_value, Expr::from_json_value
-    pub fn from_str(input: &str) -> Result<Expr, ParseError> {
-        let expr_parser = ExprParser {};
-        expr_parser.parse(input)
-    }
-
-    pub fn to_string(&self) -> Result<String, String> {
-        expression::to_string(self).map_err(|x| x.to_string())
-    }
 }
 
 impl FromStr for Expr {
@@ -210,6 +212,12 @@ impl FromStr for Expr {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let expr_parser = ExprParser {};
         expr_parser.parse(s)
+    }
+}
+
+impl Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", expression::to_string(self).unwrap())
     }
 }
 

@@ -21,6 +21,8 @@ pub enum Token {
     Colon,
     LetEqual,
     SemiColon,
+    WildCard,
+    At,
 }
 
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
@@ -154,6 +156,8 @@ impl Display for Token {
                 Token::Colon => ":",
                 Token::LetEqual => "=",
                 Token::SemiColon => ";",
+                Token::WildCard => "_",
+                Token::At => "@",
                 Token::MultiChar(multi_char) => match multi_char {
                     MultiCharTokens::Else => "else",
                     MultiCharTokens::EqualTo => "==",
@@ -180,16 +184,6 @@ impl Display for Token {
 }
 
 impl Token {
-    pub fn is_non_empty_constructor(&self) -> bool {
-        matches!(
-            self,
-            Token::MultiChar(MultiCharTokens::Ok)
-                | Token::MultiChar(MultiCharTokens::Err)
-                | Token::MultiChar(MultiCharTokens::Some)
-                | Token::MultiChar(MultiCharTokens::Match)
-        )
-    }
-
     pub fn is_empty_constructor(&self) -> bool {
         matches!(self, Token::MultiChar(MultiCharTokens::None))
     }
@@ -215,6 +209,10 @@ pub struct Tokenizer<'a> {
 }
 
 impl<'t> Tokenizer<'t> {
+    pub fn pos(&self) -> usize {
+        self.state.pos
+    }
+
     pub fn peek_at(&mut self, index: usize) -> Option<Token> {
         let original_state = self.state.pos;
         self.state.pos = index;
@@ -258,6 +256,32 @@ impl<'t> Tokenizer<'t> {
             None => None,
         }
     }
+
+    pub fn capture_string_until_either(
+        &mut self,
+        token1: &'t Token,
+        token2: &'t Token,
+    ) -> Option<(&'t Token, String)> {
+        let left_index = self.index_of_end_token(token1);
+        let right_index = self.index_of_end_token(token2);
+
+        match (left_index, right_index) {
+            (Some(x), Some(y)) if x > y => self
+                .capture_string_until(token2)
+                .map(|string| (token2, string)),
+            (Some(_), Some(_)) => self
+                .capture_string_until(token1)
+                .map(|string| (token1, string)),
+            (Some(_), None) => self
+                .capture_string_until(token1)
+                .map(|string| (token1, string)),
+            (None, Some(_)) => self
+                .capture_string_until(token2)
+                .map(|string| (token2, string)),
+            (None, None) => None,
+        }
+    }
+
     // Consider this function to be low level function and use it carefully. Example: use expr::util module functions
     // if you are calling this as part of `Expr` language parsing.
     // Captures the string upto the end token, leaving the cursor at the end token (leaving it to the user)
@@ -464,8 +488,10 @@ impl<'t> Tokenizer<'t> {
             ' ' => Some(Token::Space),
             '>' => Some(Token::GreaterThan),
             '<' => Some(Token::LessThan),
+            '_' => Some(Token::WildCard),
             ':' => Some(Token::Colon),
             ';' => Some(Token::SemiColon),
+            '@' => Some(Token::At),
             '=' => self
                 .rest()
                 .chars()
@@ -1118,5 +1144,14 @@ else${z}
             (result, unchanged_current_toknen),
             (None, Some(Token::Quote))
         )
+    }
+
+    #[test]
+    fn test_capture_string_between_quotes() {
+        let tokens = "foo' == 'bar'";
+
+        let mut tokeniser = Tokenizer::new(tokens);
+        let result = tokeniser.capture_string_until_and_skip_end(&Token::Quote);
+        assert_eq!(result, Some("foo".to_string()))
     }
 }

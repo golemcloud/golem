@@ -1,6 +1,6 @@
 use crate::expression::Expr;
 use crate::parser::expr::util;
-use crate::parser::expr_parser::{parse_with_context, Context};
+use crate::parser::expr_parser::parse_code;
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
@@ -31,7 +31,7 @@ pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErro
                         let captured_value = tokenizer.capture_string_until(&Token::Comma);
                         match captured_value {
                             Some(value) => {
-                                let expr = parse_with_context(value.as_str(), Context::Code)?;
+                                let expr = parse_code(value.as_str())?;
                                 record.push((key.to_string(), expr.clone()));
                                 tokenizer.skip_if_next_non_empty_token_is(&Token::Comma); // Skip next comma
                                 go(tokenizer, record)
@@ -41,8 +41,7 @@ pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErro
 
                                 match last_value {
                                     Some(last_value) => {
-                                        let expr =
-                                            parse_with_context(last_value.as_str(), Context::Code)?;
+                                        let expr = parse_code(last_value.as_str())?;
                                         record.push((key.to_string(), expr));
                                         Ok(())
                                     }
@@ -97,7 +96,7 @@ where
                 &complex_value_start_token, &captured_string, &closing_token
             );
 
-            let expr = parse_with_context(full_expr.as_str(), Context::Code)?;
+            let expr = parse_code(full_expr.as_str())?;
             record.push((key_of_complex_value, expr.clone()));
             match tokenizer.peek_next_non_empty_token() {
                 Some(Token::Comma) => {
