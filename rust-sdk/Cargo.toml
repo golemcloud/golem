@@ -1,16 +1,13 @@
-[package]
-name = "golem-rust"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
-homepage = "https://golem.cloud"
-description = "Golem Rust tooling library that facilitates writing Golem backends in Rust"
+[workspace]
+resolver = "2"
 
-[lib]
-proc-macro = true
-path = "src/lib.rs"
+members = [
+    "golem-rust-macro",
+    "golem-rust",
+]
 
-[dependencies]
-proc-macro2 = "1.0.70"
-quote = "1.0.33"
-syn = { version = "2.0.39", features = ["extra-traits", "full", "fold"] }
+[profile.release]
+debug = false
+lto = true
+opt-level = 's'
+

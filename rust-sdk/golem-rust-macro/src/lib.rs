@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod der_macro;
-mod wit_gen;
-
 use proc_macro::TokenStream;
+
 use syn::*;
+
+use crate::transaction::golem_operation_impl;
+
+mod expand;
+mod transaction;
+mod wit_gen;
 
 /// Derives `From<>` And `Into<>` typeclasses for wit-bindgen generated data types (e.g. `WitPerson`)
 /// and custom domain data types (e.g. `Person`). So it's possible to write code like this:
@@ -41,7 +45,7 @@ use syn::*;
 ///  }
 ///
 ///
-///  #[derive(golem_rust::WIT_From_Into)]
+///  #[derive(golem_rust_macro::WIT_From_Into)]
 ///  #[wit_type_name(WitPerson)]
 ///  pub struct Person {
 ///
@@ -55,17 +59,17 @@ use syn::*;
 pub fn derive(input: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(input as DeriveInput);
 
-    der_macro::expand_wit(&mut input)
+    expand::expand_wit(&mut input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
-/// Annotates a module with `#[golem_rust::create_wit_file]` and generates WIT file in the root of your project.
+/// Annotates a module with `#[golem_rust_macro::create_wit_file]` and generates WIT file in the root of your project.
 /// Supports enums, structs, traits and alias types.
 ///
 /// # Example:
 /// ```
-///  #[golem_rust::create_wit_file("auction_app.wit")]
+///  #[golem_rust_macro::create_wit_file("auction_app.wit")]
 ///  mod auction_app {
 ///  
 ///      struct BidderId {
@@ -188,4 +192,10 @@ pub fn create_wit_file(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .and_then(|file_name| wit_gen::generate_witfile(&mut input, file_name).to_owned())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// Defines a function as an `Operation` that can be used in transactions
+#[proc_macro_attribute]
+pub fn golem_operation(attr: TokenStream, item: TokenStream) -> TokenStream {
+    golem_operation_impl(attr, item)
 }

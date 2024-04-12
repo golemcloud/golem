@@ -16,27 +16,32 @@ jobs:
 
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-is    
-    - name: Setup Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        override: true
-    - name: Check formatting
-      run: cargo fmt -- --check
-    - name: Clippy
-      run: cargo clippy -- -Dwarnings      
-    - name: Tests
-      run: cargo test --all-features
+      - uses: actions/checkout@v3
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-is
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Install cargo-component
+        run: cargo binstall --no-confirm cargo-component@0.7.0
+      - name: Check formatting
+        run: cargo fmt -- --check
+      - name: Clippy
+        run: cargo clippy -- -Dwarnings
+      - name: Tests
+        run: cargo test --all-features
+      - name: Build golem-rust component
+        run: cargo component build -p golem-rust
 
   publish:
     needs: [ build ]
@@ -64,10 +69,12 @@ jobs:
           override: true
       - id: get_version
         uses: battila7/get-version-action@v2
-      - name: Publish crate
+      - name: Publish crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           export VERSION="${{ steps.get_version.outputs.version-without-v }}"
-          sed -i "s/0.0.0/$VERSION/g" Cargo.toml
-          cargo publish --all-features --allow-dirty
+          sed -i "s/0.0.0/$VERSION/g" golem-rust-macro/Cargo.toml
+          sed -i "s/0.0.0/$VERSION/g" golem-rust/Cargo.toml
+          cargo publish -p golem-rust-macro --all-features --allow-dirty
+          cargo publish -p golem-rust --all-features --allow-dirty
