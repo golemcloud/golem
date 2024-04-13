@@ -128,7 +128,6 @@ cargo build --release --target aarch64-unknown-linux-gnu --package golem-templat
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-router
 ```
 
 ### ARM MAC
@@ -156,7 +155,6 @@ cargo build --release --target aarch64-unknown-linux-gnu --package golem-templat
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-router
 ```
 
 ### LINUX
@@ -170,7 +168,6 @@ cargo build --release --target aarch64-unknown-linux-gnu --package golem-templat
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-router
 ```
 
 ## Integration with existing API Gateways
