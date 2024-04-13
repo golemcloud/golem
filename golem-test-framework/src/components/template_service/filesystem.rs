@@ -58,7 +58,7 @@ impl TemplateService for FileSystemTemplateService {
         TemplateId(uuid)
     }
 
-    async fn update_template(&self, template_id: &TemplateId, local_path: &Path) -> i32 {
+    async fn update_template(&self, template_id: &TemplateId, local_path: &Path) -> u64 {
         let target_dir = &self.root;
 
         debug!("Local template store: {target_dir:?}");
@@ -80,7 +80,7 @@ impl TemplateService for FileSystemTemplateService {
         new_version
     }
 
-    async fn get_latest_version(&self, template_id: &TemplateId) -> i32 {
+    async fn get_latest_version(&self, template_id: &TemplateId) -> u64 {
         let target_dir = &self.root;
 
         let template_id_str = template_id.to_string();
@@ -94,14 +94,14 @@ impl TemplateService for FileSystemTemplateService {
                 if file_name.starts_with(&template_id_str) && file_name.ends_with(".wasm") {
                     let version_part = file_name.split('-').last().unwrap();
                     let version_part = version_part[..version_part.len() - 5].to_string();
-                    version_part.parse::<i32>().ok()
+                    version_part.parse::<u64>().ok()
                 } else {
                     None
                 }
             })
-            .collect::<Vec<i32>>();
+            .collect::<Vec<u64>>();
         versions.sort();
-        *versions.last().unwrap_or(&-1)
+        *versions.last().unwrap_or(&0)
     }
 
     fn private_host(&self) -> String {

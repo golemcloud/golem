@@ -21,7 +21,7 @@ use golem_common::model::TemplateId;
 
 #[async_trait]
 pub trait TemplateCompilationService {
-    async fn enqueue_compilation(&self, template_id: &TemplateId, template_version: i32);
+    async fn enqueue_compilation(&self, template_id: &TemplateId, template_version: u64);
 }
 
 pub struct TemplateCompilationServiceDefault {
@@ -36,7 +36,7 @@ impl TemplateCompilationServiceDefault {
 
 #[async_trait]
 impl TemplateCompilationService for TemplateCompilationServiceDefault {
-    async fn enqueue_compilation(&self, template_id: &TemplateId, template_version: i32) {
+    async fn enqueue_compilation(&self, template_id: &TemplateId, template_version: u64) {
         let mut client = match TemplateCompilationServiceClient::connect(self.uri.clone()).await {
             Ok(client) => client,
             Err(e) => {
@@ -63,5 +63,5 @@ pub struct TemplateCompilationServiceDisabled;
 
 #[async_trait]
 impl TemplateCompilationService for TemplateCompilationServiceDisabled {
-    async fn enqueue_compilation(&self, _: &TemplateId, _: i32) {}
+    async fn enqueue_compilation(&self, _: &TemplateId, _: u64) {}
 }

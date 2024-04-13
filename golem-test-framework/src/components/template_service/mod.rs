@@ -130,7 +130,7 @@ pub trait TemplateService {
         }
     }
 
-    async fn update_template(&self, template_id: &TemplateId, local_path: &Path) -> i32 {
+    async fn update_template(&self, template_id: &TemplateId, local_path: &Path) -> u64 {
         let mut client = self.client().await;
         let data = std::fs::read(local_path)
             .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
@@ -175,7 +175,7 @@ pub trait TemplateService {
         }
     }
 
-    async fn get_latest_version(&self, template_id: &TemplateId) -> i32 {
+    async fn get_latest_version(&self, template_id: &TemplateId) -> u64 {
         let response = self
             .client()
             .await

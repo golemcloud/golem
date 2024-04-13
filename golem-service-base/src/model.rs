@@ -39,7 +39,7 @@ pub struct TemplateName(pub String);
 #[oai(rename_all = "camelCase")]
 pub struct VersionedTemplateId {
     pub template_id: TemplateId,
-    pub version: i32,
+    pub version: u64,
 }
 
 impl VersionedTemplateId {
@@ -1897,7 +1897,7 @@ impl std::fmt::Display for WorkerId {
 #[oai(rename_all = "camelCase")]
 pub struct VersionedWorkerId {
     pub worker_id: WorkerId,
-    pub template_version_used: i32,
+    pub template_version_used: u64,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::VersionedWorkerId> for VersionedWorkerId {
@@ -2653,8 +2653,8 @@ pub struct WorkerMetadata {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
-    pub template_version: i32,
-    pub retry_count: i32,
+    pub template_version: u64,
+    pub retry_count: u64,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {

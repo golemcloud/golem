@@ -52,14 +52,14 @@ pub trait TemplateService {
         &self,
         engine: &Engine,
         template_id: &TemplateId,
-        template_version: i32,
+        template_version: u64,
     ) -> Result<Component, GolemError>;
 
     async fn get_latest(
         &self,
         engine: &Engine,
         template_id: &TemplateId,
-    ) -> Result<(i32, Component), GolemError>;
+    ) -> Result<(u64, Component), GolemError>;
 }
 
 pub async fn configured(
@@ -96,7 +96,7 @@ pub async fn configured(
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct TemplateKey {
     template_id: TemplateId,
-    template_version: i32,
+    template_version: u64,
 }
 
 pub struct TemplateServiceGrpc {
@@ -135,7 +135,7 @@ impl TemplateService for TemplateServiceGrpc {
         &self,
         engine: &Engine,
         template_id: &TemplateId,
-        template_version: i32,
+        template_version: u64,
     ) -> Result<Component, GolemError> {
         let key = TemplateKey {
             template_id: template_id.clone(),
@@ -217,7 +217,7 @@ impl TemplateService for TemplateServiceGrpc {
         &self,
         engine: &Engine,
         template_id: &TemplateId,
-    ) -> Result<(i32, Component), GolemError> {
+    ) -> Result<(u64, Component), GolemError> {
         let latest_version = get_latest_version_via_grpc(
             &self.endpoint,
             &self.access_token,
@@ -235,7 +235,7 @@ async fn download_via_grpc(
     access_token: &Uuid,
     retry_config: &RetryConfig,
     template_id: &TemplateId,
-    template_version: i32,
+    template_version: u64,
     max_template_size: usize,
 ) -> Result<Vec<u8>, GolemError> {
     let desc = format!("Downloading template {template_id}");
@@ -296,7 +296,7 @@ async fn get_latest_version_via_grpc(
     access_token: &Uuid,
     retry_config: &RetryConfig,
     template_id: &TemplateId,
-) -> Result<i32, GolemError> {
+) -> Result<u64, GolemError> {
     let desc = format!("Getting latest version of {template_id}");
     debug!("{}", &desc);
     with_retries(
@@ -357,7 +357,7 @@ async fn get_latest_version_via_grpc(
 fn grpc_template_download_error(
     error: GrpcError<TemplateError>,
     template_id: &TemplateId,
-    template_version: i32,
+    template_version: u64,
 ) -> GolemError {
     GolemError::TemplateDownloadFailed {
         template_id: template_id.clone(),
@@ -427,7 +427,7 @@ impl TemplateServiceLocalFileSystem {
         path: &Path,
         engine: &Engine,
         template_id: &TemplateId,
-        template_version: i32,
+        template_version: u64,
     ) -> Result<Component, GolemError> {
         let key = TemplateKey {
             template_id: template_id.clone(),
@@ -502,7 +502,7 @@ impl TemplateService for TemplateServiceLocalFileSystem {
         &self,
         engine: &Engine,
         template_id: &TemplateId,
-        template_version: i32,
+        template_version: u64,
     ) -> Result<Component, GolemError> {
         let path = self
             .root
@@ -516,7 +516,7 @@ impl TemplateService for TemplateServiceLocalFileSystem {
         &self,
         engine: &Engine,
         template_id: &TemplateId,
-    ) -> Result<(i32, Component), GolemError> {
+    ) -> Result<(u64, Component), GolemError> {
         let prefix = format!("{}-", template_id);
         let mut reader = tokio::fs::read_dir(&self.root).await?;
         let mut matching_files = Vec::new();
@@ -533,7 +533,7 @@ impl TemplateService for TemplateServiceLocalFileSystem {
 
         let latest = matching_files
             .into_iter()
-            .filter_map(|(path, s)| s.parse::<i32>().map(|version| (path, version)).ok())
+            .filter_map(|(path, s)| s.parse::<u64>().map(|version| (path, version)).ok())
             .max_by_key(|(_, version)| *version);
 
         match latest {
@@ -575,7 +575,7 @@ impl TemplateService for TemplateServiceMock {
         &self,
         _engine: &Engine,
         _template_id: &TemplateId,
-        _template_version: i32,
+        _template_version: u64,
     ) -> Result<Component, GolemError> {
         unimplemented!()
     }
@@ -584,7 +584,7 @@ impl TemplateService for TemplateServiceMock {
         &self,
         _engine: &Engine,
         _template_id: &TemplateId,
-    ) -> Result<(i32, Component), GolemError> {
+    ) -> Result<(u64, Component), GolemError> {
         unimplemented!()
     }
 }

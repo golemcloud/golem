@@ -76,13 +76,13 @@ pub trait TemplateService {
     async fn download(
         &self,
         template_id: &TemplateId,
-        version: Option<i32>,
+        version: Option<u64>,
     ) -> Result<Vec<u8>, TemplateError>;
 
     async fn get_protected_data(
         &self,
         template_id: &TemplateId,
-        version: Option<i32>,
+        version: Option<u64>,
     ) -> Result<Option<Vec<u8>>, TemplateError>;
 
     async fn find_by_name(
@@ -234,7 +234,7 @@ impl TemplateService for TemplateServiceDefault {
     async fn download(
         &self,
         template_id: &TemplateId,
-        version: Option<i32>,
+        version: Option<u64>,
     ) -> Result<Vec<u8>, TemplateError> {
         let versioned_template_id = {
             match version {
@@ -266,7 +266,7 @@ impl TemplateService for TemplateServiceDefault {
     async fn get_protected_data(
         &self,
         template_id: &TemplateId,
-        version: Option<i32>,
+        version: Option<u64>,
     ) -> Result<Option<Vec<u8>>, TemplateError> {
         info!(
             "Getting template  {} version {} data",
@@ -281,8 +281,8 @@ impl TemplateService for TemplateServiceDefault {
 
         let v = match latest_template {
             Some(template) => match version {
-                Some(v) if v <= template.version => v,
-                None => template.version,
+                Some(v) if v <= template.version as u64 => v,
+                None => template.version as u64,
                 _ => {
                     return Ok(None);
                 }
@@ -497,7 +497,7 @@ impl TemplateService for TemplateServiceNoOp {
     async fn download(
         &self,
         _template_id: &TemplateId,
-        _version: Option<i32>,
+        _version: Option<u64>,
     ) -> Result<Vec<u8>, TemplateError> {
         Ok(vec![])
     }
@@ -505,7 +505,7 @@ impl TemplateService for TemplateServiceNoOp {
     async fn get_protected_data(
         &self,
         _template_id: &TemplateId,
-        _version: Option<i32>,
+        _version: Option<u64>,
     ) -> Result<Option<Vec<u8>>, TemplateError> {
         Ok(None)
     }
