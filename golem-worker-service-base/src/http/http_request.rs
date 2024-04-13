@@ -4,6 +4,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
+use crate::api_definition::Host;
 
 use crate::api_definition::http::{HttpApiDefinition, QueryInfo, VarInfo};
 use crate::tokeniser::tokenizer::Token;
@@ -23,11 +24,11 @@ pub struct InputHttpRequest {
 }
 
 impl InputHttpRequest {
-    pub fn get_host(&self) -> Option<String> {
+    pub fn get_host(&self) -> Option<Host> {
         self.headers
             .get("host")
-            .and_then(|hv| hv.to_str().ok())
-            .map(|s| s.to_string())
+            .and_then(|host| host.to_str().ok())
+            .map(|host| Host::from_string(host))
     }
 
     // Converts all request details to type-annotated-value

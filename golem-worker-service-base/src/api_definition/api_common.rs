@@ -4,6 +4,7 @@ use std::fmt::Display;
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
+use crate::service::api_definition::ApiDefinitionKey;
 
 use crate::worker_binding::GolemWorkerBinding;
 
@@ -42,9 +43,17 @@ pub trait HasGolemWorkerBindings {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct Domain(pub String);
 
+
+struct ApiDeployment {
+    api_definition_id: ApiDefinitionKey<>,
+    version: ApiVersion,
+    site: Host,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct SubDomain(pub String);
 
+#[derive(PartialEq, Eq)]
 pub struct Host {
     pub domain: Domain,
     pub sub_domain: SubDomain,

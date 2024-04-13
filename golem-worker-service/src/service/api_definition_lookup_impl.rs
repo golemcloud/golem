@@ -54,28 +54,11 @@ for CustomRequestDefinitionLookupDefault
         &self,
         input_http_request: InputHttpRequest,
     ) -> Result<HttpApiDefinition, ApiDefinitionLookupError> {
-        let api_definition_id = match get_header_value(
-            &input_http_request.headers,
-            "x-golem-api-definition-id", // TODO; This will be removed, and will depend on domain
-        ) {
-            Ok(api_definition_id) => Ok(ApiDefinitionId(api_definition_id.to_string())),
-            Err(err) => Err(ApiDefinitionLookupError(format!(
-                "{} not found in the request headers. Error: {}",
-                "x-golem-api-definition-id", err
-            ))),
-        }?;
 
-        // This will be removed and will be depending on the latest version
-        let version = match get_header_value(
-            &input_http_request.headers,
-            "x-golem-api-definition-version",
-        ) {
-            Ok(version) => Ok(ApiVersion(version)),
-            Err(err) => Err(ApiDefinitionLookupError(format!(
-                "{} not found in the request headers. Error: {}",
-                "x-golem-api-definition-version", err
-            ))),
-        }?;
+        // HOST should exist in Http Reequest
+        let host =
+            input_http_request.get_host().ok_or(ApiDefinitionLookupError("Host header not found".to_string()))?;
+
 
         let api_key = ApiDefinitionKey {
             namespace: CommonNamespace::default(),

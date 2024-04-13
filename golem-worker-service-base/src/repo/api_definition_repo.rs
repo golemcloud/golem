@@ -11,7 +11,8 @@ use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 
 use crate::api_definition::ApiDefinitionId;
-use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
+use crate::repo::api_namespace::ApiNamespace;
+use crate::service::api_definition::{ApiDefinitionKey};
 
 #[async_trait]
 pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {

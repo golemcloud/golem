@@ -7,9 +7,7 @@ use async_trait::async_trait;
 use golem_common::model::TemplateId;
 use golem_service_base::model::Template;
 
-use crate::api_definition::{
-    ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion,
-};
+use crate::api_definition::{ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, Host};
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
@@ -59,35 +57,6 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ApiDefinition, ValidationErro
     ) -> ApiResult<Vec<ApiDefinition>, ValidationError>;
 }
 
-pub trait ApiNamespace:
-    Eq
-    + Hash
-    + PartialEq
-    + Clone
-    + Debug
-    + Display
-    + Send
-    + Sync
-    + bincode::Encode
-    + bincode::Decode
-    + serde::de::DeserializeOwned
-{
-}
-impl<
-        T: Eq
-            + Hash
-            + PartialEq
-            + Clone
-            + Debug
-            + Display
-            + Send
-            + Sync
-            + bincode::Encode
-            + bincode::Decode
-            + serde::de::DeserializeOwned,
-    > ApiNamespace for T
-{
-}
 
 // An ApiDefinitionKey is just the original ApiDefinitionId with additional information of version and a possibility of namespace.
 // A namespace here can be for example: account, project, production, dev or a composite value, or infact as simple
