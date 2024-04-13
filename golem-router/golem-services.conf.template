@@ -3,7 +3,7 @@ events {
 }
 
 http {
-    client_max_body_size 50m; # Increase this especially if your template size is higher than this
+    client_max_body_size $GOLEM_TEMPLATE_MAX_SIZE_ALLOWED; # Increase this especially if your template size is higher than this
 
     # For docker we need this for service discovery in docker network
     resolver 127.0.0.11;
