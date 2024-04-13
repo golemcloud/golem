@@ -123,7 +123,12 @@ From the root of the project
 
 ```bash
 rustup target add x86_64-unknown-linux-gnu
-cargo build --release --target x86_64-unknown-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-shard-manager
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-router
 ```
 
 ### ARM MAC
@@ -146,7 +151,12 @@ From the root of the project
 
 ```bash
 rustup target add aarch64-unknown-linux-gnu-gcc
-cargo build --release --target aarch64-unknown-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-shard-manager
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-router
 ```
 
 ### LINUX
@@ -155,7 +165,12 @@ From the root of the project
 
 ```bash
 rustup target add x86_64-unknown-linux-gnu
-cargo build --target x86_64-unknown-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-shard-manager
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-router
 ```
 
 ## Integration with existing API Gateways
