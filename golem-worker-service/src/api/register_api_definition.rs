@@ -74,7 +74,7 @@ impl RegisterApiDefinitionApi {
 
         Ok(Json(definition))
     }
-    #[oai(path = "/", method = "post")]
+    #[oai(path = "/", method = "put")]
     async fn update(
         &self,
         payload: Json<HttpApiDefinition>,
@@ -241,7 +241,7 @@ mod test {
         };
 
         let response = client
-            .put("/v1/api/definitions")
+            .post("/v1/api/definitions")
             .body_json(&definition)
             .send()
             .await;
@@ -249,7 +249,7 @@ mod test {
         response.assert_status_is_ok();
 
         let response = client
-            .put("/v1/api/definitions")
+            .post("/v1/api/definitions")
             .body_json(&definition)
             .send()
             .await;
@@ -268,7 +268,7 @@ mod test {
             routes: vec![],
         };
         let response = client
-            .put("/v1/api/definitions")
+            .post("/v1/api/definitions")
             .body_json(&definition)
             .send()
             .await;
@@ -280,7 +280,7 @@ mod test {
             routes: vec![],
         };
         let response = client
-            .put("/v1/api/definitions")
+            .post("/v1/api/definitions")
             .body_json(&definition)
             .send()
             .await;
