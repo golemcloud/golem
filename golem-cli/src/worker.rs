@@ -28,7 +28,7 @@ use tracing::{error, info};
 use crate::clients::worker::{WorkerClient, WorkerClientLive};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::template::function_params_types;
-use crate::model::wave::wrap_type;
+use crate::model::wave::type_to_analysed;
 use crate::model::{
     GolemError, GolemResult, InvocationKey, JsonValueParser, TemplateId, TemplateIdOrName,
     WorkerName,
@@ -344,7 +344,7 @@ fn wave_parameters_to_json(
 }
 
 fn parse_parameter(wave: &str, typ: &Type) -> Result<TypeAnnotatedValue, GolemError> {
-    match wasm_wave::from_str(&wrap_type(typ), wave) {
+    match wasm_wave::from_str(&type_to_analysed(typ), wave) {
         Ok(value) => Ok(value),
         Err(err) => Err(GolemError(format!(
             "Failed to parse wave parameter {wave}: {err:?}"
