@@ -55,8 +55,8 @@ impl RegisterApiDefinitionApi {
         Ok(Json(definition))
     }
 
-    #[oai(path = "/", method = "put")]
-    async fn create_or_update(
+    #[oai(path = "/", method = "post")]
+    async fn create(
         &self,
         payload: Json<HttpApiDefinition>,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
@@ -68,6 +68,31 @@ impl RegisterApiDefinitionApi {
             .map_err(ApiEndpointError::bad_request)?;
 
         self.register_api(&definition).await?;
+
+        let definition: HttpApiDefinition =
+            definition.try_into().map_err(ApiEndpointError::internal)?;
+
+        Ok(Json(definition))
+    }
+    #[oai(path = "/", method = "post")]
+    async fn update(
+        &self,
+        payload: Json<HttpApiDefinition>,
+    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+        info!("Update API definition - id: {}", &payload.id);
+
+        let definition: CoreHttpApiDefinition = payload
+            .0
+            .try_into()
+            .map_err(ApiEndpointError::bad_request)?;
+
+        self.definition_service
+            .update(&definition, CommonNamespace::default(), &EmptyAuthCtx {})
+            .await
+            .map_err(|e| {
+                error!("API Definition ID: {} - update error: {e:?}", definition.id,);
+                e
+            })?;
 
         let definition: HttpApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
@@ -166,7 +191,10 @@ impl RegisterApiDefinitionApi {
             .register(definition, CommonNamespace::default(), &EmptyAuthCtx {})
             .await
             .map_err(|e| {
-                error!("API definition id: {} - register error: {e}", definition.id,);
+                error!(
+                    "API definition ID: {} - register error: {e:?}",
+                    definition.id
+                );
                 e
             })?;
 
