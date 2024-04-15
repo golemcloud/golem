@@ -1,0 +1,15 @@
+package golem:it;
+
+interface api {
+  use golem:api/host@0.2.0.{
+           template-id,
+           worker-metadata
+  };
+  get-idle-workers: func(template-id: template-id) -> list<worker-metadata>;
+}
+
+world workers {
+  import golem:api/host@0.2.0;
+
+  export api;
+}

@@ -46,6 +46,7 @@ exclude = [
     "test-templates/variant-service",
     "test-templates/write-stderr",
     "test-templates/write-stdout",
+    "test-templates/get-workers",
 ]
 
 [workspace.dependencies]
