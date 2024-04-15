@@ -12,6 +12,7 @@ wasmparser = { version = "0.121.2", optional = true }
 wasm-encoder = { version = "0.41.2", optional = true }
 wasm-metadata = { version = "0.10.20", optional = true }
 leb128 = {  version = "0.2.5", optional = true }
+wasm-wave = { version = "=0.4.0", optional = true }
 
 [dev-dependencies]
 colored-diff = "0.2.3"
@@ -19,7 +20,7 @@ pretty_assertions = "1.4.0"
 wasmprinter = "0.2.80"
 
 [features]
-default = ["parser", "writer", "component", "metadata", "analysis"]
+default = ["parser", "writer", "component", "metadata", "analysis", "wave"]
 
 # Support building up the WASM AST by parsing a binary WASM module or component using the wasmparser library
 parser = ["dep:wasmparser", "dep:leb128"]
@@ -35,6 +36,11 @@ metadata = ["dep:wasm-metadata"]
 
 # Enables some higher level analysis features built on top of the WASM AST
 analysis = ["component"]
+
+# Wave format representation
+wave = ["dep:wasm-wave"]
+
+
 
 [lib]
 path = "src/lib.rs"
