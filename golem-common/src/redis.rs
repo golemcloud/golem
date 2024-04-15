@@ -378,22 +378,6 @@ impl<'a> RedisLabelledApi<'a> {
         )
     }
 
-    pub async fn sismember<K, V>(&self, key: K, member: V) -> RedisResult<bool>
-    where
-        K: AsRef<str>,
-        V: TryInto<RedisValue> + Send,
-        V::Error: Into<RedisError> + Send,
-    {
-        self.ensure_connected().await?;
-        let start = Instant::now();
-        let result: usize = self.record(
-            start,
-            "SISMEMBER",
-            self.pool.sismember(self.prefixed_key(key), member).await,
-        )?;
-        Ok(result == 1)
-    }
-
     pub async fn xadd<R, K, C, I, F>(
         &self,
         key: K,
