@@ -258,6 +258,26 @@ mod test {
     }
 
     #[tokio::test]
+    async fn update_non_existant() {
+        let api = make_route();
+        let client = TestClient::new(api);
+
+        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
+            id: ApiDefinitionId("test".to_string()),
+            version: ApiVersion("42.0".to_string()),
+            routes: vec![],
+        };
+
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+
+        response.assert_status(http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn get_all() {
         let api = make_route();
         let client = TestClient::new(api);
