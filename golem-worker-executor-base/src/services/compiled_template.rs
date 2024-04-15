@@ -40,13 +40,13 @@ pub trait CompiledTemplateService {
     async fn get(
         &self,
         template_id: &TemplateId,
-        template_version: i32,
+        template_version: u64,
         engine: &Engine,
     ) -> Result<Option<Component>, GolemError>;
     async fn put(
         &self,
         template_id: &TemplateId,
-        template_version: i32,
+        template_version: u64,
         component: &Component,
     ) -> Result<(), GolemError>;
 }
@@ -95,7 +95,7 @@ impl CompiledTemplateService for CompiledTemplateServiceS3 {
     async fn get(
         &self,
         template_id: &TemplateId,
-        template_version: i32,
+        template_version: u64,
         engine: &Engine,
     ) -> Result<Option<Component>, GolemError> {
         let prefix = if self.config.object_prefix.is_empty() {
@@ -167,7 +167,7 @@ impl CompiledTemplateService for CompiledTemplateServiceS3 {
     async fn put(
         &self,
         template_id: &TemplateId,
-        template_version: i32,
+        template_version: u64,
         component: &Component,
     ) -> Result<(), GolemError> {
         let prefix = if self.config.object_prefix.is_empty() {
@@ -250,7 +250,7 @@ impl CompiledTemplateServiceLocalFileSystem {
         }
     }
 
-    fn path_of(&self, template_id: &TemplateId, template_version: i32) -> PathBuf {
+    fn path_of(&self, template_id: &TemplateId, template_version: u64) -> PathBuf {
         self.root
             .join(format!("{}-{}.cwasm", template_id, template_version))
     }
@@ -261,7 +261,7 @@ impl CompiledTemplateService for CompiledTemplateServiceLocalFileSystem {
     async fn get(
         &self,
         template_id: &TemplateId,
-        template_version: i32,
+        template_version: u64,
         engine: &Engine,
     ) -> Result<Option<Component>, GolemError> {
         let path = self.path_of(template_id, template_version);
@@ -285,7 +285,7 @@ impl CompiledTemplateService for CompiledTemplateServiceLocalFileSystem {
     async fn put(
         &self,
         template_id: &TemplateId,
-        template_version: i32,
+        template_version: u64,
         component: &Component,
     ) -> Result<(), GolemError> {
         let bytes = component.serialize().unwrap();
@@ -314,7 +314,7 @@ impl CompiledTemplateService for CompiledTemplateServiceDisabled {
     async fn get(
         &self,
         _template_id: &TemplateId,
-        _template_version: i32,
+        _template_version: u64,
         _engine: &Engine,
     ) -> Result<Option<Component>, GolemError> {
         Ok(None)
@@ -323,7 +323,7 @@ impl CompiledTemplateService for CompiledTemplateServiceDisabled {
     async fn put(
         &self,
         _template_id: &TemplateId,
-        _template_version: i32,
+        _template_version: u64,
         _component: &Component,
     ) -> Result<(), GolemError> {
         Ok(())

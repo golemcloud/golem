@@ -54,13 +54,13 @@ message FailedToResumeWorker {
 
 message TemplateDownloadFailed {
   golem.template.TemplateId template_id = 1;
-  int32 template_version = 2;
+  uint64 template_version = 2;
   string reason = 3;
 }
 
 message TemplateParseFailed {
   golem.template.TemplateId template_id = 1;
-  int32 template_version = 2;
+  uint64 template_version = 2;
   string reason = 3;
 }
 

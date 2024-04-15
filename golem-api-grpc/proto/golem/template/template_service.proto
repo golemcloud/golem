@@ -59,7 +59,7 @@ message CreateTemplateResponse {
 
 message DownloadTemplateRequest {
   golem.template.TemplateId templateId = 1;
-  optional int32 version = 2;
+  optional uint64 version = 2;
 }
 
 message DownloadTemplateResponse {
@@ -75,7 +75,7 @@ message GetTemplateRequest {
 
 message GetVersionedTemplateRequest {
   golem.template.TemplateId templateId = 1;
-  int32 version = 2;
+  uint64 version = 2;
 }
 
 message GetTemplateMetadataAllVersionsResponse {

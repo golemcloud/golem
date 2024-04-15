@@ -13,7 +13,7 @@ pub trait CompilationService {
     async fn enqueue_compilation(
         &self,
         template_id: TemplateId,
-        template_version: i32,
+        template_version: u64,
     ) -> Result<(), CompilationError>;
 }
 
@@ -56,7 +56,7 @@ impl CompilationService for TemplateCompilationServiceImpl {
     async fn enqueue_compilation(
         &self,
         template_id: TemplateId,
-        template_version: i32,
+        template_version: u64,
     ) -> Result<(), CompilationError> {
         tracing::info!(
             "Enqueueing compilation for template {}@{}",

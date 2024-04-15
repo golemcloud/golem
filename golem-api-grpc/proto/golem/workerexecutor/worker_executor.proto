@@ -74,7 +74,7 @@ message InterruptWorkerResponse {
 
 message CreateWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
-  int32 template_version = 2;
+  uint64 template_version = 2;
   repeated string args = 3;
   map<string, string> env = 4;
   golem.common.AccountId account_id = 5;

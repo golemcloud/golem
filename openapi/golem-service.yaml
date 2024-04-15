@@ -1371,7 +1371,7 @@ paths:
         deprecated: false
         schema:
           type: integer
-          format: int32
+          format: uint64
         explode: true
         style: form
       responses:
@@ -2254,7 +2254,7 @@ components:
           format: uuid
         version:
           type: integer
-          format: int32
+          format: uint64
       required:
       - templateId
       - version
@@ -2265,7 +2265,7 @@ components:
           $ref: '#/components/schemas/WorkerId'
         templateVersionUsed:
           type: integer
-          format: int32
+          format: uint64
       required:
       - workerId
       - templateVersionUsed
@@ -2449,10 +2449,10 @@ components:
           $ref: '#/components/schemas/WorkerStatus'
         templateVersion:
           type: integer
-          format: int32
+          format: uint64
         retryCount:
           type: integer
-          format: int32
+          format: uint64
       required:
       - workerId
       - args
