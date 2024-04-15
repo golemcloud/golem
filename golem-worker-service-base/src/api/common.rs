@@ -110,16 +110,12 @@ mod conversion {
                     ApiRegistrationRepoError::AlreadyExists(_) => {
                         ApiEndpointError::already_exists(error)
                     }
-                    ApiRegistrationRepoError::InternalError(_) => ApiEndpointError::internal(error),
+                    ApiRegistrationRepoError::NotFound(_) => ApiEndpointError::not_found(error),
+                    ApiRegistrationRepoError::Internal(_) => ApiEndpointError::internal(error),
                 },
                 ApiRegistrationError::ValidationError(e) => e.into(),
-                ApiRegistrationError::TemplateNotFoundError(template_id) => {
-                    let templates = template_id
-                        .iter()
-                        .map(|t| t.to_string())
-                        .collect::<Vec<String>>()
-                        .join(", ");
-                    ApiEndpointError::bad_request(format!("Templates not found, {}", templates))
+                e @ ApiRegistrationError::TemplateNotFoundError(_) => {
+                    ApiEndpointError::bad_request(e)
                 }
             }
         }
@@ -153,8 +149,13 @@ mod conversion {
                             error: error.to_string(),
                         })),
                     },
-                    ApiRegistrationRepoError::InternalError(_) => ApiDefinitionError {
+                    ApiRegistrationRepoError::Internal(_) => ApiDefinitionError {
                         error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                            error: error.to_string(),
+                        })),
+                    },
+                    ApiRegistrationRepoError::NotFound(_) => ApiDefinitionError {
+                        error: Some(api_definition_error::Error::NotFound(ErrorBody {
                             error: error.to_string(),
                         })),
                     },
