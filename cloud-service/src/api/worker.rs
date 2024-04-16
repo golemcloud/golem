@@ -452,7 +452,25 @@ impl WorkerApi {
 
     /// Get metadata of multiple workers
     ///
-    /// Returns metadata about multiple workers.
+    /// ### Filters
+    ///
+    /// | Property    | Comparator             | Description                    | Example                         |
+    /// |-------------|------------------------|--------------------------------|----------------------------------|
+    /// | name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
+    /// | version     | FilterComparator       | Version of worker              | `version >= 0`                   |
+    /// | status      | FilterComparator       | Status of worker               | `status = Running`               |
+    /// | env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
+    /// | createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
+    ///
+    ///
+    /// ### Comparators
+    ///
+    /// - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+    /// - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+    ///
+    /// Returns metadata about an existing template workers:
+    /// - `workers` list of workers metadata
+    /// - `cursor` cursor for next request, if cursor is empty/null, there are no other values
     #[oai(
         path = "/:template_id/workers",
         method = "get",
@@ -461,9 +479,13 @@ impl WorkerApi {
     async fn get_workers_metadata(
         &self,
         template_id: Path<TemplateId>,
+        /// Filter for worker metadata in form of `property op value`. Can be used multiple times (AND condition is applied between them)
         filter: Query<Option<Vec<String>>>,
+        /// Count of listed values, default: 50
         cursor: Query<Option<u64>>,
+        /// Position where to start listing, if not provided, starts from the beginning. It is used to get the next page of results. To get next page, use the cursor returned in the response
         count: Query<Option<u64>>,
+        /// Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
         precise: Query<Option<bool>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
@@ -495,6 +517,27 @@ impl WorkerApi {
         }))
     }
 
+    /// Advanced search for workers
+    ///
+    /// ### Filter types
+    /// | Type      | Comparator             | Description                    | Example                                                                                       |
+    /// |-----------|------------------------|--------------------------------|-----------------------------------------------------------------------------------------------|
+    /// | Name      | StringFilterComparator | Name of worker                 | `{ "type": "Name", "comparator": "Equal", "value": "worker-name" }`                           |
+    /// | Version   | FilterComparator       | Version of worker              | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                             |
+    /// | Status    | FilterComparator       | Status of worker               | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                             |
+    /// | Env       | StringFilterComparator | Environment variable of worker | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`                  |
+    /// | CreatedAt | FilterComparator       | Creation time of worker        | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`           |
+    /// | And       |                        | And filter combinator          | `{ "type": "And", "filters": [ ... ] }`                                                       |
+    /// | Or        |                        | Or filter combinator           | `{ "type": "Or", "filters": [ ... ] }`                                                        |
+    /// | Not       |                        | Negates the specified filter   | `{ "type": "Not", "filter": { "type": "Version", "comparator": "GreaterEqual", "value": 0 } }`|
+    ///
+    /// ### Comparators
+    /// - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
+    /// - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+    ///
+    /// Returns metadata about an existing template workers:
+    /// - `workers` list of workers metadata
+    /// - `cursor` cursor for next request, if cursor is empty/null, there are no other values
     #[oai(
         path = "/:template_id/workers/find",
         method = "post",
