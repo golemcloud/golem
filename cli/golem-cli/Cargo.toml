@@ -28,7 +28,7 @@ futures-util = { workspace = true }
 golem-examples = "0.1.15"
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true, features = ["text"] }
-golem-wasm-rpc-stubgen = { version = "0.0.19", optional = true }
+golem-wasm-rpc-stubgen = { version = "0.0.20", optional = true }
 h2 = "0.3.24"
 http = { workspace = true }
 hyper = "0.14.28"

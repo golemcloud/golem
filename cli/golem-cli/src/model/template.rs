@@ -3,10 +3,11 @@ use golem_client::model::{
     Export, ExportFunction, ExportInstance, FunctionResult, NameOptionTypePair, NameTypePair,
     ResourceMode, Template, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
+use golem_wasm_ast::wave::DisplayNamedFunc;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::model::wave::{function_wave_compatible, DisplayNamedFunc, WrapExportFunction};
+use crate::model::wave::{func_to_analysed, function_wave_compatible};
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -127,7 +128,7 @@ fn show_exported_function(prefix: &str, f: &ExportFunction) -> String {
 
         DisplayNamedFunc {
             name: format!("{prefix}{name}"),
-            func: WrapExportFunction(f.clone()),
+            func: func_to_analysed(f),
         }
         .to_string()
     } else {

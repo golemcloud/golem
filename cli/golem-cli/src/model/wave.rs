@@ -1,10 +1,10 @@
 use golem_client::model::{
     ExportFunction, ResourceMode, Type, TypeHandle, TypeRecord, TypeResult, TypeTuple, TypeVariant,
 };
-use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType};
-use std::borrow::Cow;
-use std::fmt::Display;
-use wasm_wave::wasm::{DisplayType, WasmFunc};
+use golem_wasm_ast::analysis::{
+    AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId,
+    AnalysedResourceMode, AnalysedType,
+};
 
 pub fn type_wave_compatible(typ: &Type) -> bool {
     fn variant_wave_compatible(tv: &TypeVariant) -> bool {
@@ -56,49 +56,25 @@ pub fn function_wave_compatible(func: &ExportFunction) -> bool {
         && func.results.iter().all(|r| type_wave_compatible(&r.typ))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WrapExportFunction(pub ExportFunction);
-
-fn wrap_analysed_type(typ: AnalysedType) -> golem_wasm_rpc::AnalysedType {
-    golem_wasm_rpc::AnalysedType(typ)
-}
-
-pub fn wrap_type(typ: &Type) -> golem_wasm_rpc::AnalysedType {
-    wrap_analysed_type(type_to_analysed(typ))
-}
-
-impl WasmFunc for WrapExportFunction {
-    type Type = golem_wasm_rpc::AnalysedType;
-
-    fn params(&self) -> Box<dyn Iterator<Item = Self::Type> + '_> {
-        Box::new(self.0.parameters.iter().map(|p| wrap_type(&p.typ)))
-    }
-
-    fn param_names(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
-        Box::new(
-            self.0
-                .parameters
-                .iter()
-                .map(|p| Cow::Borrowed(p.name.as_str())),
-        )
-    }
-
-    fn results(&self) -> Box<dyn Iterator<Item = Self::Type> + '_> {
-        Box::new(self.0.results.iter().map(|r| wrap_type(&r.typ)))
-    }
-
-    fn result_names(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
-        let names: Option<Vec<Cow<str>>> = self
-            .0
+pub fn func_to_analysed(func: &ExportFunction) -> AnalysedFunction {
+    AnalysedFunction {
+        name: func.name.clone(),
+        params: func
+            .parameters
+            .iter()
+            .map(|p| AnalysedFunctionParameter {
+                name: p.name.to_string(),
+                typ: type_to_analysed(&p.typ),
+            })
+            .collect(),
+        results: func
             .results
             .iter()
-            .map(|r| r.name.as_ref().map(|n| Cow::Borrowed(n.as_str())))
-            .collect();
-
-        match names {
-            Some(names) => Box::new(names.into_iter()),
-            None => Box::new(std::iter::empty()),
-        }
+            .map(|r| AnalysedFunctionResult {
+                name: r.name.clone(),
+                typ: type_to_analysed(&r.typ),
+            })
+            .collect(),
     }
 }
 
@@ -163,57 +139,5 @@ pub fn type_to_analysed(typ: &Type) -> AnalysedType {
         Type::S8(_) => AnalysedType::S8,
         Type::Bool(_) => AnalysedType::Bool,
         Type::Handle(th) => handle_to_analysed(th),
-    }
-}
-
-/// Copy of DisplayFunc with additional name filed.
-/// DisplayFunc is always using func for name
-pub struct DisplayNamedFunc<T: WasmFunc> {
-    pub name: String,
-    pub func: T,
-}
-
-impl<T: WasmFunc> Display for DisplayNamedFunc<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.name)?;
-        f.write_str("(")?;
-        let mut param_names = self.func.param_names();
-        for (idx, ty) in self.func.params().enumerate() {
-            if idx != 0 {
-                f.write_str(", ")?;
-            }
-            if let Some(name) = param_names.next() {
-                write!(f, "{name}: ")?;
-            }
-            DisplayType(&ty).fmt(f)?
-        }
-        f.write_str(")")?;
-
-        let results = self.func.results().collect::<Vec<_>>();
-        if results.is_empty() {
-            return Ok(());
-        }
-
-        let mut result_names = self.func.result_names();
-        if results.len() == 1 {
-            let ty = DisplayType(&results.into_iter().next().unwrap()).to_string();
-            if let Some(name) = result_names.next() {
-                write!(f, " -> ({name}: {ty})")
-            } else {
-                write!(f, " -> {ty}")
-            }
-        } else {
-            f.write_str(" -> (")?;
-            for (idx, ty) in results.into_iter().enumerate() {
-                if idx != 0 {
-                    f.write_str(", ")?;
-                }
-                if let Some(name) = result_names.next() {
-                    write!(f, "{name}: ")?;
-                }
-                DisplayType(&ty).fmt(f)?;
-            }
-            f.write_str(")")
-        }
     }
 }
