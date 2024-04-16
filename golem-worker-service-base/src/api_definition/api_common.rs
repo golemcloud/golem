@@ -44,23 +44,25 @@ pub trait HasGolemWorkerBindings {
 pub struct Domain(pub String);
 
 
-struct ApiDeployment {
-    api_definition_id: ApiDefinitionKey<>,
-    version: ApiVersion,
-    site: Host,
+pub struct ApiDeployment<ApiNamespace> {
+    pub api_definition_id: ApiDefinitionKey<ApiNamespace>,
+    pub site: Host,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct SubDomain(pub String);
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub struct Host {
     pub domain: Domain,
     pub sub_domain: SubDomain,
 }
 
-pub trait HasHost {
-    fn get_host(&self) -> Host;
+
+impl Display for Host {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.sub_domain.0, self.domain.0)
+    }
 }
 
 impl Host {
@@ -76,11 +78,16 @@ impl Host {
     }
 }
 
-impl Display for Host {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.sub_domain.0, self.domain.0)
+pub trait HasHost {
+    fn get_host(&self) -> Host;
+}
+
+impl<N> HasHost for ApiDeployment<N> {
+    fn get_host(&self) -> Host {
+        Host::new(self.site.domain.clone(), self.site.sub_domain.clone())
     }
 }
+
 
 #[cfg(test)]
 mod tests {

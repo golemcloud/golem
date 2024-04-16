@@ -347,7 +347,8 @@ impl RedisApiRegistry {
 }
 
 mod redis_keys {
-    use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
+    use crate::repo::api_namespace::ApiNamespace;
+    use crate::service::api_definition::{ApiDefinitionKey};
 
     use super::ApiRegistrationRepoError;
 
