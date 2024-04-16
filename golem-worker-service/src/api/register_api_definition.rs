@@ -47,7 +47,7 @@ impl RegisterApiDefinitionApi {
             ApiEndpointError::bad_request(e)
         })?;
 
-        self.register_api(&definition).await?;
+        self.create_api(&definition).await?;
 
         let definition: HttpApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
@@ -67,7 +67,7 @@ impl RegisterApiDefinitionApi {
             .try_into()
             .map_err(ApiEndpointError::bad_request)?;
 
-        self.register_api(&definition).await?;
+        self.create_api(&definition).await?;
 
         let definition: HttpApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
@@ -90,7 +90,7 @@ impl RegisterApiDefinitionApi {
             .update(&definition, CommonNamespace::default(), &EmptyAuthCtx {})
             .await
             .map_err(|e| {
-                error!("API Definition ID: {} - update error: {e:?}", definition.id,);
+                error!("API Definition ID: {} - update error: {e:?}", definition.id);
                 e
             })?;
 
@@ -183,12 +183,9 @@ impl RegisterApiDefinitionApi {
 }
 
 impl RegisterApiDefinitionApi {
-    async fn register_api(
-        &self,
-        definition: &CoreHttpApiDefinition,
-    ) -> Result<(), ApiEndpointError> {
+    async fn create_api(&self, definition: &CoreHttpApiDefinition) -> Result<(), ApiEndpointError> {
         self.definition_service
-            .register(definition, CommonNamespace::default(), &EmptyAuthCtx {})
+            .create(definition, CommonNamespace::default(), &EmptyAuthCtx {})
             .await
             .map_err(|e| {
                 error!(

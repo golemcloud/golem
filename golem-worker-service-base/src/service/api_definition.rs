@@ -22,7 +22,7 @@ pub type ApiResult<T, E> = Result<T, ApiRegistrationError<E>>;
 // validations, authorisations etc is the right approach. However we are keeping it simple for now.
 #[async_trait]
 pub trait ApiDefinitionService<AuthCtx, Namespace, ApiDefinition, ValidationError> {
-    async fn register(
+    async fn create(
         &self,
         definition: &ApiDefinition,
         namespace: Namespace,
@@ -209,7 +209,7 @@ where
     Namespace: ApiNamespace + Send + Sync,
     ApiDefinition: GolemApiDefinition + Sync,
 {
-    async fn register(
+    async fn create(
         &self,
         definition: &ApiDefinition,
         namespace: Namespace,
@@ -226,7 +226,7 @@ where
             version: definition.get_version().clone(),
         };
 
-        self.register_repo.register(definition, &key).await?;
+        self.register_repo.create(definition, &key).await?;
 
         Ok(key.id)
     }
@@ -324,7 +324,7 @@ impl<AuthCtx, Namespace, ApiDefinition, ValidationError>
 where
     Namespace: Default + Send + Sync + 'static,
 {
-    async fn register(
+    async fn create(
         &self,
         _definition: &ApiDefinition,
         _namespace: Namespace,

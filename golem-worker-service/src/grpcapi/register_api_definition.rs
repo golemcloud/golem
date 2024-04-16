@@ -165,7 +165,7 @@ impl GrpcApiDefinitionService {
         };
 
         self.definition_service
-            .register(
+            .create(
                 &internal_definition,
                 CommonNamespace::default(),
                 &EmptyAuthCtx {},

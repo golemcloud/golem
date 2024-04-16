@@ -15,7 +15,7 @@ use crate::service::api_definition::{ApiDefinitionKey, ApiNamespace};
 
 #[async_trait]
 pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {
-    async fn register(
+    async fn create(
         &self,
         definition: &ApiDefinition,
         key: &ApiDefinitionKey<Namespace>,
@@ -81,7 +81,7 @@ impl<Namespace, ApiDefinition> Default for InMemoryRegistry<Namespace, ApiDefini
 impl<Namespace: ApiNamespace, ApiDefinition: Send + Clone + Sync>
     ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition>
 {
-    async fn register(
+    async fn create(
         &self,
         definition: &ApiDefinition,
         key: &ApiDefinitionKey<Namespace>,
@@ -177,7 +177,7 @@ where
     Namespace: ApiNamespace,
     ApiDefinition: bincode::Decode + bincode::Encode + DeserializeOwned + Send + Sync,
 {
-    async fn register(
+    async fn create(
         &self,
         definition: &ApiDefinition,
         key: &ApiDefinitionKey<Namespace>,
@@ -232,6 +232,7 @@ where
                 let definition_key = redis_keys::api_definition_key(key);
                 let definition = self.serialize(definition)?;
 
+                // We don't need transaction b/c the value should already exist in the namespace set.
                 let _ = self
                     .pool
                     .with("persistance", "update_definition")
@@ -516,9 +517,9 @@ mod tests {
             "cart-${path.cart-id}",
         );
 
-        registry.register(&api_definition1, &api_id1).await.unwrap();
+        registry.create(&api_definition1, &api_id1).await.unwrap();
 
-        registry.register(&api_definition2, &api_id2).await.unwrap();
+        registry.create(&api_definition2, &api_id2).await.unwrap();
 
         let api_definition1_result1 = registry.get(&api_id1).await.unwrap_or(None);
 
@@ -582,7 +583,7 @@ mod tests {
 
         // Registration of an api definition
 
-        registry.register(&api_definition1, &api_id1).await.unwrap();
+        registry.create(&api_definition1, &api_id1).await.unwrap();
 
         let retrieved_api = registry.get(&api_id1).await.unwrap().unwrap();
 
@@ -608,7 +609,7 @@ mod tests {
 
         // Ensure that you can't register the same api definition twice.
 
-        let result = registry.register(&api_definition1, &api_id1).await;
+        let result = registry.create(&api_definition1, &api_id1).await;
 
         assert!(
             matches!(result, Err(ApiRegistrationRepoError::AlreadyExists(_))),
@@ -638,7 +639,7 @@ mod tests {
             "cart-${path.cart-id}",
         );
 
-        registry.register(&api_definition2, &api_id2).await.unwrap();
+        registry.create(&api_definition2, &api_id2).await.unwrap();
 
         assert_eq!(
             vec![api_definition1.clone(), api_definition2.clone()],
@@ -663,7 +664,7 @@ mod tests {
             "getcartcontent/{cart-id}",
             "cart-${path.cart-id}",
         );
-        registry.register(&api_definition3, &api_id3).await.unwrap();
+        registry.create(&api_definition3, &api_id3).await.unwrap();
 
         assert_eq!(
             vec![
@@ -722,7 +723,7 @@ mod tests {
             "cart-${path.cart-id}",
         );
 
-        registry.register(&api_definition4, &api_id5).await.unwrap();
+        registry.create(&api_definition4, &api_id5).await.unwrap();
 
         assert_eq!(
             vec![api_definition2.clone(), api_definition3.clone()],
