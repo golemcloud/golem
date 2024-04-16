@@ -1,7 +1,8 @@
+pub mod api_definition_lookup_impl;
 pub mod template;
 pub mod worker;
-pub mod api_definition_lookup_impl;
 
+use crate::service::api_definition_lookup_impl::CustomRequestDefinitionLookupDefault;
 use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
 use async_trait::async_trait;
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
@@ -32,7 +33,6 @@ use http::HeaderMap;
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
-use crate::service::api_definition_lookup_impl::CustomRequestDefinitionLookupDefault;
 
 #[derive(Clone)]
 pub struct Services {

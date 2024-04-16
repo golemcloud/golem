@@ -31,7 +31,7 @@ use tracing::error;
 
 pub struct CustomRequestDefinitionLookupDefault {
     register_api_definition_repo:
-    Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send>,
+        Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send>,
 }
 
 impl CustomRequestDefinitionLookupDefault {
@@ -48,17 +48,18 @@ impl CustomRequestDefinitionLookupDefault {
 
 #[async_trait]
 impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition>
-for CustomRequestDefinitionLookupDefault
+    for CustomRequestDefinitionLookupDefault
 {
     async fn get(
         &self,
         input_http_request: InputHttpRequest,
     ) -> Result<HttpApiDefinition, ApiDefinitionLookupError> {
-
         // HOST should exist in Http Reequest
-        let host =
-            input_http_request.get_host().ok_or(ApiDefinitionLookupError("Host header not found".to_string()))?;
-
+        let host = input_http_request
+            .get_host()
+            .ok_or(ApiDefinitionLookupError(
+                "Host header not found".to_string(),
+            ))?;
 
         let api_key = ApiDefinitionKey {
             namespace: CommonNamespace::default(),

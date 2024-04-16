@@ -1,5 +1,5 @@
-pub mod register_api_definition_api;
 pub mod deploy_api_definition_api;
+pub mod register_api_definition_api;
 pub mod worker;
 pub mod worker_connect;
 

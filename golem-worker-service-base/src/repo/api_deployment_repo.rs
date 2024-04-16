@@ -18,7 +18,7 @@ use crate::api_definition::HasHost;
 const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 
 #[async_trait]
-pub trait DeployApiDefinition<Namespace: ApiNamespace> {
+pub trait ApiDeploymentRepo<Namespace: ApiNamespace> {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>>;
 
     async fn get(&self, host: Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
@@ -46,7 +46,7 @@ impl<Namespace> Default for InMemoryDeployment<Namespace> {
 
 #[async_trait]
 impl<Namespace: ApiNamespace>
-DeployApiDefinition<Namespace> for InMemoryDeployment<Namespace> {
+ApiDeploymentRepo<Namespace> for InMemoryDeployment<Namespace> {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>> {
         debug!(
             "Deploy API site: {}, id: {}",
@@ -113,7 +113,7 @@ impl RedisApiDeploy {
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace> DeployApiDefinition<Namespace> for RedisApiDeploy {
+impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>> {
         debug!(
             "Deploy API site: {}, id: {}",
@@ -296,8 +296,8 @@ mod tests {
 
     use crate::api_definition::{ApiDeployment, Host};
     use crate::auth::CommonNamespace;
-    use crate::repo::api_deployment_repo::{DeployApiDefinition,
-        InMemoryDeployment, RedisApiDeploy,
+    use crate::repo::api_deployment_repo::{ApiDeploymentRepo,
+                                           InMemoryDeployment, RedisApiDeploy,
     };
     use crate::repo::api_deployment_repo::redis_keys::{api_deployment_redis_key, api_deployments_redis_key};
     use crate::service::api_definition::ApiDefinitionKey;
