@@ -161,12 +161,17 @@ impl<Ctx: WorkerCtx> InvocationQueue for DefaultInvocationQueue<Ctx> {
         };
         if let Some(worker) = self.worker.upgrade() {
             if worker.store.try_lock().is_none() {
+                debug!(
+                    "Worker {} is busy, persisting pending invocation",
+                    worker.metadata.worker_id.worker_id
+                );
                 // The worker is currently busy, so we write the pending worker invocation to the oplog
                 worker
                     .public_state
                     .oplog()
                     .add(OplogEntry::pending_worker_invocation(invocation.clone()))
                     .await;
+                worker.public_state.oplog().commit().await;
             }
         }
         self.active.write().unwrap().push_back(invocation);

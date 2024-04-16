@@ -26,7 +26,7 @@ use golem_test_framework::dsl::{
 };
 use tokio::time::sleep;
 use tonic::transport::Body;
-use tracing::debug;
+use tracing::{debug, info};
 use warp::Filter;
 use wasmtime_wasi::preview2::spawn;
 
@@ -1960,4 +1960,112 @@ async fn reconstruct_interrupted_state() {
     check!(result.is_err());
     check!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
     check!(status == WorkerStatus::Interrupted);
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn invocation_queue_is_persistent() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let response_clone = response.clone();
+    let host_http_port = context.host_http_port();
+
+    let http_server = tokio::spawn(async move {
+        let route = warp::path::path("poll").and(warp::get()).map(move || {
+            let body = response_clone.lock().unwrap();
+            Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::from(body.clone()))
+                .unwrap()
+        });
+
+        warp::serve(route)
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
+            .await;
+    });
+
+    let template_id = executor.store_template("http-client-2").await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_worker_with(&template_id, "invocation-queue-is-persistent", vec![], env)
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    info!("=== START POLLING ===");
+
+    executor
+        .invoke(
+            &worker_id,
+            "golem:it/api/start-polling",
+            vec![Value::String("done".to_string())],
+        )
+        .await
+        .unwrap();
+
+    sleep(Duration::from_secs(2)).await;
+
+    info!("=== INCREMENT 3x ===");
+
+    executor
+        .invoke(&worker_id, "golem:it/api/increment", vec![])
+        .await
+        .unwrap();
+    executor
+        .invoke(&worker_id, "golem:it/api/increment", vec![])
+        .await
+        .unwrap();
+    executor
+        .invoke(&worker_id, "golem:it/api/increment", vec![])
+        .await
+        .unwrap();
+
+    info!("=== INTERRUPT ===");
+
+    executor.interrupt(&worker_id).await;
+
+    info!("=== SLEEP ===");
+
+    sleep(Duration::from_secs(2)).await;
+
+    info!("=== DROP EXECUTOR ===");
+
+    drop(executor);
+    let executor = start(&context).await.unwrap();
+
+    info!("=== INCREMENT 1x ===");
+
+    executor
+        .invoke(&worker_id, "golem:it/api/increment", vec![])
+        .await
+        .unwrap();
+
+    executor.log_output(&worker_id).await;
+
+    sleep(Duration::from_secs(2)).await;
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "done".to_string();
+    }
+
+    info!("=== RESPONSE IS NOW done ===");
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api/get-count", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+    http_server.abort();
+
+    check!(result == vec![Value::U64(4)]);
 }
