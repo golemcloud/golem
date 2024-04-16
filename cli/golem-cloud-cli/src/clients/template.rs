@@ -56,7 +56,7 @@ pub struct TemplateClientLive<C: golem_cloud_client::api::TemplateClient + Sync 
 #[serde(rename_all = "camelCase")]
 pub struct TemplateView {
     pub template_id: String,
-    pub template_version: i32,
+    pub template_version: u64,
     pub template_name: String,
     pub template_size: i32,
     pub exports: Vec<String>,
