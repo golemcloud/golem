@@ -33,8 +33,9 @@ use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::InvocationKeyService;
+use crate::services::invocation_queue::InvocationQueue;
 use crate::services::key_value::KeyValueService;
-use crate::services::oplog::OplogService;
+use crate::services::oplog::{Oplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::recovery::RecoveryManagement;
 use crate::services::rpc::Rpc;
@@ -63,7 +64,7 @@ pub trait WorkerCtx:
     /// PublicState is a subset of the worker context which is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
-    type PublicState: PublicWorkerIo + HasInvocationQueue + HasOplog + Clone + Send + Sync;
+    type PublicState: PublicWorkerIo + HasInvocationQueue<Self> + HasOplog + Clone + Send + Sync;
 
     /// Creates a new worker context
     ///
@@ -99,6 +100,8 @@ pub trait WorkerCtx:
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
+        oplog: Arc<dyn Oplog + Send + Sync>,
+        invocation_queue: Arc<InvocationQueue<Self>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,

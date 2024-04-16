@@ -37,7 +37,7 @@ use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
 use golem_worker_executor_base::services::key_value::KeyValueService;
-use golem_worker_executor_base::services::oplog::OplogService;
+use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
 use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::recovery::{
     RecoveryManagement, RecoveryManagementDefault,
@@ -77,6 +77,7 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_worker_executor_base::preview2::golem;
+use golem_worker_executor_base::services::invocation_queue::InvocationQueue;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
 };
@@ -568,7 +569,7 @@ struct ServerBootstrap {}
 
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
-    type PublicState = PublicDurableWorkerState;
+    type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
     async fn create(
         worker_id: VersionedWorkerId,
@@ -584,6 +585,8 @@ impl WorkerCtx for TestWorkerCtx {
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
+        oplog: Arc<dyn Oplog + Send + Sync>,
+        invocation_queue: Arc<InvocationQueue<TestWorkerCtx>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
@@ -604,6 +607,8 @@ impl WorkerCtx for TestWorkerCtx {
             event_service,
             active_workers,
             oplog_service,
+            oplog,
+            invocation_queue,
             scheduler_service,
             recovery_management,
             rpc,

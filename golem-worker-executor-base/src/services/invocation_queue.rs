@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use golem_wasm_rpc::Value;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::Weak;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::invocation::invoke_worker;
+use crate::services::oplog::Oplog;
 use crate::services::HasOplog;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -38,45 +39,103 @@ use golem_common::model::{CallingConvention, InvocationKey, WorkerId, WorkerInvo
 /// If the queue is empty, the service can trigger invocations directly as an optimization.
 ///
 /// Every worker invocation should be done through this service.
-#[async_trait]
-pub trait InvocationQueue: Send + Sync {
-    async fn enqueue(
+pub struct InvocationQueue<Ctx: WorkerCtx> {
+    worker_id: WorkerId,
+    oplog: Arc<dyn Oplog + Send + Sync>,
+    queue: Arc<RwLock<VecDeque<WorkerInvocation>>>,
+    running: Arc<Mutex<Option<RunningInvocationQueue<Ctx>>>>,
+}
+
+impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
+    pub fn new(
+        worker_id: WorkerId,
+        oplog: Arc<dyn Oplog + Send + Sync>,
+        initial_pending_invocations: &[WorkerInvocation],
+    ) -> Self {
+        let queue = Arc::new(RwLock::new(VecDeque::from_iter(
+            initial_pending_invocations.iter().cloned(),
+        )));
+
+        InvocationQueue {
+            worker_id,
+            oplog,
+            queue,
+            running: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub async fn attach(&self, worker: Arc<Worker<Ctx>>) {
+        let mut running = self.running.lock().await;
+        assert!(running.is_none());
+        *running = Some(RunningInvocationQueue::new(worker, self.queue.clone()));
+    }
+
+    pub async fn enqueue(
         &self,
         invocation_key: InvocationKey,
         full_function_name: String,
         function_input: Vec<Value>,
         calling_convention: CallingConvention,
-    );
+    ) {
+        match self.running.lock().await.as_ref() {
+            Some(running) => {
+                running
+                    .enqueue(
+                        invocation_key,
+                        full_function_name,
+                        function_input,
+                        calling_convention,
+                    )
+                    .await;
+            }
+            None => {
+                debug!(
+                    "Worker {} is initializing, persisting pending invocation",
+                    self.worker_id
+                );
+                let invocation = WorkerInvocation {
+                    invocation_key,
+                    full_function_name,
+                    function_input,
+                    calling_convention,
+                };
+                self.queue.write().unwrap().push_back(invocation.clone());
+                self.oplog
+                    .add(OplogEntry::pending_worker_invocation(invocation))
+                    .await;
+                self.oplog.commit().await;
+            }
+        }
+    }
 
-    /// Gets the currently enqueued invocations
-    fn pending_invocations(&self) -> Vec<WorkerInvocation>;
+    pub fn pending_invocations(&self) -> Vec<WorkerInvocation> {
+        self.queue.read().unwrap().iter().cloned().collect()
+    }
 }
 
-pub struct DefaultInvocationQueue<Ctx: WorkerCtx> {
+struct RunningInvocationQueue<Ctx: WorkerCtx> {
     _handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<()>,
-    active: Arc<RwLock<VecDeque<WorkerInvocation>>>,
+    queue: Arc<RwLock<VecDeque<WorkerInvocation>>>,
     worker: Weak<Worker<Ctx>>,
 }
 
-impl<Ctx: WorkerCtx> DefaultInvocationQueue<Ctx> {
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(
-        worker: Arc<Worker<Ctx>>,
-        initial_pending_invocations: &[WorkerInvocation],
-    ) -> Arc<dyn InvocationQueue> {
+impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
+    pub fn new(worker: Arc<Worker<Ctx>>, queue: Arc<RwLock<VecDeque<WorkerInvocation>>>) -> Self {
         let worker_id = worker.metadata.worker_id.worker_id.clone();
 
         let worker = Arc::downgrade(&worker);
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        let active = Arc::new(RwLock::new(VecDeque::from_iter(
-            initial_pending_invocations.iter().cloned(),
-        )));
+
+        // Preload
+        for _ in 0..queue.read().unwrap().len() {
+            sender.send(()).unwrap();
+        }
 
         let worker_clone = worker.clone();
-        let active_clone = active.clone();
+        let active_clone = queue.clone();
         let handle = tokio::task::spawn(async move {
-            DefaultInvocationQueue::invocation_loop(
+            RunningInvocationQueue::invocation_loop(
                 receiver,
                 active_clone,
                 worker_clone,
@@ -85,12 +144,44 @@ impl<Ctx: WorkerCtx> DefaultInvocationQueue<Ctx> {
             .await;
         });
 
-        Arc::new(DefaultInvocationQueue {
+        RunningInvocationQueue {
             _handle: Some(handle),
             sender,
-            active,
+            queue,
             worker,
-        })
+        }
+    }
+
+    pub async fn enqueue(
+        &self,
+        invocation_key: InvocationKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+        calling_convention: CallingConvention,
+    ) {
+        let invocation = WorkerInvocation {
+            invocation_key,
+            full_function_name,
+            function_input,
+            calling_convention,
+        };
+        if let Some(worker) = self.worker.upgrade() {
+            if worker.store.try_lock().is_none() {
+                debug!(
+                    "Worker {} is busy, persisting pending invocation",
+                    worker.metadata.worker_id.worker_id
+                );
+                // The worker is currently busy, so we write the pending worker invocation to the oplog
+                worker
+                    .public_state
+                    .oplog()
+                    .add(OplogEntry::pending_worker_invocation(invocation.clone()))
+                    .await;
+                worker.public_state.oplog().commit().await;
+            }
+        }
+        self.queue.write().unwrap().push_back(invocation);
+        self.sender.send(()).unwrap()
     }
 
     async fn invocation_loop(
@@ -141,44 +232,5 @@ impl<Ctx: WorkerCtx> DefaultInvocationQueue<Ctx> {
             }
         }
         debug!("Invocation queue loop for {worker_id} finished");
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> InvocationQueue for DefaultInvocationQueue<Ctx> {
-    async fn enqueue(
-        &self,
-        invocation_key: InvocationKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        calling_convention: CallingConvention,
-    ) {
-        let invocation = WorkerInvocation {
-            invocation_key,
-            full_function_name,
-            function_input,
-            calling_convention,
-        };
-        if let Some(worker) = self.worker.upgrade() {
-            if worker.store.try_lock().is_none() {
-                debug!(
-                    "Worker {} is busy, persisting pending invocation",
-                    worker.metadata.worker_id.worker_id
-                );
-                // The worker is currently busy, so we write the pending worker invocation to the oplog
-                worker
-                    .public_state
-                    .oplog()
-                    .add(OplogEntry::pending_worker_invocation(invocation.clone()))
-                    .await;
-                worker.public_state.oplog().commit().await;
-            }
-        }
-        self.active.write().unwrap().push_back(invocation);
-        self.sender.send(()).unwrap()
-    }
-
-    fn pending_invocations(&self) -> Vec<WorkerInvocation> {
-        self.active.read().unwrap().iter().cloned().collect()
     }
 }

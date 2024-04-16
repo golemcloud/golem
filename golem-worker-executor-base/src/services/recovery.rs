@@ -641,12 +641,8 @@ mod tests {
         }
     }
 
-    impl HasInvocationQueue for EmptyPublicState {
-        fn invocation_queue(&self) -> Arc<dyn InvocationQueue> {
-            unimplemented!()
-        }
-
-        fn attach_invocation_queue(&self, _invocation_queue: Arc<dyn InvocationQueue>) {
+    impl HasInvocationQueue<EmptyContext> for EmptyPublicState {
+        fn invocation_queue(&self) -> Arc<InvocationQueue<EmptyContext>> {
             unimplemented!()
         }
     }
@@ -853,6 +849,8 @@ mod tests {
             _event_service: Arc<dyn WorkerEventService + Send + Sync>,
             _active_workers: Arc<ActiveWorkers<Self>>,
             _oplog_service: Arc<dyn OplogService + Send + Sync>,
+            _oplog: Arc<dyn Oplog + Send + Sync>,
+            _invocation_queue: Arc<InvocationQueue<EmptyContext>>,
             _scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
             _recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
             rpc: Arc<dyn Rpc + Send + Sync>,

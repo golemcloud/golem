@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::error::GolemError;
@@ -100,7 +100,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     wasi: WasiCtx,
     wasi_http: WasiHttpCtx,
     pub worker_id: VersionedWorkerId,
-    pub public_state: PublicDurableWorkerState,
+    pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState<Ctx>,
     #[allow(unused)] // note: need to keep reference to it to keep the temp dir alive
     temp_dir: Arc<TempDir>,
@@ -122,6 +122,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         active_workers: Arc<ActiveWorkers<Ctx>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
+        oplog: Arc<dyn Oplog + Send + Sync>,
+        invocation_queue: Arc<InvocationQueue<Ctx>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
@@ -150,7 +152,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stdout = ManagedStdOut::from_standard_io(stdio.clone());
         let stderr = ManagedStdErr::from_stderr(Stderr);
 
-        let oplog = oplog_service.open(&worker_id.worker_id).await;
         let oplog_size = oplog.current_oplog_index().await;
 
         wasi_host::create_context(
@@ -174,7 +175,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         promise_service: promise_service.clone(),
                         event_service,
                         managed_stdio: stdio,
-                        invocation_queue: Arc::new(Mutex::new(None)),
+                        invocation_queue,
                         oplog: oplog.clone(),
                     },
                     state: PrivateDurableWorkerState {
@@ -215,7 +216,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .map_err(|e| GolemError::runtime(format!("Could not create WASI context: {e}")))
     }
 
-    pub fn get_public_state(&self) -> &PublicDurableWorkerState {
+    pub fn get_public_state(&self) -> &PublicDurableWorkerState<Ctx> {
         &self.public_state
     }
 
@@ -1153,17 +1154,28 @@ impl<Ctx: WorkerCtx> HasOplog for PrivateDurableWorkerState<Ctx> {
     }
 }
 
-#[derive(Clone)]
-pub struct PublicDurableWorkerState {
+pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
     managed_stdio: ManagedStandardIo,
-    invocation_queue: Arc<Mutex<Option<Arc<dyn InvocationQueue>>>>,
+    invocation_queue: Arc<InvocationQueue<Ctx>>,
     oplog: Arc<dyn Oplog + Send + Sync>,
 }
 
+impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
+    fn clone(&self) -> Self {
+        Self {
+            promise_service: self.promise_service.clone(),
+            event_service: self.event_service.clone(),
+            managed_stdio: self.managed_stdio.clone(),
+            invocation_queue: self.invocation_queue.clone(),
+            oplog: self.oplog.clone(),
+        }
+    }
+}
+
 #[async_trait]
-impl PublicWorkerIo for PublicDurableWorkerState {
+impl<Ctx: WorkerCtx> PublicWorkerIo for PublicDurableWorkerState<Ctx> {
     fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync> {
         self.event_service.clone()
     }
@@ -1173,22 +1185,13 @@ impl PublicWorkerIo for PublicDurableWorkerState {
     }
 }
 
-impl HasInvocationQueue for PublicDurableWorkerState {
-    fn invocation_queue(&self) -> Arc<dyn InvocationQueue> {
-        self.invocation_queue
-            .lock()
-            .unwrap()
-            .as_ref()
-            .expect("invocation queue is not initialized")
-            .clone()
-    }
-
-    fn attach_invocation_queue(&self, invocation_queue: Arc<dyn InvocationQueue>) {
-        *self.invocation_queue.lock().unwrap() = Some(invocation_queue);
+impl<Ctx: WorkerCtx> HasInvocationQueue<Ctx> for PublicDurableWorkerState<Ctx> {
+    fn invocation_queue(&self) -> Arc<InvocationQueue<Ctx>> {
+        self.invocation_queue.clone()
     }
 }
 
-impl HasOplog for PublicDurableWorkerState {
+impl<Ctx: WorkerCtx> HasOplog for PublicDurableWorkerState<Ctx> {
     fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
         self.oplog.clone()
     }

@@ -26,7 +26,7 @@ use golem_test_framework::dsl::{
 };
 use tokio::time::sleep;
 use tonic::transport::Body;
-use tracing::{debug, info};
+use tracing::debug;
 use warp::Filter;
 use wasmtime_wasi::preview2::spawn;
 
@@ -2000,8 +2000,6 @@ async fn invocation_queue_is_persistent() {
 
     executor.log_output(&worker_id).await;
 
-    info!("=== START POLLING ===");
-
     executor
         .invoke(
             &worker_id,
@@ -2013,8 +2011,6 @@ async fn invocation_queue_is_persistent() {
 
     sleep(Duration::from_secs(2)).await;
 
-    info!("=== INCREMENT 3x ===");
-
     executor
         .invoke(&worker_id, "golem:it/api/increment", vec![])
         .await
@@ -2027,21 +2023,13 @@ async fn invocation_queue_is_persistent() {
         .invoke(&worker_id, "golem:it/api/increment", vec![])
         .await
         .unwrap();
-
-    info!("=== INTERRUPT ===");
 
     executor.interrupt(&worker_id).await;
 
-    info!("=== SLEEP ===");
-
     sleep(Duration::from_secs(2)).await;
-
-    info!("=== DROP EXECUTOR ===");
 
     drop(executor);
     let executor = start(&context).await.unwrap();
-
-    info!("=== INCREMENT 1x ===");
 
     executor
         .invoke(&worker_id, "golem:it/api/increment", vec![])
@@ -2056,8 +2044,6 @@ async fn invocation_queue_is_persistent() {
         let mut response = response.lock().unwrap();
         *response = "done".to_string();
     }
-
-    info!("=== RESPONSE IS NOW done ===");
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api/get-count", vec![])
