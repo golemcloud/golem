@@ -41,7 +41,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::{worker_enumeration, HasAll, HasInvocationQueue};
+use crate::services::{worker_enumeration, HasAll, HasInvocationQueue, HasOplog};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -63,7 +63,7 @@ pub trait WorkerCtx:
     /// PublicState is a subset of the worker context which is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
-    type PublicState: PublicWorkerIo + HasInvocationQueue + Clone + Send + Sync;
+    type PublicState: PublicWorkerIo + HasInvocationQueue + HasOplog + Clone + Send + Sync;
 
     /// Creates a new worker context
     ///
@@ -174,7 +174,7 @@ pub trait FuelManagement {
 #[async_trait]
 pub trait InvocationManagement {
     /// Sets the invocation key associated with the current invocation of the worker.
-    async fn set_current_invocation_key(&mut self, invocation_key: Option<InvocationKey>);
+    async fn set_current_invocation_key(&mut self, invocation_key: InvocationKey);
 
     /// Gets the invocation key associated with the current invocation of the worker.
     async fn get_current_invocation_key(&self) -> Option<InvocationKey>;
@@ -230,6 +230,9 @@ pub trait StatusManagement {
 
     /// Stores the current worker status
     async fn store_worker_status(&self, status: WorkerStatus);
+
+    /// Update the pending invocations of the worker
+    async fn update_pending_invocations(&self);
 
     /// Called when a worker is getting deactivated
     async fn deactivate(&self);

@@ -31,7 +31,7 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         function_name: String,
         request: Vec<u8>,
-        invocation_key: Option<InvocationKey>,
+        invocation_key: InvocationKey,
         calling_convention: Option<CallingConvention>,
     },
     /// The worker has completed an invocation
@@ -128,7 +128,7 @@ impl OplogEntry {
     pub fn exported_function_invoked<R: Encode>(
         function_name: String,
         request: &R,
-        invocation_key: Option<InvocationKey>,
+        invocation_key: InvocationKey,
         calling_convention: Option<CallingConvention>,
     ) -> Result<OplogEntry, String> {
         let serialized_request = serialize(request)?.to_vec();
@@ -221,6 +221,13 @@ impl OplogEntry {
         OplogEntry::EndRemoteWrite {
             timestamp: Timestamp::now_utc(),
             begin_index,
+        }
+    }
+
+    pub fn pending_worker_invocation(invocation: WorkerInvocation) -> OplogEntry {
+        OplogEntry::PendingWorkerInvocation {
+            timestamp: Timestamp::now_utc(),
+            invocation,
         }
     }
 
@@ -328,9 +335,9 @@ mod tests {
         let entry = OplogEntry::exported_function_invoked(
             "function_name".to_string(),
             &vec![val1.clone()],
-            Some(InvocationKey {
+            InvocationKey {
                 value: "invocation_key".to_string(),
-            }),
+            },
             Some(CallingConvention::Stdio),
         )
         .unwrap();

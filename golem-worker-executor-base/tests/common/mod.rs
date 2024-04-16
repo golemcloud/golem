@@ -241,7 +241,7 @@ impl TestContext {
     }
 
     pub fn redis_prefix(&self) -> String {
-        format!("test-{}", self.unique_id)
+        format!("test-{}:", self.unique_id)
     }
 
     pub fn grpc_port(&self) -> u16 {
@@ -435,7 +435,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
 
 #[async_trait]
 impl InvocationManagement for TestWorkerCtx {
-    async fn set_current_invocation_key(&mut self, invocation_key: Option<InvocationKey>) {
+    async fn set_current_invocation_key(&mut self, invocation_key: InvocationKey) {
         self.durable_ctx
             .set_current_invocation_key(invocation_key)
             .await
@@ -495,6 +495,10 @@ impl StatusManagement for TestWorkerCtx {
 
     async fn store_worker_status(&self, status: WorkerStatus) {
         self.durable_ctx.store_worker_status(status).await
+    }
+
+    async fn update_pending_invocations(&self) {
+        self.durable_ctx.update_pending_invocations().await
     }
 
     async fn deactivate(&self) {

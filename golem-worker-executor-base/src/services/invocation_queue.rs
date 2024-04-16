@@ -23,8 +23,10 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::invocation::invoke_worker;
+use crate::services::HasOplog;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::OplogEntry;
 use golem_common::model::{CallingConvention, InvocationKey, WorkerId, WorkerInvocation};
 
 /// Per-worker invocation queue service
@@ -40,7 +42,7 @@ use golem_common::model::{CallingConvention, InvocationKey, WorkerId, WorkerInvo
 pub trait InvocationQueue: Send + Sync {
     async fn enqueue(
         &self,
-        invocation_key: Option<InvocationKey>,
+        invocation_key: InvocationKey,
         full_function_name: String,
         function_input: Vec<Value>,
         calling_convention: CallingConvention,
@@ -54,17 +56,22 @@ pub struct DefaultInvocationQueue<Ctx: WorkerCtx> {
     _handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<()>,
     active: Arc<RwLock<VecDeque<WorkerInvocation>>>,
-    _worker: Weak<Worker<Ctx>>,
+    worker: Weak<Worker<Ctx>>,
 }
 
 impl<Ctx: WorkerCtx> DefaultInvocationQueue<Ctx> {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(worker: Arc<Worker<Ctx>>) -> Arc<dyn InvocationQueue> {
+    pub fn new(
+        worker: Arc<Worker<Ctx>>,
+        initial_pending_invocations: &[WorkerInvocation],
+    ) -> Arc<dyn InvocationQueue> {
         let worker_id = worker.metadata.worker_id.worker_id.clone();
 
         let worker = Arc::downgrade(&worker);
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        let active = Arc::new(RwLock::new(VecDeque::new()));
+        let active = Arc::new(RwLock::new(VecDeque::from_iter(
+            initial_pending_invocations.iter().cloned(),
+        )));
 
         let worker_clone = worker.clone();
         let active_clone = active.clone();
@@ -82,7 +89,7 @@ impl<Ctx: WorkerCtx> DefaultInvocationQueue<Ctx> {
             _handle: Some(handle),
             sender,
             active,
-            _worker: worker,
+            worker,
         })
     }
 
@@ -113,7 +120,9 @@ impl<Ctx: WorkerCtx> DefaultInvocationQueue<Ctx> {
                     .set_current_invocation_key(message.invocation_key)
                     .await;
 
-                // TODO: remove invocation from the worker status record
+                // Make sure to update the pending invocation queue in the status record before
+                // the invocation writes the invocation start oplog entry
+                store.data_mut().update_pending_invocations().await;
 
                 let _ = invoke_worker(
                     message.full_function_name,
@@ -139,19 +148,28 @@ impl<Ctx: WorkerCtx> DefaultInvocationQueue<Ctx> {
 impl<Ctx: WorkerCtx> InvocationQueue for DefaultInvocationQueue<Ctx> {
     async fn enqueue(
         &self,
-        invocation_key: Option<InvocationKey>,
+        invocation_key: InvocationKey,
         full_function_name: String,
         function_input: Vec<Value>,
         calling_convention: CallingConvention,
     ) {
-        // TODO: direct invocation
-        // TODO: write to oplog and status record
-        self.active.write().unwrap().push_back(WorkerInvocation {
+        let invocation = WorkerInvocation {
             invocation_key,
             full_function_name,
             function_input,
             calling_convention,
-        });
+        };
+        if let Some(worker) = self.worker.upgrade() {
+            if worker.store.try_lock().is_none() {
+                // The worker is currently busy, so we write the pending worker invocation to the oplog
+                worker
+                    .public_state
+                    .oplog()
+                    .add(OplogEntry::pending_worker_invocation(invocation.clone()))
+                    .await;
+            }
+        }
+        self.active.write().unwrap().push_back(invocation);
         self.sender.send(()).unwrap()
     }
 

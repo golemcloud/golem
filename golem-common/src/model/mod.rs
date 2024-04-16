@@ -739,7 +739,7 @@ impl From<WorkerStatus> for i32 {
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct WorkerInvocation {
-    pub invocation_key: Option<InvocationKey>,
+    pub invocation_key: InvocationKey,
     pub full_function_name: String,
     pub function_input: Vec<golem_wasm_rpc::Value>,
     pub calling_convention: CallingConvention,

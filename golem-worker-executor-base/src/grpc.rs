@@ -521,9 +521,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let calling_convention = request.calling_convention();
-        let invocation_key = request.invocation_key()?;
-
         let worker_details = self.get_or_create(request).await?;
+        let invocation_key = request.invocation_key()?.unwrap_or(
+            self.invocation_key_service()
+                .generate_key(&worker_details.metadata.worker_id.worker_id),
+        );
+
         let values = invoke_and_await(
             worker_details,
             self,
@@ -588,9 +591,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let calling_convention = request.calling_convention();
-        let invocation_key = request.invocation_key()?;
-
         let worker_details = self.get_or_create(request).await?;
+        let invocation_key = request.invocation_key()?.unwrap_or(
+            self.invocation_key_service()
+                .generate_key(&worker_details.metadata.worker_id.worker_id),
+        );
+
         let result = invoke(
             worker_details,
             self,

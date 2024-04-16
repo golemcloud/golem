@@ -129,6 +129,10 @@ pub trait HasInvocationQueue {
     fn attach_invocation_queue(&self, invocation_queue: Arc<dyn invocation_queue::InvocationQueue>);
 }
 
+pub trait HasOplog {
+    fn oplog(&self) -> Arc<dyn oplog::Oplog + Send + Sync>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>

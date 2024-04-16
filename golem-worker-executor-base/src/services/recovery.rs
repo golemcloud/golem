@@ -591,9 +591,9 @@ mod tests {
     use crate::services::worker_event::WorkerEventService;
     use crate::services::{
         worker_enumeration, All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
-        HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasPromiseService, HasRpc,
-        HasRunningWorkerEnumerationService, HasTemplateService, HasWasmtimeEngine,
-        HasWorkerEnumerationService, HasWorkerService,
+        HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasOplog,
+        HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasTemplateService,
+        HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
     };
     use crate::workerctx::{
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
@@ -615,7 +615,7 @@ mod tests {
     use wasmtime::component::{Instance, ResourceAny};
     use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
-    use crate::services::oplog::{OplogService, OplogServiceMock};
+    use crate::services::oplog::{Oplog, OplogService, OplogServiceMock};
     use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault, TrapType};
     use crate::services::rpc::Rpc;
     use crate::services::scheduler;
@@ -651,6 +651,12 @@ mod tests {
         }
     }
 
+    impl HasOplog for EmptyPublicState {
+        fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
+            unimplemented!()
+        }
+    }
+
     #[async_trait]
     impl FuelManagement for EmptyContext {
         fn is_out_of_fuel(&self, _current_level: i64) -> bool {
@@ -672,7 +678,7 @@ mod tests {
 
     #[async_trait]
     impl InvocationManagement for EmptyContext {
-        async fn set_current_invocation_key(&mut self, _invocation_key: Option<InvocationKey>) {
+        async fn set_current_invocation_key(&mut self, _invocation_key: InvocationKey) {
             unimplemented!()
         }
 
@@ -727,6 +733,10 @@ mod tests {
         }
 
         async fn store_worker_status(&self, _status: WorkerStatus) {
+            unimplemented!()
+        }
+
+        async fn update_pending_invocations(&self) {
             unimplemented!()
         }
 

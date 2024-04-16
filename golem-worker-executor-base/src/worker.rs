@@ -223,7 +223,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 execution_status,
             });
 
-            let invocation_queue = DefaultInvocationQueue::new(result.clone()); // TODO: pass the entries read from oplog to worker_metadata.last_known_status
+            let invocation_queue = DefaultInvocationQueue::new(
+                result.clone(),
+                &worker_metadata.last_known_status.pending_invocations,
+            ); // TODO: pass the entries read from oplog to worker_metadata.last_known_status
             result
                 .public_state
                 .attach_invocation_queue(invocation_queue);
@@ -539,7 +542,7 @@ fn validate_worker(
 pub async fn invoke<Ctx: WorkerCtx, T>(
     worker: Arc<Worker<Ctx>>,
     this: &T,
-    invocation_key: Option<InvocationKey>,
+    invocation_key: InvocationKey,
     calling_convention: CallingConvention,
     full_function_name: String,
     function_input: Vec<Value>,
@@ -547,17 +550,13 @@ pub async fn invoke<Ctx: WorkerCtx, T>(
 where
     T: HasInvocationKeyService,
 {
-    let output = match &invocation_key {
-        Some(invocation_key) => worker.lookup_result(this, invocation_key),
-        None => LookupResult::Pending,
-    };
+    let output = worker.lookup_result(this, &invocation_key);
 
     match output {
         LookupResult::Complete(output) => Ok(Some(output)),
         LookupResult::Invalid => Err(GolemError::invalid_request(format!(
             "Invalid invocation key {} for {}",
-            invocation_key.unwrap(),
-            worker.metadata.worker_id.worker_id
+            invocation_key, worker.metadata.worker_id.worker_id
         ))),
         LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
         LookupResult::Pending => {
@@ -575,14 +574,7 @@ where
                         )),
                     }?;
 
-                    public_state
-                        .enqueue(
-                            bytes,
-                            invocation_key
-                                .clone()
-                                .expect("stdio-eventloop mode requires an invocation key"),
-                        )
-                        .await;
+                    public_state.enqueue(bytes, invocation_key.clone()).await;
                     let execution_status = worker.execution_status.read().unwrap().clone();
                     !execution_status.is_running()
                 };
@@ -622,7 +614,7 @@ where
 pub async fn invoke_and_await<Ctx: WorkerCtx, T>(
     worker: Arc<Worker<Ctx>>,
     this: &T,
-    invocation_key: Option<InvocationKey>,
+    invocation_key: InvocationKey,
     calling_convention: CallingConvention,
     full_function_name: String,
     function_input: Vec<Value>,
@@ -644,9 +636,6 @@ where
         Some(Ok(output)) => Ok(output),
         Some(Err(err)) => Err(err),
         None => {
-            let invocation_key =
-                invocation_key.expect("missing invocation key for invoke-and-await");
-
             debug!(
                 "Waiting for invocation key {} to complete for {worker_id}",
                 invocation_key
@@ -855,10 +844,15 @@ fn calculate_pending_invocations(
 ) -> Vec<WorkerInvocation> {
     let mut result = initial;
     for entry in entries {
-        if let OplogEntry::PendingWorkerInvocation { invocation, .. } = entry {
-            result.push(invocation.clone());
+        match entry {
+            OplogEntry::PendingWorkerInvocation { invocation, .. } => {
+                result.push(invocation.clone());
+            }
+            OplogEntry::ExportedFunctionInvoked { invocation_key, .. } => {
+                result.retain(|invocation| &invocation.invocation_key != invocation_key);
+            }
+            _ => {}
         }
-        // TODO: remove invocation if it happened - maybe we need to make invocation key required for that
     }
     result
 }

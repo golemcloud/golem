@@ -142,7 +142,7 @@ impl ExternalOperations<Context> for Context {
 
 #[async_trait]
 impl InvocationManagement for Context {
-    async fn set_current_invocation_key(&mut self, invocation_key: Option<InvocationKey>) {
+    async fn set_current_invocation_key(&mut self, invocation_key: InvocationKey) {
         self.durable_ctx
             .set_current_invocation_key(invocation_key)
             .await
@@ -202,6 +202,10 @@ impl StatusManagement for Context {
 
     async fn store_worker_status(&self, status: WorkerStatus) {
         self.durable_ctx.store_worker_status(status).await
+    }
+
+    async fn update_pending_invocations(&self) {
+        self.durable_ctx.update_pending_invocations().await
     }
 
     async fn deactivate(&self) {
