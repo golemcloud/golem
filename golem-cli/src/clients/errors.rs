@@ -66,7 +66,7 @@ impl ResponseContentErrorMapper for ApiDefinitionError {
             ApiDefinitionError::Error400(error) => display_worker_service_errors_body(error),
             ApiDefinitionError::Error401(error) => error.error,
             ApiDefinitionError::Error403(error) => error.error,
-            ApiDefinitionError::Error404(error) => error.message,
+            ApiDefinitionError::Error404(error) => error.error,
             ApiDefinitionError::Error409(error) => error.to_string(),
             ApiDefinitionError::Error500(error) => error.error,
         }
@@ -214,8 +214,8 @@ mod tests {
     use golem_client::{
         api::ApiDefinitionError,
         model::{
-            MessageBody, MessagesErrorsBody, MethodPattern, RouteValidationError,
-            ValidationErrorsBody, WorkerServiceErrorBody, WorkerServiceErrorsBody,
+            ErrorBody, MessagesErrorsBody, MethodPattern, RouteValidationError,
+            ValidationErrorsBody, WorkerServiceErrorsBody,
         },
     };
     use uuid::Uuid;
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn api_definition_error_401() {
-        let error = ApiDefinitionError::Error401(WorkerServiceErrorBody {
+        let error = ApiDefinitionError::Error401(ErrorBody {
             error: "401".to_string(),
         });
         assert_eq!(error.map(), "401".to_string())
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn api_definition_error_403() {
-        let error = ApiDefinitionError::Error403(WorkerServiceErrorBody {
+        let error = ApiDefinitionError::Error403(ErrorBody {
             error: "403".to_string(),
         });
         assert_eq!(error.map(), "403".to_string())
@@ -246,15 +246,15 @@ mod tests {
 
     #[test]
     fn api_definition_error_404() {
-        let error = ApiDefinitionError::Error404(MessageBody {
-            message: "404".to_string(),
+        let error = ApiDefinitionError::Error404(ErrorBody {
+            error: "404".to_string(),
         });
         assert_eq!(error.map(), "404".to_string())
     }
 
     #[test]
     fn api_definition_error_500() {
-        let error = ApiDefinitionError::Error500(WorkerServiceErrorBody {
+        let error = ApiDefinitionError::Error500(ErrorBody {
             error: "500".to_string(),
         });
         assert_eq!(error.map(), "500".to_string())

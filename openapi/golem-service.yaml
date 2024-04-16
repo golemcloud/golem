@@ -887,19 +887,19 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
         '403':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
@@ -911,7 +911,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
   /v1/api/definitions:
     get:
       tags:
@@ -953,19 +953,19 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
         '403':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
@@ -977,7 +977,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
     put:
       tags:
       - ApiDefinition
@@ -1005,19 +1005,19 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
         '403':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
@@ -1029,7 +1029,59 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
+    post:
+      tags:
+      - ApiDefinition
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/HttpApiDefinition'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
     delete:
       tags:
       - ApiDefinition
@@ -1068,19 +1120,19 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
         '403':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
@@ -1092,7 +1144,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
   /v1/api/definitions/all:
     get:
       tags:
@@ -1117,19 +1169,19 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
         '403':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
@@ -1141,7 +1193,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
   /healthcheck:
     get:
       tags:
@@ -2144,13 +2196,6 @@ components:
         result: {}
       required:
       - result
-    MessageBody:
-      type: object
-      properties:
-        message:
-          type: string
-      required:
-      - message
     MessagesErrorsBody:
       type: object
       properties:
@@ -2486,13 +2531,6 @@ components:
             $ref: '#/components/schemas/WorkerFilter'
       required:
       - filters
-    WorkerServiceErrorBody:
-      type: object
-      properties:
-        error:
-          type: string
-      required:
-      - error
     WorkerServiceErrorsBody:
       discriminator:
         propertyName: type

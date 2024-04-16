@@ -47,7 +47,7 @@ impl RegisterApiDefinitionApi {
             ApiEndpointError::bad_request(e)
         })?;
 
-        self.register_api(&definition).await?;
+        self.create_api(&definition).await?;
 
         let definition: HttpApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
@@ -55,8 +55,8 @@ impl RegisterApiDefinitionApi {
         Ok(Json(definition))
     }
 
-    #[oai(path = "/", method = "put")]
-    async fn create_or_update(
+    #[oai(path = "/", method = "post")]
+    async fn create(
         &self,
         payload: Json<HttpApiDefinition>,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
@@ -67,7 +67,32 @@ impl RegisterApiDefinitionApi {
             .try_into()
             .map_err(ApiEndpointError::bad_request)?;
 
-        self.register_api(&definition).await?;
+        self.create_api(&definition).await?;
+
+        let definition: HttpApiDefinition =
+            definition.try_into().map_err(ApiEndpointError::internal)?;
+
+        Ok(Json(definition))
+    }
+    #[oai(path = "/", method = "put")]
+    async fn update(
+        &self,
+        payload: Json<HttpApiDefinition>,
+    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+        info!("Update API definition - id: {}", &payload.id);
+
+        let definition: CoreHttpApiDefinition = payload
+            .0
+            .try_into()
+            .map_err(ApiEndpointError::bad_request)?;
+
+        self.definition_service
+            .update(&definition, CommonNamespace::default(), &EmptyAuthCtx {})
+            .await
+            .map_err(|e| {
+                error!("API Definition ID: {} - update error: {e:?}", definition.id);
+                e
+            })?;
 
         let definition: HttpApiDefinition =
             definition.try_into().map_err(ApiEndpointError::internal)?;
@@ -158,15 +183,15 @@ impl RegisterApiDefinitionApi {
 }
 
 impl RegisterApiDefinitionApi {
-    async fn register_api(
-        &self,
-        definition: &CoreHttpApiDefinition,
-    ) -> Result<(), ApiEndpointError> {
+    async fn create_api(&self, definition: &CoreHttpApiDefinition) -> Result<(), ApiEndpointError> {
         self.definition_service
-            .register(definition, CommonNamespace::default(), &EmptyAuthCtx {})
+            .create(definition, CommonNamespace::default(), &EmptyAuthCtx {})
             .await
             .map_err(|e| {
-                error!("API definition id: {} - register error: {e}", definition.id,);
+                error!(
+                    "API definition ID: {} - register error: {e:?}",
+                    definition.id
+                );
                 e
             })?;
 
@@ -213,7 +238,7 @@ mod test {
         };
 
         let response = client
-            .put("/v1/api/definitions")
+            .post("/v1/api/definitions")
             .body_json(&definition)
             .send()
             .await;
@@ -221,12 +246,32 @@ mod test {
         response.assert_status_is_ok();
 
         let response = client
-            .put("/v1/api/definitions")
+            .post("/v1/api/definitions")
             .body_json(&definition)
             .send()
             .await;
 
         response.assert_status(http::StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn update_non_existant() {
+        let api = make_route();
+        let client = TestClient::new(api);
+
+        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
+            id: ApiDefinitionId("test".to_string()),
+            version: ApiVersion("42.0".to_string()),
+            routes: vec![],
+        };
+
+        let response = client
+            .put("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+
+        response.assert_status(http::StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -240,7 +285,7 @@ mod test {
             routes: vec![],
         };
         let response = client
-            .put("/v1/api/definitions")
+            .post("/v1/api/definitions")
             .body_json(&definition)
             .send()
             .await;
@@ -252,7 +297,7 @@ mod test {
             routes: vec![],
         };
         let response = client
-            .put("/v1/api/definitions")
+            .post("/v1/api/definitions")
             .body_json(&definition)
             .send()
             .await;
