@@ -11,6 +11,7 @@ services:
     ports:
       - "${GOLEM_ROUTER_PORT}:80"
     environment:
+      - GOLEM_TEMPLATE_MAX_SIZE_ALLOWED=${GOLEM_ROUTER_TEMPLATE_MAX_SIZE_ALLOWED}
       - GOLEM_WORKER_SERVICE_HOST=golem-worker-service
       - GOLEM_WORKER_SERVICE_PORT=${WORKER_SERVICE_HTTP_PORT}
       - GOLEM_TEMPLATE_SERVICE_HOST=golem-template-service
@@ -168,6 +169,8 @@ services:
       - template_compiled_store:/template_compiled_store
     ports:
       - "${WORKER_EXECUTOR_HTTP_PORT}:${WORKER_EXECUTOR_HTTP_PORT}"
+    depends_on:
+      - redis
 
 volumes:
   redis_data:

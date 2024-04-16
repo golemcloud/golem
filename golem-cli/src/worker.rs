@@ -12,17 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::clients::template::TemplateClientLive;
 use async_trait::async_trait;
 use clap::builder::ValueParser;
 use clap::Subcommand;
-use golem_client::model::{InvokeParameters, WorkerMetadata, WorkersMetadataResponse};
+use golem_client::model::{
+    InvokeParameters, InvokeResult, StringFilterComparator, Template, Type, WorkerFilter,
+    WorkerMetadata, WorkerNameFilter, WorkersMetadataResponse,
+};
+use golem_client::Context;
+use golem_wasm_rpc::TypeAnnotatedValue;
+use tokio::task::JoinHandle;
+use tracing::{error, info};
 
-use crate::clients::worker::WorkerClient;
+use crate::clients::worker::{WorkerClient, WorkerClientLive};
+use crate::model::invoke_result_view::InvokeResultView;
+use crate::model::template::function_params_types;
+use crate::model::wave::wrap_type;
 use crate::model::{
-    GolemError, GolemResult, InvocationKey, JsonValueParser, TemplateIdOrName, WorkerName,
+    GolemError, GolemResult, InvocationKey, JsonValueParser, TemplateId, TemplateIdOrName,
+    WorkerName,
 };
 use crate::parse_key_val;
-use crate::template::TemplateHandler;
+use crate::template::{TemplateHandler, TemplateHandlerLive};
 
 #[derive(Subcommand, Debug)]
 #[command()]
@@ -79,12 +91,29 @@ pub enum WorkerSubcommand {
         function: String,
 
         /// JSON array representing the parameters to be passed to the function
-        #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser))]
-        parameters: serde_json::value::Value,
+        #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser), conflicts_with = "wave")]
+        parameters: Option<serde_json::value::Value>,
+
+        /// Function parameter in WAVE format
+        ///
+        /// You can specify this argument multiple times for multiple parameters.
+        #[arg(
+            short = 'p',
+            long = "param",
+            value_name = "wave",
+            conflicts_with = "parameters"
+        )]
+        wave: Vec<String>,
 
         /// Enables the STDIO cal;ing convention, passing the parameters through stdin instead of a typed exported interface
         #[arg(short = 's', long, default_value_t = false)]
         use_stdio: bool,
+
+        /// Human-readable response format.
+        ///
+        /// Temporary flag. Should be replaced with the new --format option.
+        #[arg(short = 'H', long, default_value_t = false)]
+        human_readable: bool,
     },
 
     /// Triggers a function invocation on a worker without waiting for its completion
@@ -103,8 +132,19 @@ pub enum WorkerSubcommand {
         function: String,
 
         /// JSON array representing the parameters to be passed to the function
-        #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser))]
-        parameters: serde_json::value::Value,
+        #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser), conflicts_with = "wave")]
+        parameters: Option<serde_json::value::Value>,
+
+        /// Function parameter in WAVE format
+        ///
+        /// You can specify this argument multiple times for multiple parameters.
+        #[arg(
+            short = 'p',
+            long = "param",
+            value_name = "wave",
+            conflicts_with = "parameters"
+        )]
+        wave: Vec<String>,
     },
 
     /// Connect to a worker and live stream its standard output, error and log channels
@@ -206,6 +246,188 @@ pub trait WorkerHandler {
 pub struct WorkerHandlerLive<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> {
     pub client: C,
     pub templates: &'r R,
+    pub worker_context: Context,
+    pub template_context: Context,
+    pub allow_insecure: bool,
+}
+
+// same as resolve_worker_template_version, but with no borrowing, so we can spawn it.
+async fn resolve_worker_template_version_no_ref(
+    worker_context: Context,
+    template_context: Context,
+    allow_insecure: bool,
+    template_id: TemplateId,
+    worker_name: WorkerName,
+) -> Result<Option<Template>, GolemError> {
+    let client = WorkerClientLive {
+        client: golem_client::api::WorkerClientLive {
+            context: worker_context.clone(),
+        },
+        context: worker_context.clone(),
+        allow_insecure,
+    };
+
+    let templates = TemplateHandlerLive {
+        client: TemplateClientLive {
+            client: golem_client::api::TemplateClientLive {
+                context: template_context.clone(),
+            },
+        },
+    };
+    resolve_worker_template_version(&client, &templates, &template_id, worker_name).await
+}
+
+async fn resolve_worker_template_version<
+    C: WorkerClient + Send + Sync,
+    R: TemplateHandler + Send + Sync,
+>(
+    client: &C,
+    templates: &R,
+    template_id: &TemplateId,
+    worker_name: WorkerName,
+) -> Result<Option<Template>, GolemError> {
+    let worker_meta = client
+        .find_metadata(
+            template_id.clone(),
+            Some(WorkerFilter::Name(WorkerNameFilter {
+                comparator: StringFilterComparator::Equal,
+                value: worker_name.0,
+            })),
+            None,
+            Some(2),
+            Some(true),
+        )
+        .await?;
+
+    if worker_meta.workers.len() > 1 {
+        Err(GolemError(
+            "Multiple workers with the same name".to_string(),
+        ))
+    } else if let Some(worker) = worker_meta.workers.first() {
+        Ok(Some(
+            templates
+                .get_metadata(template_id, worker.template_version)
+                .await?,
+        ))
+    } else {
+        Ok(None)
+    }
+}
+
+fn wave_parameters_to_json(
+    wave: &[String],
+    template: &Template,
+    function: &str,
+) -> Result<serde_json::value::Value, GolemError> {
+    let types = function_params_types(template, function)?;
+
+    if wave.len() != types.len() {
+        return Err(GolemError(format!(
+            "Invalid number of wave parameters for function {function}. Expected {}, but got {}.",
+            types.len(),
+            wave.len()
+        )));
+    }
+
+    let params = wave
+        .iter()
+        .zip(types)
+        .map(|(param, typ)| parse_parameter(param, typ))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let json_params = params
+        .iter()
+        .map(golem_wasm_rpc::json::get_json_from_typed_value)
+        .collect::<Vec<_>>();
+
+    Ok(serde_json::value::Value::Array(json_params))
+}
+
+fn parse_parameter(wave: &str, typ: &Type) -> Result<TypeAnnotatedValue, GolemError> {
+    match wasm_wave::from_str(&wrap_type(typ), wave) {
+        Ok(value) => Ok(value),
+        Err(err) => Err(GolemError(format!(
+            "Failed to parse wave parameter {wave}: {err:?}"
+        ))),
+    }
+}
+
+async fn resolve_parameters<C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync>(
+    client: &C,
+    templates: &R,
+    template_id: &TemplateId,
+    worker_name: &WorkerName,
+    parameters: Option<serde_json::value::Value>,
+    wave: Vec<String>,
+    function: &str,
+) -> Result<(serde_json::value::Value, Option<Template>), GolemError> {
+    if let Some(parameters) = parameters {
+        Ok((parameters, None))
+    } else if let Some(template) =
+        resolve_worker_template_version(client, templates, template_id, worker_name.clone()).await?
+    {
+        let json = wave_parameters_to_json(&wave, &template, function)?;
+
+        Ok((json, Some(template)))
+    } else {
+        info!("No worker found with name {worker_name}. Assuming it should be create with the latest template version");
+        let template = templates.get_latest_metadata(template_id).await?;
+
+        let json = wave_parameters_to_json(&wave, &template, function)?;
+
+        // We are not going to use this template for result parsing.
+        Ok((json, None))
+    }
+}
+
+async fn to_invoke_result_view<C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync>(
+    res: InvokeResult,
+    async_template_request: AsyncTemplateRequest,
+    client: &C,
+    templates: &R,
+    template_id: &TemplateId,
+    worker_name: &WorkerName,
+    function: &str,
+) -> Result<InvokeResultView, GolemError> {
+    let template = match async_template_request {
+        AsyncTemplateRequest::Empty => None,
+        AsyncTemplateRequest::Resolved(template) => Some(template),
+        AsyncTemplateRequest::Async(join_meta) => match join_meta.await.unwrap() {
+            Ok(Some(template_meta)) => Some(template_meta),
+            _ => None,
+        },
+    };
+
+    let template = match template {
+        None => {
+            match resolve_worker_template_version(
+                client,
+                templates,
+                template_id,
+                worker_name.clone(),
+            )
+            .await
+            {
+                Ok(Some(template)) => template,
+                _ => {
+                    error!("Failed to get worker metadata after successful call.");
+
+                    return Ok(InvokeResultView::Json(res.result));
+                }
+            }
+        }
+        Some(template) => template,
+    };
+
+    Ok(InvokeResultView::try_parse_or_json(
+        res, &template, function,
+    ))
+}
+
+enum AsyncTemplateRequest {
+    Empty,
+    Resolved(Template),
+    Async(JoinHandle<Result<Option<Template>, GolemError>>),
 }
 
 #[async_trait]
@@ -248,9 +470,38 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 invocation_key,
                 function,
                 parameters,
+                wave,
                 use_stdio,
+                human_readable,
             } => {
                 let template_id = self.templates.resolve_id(template_id_or_name).await?;
+
+                let (parameters, template_meta) = resolve_parameters(
+                    &self.client,
+                    self.templates,
+                    &template_id,
+                    &worker_name,
+                    parameters,
+                    wave,
+                    &function,
+                )
+                .await?;
+
+                let async_template_request = if let Some(template) = template_meta {
+                    AsyncTemplateRequest::Resolved(template)
+                } else if human_readable {
+                    AsyncTemplateRequest::Async(tokio::spawn(
+                        resolve_worker_template_version_no_ref(
+                            self.worker_context.clone(),
+                            self.template_context.clone(),
+                            self.allow_insecure,
+                            template_id.clone(),
+                            worker_name.clone(),
+                        ),
+                    ))
+                } else {
+                    AsyncTemplateRequest::Empty
+                };
 
                 let invocation_key = match invocation_key {
                     None => {
@@ -264,24 +515,51 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 let res = self
                     .client
                     .invoke_and_await(
-                        worker_name,
-                        template_id,
-                        function,
+                        worker_name.clone(),
+                        template_id.clone(),
+                        function.clone(),
                         InvokeParameters { params: parameters },
                         invocation_key,
                         use_stdio,
                     )
                     .await?;
 
-                Ok(GolemResult::Json(res.result))
+                if human_readable {
+                    let view = to_invoke_result_view(
+                        res,
+                        async_template_request,
+                        &self.client,
+                        self.templates,
+                        &template_id,
+                        &worker_name,
+                        &function,
+                    )
+                    .await?;
+
+                    Ok(GolemResult::Ok(Box::new(view)))
+                } else {
+                    Ok(GolemResult::Json(res.result))
+                }
             }
             WorkerSubcommand::Invoke {
                 template_id_or_name,
                 worker_name,
                 function,
                 parameters,
+                wave,
             } => {
                 let template_id = self.templates.resolve_id(template_id_or_name).await?;
+
+                let (parameters, _) = resolve_parameters(
+                    &self.client,
+                    self.templates,
+                    &template_id,
+                    &worker_name,
+                    parameters,
+                    wave,
+                    &function,
+                )
+                .await?;
 
                 self.client
                     .invoke(

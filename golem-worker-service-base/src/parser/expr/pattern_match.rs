@@ -1,178 +1,149 @@
-use crate::expression::{ConstructorPattern, ConstructorPatternExpr, Expr};
-use crate::parser::expr_parser::{parse_with_context, Context};
+use crate::expression::{ArmPattern, Expr, MatchArm};
+use crate::parser::expr_parser::parse_code;
 use crate::parser::ParseError;
-use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
+use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
-pub(crate) fn get_match_expr(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
-    let expr_under_evaluation = tokenizer.capture_string_until(&Token::LCurly);
+pub(crate) fn create_pattern_match_expr(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError> {
+    let match_expr_str = tokenizer
+        .capture_string_until(&Token::LCurly)
+        .ok_or_else(|| {
+            ParseError::Message("Expecting a valid expression after match".to_string())
+        })?;
 
-    match expr_under_evaluation {
-        Some(expr_under_evaluation) => {
-            let expression = parse_with_context(expr_under_evaluation.as_str(), Context::Code)?;
-
-            dbg!(expression.clone());
-
-            match tokenizer.next_non_empty_token() {
-                Some(Token::LCurly) => {
-                    let constructors = get_match_constructor_patter_exprs(tokenizer)?;
-
-                    Ok(Expr::PatternMatch(Box::new(expression), constructors))
-                }
-                _ => Err(ParseError::Message(
-                    "Expecting a curly brace after match expr".to_string(),
-                )),
-            }
-        }
-
-        None => Err(ParseError::Message(
-            "Expecting a valid expression after match".to_string(),
-        )),
-    }
+    let match_expression = parse_code(match_expr_str.as_str())?;
+    tokenizer.skip_next_non_empty_token(); // Skip LCurly
+    let arms = accumulate_match_arms(tokenizer)?;
+    Ok(Expr::PatternMatch(Box::new(match_expression), arms))
 }
 
-// To parse collection of terms under match expression
-// Ex: some(x) => x
-// Handles Ok, Err, Some, None
-pub(crate) fn get_match_constructor_patter_exprs(
+pub(crate) fn accumulate_match_arms(
     tokenizer: &mut Tokenizer,
-) -> Result<Vec<ConstructorPatternExpr>, ParseError> {
-    let mut constructor_patterns: Vec<ConstructorPatternExpr> = vec![];
+) -> Result<Vec<MatchArm>, ParseError> {
+    let mut constructor_patterns = Vec::new();
 
-    fn go(
-        tokenizer: &mut Tokenizer,
-        constructor_patterns: &mut Vec<ConstructorPatternExpr>,
-    ) -> Result<(), ParseError> {
-        match tokenizer.next_non_empty_token() {
-            Some(token) if token.is_non_empty_constructor() => {
-                let next_non_empty_open_braces = tokenizer.next_non_empty_token();
+    loop {
+        let arm_pattern = get_arm_pattern(tokenizer)?;
+        let ArmBody { cursor, arm_body } = ArmBody::from_tokenizer(tokenizer)?;
+        let complete_arm = MatchArm((arm_pattern, arm_body));
+        constructor_patterns.push(complete_arm);
 
-                match next_non_empty_open_braces {
-                    Some(Token::LParen) => {
-                        let constructor_var_optional =
-                            tokenizer.capture_string_until_and_skip_end(&Token::RParen);
-
-                        match constructor_var_optional {
-                            Some(constructor_var) => {
-                                let expr = parse_with_context(constructor_var.as_str(), Context::Code)?;
-
-                                let cons = match expr {
-                                    Expr::Constructor0(cons) => cons,
-                                    expr => ConstructorPattern::Literal(Box::new(expr))
-                                };
-
-                                let constructor_pattern =
-                                    ConstructorPattern::constructor(
-                                        token.to_string().as_str(),
-                                        vec![cons],
-                                    )?;
-
-                                accumulate_constructor_pattern_expr(tokenizer, constructor_pattern, constructor_patterns, go)
-
-                            }
-                            _ => Err(ParseError::Message(
-                                format!("Token {} is a non empty constructor. Expecting the following pattern: {}(foo) => bar", token, token),
-                            )),
-                        }
-                    }
-
-                    value => Err(ParseError::Message(format!(
-                        "Expecting an open parenthesis, but found {}",
-                        value.map(|x| x.to_string()).unwrap_or("".to_string())
-                    ))),
-                }
-            }
-
-            Some(token) if token.is_empty_constructor() => {
-                let constructor_pattern =
-                    ConstructorPattern::constructor(token.to_string().as_str(), vec![]);
-
-                accumulate_constructor_pattern_expr(
-                    tokenizer,
-                    constructor_pattern?,
-                    constructor_patterns,
-                    go,
-                )
-            }
-
-            Some(token) => Err(ParseError::Message(format!(
-                "Expecting a constructor pattern. But found {}",
-                token
-            ))),
-
-            None => Err(ParseError::Message(
-                "Expecting a constructor pattern. But found nothing".to_string(),
-            )),
+        if cursor == Cursor::Break {
+            break;
         }
     }
 
-    go(tokenizer, &mut constructor_patterns)?;
+    if constructor_patterns.is_empty() {
+        return Err(ParseError::Message(
+            "Expecting a constructor pattern, but found nothing".to_string(),
+        ));
+    }
+
     Ok(constructor_patterns)
 }
 
-fn accumulate_constructor_pattern_expr<F>(
-    tokenizer: &mut Tokenizer,
-    constructor_pattern: ConstructorPattern,
-    collected_exprs: &mut Vec<ConstructorPatternExpr>,
-    accumulator: F,
-) -> Result<(), ParseError>
-where
-    F: FnOnce(&mut Tokenizer, &mut Vec<ConstructorPatternExpr>) -> Result<(), ParseError>,
-{
-    match tokenizer.next_non_empty_token() {
-        Some(Token::MultiChar(MultiCharTokens::Arrow)) => {
-            let index_of_closed_curly_brace = tokenizer.index_of_end_token(&Token::RCurly);
-            let index_of_commaseparator = tokenizer.index_of_end_token(&Token::Comma);
-
-            match (index_of_closed_curly_brace, index_of_commaseparator) {
-                (Some(end_of_constructors), Some(comma)) => {
-                    if end_of_constructors > comma {
-                        let captured_string = tokenizer.capture_string_until(&Token::Comma);
-
-                        let individual_expr =
-                            parse_with_context(captured_string.unwrap().as_str(), Context::Code)
-                                .map(|expr| {
-                                    ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
-                                })?;
-                        collected_exprs.push(individual_expr);
-                        tokenizer.next_non_empty_token(); // Skip CommaSeparator
-                        accumulator(tokenizer, collected_exprs)
-                    } else {
-                        // End of constructor
-                        let captured_string = tokenizer.capture_string_until(&Token::RCurly);
-                        let individual_expr =
-                            parse_with_context(captured_string.unwrap().as_str(), Context::Code)
-                                .map(|expr| {
-                                    ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
-                                })?;
-                        collected_exprs.push(individual_expr);
-                        Ok(())
+pub(crate) fn get_arm_pattern(tokenizer: &mut Tokenizer) -> Result<ArmPattern, ParseError> {
+    if let Some(constructor_name) = tokenizer.next_non_empty_token() {
+        match constructor_name {
+            Token::WildCard => Ok(ArmPattern::WildCard),
+            _ => {
+                if tokenizer.peek_next_non_empty_token_is(&Token::LParen) {
+                    tokenizer.skip_next_non_empty_token(); // Skip LParen
+                    match tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
+                        Some(constructor_str) => {
+                            let patterns = collect_arm_pattern_variables(constructor_str.as_str())?;
+                            ArmPattern::from(constructor_name.to_string().as_str(), patterns)
+                        }
+                        None => Err(ParseError::Message(
+                            "Empty value inside the constructor".to_string(),
+                        )),
                     }
+                } else if tokenizer.peek_next_non_empty_token_is(&Token::At) {
+                    let variable = constructor_name.to_string();
+                    tokenizer.skip_next_non_empty_token(); // Skip At
+                    let arm_pattern = get_arm_pattern(tokenizer)?;
+                    Ok(ArmPattern::As(variable, Box::new(arm_pattern)))
+                } else {
+                    ArmPattern::from(constructor_name.to_string().as_str(), vec![])
                 }
-
-                // Last constructor
-                (Some(_), None) => {
-                    let captured_string = tokenizer.capture_string_until(&Token::RCurly);
-
-                    if let Some(captured_string) = captured_string {
-                        let individual_expr =
-                            parse_with_context(captured_string.as_str(), Context::Code).map(
-                                |expr| {
-                                    ConstructorPatternExpr((constructor_pattern, Box::new(expr)))
-                                },
-                            )?;
-                        collected_exprs.push(individual_expr);
-                    }
-
-                    Ok(())
-                }
-
-                _ => Err(ParseError::Message(
-                    "Invalid constructor pattern".to_string(),
-                )),
             }
         }
-        _ => Err(ParseError::Message(
-            "Expecting an arrow after Some expression".to_string(),
-        )),
+    } else {
+        Err(ParseError::Message(
+            "Expecting a constructor name".to_string(),
+        ))
+    }
+}
+
+fn collect_arm_pattern_variables(
+    constructor_variable_str: &str,
+) -> Result<Vec<ArmPattern>, ParseError> {
+    let mut tokenizer = Tokenizer::new(constructor_variable_str);
+    let mut arm_patterns = vec![];
+    loop {
+        if let Some(value) = tokenizer.capture_string_until_and_skip_end(&Token::Comma) {
+            let arm_pattern = parse_code(value.as_str())
+                .map(ArmPattern::from_expr)
+                .or_else(|_| {
+                    let mut tokenizer = Tokenizer::new(value.as_str());
+                    get_arm_pattern(&mut tokenizer)
+                })?;
+            arm_patterns.push(arm_pattern);
+        } else {
+            let rest = tokenizer.rest();
+            if !rest.is_empty() {
+                let arm_pattern = parse_code(rest).map(ArmPattern::from_expr).or_else(|_| {
+                    let mut tokenizer = Tokenizer::new(rest);
+                    get_arm_pattern(&mut tokenizer)
+                })?;
+                arm_patterns.push(arm_pattern);
+            }
+            break;
+        }
+    }
+
+    Ok(arm_patterns)
+}
+
+#[derive(Debug, PartialEq)]
+enum Cursor {
+    Continue,
+    Break,
+}
+
+#[derive(Debug, PartialEq)]
+struct ArmBody {
+    cursor: Cursor,
+    arm_body: Box<Expr>,
+}
+
+impl ArmBody {
+    fn from_tokenizer(tokenizer: &mut Tokenizer) -> Result<ArmBody, ParseError> {
+        if tokenizer.next_non_empty_token_is(&Token::arrow()) {
+            if let Some((end_token, captured_string)) =
+                tokenizer.capture_string_until_either(&Token::Comma, &Token::RCurly)
+            {
+                let arm = parse_code(captured_string)?;
+
+                let cursor = if end_token == &Token::RCurly {
+                    Cursor::Break
+                } else {
+                    tokenizer.skip_next_non_empty_token(); // Skip comma
+                    Cursor::Continue
+                };
+
+                Ok(ArmBody {
+                    cursor,
+                    arm_body: Box::new(arm),
+                })
+            } else {
+                Err(ParseError::Message(
+                    "Expecting an arm body after Some arrow".to_string(),
+                ))
+            }
+        } else {
+            Err(ParseError::Message(
+                "Expecting an arrow after Some expression".to_string(),
+            ))
+        }
     }
 }

@@ -213,7 +213,7 @@ pub struct VersionedWorkerId {
     #[serde(rename = "instance_id")]
     pub worker_id: WorkerId,
     #[serde(rename = "component_version")]
-    pub template_version: i32,
+    pub template_version: u64,
 }
 
 impl VersionedWorkerId {
@@ -1114,7 +1114,7 @@ impl WorkerFilter {
                 comparator.matches(&metadata.worker_id.worker_id.worker_name, &value)
             }
             WorkerFilter::Version(WorkerVersionFilter { comparator, value }) => {
-                let version: u64 = metadata.worker_id.template_version as u64;
+                let version: u64 = metadata.worker_id.template_version;
                 comparator.matches(&version, &value)
             }
             WorkerFilter::Env(WorkerEnvFilter {

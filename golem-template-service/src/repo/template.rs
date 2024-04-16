@@ -29,10 +29,10 @@ pub struct TemplateRecord {
     pub template_id: Uuid,
     pub name: String,
     pub size: i32,
-    pub version: i32,
+    pub version: i64,
     pub user_template: String,
     pub protected_template: String,
-    pub protector_version: Option<i32>,
+    pub protector_version: Option<i64>,
     pub metadata: String,
 }
 
@@ -41,7 +41,7 @@ impl From<TemplateRecord> for Template {
         let metadata: TemplateMetadata = serde_json::from_str(&value.metadata).unwrap();
         let versioned_template_id: VersionedTemplateId = VersionedTemplateId {
             template_id: TemplateId(value.template_id),
-            version: value.version,
+            version: value.version as u64,
         };
         let protected_template_id: ProtectedTemplateId = ProtectedTemplateId {
             versioned_template_id: versioned_template_id.clone(),
@@ -66,7 +66,7 @@ impl From<Template> for TemplateRecord {
             template_id: value.versioned_template_id.template_id.0,
             name: value.template_name.0,
             size: value.template_size,
-            version: value.versioned_template_id.version,
+            version: value.versioned_template_id.version as i64,
             user_template: value.versioned_template_id.slug(),
             protected_template: value.protected_template_id.slug(),
             protector_version: None,
@@ -91,7 +91,7 @@ pub trait TemplateRepo {
     async fn get_by_version(
         &self,
         template_id: &Uuid,
-        version: i32,
+        version: u64,
     ) -> Result<Option<TemplateRecord>, RepoError>;
 
     async fn get_by_name(&self, name: &str) -> Result<Vec<TemplateRecord>, RepoError>;
@@ -172,13 +172,13 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Sqlite> {
     async fn get_by_version(
         &self,
         template_id: &Uuid,
-        version: i32,
+        version: u64,
     ) -> Result<Option<TemplateRecord>, RepoError> {
         sqlx::query_as::<_, TemplateRecord>(
             "SELECT template_id, version, name, size, user_template, protected_template, protector_version,  CAST(metadata AS TEXT) AS metadata  FROM templates WHERE template_id = $1 AND version = $2",
         )
             .bind(template_id)
-            .bind(version)
+            .bind(version as i64)
             .fetch_optional(self.db_pool.deref())
             .await
             .map_err(|e| e.into())
@@ -276,13 +276,13 @@ impl TemplateRepo for DbTemplateRepo<sqlx::Postgres> {
     async fn get_by_version(
         &self,
         template_id: &Uuid,
-        version: i32,
+        version: u64,
     ) -> Result<Option<TemplateRecord>, RepoError> {
         sqlx::query_as::<_, TemplateRecord>(
             "SELECT template_id, name, size, version, user_template, protected_template, protector_version, jsonb_pretty(templates.metadata) AS metadata  FROM templates WHERE template_id = $1 AND version = $2",
         )
             .bind(template_id)
-            .bind(version)
+            .bind(version as i64)
             .fetch_optional(self.db_pool.deref())
             .await
             .map_err(|e| e.into())

@@ -676,7 +676,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             template_version: metadata.worker_id.template_version,
             status: Into::<golem::worker::WorkerStatus>::into(latest_status).into(),
             retry_count: last_error_and_retry_count
-                .map(|last_error| last_error.retry_count as i32)
+                .map(|last_error| last_error.retry_count)
                 .unwrap_or_default(),
             // TODO: add error details
         })

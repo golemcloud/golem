@@ -16,6 +16,12 @@ pub enum ParseError {
     Message(String),
 }
 
+impl<T: AsRef<str>> From<T> for ParseError {
+    fn from(msg: T) -> Self {
+        ParseError::Message(msg.as_ref().to_string())
+    }
+}
+
 impl ParseError {
     pub fn message(msg: impl Into<String>) -> Self {
         ParseError::Message(msg.into())

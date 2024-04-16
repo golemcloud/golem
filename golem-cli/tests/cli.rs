@@ -173,7 +173,7 @@ impl Cli for CliLive {
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
-                eprintln!("[golem-cloud-cli-stderr]   {}", line.unwrap())
+                eprintln!("[golem-cli-stderr]   {}", line.unwrap())
             }
         });
 

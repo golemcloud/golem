@@ -7,7 +7,7 @@ use wasmtime::component::Component;
 #[derive(Debug, Clone)]
 pub struct TemplateWithVersion {
     pub id: TemplateId,
-    pub version: i32,
+    pub version: u64,
 }
 
 impl Display for TemplateWithVersion {

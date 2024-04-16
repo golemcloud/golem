@@ -22,7 +22,7 @@ pub trait TemplateService<AuthCtx> {
     async fn get_by_version(
         &self,
         template_id: &TemplateId,
-        version: i32,
+        version: u64,
         auth_ctx: &AuthCtx,
     ) -> TemplateResult<Template>;
 
@@ -115,7 +115,7 @@ where
     async fn get_by_version(
         &self,
         template_id: &TemplateId,
-        version: i32,
+        version: u64,
         metadata: &AuthCtx,
     ) -> TemplateResult<Template> {
         let desc = format!("Getting template: {}", template_id);
@@ -221,7 +221,7 @@ impl<AuthCtx> TemplateService<AuthCtx> for TemplateServiceNoop {
     async fn get_by_version(
         &self,
         _template_id: &TemplateId,
-        _version: i32,
+        _version: u64,
         _auth_ctx: &AuthCtx,
     ) -> TemplateResult<Template> {
         Ok(Self::test_template())

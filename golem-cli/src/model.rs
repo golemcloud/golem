@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod invoke_result_view;
+pub mod template;
+pub mod wave;
+
 use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::PathBuf;
@@ -183,7 +187,7 @@ struct TemplateIdOrNameArgs {
 impl From<&TemplateIdOrNameArgs> for TemplateIdOrName {
     fn from(value: &TemplateIdOrNameArgs) -> TemplateIdOrName {
         if let Some(id) = value.template_id {
-            TemplateIdOrName::Id(RawTemplateId(id))
+            TemplateIdOrName::Id(TemplateId(id))
         } else {
             TemplateIdOrName::Name(TemplateName(
                 value.template_name.as_ref().unwrap().to_string(),
@@ -195,7 +199,7 @@ impl From<&TemplateIdOrNameArgs> for TemplateIdOrName {
 impl From<&TemplateIdOrName> for TemplateIdOrNameArgs {
     fn from(value: &TemplateIdOrName) -> TemplateIdOrNameArgs {
         match value {
-            TemplateIdOrName::Id(RawTemplateId(id)) => TemplateIdOrNameArgs {
+            TemplateIdOrName::Id(TemplateId(id)) => TemplateIdOrNameArgs {
                 template_id: Some(*id),
                 template_name: None,
             },
@@ -207,15 +211,12 @@ impl From<&TemplateIdOrName> for TemplateIdOrNameArgs {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct RawTemplateId(pub Uuid);
-
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 pub struct TemplateName(pub String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TemplateIdOrName {
-    Id(RawTemplateId),
+    Id(TemplateId),
     Name(TemplateName),
 }
 

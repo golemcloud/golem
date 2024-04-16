@@ -661,7 +661,7 @@ impl From<golem_common::model::WorkerMetadata> for golem::api::host::WorkerMetad
             args: value.args,
             env: value.env,
             status: value.last_known_status.status.into(),
-            template_version: value.worker_id.template_version as u64,
+            template_version: value.worker_id.template_version,
             retry_count: 0,
         }
     }

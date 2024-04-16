@@ -1,6 +1,6 @@
 use crate::expression::Expr;
 use crate::parser::expr::util;
-use crate::parser::expr_parser::{parse_with_context, Context};
+use crate::parser::expr_parser::parse_code;
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
@@ -27,8 +27,7 @@ pub(crate) fn create_sequence(tokenizer: &mut Tokenizer) -> Result<Expr, ParseEr
 
             match possible_sequence_elem {
                 Some(sequence_element_string) => {
-                    let sequence_elem_expr =
-                        parse_with_context(sequence_element_string.as_str(), Context::Code)?;
+                    let sequence_elem_expr = parse_code(sequence_element_string.as_str())?;
                     record.push(sequence_elem_expr);
                     tokenizer.next_non_empty_token();
                     go(tokenizer, record)
@@ -39,7 +38,7 @@ pub(crate) fn create_sequence(tokenizer: &mut Tokenizer) -> Result<Expr, ParseEr
 
                     match last_value {
                         Some(last_value) => {
-                            let expr = parse_with_context(last_value.as_str(), Context::Code)?;
+                            let expr = parse_code(last_value.as_str())?;
                             record.push(expr);
                             Ok(())
                         }
@@ -83,7 +82,7 @@ where
                 &complex_value_start_token, &captured_string, &closing_token
             );
 
-            let expr = parse_with_context(full_expr.as_str(), Context::Code)?;
+            let expr = parse_code(full_expr.as_str())?;
             record.push(expr);
             match tokenizer.peek_next_non_empty_token() {
                 Some(Token::Comma) => {

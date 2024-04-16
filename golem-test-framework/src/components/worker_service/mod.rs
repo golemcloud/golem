@@ -24,9 +24,10 @@ use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceCl
 use golem_api_grpc::proto::golem::worker::{
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetInvocationKeyRequest,
     GetInvocationKeyResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LogEvent,
-    ResumeWorkerRequest, ResumeWorkerResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest,
+    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LogEvent, ResumeWorkerRequest,
+    ResumeWorkerResponse,
 };
 
 use crate::components::rdb::Rdb;
@@ -87,6 +88,18 @@ pub trait WorkerService {
         self.client()
             .await
             .get_worker_metadata(request)
+            .await
+            .expect("Failed to call golem-worker-service")
+            .into_inner()
+    }
+
+    async fn get_workers_metadata(
+        &self,
+        request: GetWorkersMetadataRequest,
+    ) -> GetWorkersMetadataResponse {
+        self.client()
+            .await
+            .get_workers_metadata(request)
             .await
             .expect("Failed to call golem-worker-service")
             .into_inner()

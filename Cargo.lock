@@ -3082,7 +3082,7 @@ dependencies = [
  "bytes 1.6.0",
  "cargo_metadata",
  "futures-core",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.21",
  "prost 0.12.3",
  "prost-types 0.12.3",
  "serde",
@@ -3109,6 +3109,8 @@ dependencies = [
  "golem-client",
  "golem-examples",
  "golem-test-framework",
+ "golem-wasm-ast",
+ "golem-wasm-rpc 0.0.21",
  "golem-wasm-rpc-stubgen",
  "h2 0.3.25",
  "http 1.1.0",
@@ -3143,6 +3145,7 @@ dependencies = [
  "url",
  "uuid",
  "version-compare",
+ "wasm-wave 0.4.0",
 ]
 
 [[package]]
@@ -3175,7 +3178,7 @@ dependencies = [
  "fred",
  "futures-core",
  "golem-api-grpc",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.21",
  "humantime-serde",
  "iso8601-timestamp",
  "lazy_static",
@@ -3244,7 +3247,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.21",
  "http 0.2.12",
  "http 1.1.0",
  "hyper 1.2.0",
@@ -3336,7 +3339,7 @@ dependencies = [
  "golem-service-base",
  "golem-template-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.21",
  "http 0.2.12",
  "humantime-serde",
  "lazy_static",
@@ -3391,7 +3394,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.21",
  "k8s-openapi",
  "kill_tree",
  "kube",
@@ -3414,21 +3417,23 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-ast"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9ed9390768d544789a08504531c032f355d4a1ba70a41e984f1f5266c91224d"
+checksum = "7a73b7e97992db438181bc0884406e2066fbe8c22e6d288a960790221036a9da"
 dependencies = [
  "leb128",
  "mappable-rc",
  "wasm-encoder 0.41.2",
  "wasm-metadata",
+ "wasm-wave 0.4.0",
  "wasmparser 0.121.2",
 ]
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rpc.git?branch=value-bincode#92e7f1a0da32b56b7f5b8043d75c38dc0f07d487"
+version = "0.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad28331e638d4c73f2dc0be1fd445778fb4972d95836f0cf5974b5090192a5ef"
 dependencies = [
  "arbitrary",
  "bigdecimal",
@@ -3445,9 +3450,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.13"
+version = "0.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c003f6c9b2d632caf4ada88eea0773b09ce863f54d86b66239b81613b4e8bd98"
+checksum = "bb1b4a24800a34235d8f5773c462b68b7db61d17d3b0af6a705f206e7331128c"
 dependencies = [
  "arbitrary",
  "bigdecimal",
@@ -3464,9 +3469,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "0.0.13"
+version = "0.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baff235699769ce32914a9e050475e27329f7192d7f58b2c7f79a15030fbdc8d"
+checksum = "98717294b0020bee0d38041b5cb9ae66a38a73365e926f38d38315782a565c6b"
 dependencies = [
  "anyhow",
  "cargo-component",
@@ -3476,7 +3481,7 @@ dependencies = [
  "dir-diff",
  "fs_extra",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.13",
+ "golem-wasm-rpc 0.0.19",
  "heck 0.4.1",
  "id-arena",
  "indexmap 2.2.6",
@@ -3511,7 +3516,7 @@ dependencies = [
  "figment",
  "golem-api-grpc",
  "golem-common",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.21",
  "golem-worker-executor-base",
  "humantime-serde",
  "prometheus",
@@ -3565,7 +3570,7 @@ dependencies = [
  "golem-common",
  "golem-test-framework",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.21",
  "golem-wit",
  "http 0.2.12",
  "http 1.1.0",
@@ -3622,7 +3627,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.21",
  "golem-worker-service-base",
  "http 0.2.12",
  "http 1.1.0",
@@ -3674,7 +3679,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.21",
  "http 0.2.12",
  "http 1.1.0",
  "humantime-serde",
@@ -4268,7 +4273,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-test-framework",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc 0.0.21",
  "rand 0.8.5",
  "tokio",
  "tracing",

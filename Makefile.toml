@@ -8,7 +8,7 @@
 # - `cargo make unit-tests`: runs unit tests only
 # - `cargo make worker-executor-tests`: runs worker executor tests only
 # - `cargo make integration-tests`: runs integration tests only
-# - `cargo make cli-tests`: runs integration tests only
+# - `cargo make cli-tests`: runs CLI tests only
 # - `cargo make sharding-tests`: runs sharding integration tests only
 # - `cargo make test`: runs all unit tests, worker executor tests and integration tests
 # - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI)
