@@ -628,8 +628,8 @@ pub struct WorkerMetadata {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
-    pub template_version: i32,
-    pub retry_count: i32,
+    pub template_version: u64,
+    pub retry_count: u64,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {

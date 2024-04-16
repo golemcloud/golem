@@ -47,7 +47,7 @@ pub trait WorkerService {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        template_version: i32,
+        template_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         auth: &AccountAuthorisation,
@@ -228,7 +228,7 @@ impl WorkerService for WorkerServiceDefault {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        template_version: i32,
+        template_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         auth: &AccountAuthorisation,
@@ -702,7 +702,7 @@ impl WorkerService for WorkerServiceNoOp {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        _template_version: i32,
+        _template_version: u64,
         _arguments: Vec<String>,
         _environment_variables: HashMap<String, String>,
         _auth: &AccountAuthorisation,

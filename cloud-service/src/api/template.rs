@@ -184,7 +184,7 @@ impl TemplateApi {
     async fn download_template(
         &self,
         template_id: Path<TemplateId>,
-        version: Query<Option<i32>>,
+        version: Query<Option<u64>>,
         token: GolemSecurityScheme,
     ) -> Result<Binary<Body>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;

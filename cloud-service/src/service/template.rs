@@ -125,14 +125,14 @@ pub trait TemplateService {
     async fn download(
         &self,
         template_id: &TemplateId,
-        version: Option<i32>,
+        version: Option<u64>,
         auth: &AccountAuthorisation,
     ) -> Result<Vec<u8>, TemplateError>;
 
     async fn get_protected_data(
         &self,
         template_id: &TemplateId,
-        version: Option<i32>,
+        version: Option<u64>,
         auth: &AccountAuthorisation,
     ) -> Result<Option<Vec<u8>>, TemplateError>;
 
@@ -382,7 +382,7 @@ impl TemplateService for TemplateServiceDefault {
     async fn download(
         &self,
         template_id: &TemplateId,
-        version: Option<i32>,
+        version: Option<u64>,
         auth: &AccountAuthorisation,
     ) -> Result<Vec<u8>, TemplateError> {
         self.is_authorized_by_template(auth, template_id, &ProjectAction::ViewTemplate)
@@ -419,7 +419,7 @@ impl TemplateService for TemplateServiceDefault {
     async fn get_protected_data(
         &self,
         template_id: &TemplateId,
-        version: Option<i32>,
+        version: Option<u64>,
         auth: &AccountAuthorisation,
     ) -> Result<Option<Vec<u8>>, TemplateError> {
         info!(
@@ -438,8 +438,8 @@ impl TemplateService for TemplateServiceDefault {
 
         let v = match latest_template {
             Some(template) => match version {
-                Some(v) if v <= template.version => v,
-                None => template.version,
+                Some(v) if v <= template.version as u64 => v,
+                None => template.version as u64,
                 _ => {
                     return Ok(None);
                 }
@@ -842,7 +842,7 @@ impl TemplateService for TemplateServiceNoOp {
     async fn download(
         &self,
         _template_id: &TemplateId,
-        _version: Option<i32>,
+        _version: Option<u64>,
         _auth: &AccountAuthorisation,
     ) -> Result<Vec<u8>, TemplateError> {
         Ok(vec![])
@@ -851,7 +851,7 @@ impl TemplateService for TemplateServiceNoOp {
     async fn get_protected_data(
         &self,
         _template_id: &TemplateId,
-        _version: Option<i32>,
+        _version: Option<u64>,
         _auth: &AccountAuthorisation,
     ) -> Result<Option<Vec<u8>>, TemplateError> {
         Ok(None)

@@ -28,7 +28,7 @@ impl BaseTemplateService<AccountAuthorisation> for TemplateServiceWrapper {
     async fn get_by_version(
         &self,
         template_id: &TemplateId,
-        version: i32,
+        version: u64,
         auth_ctx: &AccountAuthorisation,
     ) -> TemplateResult<BaseTemplate> {
         let versioned = VersionedTemplateId {
