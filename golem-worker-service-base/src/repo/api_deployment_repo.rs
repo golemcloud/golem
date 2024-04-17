@@ -267,13 +267,6 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
     }
 }
 
-// Api Deployments
-// I should be able to deploy a version of an API to a specific site
-// Meaning the ApiDeploymentKey should have versions in it.
-// Store them with version as the key
-// host --> api_deployment
-// api_deployment_key --> api_deployments
-
 mod redis_keys {
     use crate::api_definition::{ApiDefinitionId, ApiSite};
     use crate::repo::api_deployment_repo::API_DEFINITION_REDIS_NAMESPACE;
