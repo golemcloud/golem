@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::fmt::Display;
 
+use crate::service::api_definition::ApiDefinitionKey;
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
@@ -37,4 +38,38 @@ pub trait HasVersion {
 
 pub trait HasGolemWorkerBindings {
     fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding>;
+}
+
+#[derive(
+    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
+)]
+pub struct ApiDeployment<Namespace> {
+    pub api_definition_id: ApiDefinitionKey<Namespace>,
+    pub site: ApiSite,
+}
+
+#[derive(
+    Eq,
+    Hash,
+    PartialEq,
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode::Encode,
+    bincode::Decode,
+    NewType,
+)]
+pub struct ApiSite(pub String);
+
+impl Display for ApiSite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<&str> for ApiSite {
+    fn from(site: &str) -> Self {
+        ApiSite(site.to_string())
+    }
 }
