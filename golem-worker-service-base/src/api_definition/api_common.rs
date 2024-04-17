@@ -68,8 +68,8 @@ impl Display for ApiSite {
     }
 }
 
-impl ApiSite {
-    pub fn from_str(site: &str) -> ApiSite {
+impl From<&str> for ApiSite {
+    fn from(site: &str) -> Self {
         ApiSite(site.to_string())
     }
 }

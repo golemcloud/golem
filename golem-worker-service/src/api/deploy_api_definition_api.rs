@@ -82,7 +82,7 @@ impl ApiDeploymentApi {
         let site = site_query.0;
 
         self.deployment_service
-            .delete(&CommonNamespace::default(), &ApiSite::from_string(&site))
+            .delete(&CommonNamespace::default(), &ApiSite(site))
             .await?;
 
         Ok(Json("API deployment deleted".to_string()))

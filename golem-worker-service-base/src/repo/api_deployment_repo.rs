@@ -311,7 +311,7 @@ mod tests {
 
         let namespace = CommonNamespace::default();
 
-        let site = ApiSite::from_str("test.dev-api.golem.cloud");
+        let site = ApiSite::from("test.dev-api.golem.cloud");
 
         let api_definition_id = ApiDefinitionId("api1".to_string());
         let version = ApiVersion("0.0.1".to_string());
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     pub fn test_get_api_deployment_redis_key() {
         assert_eq!(
-            api_deployment_redis_key(&ApiSite::from_str("foo.dev-api.golem.cloud")),
+            api_deployment_redis_key(&ApiSite::from("foo.dev-api.golem.cloud")),
             "apidefinition:deployment:foo.dev-api.golem.cloud"
         );
     }
