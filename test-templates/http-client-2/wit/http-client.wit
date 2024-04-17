@@ -4,6 +4,8 @@ interface api {
   run: func() -> string;
 
   start-polling: func(until: string) -> ();
+  increment: func() -> ();
+  get-count: func() -> u64;
 }
 
 world http-client-test {

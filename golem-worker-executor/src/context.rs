@@ -35,8 +35,9 @@ use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
+use golem_worker_executor_base::services::invocation_queue::InvocationQueue;
 use golem_worker_executor_base::services::key_value::KeyValueService;
-use golem_worker_executor_base::services::oplog::OplogService;
+use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
 use golem_worker_executor_base::services::promise::PromiseService;
 use golem_worker_executor_base::services::recovery::RecoveryManagement;
 use golem_worker_executor_base::services::rpc::Rpc;
@@ -142,7 +143,7 @@ impl ExternalOperations<Context> for Context {
 
 #[async_trait]
 impl InvocationManagement for Context {
-    async fn set_current_invocation_key(&mut self, invocation_key: Option<InvocationKey>) {
+    async fn set_current_invocation_key(&mut self, invocation_key: InvocationKey) {
         self.durable_ctx
             .set_current_invocation_key(invocation_key)
             .await
@@ -204,6 +205,10 @@ impl StatusManagement for Context {
         self.durable_ctx.store_worker_status(status).await
     }
 
+    async fn update_pending_invocations(&self) {
+        self.durable_ctx.update_pending_invocations().await
+    }
+
     async fn deactivate(&self) {
         self.durable_ctx.deactivate().await
     }
@@ -215,7 +220,7 @@ impl InvocationHooks for Context {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        calling_convention: Option<&CallingConvention>,
+        calling_convention: Option<CallingConvention>,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .on_exported_function_invoked(full_function_name, function_input, calling_convention)
@@ -250,7 +255,7 @@ impl InvocationHooks for Context {
 
 #[async_trait]
 impl WorkerCtx for Context {
-    type PublicState = PublicDurableWorkerState;
+    type PublicState = PublicDurableWorkerState<Context>;
 
     async fn create(
         worker_id: VersionedWorkerId,
@@ -266,6 +271,8 @@ impl WorkerCtx for Context {
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         active_workers: Arc<ActiveWorkers<Context>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
+        oplog: Arc<dyn Oplog + Send + Sync>,
+        invocation_queue: Arc<InvocationQueue<Context>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
@@ -286,6 +293,8 @@ impl WorkerCtx for Context {
             event_service,
             active_workers,
             oplog_service,
+            oplog,
+            invocation_queue,
             scheduler_service,
             recovery_management,
             rpc,

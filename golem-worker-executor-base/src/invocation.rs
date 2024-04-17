@@ -44,7 +44,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    calling_convention: &CallingConvention,
+    calling_convention: CallingConvention,
     was_live_before: bool,
 ) -> bool {
     let mut store = store.as_context_mut();
@@ -162,7 +162,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
     function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    calling_convention: &CallingConvention,
+    calling_convention: CallingConvention,
     was_live_before: bool,
 ) -> anyhow::Result<Option<Vec<Value>>> {
     let mut store = store.as_context_mut();
@@ -231,7 +231,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
                 &mut store,
                 function,
                 &function_input,
-                calling_convention.try_into().unwrap(),
+                (&calling_convention).try_into().unwrap(),
                 &format!("{worker_id}/{full_function_name}"),
             )
             .await

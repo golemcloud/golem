@@ -584,15 +584,16 @@ mod tests {
     use crate::services::blob_store::BlobStoreService;
     use crate::services::golem_config::GolemConfig;
     use crate::services::invocation_key::InvocationKeyService;
+    use crate::services::invocation_queue::InvocationQueue;
     use crate::services::key_value::KeyValueService;
     use crate::services::promise::PromiseService;
     use crate::services::worker::WorkerService;
     use crate::services::worker_event::WorkerEventService;
     use crate::services::{
         worker_enumeration, All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
-        HasInvocationKeyService, HasKeyValueService, HasPromiseService, HasRpc,
-        HasRunningWorkerEnumerationService, HasTemplateService, HasWasmtimeEngine,
-        HasWorkerEnumerationService, HasWorkerService,
+        HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasOplog,
+        HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasTemplateService,
+        HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
     };
     use crate::workerctx::{
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
@@ -614,7 +615,7 @@ mod tests {
     use wasmtime::component::{Instance, ResourceAny};
     use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
-    use crate::services::oplog::{OplogService, OplogServiceMock};
+    use crate::services::oplog::{Oplog, OplogService, OplogServiceMock};
     use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault, TrapType};
     use crate::services::rpc::Rpc;
     use crate::services::scheduler;
@@ -640,6 +641,18 @@ mod tests {
         }
     }
 
+    impl HasInvocationQueue<EmptyContext> for EmptyPublicState {
+        fn invocation_queue(&self) -> Arc<InvocationQueue<EmptyContext>> {
+            unimplemented!()
+        }
+    }
+
+    impl HasOplog for EmptyPublicState {
+        fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
+            unimplemented!()
+        }
+    }
+
     #[async_trait]
     impl FuelManagement for EmptyContext {
         fn is_out_of_fuel(&self, _current_level: i64) -> bool {
@@ -661,7 +674,7 @@ mod tests {
 
     #[async_trait]
     impl InvocationManagement for EmptyContext {
-        async fn set_current_invocation_key(&mut self, _invocation_key: Option<InvocationKey>) {
+        async fn set_current_invocation_key(&mut self, _invocation_key: InvocationKey) {
             unimplemented!()
         }
 
@@ -719,6 +732,10 @@ mod tests {
             unimplemented!()
         }
 
+        async fn update_pending_invocations(&self) {
+            unimplemented!()
+        }
+
         async fn deactivate(&self) {
             unimplemented!()
         }
@@ -730,7 +747,7 @@ mod tests {
             &mut self,
             _full_function_name: &str,
             _function_input: &Vec<Value>,
-            _calling_convention: Option<&CallingConvention>,
+            _calling_convention: Option<CallingConvention>,
         ) -> anyhow::Result<()> {
             unimplemented!()
         }
@@ -832,6 +849,8 @@ mod tests {
             _event_service: Arc<dyn WorkerEventService + Send + Sync>,
             _active_workers: Arc<ActiveWorkers<Self>>,
             _oplog_service: Arc<dyn OplogService + Send + Sync>,
+            _oplog: Arc<dyn Oplog + Send + Sync>,
+            _invocation_queue: Arc<InvocationQueue<EmptyContext>>,
             _scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
             _recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
             rpc: Arc<dyn Rpc + Send + Sync>,

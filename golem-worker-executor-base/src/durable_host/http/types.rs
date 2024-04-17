@@ -579,7 +579,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     WrappedFunctionType::WriteRemote,
                 )
                 .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
-                self.state.set_oplog_entry(oplog_entry).await;
+                self.state.oplog.add(oplog_entry).await;
 
                 if matches!(serializable_response, SerializableResponse::Pending) {
                     match self.state.open_function_table.get(&handle) {
@@ -594,7 +594,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         }
                     }
                 }
-                self.state.commit_oplog().await;
+                self.state.oplog.commit().await;
             }
 
             response
