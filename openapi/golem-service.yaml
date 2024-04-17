@@ -3,63 +3,6 @@ info:
   title: Golem API
   version: '2.0'
 paths:
-  /v2/templates/workers/{worker_id}:
-    get:
-      tags:
-      - Worker
-      operationId: get_worker_by_id
-      parameters:
-      - in: path
-        name: worker_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/VersionedWorkerId'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/GolemErrorBody'
   /v2/templates/{template_id}/workers:
     get:
       tags:
@@ -176,7 +119,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/VersionedWorkerId'
+                $ref: '#/components/schemas/WorkerId'
         '400':
           description: ''
           content:
@@ -2481,17 +2424,6 @@ components:
       required:
       - templateId
       - version
-    VersionedWorkerId:
-      type: object
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        templateVersionUsed:
-          type: integer
-          format: uint64
-      required:
-      - workerId
-      - templateVersionUsed
     WorkerAndFilter:
       type: object
       properties:
