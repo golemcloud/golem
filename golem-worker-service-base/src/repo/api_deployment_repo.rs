@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Mutex;
 
+use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiVersion, HasApiDefinitionId, Host};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
@@ -9,11 +10,10 @@ use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::redis::RedisPool;
 use tracing::{debug, info};
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiVersion, HasApiDefinitionId, Host};
 
+use crate::api_definition::HasHost;
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, InMemoryRegistry};
 use crate::repo::api_namespace::ApiNamespace;
-use crate::api_definition::HasHost;
 
 const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 
@@ -21,7 +21,7 @@ const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 pub trait ApiDeploymentRepo<Namespace: ApiNamespace> {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>>;
 
-    async fn get(&self, host:&Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
+    async fn get(&self, host: &Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
 
     async fn delete(&self, host: &Host) -> Result<bool, Box<dyn Error>>;
 
@@ -45,8 +45,7 @@ impl<Namespace> Default for InMemoryDeployment<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace>
-ApiDeploymentRepo<Namespace> for InMemoryDeployment<Namespace> {
+impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeployment<Namespace> {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>> {
         debug!(
             "Deploy API site: {}, id: {}",
@@ -85,14 +84,12 @@ ApiDeploymentRepo<Namespace> for InMemoryDeployment<Namespace> {
         namespace: &Namespace,
         api_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, Box<dyn Error>> {
-
         let registry = self.deployments.lock().unwrap();
 
         let result: Vec<ApiDeployment<Namespace>> = registry
             .values()
             .filter(|x| {
-                &x.api_definition_id.namespace == namespace
-                    && &x.api_definition_id.id == api_id
+                &x.api_definition_id.namespace == namespace && &x.api_definition_id.id == api_id
             })
             .cloned()
             .collect();
@@ -221,7 +218,6 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         namespace: &Namespace,
         api_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, Box<dyn Error>> {
-
         let sites_key = redis_keys::api_deployments_redis_key(namespace, api_id);
 
         let site_values: Vec<Bytes> = self
@@ -283,7 +279,6 @@ mod redis_keys {
         format!("{}:deployment:{}", API_DEFINITION_REDIS_NAMESPACE, api_site)
     }
 
-
     pub(crate) fn api_deployments_redis_key<Namespace: ApiNamespace>(
         namespace: &Namespace,
         api_id: &ApiDefinitionId,
@@ -297,15 +292,15 @@ mod redis_keys {
 
 #[cfg(test)]
 mod tests {
-    use golem_common::config::RedisConfig;
     use crate::api_definition::{ApiDefinitionId, ApiVersion, Domain, Host, SubDomain};
+    use golem_common::config::RedisConfig;
 
     use crate::api_definition::{ApiDeployment, Host};
     use crate::auth::CommonNamespace;
-    use crate::repo::api_deployment_repo::{ApiDeploymentRepo,
-                                           InMemoryDeployment, RedisApiDeploy,
+    use crate::repo::api_deployment_repo::redis_keys::{
+        api_deployment_redis_key, api_deployments_redis_key,
     };
-    use crate::repo::api_deployment_repo::redis_keys::{api_deployment_redis_key, api_deployments_redis_key};
+    use crate::repo::api_deployment_repo::{ApiDeploymentRepo, InMemoryDeployment, RedisApiDeploy};
     use crate::service::api_definition::ApiDefinitionKey;
 
     #[tokio::test]
@@ -323,20 +318,17 @@ mod tests {
         let version = ApiVersion("0.0.1".to_string());
 
         let deployment = &ApiDeployment {
-                api_definition_id: ApiDefinitionKey {
-                    namespace: namespace.clone(),
-                    id: api_definition_id.clone(),
-                    version: version.clone(),
-                },
-                site: site.clone(),
-            };
+            api_definition_id: ApiDefinitionKey {
+                namespace: namespace.clone(),
+                id: api_definition_id.clone(),
+                version: version.clone(),
+            },
+            site: site.clone(),
+        };
 
         let _ = registry.deploy(&deployment).await;
 
-        let result = registry
-            .get(&site)
-            .await
-            .unwrap_or(None);
+        let result = registry.get(&site).await.unwrap_or(None);
 
         let result1 = registry
             .get_by_id(
@@ -346,15 +338,9 @@ mod tests {
             .await
             .unwrap_or(vec![]);
 
-        let delete = registry
-            .delete(&site)
-            .await
-            .unwrap_or(false);
+        let delete = registry.delete(&site).await.unwrap_or(false);
 
-        let result2 = registry
-            .get(&site)
-            .await
-            .unwrap_or(None);
+        let result2 = registry.get(&site).await.unwrap_or(None);
 
         assert!(result.is_some());
         assert_eq!(result.unwrap(), deployment);
@@ -363,7 +349,6 @@ mod tests {
         assert!(result2.is_none());
         assert!(delete);
     }
-
 
     #[test]
     pub fn test_get_api_deployment_redis_key() {

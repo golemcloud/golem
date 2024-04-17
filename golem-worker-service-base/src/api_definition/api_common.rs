@@ -1,10 +1,10 @@
 use std::fmt::Debug;
 use std::fmt::Display;
 
+use crate::service::api_definition::ApiDefinitionKey;
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
-use crate::service::api_definition::ApiDefinitionKey;
 
 use crate::worker_binding::GolemWorkerBinding;
 
@@ -43,8 +43,9 @@ pub trait HasGolemWorkerBindings {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct Domain(pub String);
 
-
-#[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode)]
+#[derive(
+    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
+)]
 pub struct ApiDeployment<ApiNamespace> {
     pub api_definition_id: ApiDefinitionKey<ApiNamespace>,
     pub site: Host,
@@ -53,12 +54,13 @@ pub struct ApiDeployment<ApiNamespace> {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct SubDomain(pub String);
 
-#[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode)]
+#[derive(
+    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
+)]
 pub struct Host {
     pub domain: Domain,
     pub sub_domain: SubDomain,
 }
-
 
 impl Display for Host {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -88,7 +90,6 @@ impl<N> HasHost for ApiDeployment<N> {
         Host::new(self.site.domain.clone(), self.site.sub_domain.clone())
     }
 }
-
 
 #[cfg(test)]
 mod tests {

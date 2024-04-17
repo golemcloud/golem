@@ -2,21 +2,7 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 
 pub trait ApiNamespace:
-Eq
-+ Hash
-+ PartialEq
-+ Clone
-+ Debug
-+ Display
-+ Send
-+ Sync
-+ bincode::Encode
-+ bincode::Decode
-+ serde::de::DeserializeOwned
-{
-}
-impl<
-    T: Eq
+    Eq
     + Hash
     + PartialEq
     + Clone
@@ -26,7 +12,21 @@ impl<
     + Sync
     + bincode::Encode
     + bincode::Decode
-    + serde::de::DeserializeOwned,
-> ApiNamespace for T
+    + serde::de::DeserializeOwned
+{
+}
+impl<
+        T: Eq
+            + Hash
+            + PartialEq
+            + Clone
+            + Debug
+            + Display
+            + Send
+            + Sync
+            + bincode::Encode
+            + bincode::Decode
+            + serde::de::DeserializeOwned,
+    > ApiNamespace for T
 {
 }
