@@ -4,9 +4,9 @@ pub mod worker;
 
 use crate::service::api_definition_lookup_impl::CustomRequestDefinitionLookupDefault;
 use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
-use async_trait::async_trait;
+
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
-use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
+
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::http::InputHttpRequest;
@@ -14,10 +14,10 @@ use golem_worker_service_base::repo::api_definition_repo::{
     ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
 };
 use golem_worker_service_base::service::api_definition::{
-    ApiDefinitionKey, ApiDefinitionService, ApiDefinitionServiceDefault,
+    ApiDefinitionService, ApiDefinitionServiceDefault,
 };
 use golem_worker_service_base::service::api_definition_lookup::{
-    ApiDefinitionLookup, ApiDefinitionLookupError,
+    ApiDefinitionLookup,
 };
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
@@ -29,7 +29,7 @@ use golem_worker_service_base::service::worker::{
     WorkerRequestMetadata, WorkerServiceDefault, WorkerServiceNoOp,
 };
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
-use http::HeaderMap;
+
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;

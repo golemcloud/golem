@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
-use golem_common::model::ProjectId;
+
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, Host};
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
-use tracing::log::error;
+
 use tracing::log::info;
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::auth::CommonNamespace;
-use golem_worker_service_base::repo::api_namespace::ApiNamespace;
+
 use golem_worker_service_base::service::api_deployment::ApiDeploymentService;
 use golem_worker_service_base::api::ApiDeployment;
 use golem_worker_service_base::api_definition;
