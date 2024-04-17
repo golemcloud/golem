@@ -1895,36 +1895,6 @@ impl std::fmt::Display for WorkerId {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct VersionedWorkerId {
-    pub worker_id: WorkerId,
-    pub template_version_used: u64,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::VersionedWorkerId> for VersionedWorkerId {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::VersionedWorkerId,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            template_version_used: value.template_version,
-        })
-    }
-}
-
-impl From<VersionedWorkerId> for golem_api_grpc::proto::golem::worker::VersionedWorkerId {
-    fn from(value: VersionedWorkerId) -> Self {
-        Self {
-            worker_id: Some(value.worker_id.into()),
-            template_version: value.template_version_used,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
 pub struct CompleteParameters {
     pub oplog_idx: u64,
     pub data: Vec<u8>,

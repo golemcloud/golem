@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use golem_common::model::{CallingConvention, InvocationKey, TemplateId, WorkerFilter};
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::auth::EmptyAuthCtx;
@@ -24,21 +22,6 @@ type Result<T> = std::result::Result<T, WorkerApiBaseError>;
 #[OpenApi(prefix_path = "/v2/templates", tag = ApiTags::Worker)]
 impl WorkerApi {
     #[oai(
-        path = "/workers/:worker_id",
-        method = "get",
-        operation_id = "get_worker_by_id"
-    )]
-    async fn get_worker_by_id(&self, worker_id: Path<String>) -> Result<Json<VersionedWorkerId>> {
-        let worker_id: WorkerId = golem_common::model::WorkerId::from_str(&worker_id.0)?.into();
-        let worker = self
-            .worker_service
-            .get_by_id(&worker_id, &EmptyAuthCtx {})
-            .await?;
-
-        Ok(Json(worker))
-    }
-
-    #[oai(
         path = "/:template_id/workers",
         method = "post",
         operation_id = "launch_new_worker"
@@ -47,7 +30,7 @@ impl WorkerApi {
         &self,
         template_id: Path<TemplateId>,
         request: Json<WorkerCreationRequest>,
-    ) -> Result<Json<VersionedWorkerId>> {
+    ) -> Result<Json<WorkerId>> {
         let template_id = template_id.0;
         let latest_template = self
             .template_service

@@ -132,10 +132,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         Ok(self
             .public_state
             .promise_service
-            .create(
-                &self.worker_id.worker_id,
-                self.state.current_oplog_index().await,
-            )
+            .create(&self.worker_id, self.state.current_oplog_index().await)
             .await
             .into())
     }
@@ -657,11 +654,11 @@ impl From<golem::api::host::WorkerAnyFilter> for golem_common::model::WorkerFilt
 impl From<golem_common::model::WorkerMetadata> for golem::api::host::WorkerMetadata {
     fn from(value: golem_common::model::WorkerMetadata) -> Self {
         Self {
-            worker_id: value.worker_id.worker_id.into(),
+            worker_id: value.worker_id.into(),
             args: value.args,
             env: value.env,
             status: value.last_known_status.status.into(),
-            template_version: value.worker_id.template_version,
+            template_version: value.last_known_status.component_version,
             retry_count: 0,
         }
     }

@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
-use golem_common::model::oplog::WorkerError;
-use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{
-    ShardAssignment, ShardId, VersionedWorkerId, WorkerId, WorkerStatusRecord,
-};
+use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use wasmtime::Trap;
+
+use golem_common::model::oplog::WorkerError;
+use golem_common::model::regions::DeletedRegions;
+use golem_common::model::{ShardAssignment, ShardId, WorkerId, WorkerStatusRecord};
 
 use crate::error::GolemError;
 use crate::workerctx::WorkerCtx;
@@ -78,14 +77,15 @@ pub struct WorkerConfig {
 
 impl WorkerConfig {
     pub fn new(
-        versioned_worker_id: VersionedWorkerId,
+        worker_id: WorkerId,
+        component_version: u64,
         worker_args: Vec<String>,
         mut worker_env: Vec<(String, String)>,
         deleted_regions: DeletedRegions,
     ) -> WorkerConfig {
-        let worker_name = versioned_worker_id.worker_id.worker_name.clone();
-        let template_id = versioned_worker_id.worker_id.template_id;
-        let template_version = versioned_worker_id.template_version.to_string();
+        let worker_name = worker_id.worker_name.clone();
+        let template_id = worker_id.template_id;
+        let template_version = component_version.to_string();
         worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name));
         worker_env.push((String::from("GOLEM_TEMPLATE_ID"), template_id.to_string()));
         worker_env.push((String::from("GOLEM_TEMPLATE_VERSION"), template_version));
@@ -247,8 +247,9 @@ impl From<PersistenceLevel> for crate::preview2::golem::api::host::PersistenceLe
 
 #[cfg(test)]
 mod shard_id_tests {
-    use golem_common::model::TemplateId;
     use uuid::Uuid;
+
+    use golem_common::model::TemplateId;
 
     use super::*;
 

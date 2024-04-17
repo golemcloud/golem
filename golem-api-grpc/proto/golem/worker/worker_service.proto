@@ -9,7 +9,6 @@ import public "golem/worker/invocation_key.proto";
 import public "golem/worker/invoke_parameters.proto";
 import public "golem/worker/invoke_result.proto";
 import public "golem/worker/invoke_result_json.proto";
-import public "golem/worker/versioned_worker_id.proto";
 import public "golem/worker/worker_error.proto";
 import public "golem/worker/worker_filter.proto";
 import public "golem/worker/worker_metadata.proto";
@@ -47,7 +46,7 @@ message LaunchNewWorkerRequest {
 
 message LaunchNewWorkerResponse {
   oneof result {
-    golem.worker.VersionedWorkerId success = 1;
+    golem.worker.WorkerId success = 1;
     golem.worker.WorkerError error = 2;
   }
 }

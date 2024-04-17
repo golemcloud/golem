@@ -19,8 +19,8 @@ use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, InvocationKey, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -111,7 +111,7 @@ impl ExternalOperations<Context> for Context {
     }
 
     async fn prepare_instance(
-        worker_id: &VersionedWorkerId,
+        worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Context> + Send),
     ) -> Result<(), GolemError> {
@@ -258,7 +258,7 @@ impl WorkerCtx for Context {
     type PublicState = PublicDurableWorkerState<Context>;
 
     async fn create(
-        worker_id: VersionedWorkerId,
+        worker_id: WorkerId,
         account_id: AccountId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
@@ -316,7 +316,7 @@ impl WorkerCtx for Context {
         self
     }
 
-    fn worker_id(&self) -> &VersionedWorkerId {
+    fn worker_id(&self) -> &WorkerId {
         self.durable_ctx.worker_id()
     }
 

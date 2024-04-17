@@ -30,14 +30,14 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    InvocationKey, TemplateId, Timestamp, VersionedWorkerId, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerStatusRecord,
+    InvocationKey, TemplateId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerStatusRecord,
 };
 use golem_wasm_ast::analysis::AnalysisContext;
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -214,13 +214,9 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         match response.result {
             None => panic!("No response from create_worker"),
-            Some(launch_new_worker_response::Result::Success(versioned_worker_id)) => {
-                Ok(versioned_worker_id
-                    .worker_id
-                    .unwrap()
-                    .try_into()
-                    .expect("Failed to parse result worker id"))
-            }
+            Some(launch_new_worker_response::Result::Success(worker_id)) => Ok(worker_id
+                .try_into()
+                .expect("Failed to parse result worker id")),
             Some(launch_new_worker_response::Result::Error(WorkerError { error: Some(error) })) => {
                 Err(error)
             }
@@ -839,16 +835,13 @@ pub fn to_worker_metadata(
     metadata: &golem_api_grpc::proto::golem::worker::WorkerMetadata,
 ) -> WorkerMetadata {
     WorkerMetadata {
-        worker_id: VersionedWorkerId {
-            worker_id: metadata
-                .worker_id
-                .clone()
-                .expect("no worker_id")
-                .clone()
-                .try_into()
-                .expect("invalid worker_id"),
-            template_version: metadata.template_version,
-        },
+        worker_id: metadata
+            .worker_id
+            .clone()
+            .expect("no worker_id")
+            .clone()
+            .try_into()
+            .expect("invalid worker_id"),
         args: metadata.args.clone(),
         env: metadata
             .env
@@ -868,6 +861,10 @@ pub fn to_worker_metadata(
             overridden_retry_config: None, // not passed through gRPC
             deleted_regions: DeletedRegions::new(),
             pending_invocations: vec![],
+            pending_updates: VecDeque::new(),
+            failed_updates: vec![],
+            successful_updates: vec![],
+            component_version: metadata.template_version,
         },
     }
 }

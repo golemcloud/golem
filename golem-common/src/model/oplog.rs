@@ -6,15 +6,19 @@ use bytes::Bytes;
 use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, CallingConvention, InvocationKey, Timestamp, VersionedWorkerId, WorkerInvocation,
+    AccountId, CallingConvention, ComponentVersion, InvocationKey, Timestamp, WorkerId,
+    WorkerInvocation,
 };
 use crate::serialization::{serialize, try_deserialize};
+
+pub type OplogIndex = u64;
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
     Create {
         timestamp: Timestamp,
-        worker_id: VersionedWorkerId,
+        worker_id: WorkerId,
+        component_version: ComponentVersion,
         args: Vec<String>,
         env: Vec<(String, String)>,
         account_id: AccountId,
@@ -76,7 +80,7 @@ pub enum OplogEntry {
     /// compaction.
     EndAtomicRegion {
         timestamp: Timestamp,
-        begin_index: u64,
+        begin_index: OplogIndex,
     },
     /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
     /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
@@ -85,18 +89,35 @@ pub enum OplogEntry {
     /// Marks the end of a remote write operation. Only used when idempotence mode is off.
     EndRemoteWrite {
         timestamp: Timestamp,
-        begin_index: u64,
+        begin_index: OplogIndex,
     },
     /// An invocation request arrived while the worker was busy
     PendingWorkerInvocation {
         timestamp: Timestamp,
         invocation: WorkerInvocation,
     },
+    /// An update request arrived and will be applied as soon the worker restarts
+    PendingUpdate {
+        timestamp: Timestamp,
+        description: UpdateDescription,
+    },
+    /// An update was successfully applied
+    SuccessfulUpdate {
+        timestamp: Timestamp,
+        target_version: ComponentVersion,
+    },
+    /// An update failed to be applied
+    FailedUpdate {
+        timestamp: Timestamp,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    },
 }
 
 impl OplogEntry {
     pub fn create(
-        worker_id: VersionedWorkerId,
+        worker_id: WorkerId,
+        component_version: ComponentVersion,
         args: Vec<String>,
         env: Vec<(String, String)>,
         account_id: AccountId,
@@ -104,6 +125,7 @@ impl OplogEntry {
         OplogEntry::Create {
             timestamp: Timestamp::now_utc(),
             worker_id,
+            component_version,
             args,
             env,
             account_id,
@@ -217,7 +239,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn end_remote_write(begin_index: u64) -> OplogEntry {
+    pub fn end_remote_write(begin_index: OplogIndex) -> OplogEntry {
         OplogEntry::EndRemoteWrite {
             timestamp: Timestamp::now_utc(),
             begin_index,
@@ -231,11 +253,33 @@ impl OplogEntry {
         }
     }
 
-    pub fn is_end_atomic_region(&self, idx: u64) -> bool {
+    pub fn pending_update(description: UpdateDescription) -> OplogEntry {
+        OplogEntry::PendingUpdate {
+            timestamp: Timestamp::now_utc(),
+            description,
+        }
+    }
+
+    pub fn successful_update(target_version: ComponentVersion) -> OplogEntry {
+        OplogEntry::SuccessfulUpdate {
+            timestamp: Timestamp::now_utc(),
+            target_version,
+        }
+    }
+
+    pub fn failed_update(target_version: ComponentVersion, details: Option<String>) -> OplogEntry {
+        OplogEntry::FailedUpdate {
+            timestamp: Timestamp::now_utc(),
+            target_version,
+            details,
+        }
+    }
+
+    pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
 
-    pub fn is_end_remote_write(&self, idx: u64) -> bool {
+    pub fn is_end_remote_write(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
     }
 
@@ -268,6 +312,32 @@ impl OplogEntry {
             _ => Ok(None),
         }
     }
+}
+
+/// Describes a pending update
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum UpdateDescription {
+    /// Automatic update by replaying the oplog on the new version
+    Automatic { target_version: ComponentVersion },
+
+    /// Custom update by loading a given snapshot on the new version
+    SnapshotBased {
+        target_version: ComponentVersion,
+        source: SnapshotSource,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum SnapshotSource {
+    /// Load the snapshot from the given byte array
+    Inline(Vec<u8>),
+
+    /// Load the snapshot from the blob store
+    BlobStore {
+        account_id: AccountId,
+        container: String,
+        object: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]

@@ -29,9 +29,9 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_api_grpc::proto::golem::worker::{
     worker_error, worker_execution_error, InvocationKey, InvokeResult, UnknownError,
-    VersionedWorkerId, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
+    WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
 };
-use golem_common::model::WorkerFilter;
+use golem_common::model::{WorkerFilter, WorkerId};
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::ConnectWorkerStream;
 use tap::TapFallible;
@@ -75,7 +75,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<LaunchNewWorkerRequest>,
     ) -> Result<Response<LaunchNewWorkerResponse>, Status> {
         let response = match self.launch_new_worker(request.into_inner()).await {
-            Ok(worker_id) => launch_new_worker_response::Result::Success(worker_id),
+            Ok(worker_id) => launch_new_worker_response::Result::Success(worker_id.into()),
             Err(error) => launch_new_worker_response::Result::Error(error),
         };
 
@@ -279,7 +279,7 @@ impl WorkerGrpcApi {
     async fn launch_new_worker(
         &self,
         request: LaunchNewWorkerRequest,
-    ) -> Result<VersionedWorkerId, GrpcWorkerError> {
+    ) -> Result<WorkerId, GrpcWorkerError> {
         let template_id: golem_common::model::TemplateId = request
             .template_id
             .and_then(|id| id.try_into().ok())
