@@ -15,16 +15,30 @@
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use crate::config::{TemplateStoreLocalConfig, TemplateStoreS3Config};
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::primitives::ByteStream;
+use hyper::body::Bytes;
 use tracing::{debug, info};
+
+pub struct GetTemplateStream(ByteStream);
+
+impl futures::stream::Stream for GetTemplateStream {
+    type Item = Result<Bytes, Box<dyn Error>>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0).poll_next(cx).map_err(|e| e.into())
+    }
+}
 
 #[async_trait]
 pub trait TemplateObjectStore {
     async fn get(&self, object_key: &str) -> Result<Vec<u8>, Box<dyn Error>>;
+
+    async fn get_stream(&self, object_key: &str) -> Result<GetTemplateStream, Box<dyn Error>>;
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error>>;
 }
@@ -76,6 +90,22 @@ impl TemplateObjectStore for AwsS3TemplateObjectStore {
 
         let data = response.body.collect().await?;
         Ok(data.to_vec())
+    }
+
+    async fn get_stream(&self, object_key: &str) -> Result<GetTemplateStream, Box<dyn Error>> {
+        let key = self.get_key(object_key);
+
+        info!("Getting object: {}/{}", self.bucket_name, key);
+
+        let response = self
+            .client
+            .get_object()
+            .bucket(&self.bucket_name)
+            .key(key)
+            .send()
+            .await?;
+
+        Ok(GetTemplateStream(response.body))
     }
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error>> {
@@ -141,6 +171,20 @@ impl TemplateObjectStore for FsTemplateObjectStore {
 
         if file_path.exists() {
             fs::read(file_path).map_err(|e| e.into())
+        } else {
+            Err("Object not found".into())
+        }
+    }
+
+    async fn get_stream(&self, object_key: &str) -> Result<GetTemplateStream, Box<dyn Error>> {
+        let dir_path = self.get_dir_path();
+
+        debug!("Getting object: {}/{}", dir_path.display(), object_key);
+
+        let file_path = dir_path.join(object_key);
+
+        if file_path.exists() {
+            Ok(GetTemplateStream(ByteStream::from_path(file_path).await?))
         } else {
             Err("Object not found".into())
         }

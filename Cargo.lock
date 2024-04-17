@@ -3271,6 +3271,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "bigdecimal",
+ "futures",
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
