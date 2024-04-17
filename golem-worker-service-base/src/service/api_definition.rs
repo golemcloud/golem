@@ -9,6 +9,7 @@ use golem_service_base::model::Template;
 
 use crate::api_definition::{ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, Host};
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
+use crate::repo::api_namespace::ApiNamespace;
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 use super::template::TemplateService;
@@ -78,6 +79,18 @@ impl<Namespace: Display> ApiDefinitionKey<Namespace> {
             id: self.id.clone(),
             version: self.version.clone(),
         }
+    }
+}
+
+impl<Namespace: Display> Display for ApiDefinitionKey<Namespace> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{namespace}::{id}::{version}",
+            namespace = self.namespace,
+            id = self.id,
+            version = self.version
+        )
     }
 }
 

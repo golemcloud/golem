@@ -27,7 +27,7 @@ pub trait ApiDeploymentRepo<Namespace: ApiNamespace> {
 
     async fn get_by_id(
         &self,
-        namespace: Namespace,
+        namespace: &Namespace,
         api_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, Box<dyn Error>>;
 }
@@ -50,7 +50,7 @@ ApiDeploymentRepo<Namespace> for InMemoryDeployment<Namespace> {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>> {
         debug!(
             "Deploy API site: {}, id: {}",
-            deployment.site, deployment.get_api_definition_id()
+            deployment.site, deployment.api_definition_id.id
         );
 
         let key = deployment.site.clone();
@@ -62,27 +62,27 @@ ApiDeploymentRepo<Namespace> for InMemoryDeployment<Namespace> {
         Ok(())
     }
 
-    async fn get(&self, host: Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
+    async fn get(&self, host: &Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
         debug!("Get API site: {}", host);
         let deployments = self.deployments.lock().unwrap();
 
-        let deployment = deployments.get(&host).cloned();
+        let deployment = deployments.get(host).cloned();
 
         Ok(deployment)
     }
 
-    async fn delete(&self, host: Host) -> Result<bool, Box<dyn Error>> {
+    async fn delete(&self, host: &Host) -> Result<bool, Box<dyn Error>> {
         debug!("Delete API site: {}", host);
         let mut deployments = self.deployments.lock().unwrap();
 
-        let deployment = deployments.remove(&host);
+        let deployment = deployments.remove(host);
 
         Ok(deployment.is_some())
     }
 
     async fn get_by_id(
         &self,
-        namespace: Namespace,
+        namespace: &Namespace,
         api_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, Box<dyn Error>> {
 
@@ -107,7 +107,7 @@ pub struct RedisApiDeploy {
 
 impl RedisApiDeploy {
     pub async fn new(config: &RedisConfig) -> Result<RedisApiDeploy, Box<dyn Error>> {
-        let pool = golem_common::redis::RedisPool::configured(config).await?;
+        let pool = RedisPool::configured(config).await?;
         Ok(Self { pool })
     }
 }
@@ -148,10 +148,10 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
             .map_err(|e| e.to_string().into())
     }
 
-    async fn get(&self, host: Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
+    async fn get(&self, host: &Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
         info!("Get host id: {}", host);
 
-        let key = redis_keys::api_deployment_redis_key(&host);
+        let key = redis_keys::api_deployment_redis_key(host);
 
         let value: Option<Bytes> = self
             .pool
@@ -172,9 +172,9 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         }
     }
 
-    async fn delete(&self, host: Host) -> Result<bool, Box<dyn Error>> {
+    async fn delete(&self, host: &Host) -> Result<bool, Box<dyn Error>> {
         debug!("Delete API site: {}", host);
-        let key = redis_keys::api_deployment_redis_key(&host);
+        let key = redis_keys::api_deployment_redis_key(host);
         let value: Option<Bytes> = self
             .pool
             .with("persistence", "delete_deployment")
@@ -218,11 +218,11 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
 
     async fn get_by_id(
         &self,
-        namespace: Namespace,
+        namespace: &Namespace,
         api_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, Box<dyn Error>> {
 
-        let sites_key = redis_keys::api_deployments_redis_key(&namespace, api_id);
+        let sites_key = redis_keys::api_deployments_redis_key(namespace, api_id);
 
         let site_values: Vec<Bytes> = self
             .pool
@@ -334,25 +334,25 @@ mod tests {
         let _ = registry.deploy(&deployment).await;
 
         let result = registry
-            .get(site)
+            .get(&site)
             .await
             .unwrap_or(None);
 
         let result1 = registry
             .get_by_id(
-                CommonNamespace::default(),
+                &CommonNamespace::default(),
                 &deployment.api_definition_id.id,
             )
             .await
             .unwrap_or(vec![]);
 
         let delete = registry
-            .delete(site)
+            .delete(&site)
             .await
             .unwrap_or(false);
 
         let result2 = registry
-            .get(site)
+            .get(&site)
             .await
             .unwrap_or(None);
 

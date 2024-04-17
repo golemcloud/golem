@@ -44,6 +44,7 @@ pub trait HasGolemWorkerBindings {
 pub struct Domain(pub String);
 
 
+#[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub struct ApiDeployment<ApiNamespace> {
     pub api_definition_id: ApiDefinitionKey<ApiNamespace>,
     pub site: Host,
@@ -52,7 +53,7 @@ pub struct ApiDeployment<ApiNamespace> {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct SubDomain(pub String);
 
-#[derive(PartialEq, Eq, Clone, Hash)]
+#[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode)]
 pub struct Host {
     pub domain: Domain,
     pub sub_domain: SubDomain,

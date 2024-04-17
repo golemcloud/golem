@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::sync::Arc;
+use async_trait::async_trait;
 use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiVersion, Host};
 use crate::repo::api_definition_repo::ApiDefinitionRepo;
 use crate::repo::api_deployment_repo::ApiDeploymentRepo;
@@ -7,8 +8,9 @@ use crate::service::api_definition::{ApiDefinitionKey, ApiDefinitionService};
 use crate::service::api_definition_validator::ApiDefinitionValidatorService;
 use crate::service::template::TemplateService;
 use tracing::log::error;
+use crate::repo::api_namespace::ApiNamespace;
 
-
+#[async_trait]
 pub trait ApiDeploymentService<Namespace>  {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), ApiDeploymentError<Namespace>>;
 
@@ -35,7 +37,7 @@ pub struct ApiDeploymentServiceDefault<Namespace, ApiDefinition> {
     pub definition_repo: Arc<dyn ApiDefinitionRepo<Namespace, ApiDefinition> + Sync + Send>,
 }
 
-impl <AuthCtx, Namespace, ApiDefinition> ApiDeploymentServiceDefault<Namespace, ApiDefinition> {
+impl <Namespace, ApiDefinition> ApiDeploymentServiceDefault<Namespace, ApiDefinition> {
     pub fn new(
         deployment_repo: Arc<dyn ApiDeploymentRepo<Namespace> + Sync + Send>,
         definition_repo: Arc<dyn ApiDefinitionRepo<Namespace, ApiDefinition> + Sync + Send>,
@@ -47,13 +49,14 @@ impl <AuthCtx, Namespace, ApiDefinition> ApiDeploymentServiceDefault<Namespace, 
     }
 }
 
-impl<Namespace, ApiDefinition> ApiDeploymentService<Namespace> for ApiDeploymentServiceDefault<Namespace, ApiDefinition> {
+#[async_trait]
+impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace> for ApiDeploymentServiceDefault<Namespace, ApiDefinition> {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), ApiDeploymentError<Namespace>> {
 
         let api_definition_key = deployment.api_definition_id.clone();
 
-        if let None = self.definition_repo.get(&api_definition_key).await.map_err(|err| {
-            ApiDeploymentError::InternalError(format!("Error getting api definition: {}", err))
+        if let Ok(None) = self.definition_repo.get(&api_definition_key).await.map_err(|err| {
+            ApiDeploymentError::<Namespace>::InternalError(format!("Error getting api definition: {}", err))
         }){
             return Err(ApiDeploymentError::ApiDefinitionNotFound(api_definition_key.namespace, api_definition_key.id))
         }
