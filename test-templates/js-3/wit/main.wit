@@ -1,8 +1,7 @@
 package golem:it;
 
 interface api {
-  set-timeout: func(value: u64, time: u64) -> bool;
-  clear-timeout: func() -> bool;
+  set-timeout: func(time: u64) -> u64;
   get: func() -> u64;
 }
 

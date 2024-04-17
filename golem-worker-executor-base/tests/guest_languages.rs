@@ -461,41 +461,31 @@ async fn javascript_example_3() {
     let template_id = executor.store_template("js-3").await;
     let worker_id = executor.start_worker(&template_id, "js-3").await;
 
-    let mut rx = executor.capture_output(&worker_id).await;
-
-    // This doesn't return until the timeout is completed?
-    let set_timeout_1 = executor
+    let timeout_time = 1000;
+    // Invoke_and_await will wait for the timeout to be finished.
+    let result_set = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api/set-timeout",
-            vec![Value::U64(10), Value::U64(10000)],
+            vec![Value::U64(timeout_time)],
         )
         .await
         .unwrap();
 
-    println!("SET TIMEOUT {}", chrono::Utc::now());
-
-    let value_1 = executor
+    let result_get = executor
         .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
         .await
         .unwrap();
-
-    tokio::time::sleep(Duration::from_secs(1)).await;
-
-    let value_2 = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
-        .await
-        .unwrap();
-
-    let mut events = vec![];
-    rx.recv_many(&mut events, 100).await;
-    println!("JS3 EVENTS {:#?}", events);
 
     drop(executor);
 
-    check!(set_timeout_1 == vec![Value::Bool(true)]);
-    check!(value_1 == vec![Value::U64(0)]);
-    check!(value_2 == vec![Value::U64(10)]);
+    let_assert!(Some(Value::U64(start)) = result_set.into_iter().next());
+    let_assert!(Some(Value::U64(end)) = result_get.into_iter().next());
+
+    let total_time = end - start;
+
+    check!(total_time >= timeout_time);
+    check!(total_time < timeout_time + 100);
 }
 
 #[tokio::test]
