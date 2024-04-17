@@ -454,6 +454,52 @@ async fn javascript_example_2() {
 
 #[tokio::test]
 #[tracing::instrument]
+async fn javascript_example_3() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let template_id = executor.store_template("js-3").await;
+    let worker_id = executor.start_worker(&template_id, "js-3").await;
+
+    let mut rx = executor.capture_output(&worker_id).await;
+
+    // This doesn't return until the timeout is completed?
+    let set_timeout_1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/set-timeout",
+            vec![Value::U64(10), Value::U64(10000)],
+        )
+        .await
+        .unwrap();
+
+    println!("SET TIMEOUT {}", chrono::Utc::now());
+
+    let value_1 = executor
+        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let value_2 = executor
+        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .await
+        .unwrap();
+
+    let mut events = vec![];
+    rx.recv_many(&mut events, 100).await;
+    println!("JS3 EVENTS {:#?}", events);
+
+    drop(executor);
+
+    check!(set_timeout_1 == vec![Value::Bool(true)]);
+    check!(value_1 == vec![Value::U64(0)]);
+    check!(value_2 == vec![Value::U64(10)]);
+}
+
+#[tokio::test]
+#[tracing::instrument]
 async fn csharp_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
