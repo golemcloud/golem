@@ -153,6 +153,19 @@ mod tests {
             })
         }
 
+        async fn post(
+            &self,
+            value: &HttpApiDefinition,
+        ) -> Result<HttpApiDefinition, Error<ApiDefinitionError>> {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push_str(format!("post: {:?}", value).as_str());
+            Ok(HttpApiDefinition {
+                id: "".to_string(),
+                version: "".to_string(),
+                routes: vec![],
+            })
+        }
+
         async fn delete(
             &self,
             api_definition_id: &str,

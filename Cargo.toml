@@ -67,8 +67,8 @@ fred = { version = "8.0.0", features = [
 futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
-golem-wasm-ast = "0.2.1"
-golem-wasm-rpc = { version = "0.0.19", default-features = false, features = ["host"] }
+golem-wasm-ast = "0.2.2"
+golem-wasm-rpc = { version = "0.0.20", default-features = false, features = ["host"] }
 http = "1.0.0" # keep in sync with wasmtime
 http_02 = { package = "http", version = "0.2.11" }
 humantime-serde = "1.1.1"

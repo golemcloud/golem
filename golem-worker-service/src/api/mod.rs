@@ -1,4 +1,4 @@
-pub mod register_api_definition_api;
+pub mod register_api_definition;
 pub mod worker;
 
 pub mod worker_connect;
@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 type ApiServices = (
     WorkerApi,
-    register_api_definition_api::RegisterApiDefinitionApi,
+    register_api_definition::RegisterApiDefinitionApi,
     HealthcheckApi,
 );
 
@@ -56,7 +56,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
                 template_service: services.template_service.clone(),
                 worker_service: services.worker_service.clone(),
             },
-            register_api_definition_api::RegisterApiDefinitionApi::new(
+            register_api_definition::RegisterApiDefinitionApi::new(
                 services.definition_service.clone(),
             ),
             HealthcheckApi,

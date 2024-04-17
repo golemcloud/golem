@@ -31,6 +31,9 @@ use tracing::{debug, Level};
 use crate::metrics::redis::{record_redis_failure, record_redis_success};
 use crate::serialization::{deserialize, serialize};
 
+// Re-export fred Error
+pub use fred::prelude::RedisError;
+
 #[derive(Clone, Debug)]
 pub struct RedisPool {
     pool: FredRedisPool,

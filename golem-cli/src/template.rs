@@ -69,7 +69,7 @@ pub trait TemplateHandler {
     async fn get_metadata(
         &self,
         template_id: &TemplateId,
-        version: i32,
+        version: u64,
     ) -> Result<Template, GolemError>;
 
     async fn get_latest_metadata(&self, template_id: &TemplateId) -> Result<Template, GolemError>;
@@ -159,7 +159,7 @@ impl<C: TemplateClient + Send + Sync> TemplateHandler for TemplateHandlerLive<C>
     async fn get_metadata(
         &self,
         template_id: &TemplateId,
-        version: i32,
+        version: u64,
     ) -> Result<Template, GolemError> {
         self.client.get_metadata(template_id, version).await
     }

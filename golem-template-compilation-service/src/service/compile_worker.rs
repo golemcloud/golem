@@ -142,7 +142,7 @@ async fn download_via_grpc(
     access_token: &Uuid,
     retry_config: &RetryConfig,
     template_id: &TemplateId,
-    template_version: i32,
+    template_version: u64,
     max_template_size: usize,
 ) -> Result<Vec<u8>, CompilationError> {
     let desc = format!("Downloading template {template_id}@{template_version}");

@@ -27,7 +27,7 @@ pub trait TemplateClient {
     async fn get_metadata(
         &self,
         template_id: &TemplateId,
-        version: i32,
+        version: u64,
     ) -> Result<Template, GolemError>;
     async fn get_latest_metadata(&self, template_id: &TemplateId) -> Result<Template, GolemError>;
     async fn find(&self, name: Option<TemplateName>) -> Result<Vec<Template>, GolemError>;
@@ -45,7 +45,7 @@ impl<C: golem_client::api::TemplateClient + Sync + Send> TemplateClient for Temp
     async fn get_metadata(
         &self,
         template_id: &TemplateId,
-        version: i32,
+        version: u64,
     ) -> Result<Template, GolemError> {
         info!("Getting template version");
 
