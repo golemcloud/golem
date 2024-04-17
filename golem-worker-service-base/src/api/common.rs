@@ -80,13 +80,13 @@ impl ApiEndpointError {
 }
 
 mod conversion {
-    use std::fmt::Display;
     use golem_api_grpc::proto::golem::{
         apidefinition,
         apidefinition::{api_definition_error, ApiDefinitionError, RouteValidationErrorsBody},
         common::ErrorBody,
     };
     use poem_openapi::payload::Json;
+    use std::fmt::Display;
 
     use crate::repo::api_definition_repo::ApiRegistrationRepoError;
     use crate::service::api_definition::ApiRegistrationError;
@@ -119,10 +119,16 @@ mod conversion {
             match error {
                 ApiDeploymentError::InternalError(e) => ApiEndpointError::internal(e),
                 ApiDeploymentError::ApiDefinitionNotFound(namespace, id) => {
-                    ApiEndpointError::not_found(format!("Api definition not found: {}/{}", namespace, id))
+                    ApiEndpointError::not_found(format!(
+                        "Api definition not found: {}/{}",
+                        namespace, id
+                    ))
                 }
                 ApiDeploymentError::ApiDeploymentNotFound(namespace, host) => {
-                    ApiEndpointError::not_found(format!("Api deployment not found: {}/{}", namespace, host))
+                    ApiEndpointError::not_found(format!(
+                        "Api deployment not found: {}/{}",
+                        namespace, host
+                    ))
                 }
                 ApiDeploymentError::DeploymentConflict(conflict) => {
                     ApiEndpointError::already_exists(format!("Deployment conflict: {}", conflict))

@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
 
-
 use golem_common::redis::RedisPool;
 use tracing::{debug, info};
 

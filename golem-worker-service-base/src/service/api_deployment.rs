@@ -3,7 +3,6 @@ use crate::repo::api_definition_repo::ApiDefinitionRepo;
 use crate::repo::api_deployment_repo::ApiDeploymentRepo;
 use crate::repo::api_namespace::ApiNamespace;
 
-
 use async_trait::async_trait;
 
 use std::sync::Arc;
@@ -23,7 +22,6 @@ pub trait ApiDeploymentService<Namespace> {
         namespace: &Namespace,
         api_definition_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
-
 
     async fn get_by_host(
         &self,

@@ -72,7 +72,7 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ApiDefinition, ValidationErro
 // as a constant string or unit.
 // A namespace is not pre-tied to any other parts of original ApiDefinitionId to keep the ApiDefinition part simple, reusable.
 #[derive(
-    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode
+    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
 )]
 pub struct ApiDefinitionKey<Namespace> {
     pub namespace: Namespace,
