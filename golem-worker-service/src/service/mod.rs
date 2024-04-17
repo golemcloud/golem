@@ -31,10 +31,12 @@ use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 use golem_worker_service_base::repo::api_deployment_repo::{
     ApiDeploymentRepo, InMemoryDeployment, RedisApiDeploy,
 };
+use golem_worker_service_base::service::api_deployment::{
+    ApiDeploymentService, ApiDeploymentServiceDefault,
+};
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
-use golem_worker_service_base::service::api_deployment::{ApiDeploymentService, ApiDeploymentServiceDefault};
 
 #[derive(Clone)]
 pub struct Services {
@@ -107,10 +109,11 @@ impl Services {
                 format!("RedisApiDeploymentRepo - init error: {}", e)
             })?);
 
-        let deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send> = Arc::new(ApiDeploymentServiceDefault::new(
-            deployment_repo.clone(),
-            definition_repo.clone(),
-        ));
+        let deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send> =
+            Arc::new(ApiDeploymentServiceDefault::new(
+                deployment_repo.clone(),
+                definition_repo.clone(),
+            ));
 
         let definition_lookup_service = Arc::new(CustomRequestDefinitionLookupDefault::new(
             definition_repo.clone(),
@@ -168,10 +171,11 @@ impl Services {
             deployment_repo.clone(),
         ));
 
-        let deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send> = Arc::new(ApiDeploymentServiceDefault::new(
-            deployment_repo.clone(),
-            definition_repo.clone(),
-        ));
+        let deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send> =
+            Arc::new(ApiDeploymentServiceDefault::new(
+                deployment_repo.clone(),
+                definition_repo.clone(),
+            ));
 
         let api_definition_validator_service: Arc<
             dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>

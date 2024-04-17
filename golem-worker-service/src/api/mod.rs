@@ -60,9 +60,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             register_api_definition::RegisterApiDefinitionApi::new(
                 services.definition_service.clone(),
             ),
-            deploy_api_definition::ApiDeploymentApi::new(
-                services.deployment_service.clone(),
-            ),
+            deploy_api_definition::ApiDeploymentApi::new(services.deployment_service.clone()),
             HealthcheckApi,
         ),
         "Golem API",
