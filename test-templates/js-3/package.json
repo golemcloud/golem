@@ -2,7 +2,7 @@
     "type": "module",
     "devDependencies": {
         "@bytecodealliance/componentize-js": "0.8.3",
-        "@bytecodealliance/jco": "^1.1.1",
+        "@bytecodealliance/jco": "1.1.1",
         "@bytecodealliance/preview2-shim": "0.16.1"
     },
     "scripts": {

@@ -7,7 +7,8 @@ const jsSource = await readFile('main.js', 'utf8');
 const { component } = await componentize(jsSource, {
   witPath: resolve('wit'),
   enableStdout: true,
-  debug: true
+  debug: true,
+  enableFeatures: ['http'],
 });
 
 await writeFile('out/component.wasm', component);

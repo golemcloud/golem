@@ -1,0 +1,18 @@
+package golem:it;
+
+interface api {
+  fetch-post: func() -> u64;
+  get: func() -> u64;
+
+  record post {
+    user-id: u64,
+    id: u64,
+    title: string,
+    content: string
+  }
+}
+
+
+world js3 {
+  export api;
+}

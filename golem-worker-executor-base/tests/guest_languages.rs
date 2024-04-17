@@ -1,4 +1,4 @@
-use assert2::{assert, check};
+use assert2::{assert, check, let_assert};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
@@ -375,6 +375,8 @@ async fn javascript_example_1() {
 
     let mut rx = executor.capture_output(&worker_id).await;
 
+    let start = chrono::Utc::now().timestamp_millis() as u64;
+
     let result = executor
         .invoke_and_await(
             &worker_id,
@@ -384,24 +386,41 @@ async fn javascript_example_1() {
         .await
         .unwrap();
 
+    let end = chrono::Utc::now().timestamp_millis() as u64;
+
     tokio::time::sleep(Duration::from_secs(5)).await;
     let mut events = vec![];
     rx.recv_many(&mut events, 100).await;
 
     drop(executor);
 
+    let_assert!(Some(Value::Record(record_values)) = result.into_iter().next());
+
+    let_assert!(
+        [
+            Value::F64(_random),
+            Value::String(random_uuid),
+            Value::U64(js_time),
+            Value::U64(wasi_time)
+        ] = record_values.as_slice(),
+    );
+
+    check!(uuid::Uuid::parse_str(random_uuid).is_ok(), "Invalid UUID");
+
+    // validating that Date.now() is working
+    check!(*js_time >= start && *js_time <= end, "Invalid js time");
+    // validating that directly calling wasi:clocks/wall-clock/now works
+    check!(
+        *wasi_time >= start && *wasi_time <= end,
+        "Invalid wasi Time"
+    );
+
     let first_line = log_event_to_string(&events[0]);
     let parts = first_line.split(' ').collect::<Vec<_>>();
-    let now = chrono::Local::now();
 
     check!(parts[0] == "Hello");
     check!(parts[1] == "JavaScript");
     check!(parts[2] == "component!");
-    check!(parts[3].parse::<f64>().is_ok());
-    check!(parts[4] == "0"); // NOTE: validating that Date.now() is not working
-    check!(parts[13] != "0"); // NOTE: validating that directly calling wasi:clocks/wall-clock/now works
-    check!(parts[21].to_string() == now.year().to_string());
-    check!(result == vec![Value::String(first_line)]);
 }
 
 #[tokio::test]
