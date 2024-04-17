@@ -34,6 +34,7 @@ use golem_worker_service_base::repo::api_deployment_repo::{
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
+use golem_worker_service_base::service::api_deployment::{ApiDeploymentService, ApiDeploymentServiceDefault};
 
 #[derive(Clone)]
 pub struct Services {
@@ -48,6 +49,7 @@ pub struct Services {
             > + Sync
             + Send,
     >,
+    pub deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send>,
     pub http_definition_lookup_service:
         Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
@@ -105,6 +107,11 @@ impl Services {
                 format!("RedisApiDeploymentRepo - init error: {}", e)
             })?);
 
+        let deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send> = Arc::new(ApiDeploymentServiceDefault::new(
+            deployment_repo.clone(),
+            definition_repo.clone(),
+        ));
+
         let definition_lookup_service = Arc::new(CustomRequestDefinitionLookupDefault::new(
             definition_repo.clone(),
             deployment_repo.clone(),
@@ -129,6 +136,7 @@ impl Services {
         Ok(Services {
             worker_service,
             definition_service,
+            deployment_service,
             http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
             template_service,
@@ -160,6 +168,11 @@ impl Services {
             deployment_repo.clone(),
         ));
 
+        let deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send> = Arc::new(ApiDeploymentServiceDefault::new(
+            deployment_repo.clone(),
+            definition_repo.clone(),
+        ));
+
         let api_definition_validator_service: Arc<
             dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
                 + Sync
@@ -178,6 +191,7 @@ impl Services {
         Services {
             worker_service,
             definition_service,
+            deployment_service,
             http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
             template_service,
