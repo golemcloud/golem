@@ -1804,7 +1804,7 @@ paths:
         - name: version
           schema:
             type: integer
-            format: int32
+            format: uint64
           in: query
           required: false
           deprecated: false
@@ -1877,8 +1877,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                type: integer
-                format: int32
+                $ref: "#/components/schemas/Template"
         "400":
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -2211,6 +2210,123 @@ paths:
       security:
         - Cookie: []
         - Token: []
+      operationId: launch_new_worker
+    get:
+      tags:
+        - Worker
+      summary: Get metadata of multiple workers
+      description: |-
+        ### Filters
+
+        | Property    | Comparator             | Description                    | Example                         |
+        |-------------|------------------------|--------------------------------|----------------------------------|
+        | name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
+        | version     | FilterComparator       | Version of worker              | `version >= 0`                   |
+        | status      | FilterComparator       | Status of worker               | `status = Running`               |
+        | env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
+        | createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
+
+
+        ### Comparators
+
+        - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+        - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+
+        Returns metadata about an existing template workers:
+        - `workers` list of workers metadata
+        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+        - name: filter
+          schema:
+            type: array
+            items:
+              type: string
+          in: query
+          description: Filter for worker metadata in form of `property op value`. Can be used multiple times (AND condition is applied between them)
+          required: false
+          deprecated: false
+          explode: true
+        - name: cursor
+          schema:
+            type: integer
+            format: uint64
+          in: query
+          description: "Count of listed values, default: 50"
+          required: false
+          deprecated: false
+          explode: true
+        - name: count
+          schema:
+            type: integer
+            format: uint64
+          in: query
+          description: Position where to start listing, if not provided, starts from the beginning. It is used to get the next page of results. To get next page, use the cursor returned in the response
+          required: false
+          deprecated: false
+          explode: true
+        - name: precise
+          schema:
+            type: boolean
+          in: query
+          description: Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
+          required: false
+          deprecated: false
+          explode: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/WorkersMetadataResponse"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+      operationId: get_workers_metadata
   /v2/templates/{template_id}/workers/{worker_name}:
     delete:
       tags:
@@ -2279,6 +2395,7 @@ paths:
       security:
         - Cookie: []
         - Token: []
+      operationId: delete_worker
     get:
       tags:
         - Worker
@@ -2361,6 +2478,7 @@ paths:
       security:
         - Cookie: []
         - Token: []
+      operationId: get_worker_metadata
   /v2/templates/{template_id}/workers/{worker_name}/key:
     post:
       tags:
@@ -2431,6 +2549,7 @@ paths:
       security:
         - Cookie: []
         - Token: []
+      operationId: get_invocation_key
   /v2/templates/{template_id}/workers/{worker_name}/invoke-and-await:
     post:
       tags:
@@ -2529,6 +2648,7 @@ paths:
       security:
         - Cookie: []
         - Token: []
+      operationId: invoke_and_await_function
   /v2/templates/{template_id}/workers/{worker_name}/invoke:
     post:
       tags:
@@ -2613,6 +2733,7 @@ paths:
       security:
         - Cookie: []
         - Token: []
+      operationId: invoke_function
   /v2/templates/{template_id}/workers/{worker_name}/complete:
     post:
       tags:
@@ -2690,6 +2811,7 @@ paths:
       security:
         - Cookie: []
         - Token: []
+      operationId: complete_promise
   /v2/templates/{template_id}/workers/{worker_name}/interrupt:
     post:
       tags:
@@ -2770,6 +2892,94 @@ paths:
       security:
         - Cookie: []
         - Token: []
+      operationId: interrupt_worker
+  /v2/templates/{template_id}/workers/find:
+    post:
+      tags:
+        - Worker
+      summary: Advanced search for workers
+      description: |-
+        ### Filter types
+        | Type      | Comparator             | Description                    | Example                                                                                       |
+        |-----------|------------------------|--------------------------------|-----------------------------------------------------------------------------------------------|
+        | Name      | StringFilterComparator | Name of worker                 | `{ "type": "Name", "comparator": "Equal", "value": "worker-name" }`                           |
+        | Version   | FilterComparator       | Version of worker              | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                             |
+        | Status    | FilterComparator       | Status of worker               | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                             |
+        | Env       | StringFilterComparator | Environment variable of worker | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`                  |
+        | CreatedAt | FilterComparator       | Creation time of worker        | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`           |
+        | And       |                        | And filter combinator          | `{ "type": "And", "filters": [ ... ] }`                                                       |
+        | Or        |                        | Or filter combinator           | `{ "type": "Or", "filters": [ ... ] }`                                                        |
+        | Not       |                        | Negates the specified filter   | `{ "type": "Not", "filter": { "type": "Version", "comparator": "GreaterEqual", "value": 0 } }`|
+
+        ### Comparators
+        - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
+        - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+
+        Returns metadata about an existing template workers:
+        - `workers` list of workers metadata
+        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
+      parameters:
+        - name: template_id
+          schema:
+            type: string
+            format: uuid
+          in: path
+          required: true
+          deprecated: false
+          explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: "#/components/schemas/WorkersMetadataRequest"
+        required: true
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/WorkersMetadataResponse"
+        "400":
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorsBody"
+        "401":
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "403":
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "404":
+          description: Template / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "409":
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: "#/components/schemas/GolemErrorBody"
+      security:
+        - Cookie: []
+        - Token: []
+      operationId: find_workers_metadata
   /v2/templates/{template_id}/workers/{worker_name}/resume:
     post:
       tags:
@@ -2837,6 +3047,7 @@ paths:
       security:
         - Cookie: []
         - Token: []
+      operationId: resume_worker
 components:
   schemas:
     Account:
@@ -2915,7 +3126,7 @@ components:
       properties:
         oplogIdx:
           type: integer
-          format: int32
+          format: uint64
         data:
           type: array
           items:
@@ -3016,6 +3227,15 @@ components:
               type: string
               example: Instance
         - $ref: "#/components/schemas/ExportInstance"
+    FilterComparator:
+      type: string
+      enum:
+        - Equal
+        - NotEqual
+        - GreaterEqual
+        - Greater
+        - LessEqual
+        - Less
     FunctionParameter:
       type: object
       required:
@@ -3146,6 +3366,11 @@ components:
       type: object
     GolemErrorPreviousInvocationFailed:
       type: object
+      required:
+        - details
+      properties:
+        details:
+          type: string
     GolemErrorPromiseAlreadyCompleted:
       type: object
       required:
@@ -3735,7 +3960,7 @@ components:
           $ref: "#/components/schemas/WorkerId"
         oplogIdx:
           type: integer
-          format: int32
+          format: uint64
     ProtectedTemplateId:
       type: object
       required:
@@ -3755,6 +3980,11 @@ components:
         maxMemoryPerWorker:
           type: integer
           format: int64
+    ResourceMode:
+      type: string
+      enum:
+        - Borrowed
+        - Owned
     ResumeResponse:
       type: object
     Role:
@@ -3774,6 +4004,13 @@ components:
         value:
           type: integer
           format: int64
+    StringFilterComparator:
+      type: string
+      enum:
+        - Equal
+        - NotEqual
+        - Like
+        - NotLike
     Template:
       type: object
       required:
@@ -3876,6 +4113,7 @@ components:
         - $ref: "#/components/schemas/Type_TypeU8"
         - $ref: "#/components/schemas/Type_TypeS8"
         - $ref: "#/components/schemas/Type_TypeBool"
+        - $ref: "#/components/schemas/Type_TypeHandle"
       discriminator:
         propertyName: type
         mapping:
@@ -3900,6 +4138,7 @@ components:
           U8: "#/components/schemas/Type_TypeU8"
           S8: "#/components/schemas/Type_TypeS8"
           Bool: "#/components/schemas/Type_TypeBool"
+          Handle: "#/components/schemas/Type_TypeHandle"
     TypeBool:
       type: object
     TypeChr:
@@ -3926,6 +4165,17 @@ components:
           type: array
           items:
             type: string
+    TypeHandle:
+      type: object
+      required:
+        - resource_id
+        - mode
+      properties:
+        resource_id:
+          type: integer
+          format: uint64
+        mode:
+          $ref: "#/components/schemas/ResourceMode"
     TypeList:
       type: object
       required:
@@ -4052,6 +4302,16 @@ components:
               type: string
               example: Flags
         - $ref: "#/components/schemas/TypeFlags"
+    Type_TypeHandle:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Handle
+        - $ref: "#/components/schemas/TypeHandle"
     Type_TypeList:
       allOf:
         - type: object
@@ -4249,7 +4509,7 @@ components:
           format: uuid
         version:
           type: integer
-          format: int32
+          format: uint64
     VersionedWorkerId:
       type: object
       required:
@@ -4260,7 +4520,27 @@ components:
           $ref: "#/components/schemas/WorkerId"
         templateVersionUsed:
           type: integer
-          format: int32
+          format: uint64
+    WorkerAndFilter:
+      type: object
+      required:
+        - filters
+      properties:
+        filters:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkerFilter"
+    WorkerCreatedAtFilter:
+      type: object
+      required:
+        - comparator
+        - value
+      properties:
+        comparator:
+          $ref: "#/components/schemas/FilterComparator"
+        value:
+          type: string
+          format: date-time
     WorkerCreationRequest:
       type: object
       required:
@@ -4278,6 +4558,121 @@ components:
           type: object
           additionalProperties:
             type: string
+    WorkerEnvFilter:
+      type: object
+      required:
+        - name
+        - comparator
+        - value
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: "#/components/schemas/StringFilterComparator"
+        value:
+          type: string
+    WorkerFilter:
+      type: object
+      oneOf:
+        - $ref: "#/components/schemas/WorkerFilter_WorkerNameFilter"
+        - $ref: "#/components/schemas/WorkerFilter_WorkerStatusFilter"
+        - $ref: "#/components/schemas/WorkerFilter_WorkerVersionFilter"
+        - $ref: "#/components/schemas/WorkerFilter_WorkerCreatedAtFilter"
+        - $ref: "#/components/schemas/WorkerFilter_WorkerEnvFilter"
+        - $ref: "#/components/schemas/WorkerFilter_WorkerAndFilter"
+        - $ref: "#/components/schemas/WorkerFilter_WorkerOrFilter"
+        - $ref: "#/components/schemas/WorkerFilter_WorkerNotFilter"
+      discriminator:
+        propertyName: type
+        mapping:
+          Name: "#/components/schemas/WorkerFilter_WorkerNameFilter"
+          Status: "#/components/schemas/WorkerFilter_WorkerStatusFilter"
+          Version: "#/components/schemas/WorkerFilter_WorkerVersionFilter"
+          CreatedAt: "#/components/schemas/WorkerFilter_WorkerCreatedAtFilter"
+          Env: "#/components/schemas/WorkerFilter_WorkerEnvFilter"
+          And: "#/components/schemas/WorkerFilter_WorkerAndFilter"
+          Or: "#/components/schemas/WorkerFilter_WorkerOrFilter"
+          Not: "#/components/schemas/WorkerFilter_WorkerNotFilter"
+    WorkerFilter_WorkerAndFilter:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: And
+        - $ref: "#/components/schemas/WorkerAndFilter"
+    WorkerFilter_WorkerCreatedAtFilter:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: CreatedAt
+        - $ref: "#/components/schemas/WorkerCreatedAtFilter"
+    WorkerFilter_WorkerEnvFilter:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Env
+        - $ref: "#/components/schemas/WorkerEnvFilter"
+    WorkerFilter_WorkerNameFilter:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Name
+        - $ref: "#/components/schemas/WorkerNameFilter"
+    WorkerFilter_WorkerNotFilter:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Not
+        - $ref: "#/components/schemas/WorkerNotFilter"
+    WorkerFilter_WorkerOrFilter:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Or
+        - $ref: "#/components/schemas/WorkerOrFilter"
+    WorkerFilter_WorkerStatusFilter:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Status
+        - $ref: "#/components/schemas/WorkerStatusFilter"
+    WorkerFilter_WorkerVersionFilter:
+      allOf:
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              example: Version
+        - $ref: "#/components/schemas/WorkerVersionFilter"
     WorkerId:
       type: object
       required:
@@ -4316,10 +4711,36 @@ components:
           $ref: "#/components/schemas/WorkerStatus"
         templateVersion:
           type: integer
-          format: int32
+          format: uint64
         retryCount:
           type: integer
-          format: int32
+          format: uint64
+    WorkerNameFilter:
+      type: object
+      required:
+        - comparator
+        - value
+      properties:
+        comparator:
+          $ref: "#/components/schemas/StringFilterComparator"
+        value:
+          type: string
+    WorkerNotFilter:
+      type: object
+      required:
+        - filter
+      properties:
+        filter:
+          $ref: "#/components/schemas/WorkerFilter"
+    WorkerOrFilter:
+      type: object
+      required:
+        - filters
+      properties:
+        filters:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkerFilter"
     WorkerStatus:
       type: string
       description: |-
@@ -4335,6 +4756,52 @@ components:
         - Retrying
         - Failed
         - Exited
+    WorkerStatusFilter:
+      type: object
+      required:
+        - comparator
+        - value
+      properties:
+        comparator:
+          $ref: "#/components/schemas/FilterComparator"
+        value:
+          $ref: "#/components/schemas/WorkerStatus"
+    WorkerVersionFilter:
+      type: object
+      required:
+        - comparator
+        - value
+      properties:
+        comparator:
+          $ref: "#/components/schemas/FilterComparator"
+        value:
+          type: integer
+          format: uint64
+    WorkersMetadataRequest:
+      type: object
+      properties:
+        filter:
+          $ref: "#/components/schemas/WorkerFilter"
+        cursor:
+          type: integer
+          format: uint64
+        count:
+          type: integer
+          format: uint64
+        precise:
+          type: boolean
+    WorkersMetadataResponse:
+      type: object
+      required:
+        - workers
+      properties:
+        workers:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkerMetadata"
+        cursor:
+          type: integer
+          format: uint64
   securitySchemes:
     Cookie:
       type: apiKey

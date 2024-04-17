@@ -41,6 +41,66 @@ The parameters in the request are the following:
 }
 ```
 
+## Get metadata of multiple workers
+
+| Path                                  | Method | Protected |
+| ------------------------------------- | ------ | --------- |
+| `/v2/templates/{template_id}/workers` | GET    | Yes       |
+
+### Filters
+
+| Property    | Comparator             | Description                    | Example                            |
+| ----------- | ---------------------- | ------------------------------ | ---------------------------------- |
+| name        | StringFilterComparator | Name of worker                 | `name = worker-name`               |
+| version     | FilterComparator       | Version of worker              | `version >= 0`                     |
+| status      | FilterComparator       | Status of worker               | `status = Running`                 |
+| env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`                 |
+| createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
+
+### Comparators
+
+- StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+- FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+
+Returns metadata about an existing template workers:
+
+- `workers` list of workers metadata
+- `cursor` cursor for next request, if cursor is empty/null, there are no other values
+
+**Query Parameters**
+
+| Name    | Type    | Required | Description                                                                                                                                                                        |
+| ------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| filter  | array   | No       | Filter for worker metadata in form of `property op value`. Can be used multiple times (AND condition is applied between them)                                                      |
+| cursor  | integer | No       | Count of listed values, default: 50                                                                                                                                                |
+| count   | integer | No       | Position where to start listing, if not provided, starts from the beginning. It is used to get the next page of results. To get next page, use the cursor returned in the response |
+| precise | boolean | No       | Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false                                                            |
+
+**Example Response JSON**
+
+```json copy
+{
+  "workers": [
+    {
+      "workerId": {
+        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+        "workerName": "string"
+      },
+      "accountId": "string",
+      "args": ["string"],
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "status": "Running",
+      "templateVersion": 0,
+      "retryCount": 0
+    }
+  ],
+  "cursor": 0
+}
+```
+
 ## Delete a worker
 
 | Path                                                | Method | Protected |
@@ -222,6 +282,75 @@ For example in case of a new invocation, the previously interrupted invocation i
 
 ```json copy
 {}
+```
+
+## Advanced search for workers
+
+| Path                                       | Method | Protected |
+| ------------------------------------------ | ------ | --------- |
+| `/v2/templates/{template_id}/workers/find` | POST   | Yes       |
+
+### Filter types
+
+| Type      | Comparator             | Description                    | Example                                                                                        |
+| --------- | ---------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| Name      | StringFilterComparator | Name of worker                 | `{ "type": "Name", "comparator": "Equal", "value": "worker-name" }`                            |
+| Version   | FilterComparator       | Version of worker              | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                              |
+| Status    | FilterComparator       | Status of worker               | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                              |
+| Env       | StringFilterComparator | Environment variable of worker | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`                   |
+| CreatedAt | FilterComparator       | Creation time of worker        | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`            |
+| And       |                        | And filter combinator          | `{ "type": "And", "filters": [ ... ] }`                                                        |
+| Or        |                        | Or filter combinator           | `{ "type": "Or", "filters": [ ... ] }`                                                         |
+| Not       |                        | Negates the specified filter   | `{ "type": "Not", "filter": { "type": "Version", "comparator": "GreaterEqual", "value": 0 } }` |
+
+### Comparators
+
+- StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
+- FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+
+Returns metadata about an existing template workers:
+
+- `workers` list of workers metadata
+- `cursor` cursor for next request, if cursor is empty/null, there are no other values
+
+**Example Request JSON**
+
+```json copy
+{
+  "filter": {
+    "type": "Name",
+    "comparator": "Equal",
+    "value": "string"
+  },
+  "cursor": 0,
+  "count": 0,
+  "precise": true
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "workers": [
+    {
+      "workerId": {
+        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+        "workerName": "string"
+      },
+      "accountId": "string",
+      "args": ["string"],
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "status": "Running",
+      "templateVersion": 0,
+      "retryCount": 0
+    }
+  ],
+  "cursor": 0
+}
 ```
 
 ## Resume a worker

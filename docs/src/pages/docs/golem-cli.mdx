@@ -213,6 +213,14 @@ To get the status and some additional metadata about a worker you can use the `w
 
 To use this command you need to specify the template and the worker name, the same way as described above for `worker invoke-and-await`.
 
+### `golem-cli worker list`
+
+To get the status and some additional metadata about a template workers you can use the `worker list` command.
+
+To use this command you need to specify the template name or id. You can filter workers metadata:
+
+- `--filter "propery op value"` - filter examples: `--filter "name = worker-name"`, `--filter "version >= 0"`, `--filter "status = Running"`, `--filter "env.var1 = value"`, `--filter "created_at > 2024-04-01T12:10:00Z"`. Can be used multiple times (AND condition is applied between them)
+
 ### `golem-cli worker connect`
 
 Connecting to a worker allows you to have a stream of the worker's output, similar to how `kubectl log` works in a Kubernetes environment.
@@ -243,6 +251,8 @@ The deployment facilities of Golem CLI allow developers to create, deploy, manag
 | golem-cli worker interrupt --template-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                       | Interrupts running worker.                                                                                                                                                                        |
 | golem-cli worker simulated-crash --template-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                 | Simulates a hardware failure or fatal crash in the specified worker (for testing purposes). Note that Golem will detect and recover the worker so the worker will not stay down for long.         |
 | golem-cli worker delete --template-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                          | Deletes worker.                                                                                                                                                                                   |
+| golem-cli worker get --template-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                             | Get worker metadata.                                                                                                                                                                              |
+| golem-cli worker list --template-name &lt;text&gt; [--filter &lt;filter&gt;] [--count &lt;count&gt;] [--cursor &lt;cursor&gt;] [--precise &lt;precise&gt;]                               | Get template workers metadata.                                                                                                                                                                    |
 
 ### Projects
 

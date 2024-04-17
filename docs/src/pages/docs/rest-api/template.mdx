@@ -430,7 +430,83 @@ Gets the latest version of a template.
 **Example Response JSON**
 
 ```json copy
-0
+{
+  "versionedTemplateId": {
+    "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+    "version": 0
+  },
+  "userTemplateId": {
+    "versionedTemplateId": {
+      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+      "version": 0
+    }
+  },
+  "protectedTemplateId": {
+    "versionedTemplateId": {
+      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+      "version": 0
+    }
+  },
+  "templateName": "string",
+  "templateSize": 0,
+  "metadata": {
+    "exports": [
+      {
+        "type": "Instance",
+        "name": "string",
+        "functions": [
+          {
+            "name": "string",
+            "parameters": [
+              {
+                "name": "string",
+                "typ": {
+                  "type": "Variant",
+                  "cases": [
+                    {
+                      "name": "string",
+                      "typ": {}
+                    }
+                  ]
+                }
+              }
+            ],
+            "results": [
+              {
+                "name": "string",
+                "typ": {
+                  "type": "Variant",
+                  "cases": [
+                    {
+                      "name": "string",
+                      "typ": {}
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "producers": [
+      {
+        "fields": [
+          {
+            "name": "string",
+            "values": [
+              {
+                "name": "string",
+                "version": "string"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8"
+}
 ```
 
 ## Template API Errors
