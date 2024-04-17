@@ -28,10 +28,12 @@ use http::HeaderMap;
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
+use golem_worker_service_base::repo::api_deployment_repo::ApiDeploymentRepo;
 
 pub struct CustomRequestDefinitionLookupDefault {
     register_api_definition_repo:
         Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send>,
+    api_deployment_repo: Arc<dyn ApiDeploymentRepo<CommonNamespace>>,
 }
 
 impl CustomRequestDefinitionLookupDefault {
@@ -61,11 +63,21 @@ impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition>
                 "Host header not found".to_string(),
             ))?;
 
-        let api_key = ApiDefinitionKey {
-            namespace: CommonNamespace::default(),
-            id: api_definition_id.clone(),
-            version: version.clone(),
-        };
+
+        let api_deployment =
+            self.api_deployment_repo.get(host).await.map_err(|err| {
+                error!("Error getting api deployment from the repo: {}", err);
+                ApiDefinitionLookupError(format!(
+                "Error getting api deployment from the repo: {}",
+                err
+            ))
+            })?.ok_or(ApiDefinitionLookupError(format!(
+            "Api deployment with host: {} not found",
+            &host
+        )))?;
+
+        let api_key =
+            api_deployment.api_definition_id;
 
         let value = self
             .register_api_definition_repo
@@ -81,7 +93,7 @@ impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition>
 
         value.ok_or(ApiDefinitionLookupError(format!(
             "Api definition with id: {} and version: {} not found",
-            &api_definition_id, &version
+            &api_key.id, &api_key.version
         )))
     }
 }

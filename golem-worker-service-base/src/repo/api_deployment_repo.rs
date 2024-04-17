@@ -9,7 +9,7 @@ use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::redis::RedisPool;
 use tracing::{debug, info};
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, HasApiDefinitionId, Host};
+use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiVersion, HasApiDefinitionId, Host};
 
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, InMemoryRegistry};
 use crate::repo::api_namespace::ApiNamespace;
@@ -21,9 +21,9 @@ const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 pub trait ApiDeploymentRepo<Namespace: ApiNamespace> {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>>;
 
-    async fn get(&self, host: Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
+    async fn get(&self, host:&Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
 
-    async fn delete(&self, host: Host) -> Result<bool, Box<dyn Error>>;
+    async fn delete(&self, host: &Host) -> Result<bool, Box<dyn Error>>;
 
     async fn get_by_id(
         &self,
@@ -267,6 +267,12 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
     }
 }
 
+// Api Deployments
+// I should be able to deploy a version of an API to a specific site
+// Meaning the ApiDeploymentKey should have versions in it.
+// Store them with version as the key
+// host --> api_deployment
+// api_deployment_key --> api_deployments
 
 mod redis_keys {
     use crate::api_definition::{ApiDefinitionId, Host};
