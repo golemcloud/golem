@@ -23,7 +23,14 @@ pub type ApiResult<T, E> = Result<T, ApiRegistrationError<E>>;
 // validations, authorisations etc is the right approach. However we are keeping it simple for now.
 #[async_trait]
 pub trait ApiDefinitionService<AuthCtx, Namespace, ApiDefinition, ValidationError> {
-    async fn register(
+    async fn create(
+        &self,
+        definition: &ApiDefinition,
+        namespace: Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ApiResult<ApiDefinitionId, ValidationError>;
+
+    async fn update(
         &self,
         definition: &ApiDefinition,
         namespace: Namespace,
@@ -95,7 +102,7 @@ impl<Namespace: Display> Display for ApiDefinitionKey<Namespace> {
     }
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum ApiRegistrationError<E> {
     #[error(transparent)]
     RepoError(#[from] ApiRegistrationRepoError),
@@ -185,7 +192,7 @@ where
     Namespace: ApiNamespace + Send + Sync,
     ApiDefinition: GolemApiDefinition + Sync,
 {
-    async fn register(
+    async fn create(
         &self,
         definition: &ApiDefinition,
         namespace: Namespace,
@@ -197,12 +204,34 @@ where
             .validate(definition, templates.as_slice())?;
 
         let key = ApiDefinitionKey {
-            namespace: namespace.clone(),
+            namespace,
             id: definition.get_api_definition_id().clone(),
             version: definition.get_version().clone(),
         };
 
-        self.register_repo.register(definition, &key).await?;
+        self.register_repo.create(definition, &key).await?;
+
+        Ok(key.id)
+    }
+
+    async fn update(
+        &self,
+        definition: &ApiDefinition,
+        namespace: Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ApiResult<ApiDefinitionId, ValidationError> {
+        let templates = self.get_all_templates(definition, auth_ctx).await?;
+
+        self.api_definition_validator
+            .validate(definition, templates.as_slice())?;
+
+        let key = ApiDefinitionKey {
+            namespace,
+            id: definition.get_api_definition_id().clone(),
+            version: definition.get_version().clone(),
+        };
+
+        self.register_repo.update(definition, &key).await?;
 
         Ok(key.id)
     }
@@ -215,7 +244,7 @@ where
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinition>, ValidationError> {
         let key = ApiDefinitionKey {
-            namespace: namespace.clone(),
+            namespace,
             id: api_definition_id.clone(),
             version: version.clone(),
         };
@@ -278,7 +307,16 @@ impl<AuthCtx, Namespace, ApiDefinition, ValidationError>
 where
     Namespace: Default + Send + Sync + 'static,
 {
-    async fn register(
+    async fn create(
+        &self,
+        _definition: &ApiDefinition,
+        _namespace: Namespace,
+        _auth_ctx: &AuthCtx,
+    ) -> ApiResult<ApiDefinitionId, ValidationError> {
+        Ok(ApiDefinitionId("noop".to_string()))
+    }
+
+    async fn update(
         &self,
         _definition: &ApiDefinition,
         _namespace: Namespace,

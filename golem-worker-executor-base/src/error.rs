@@ -45,12 +45,12 @@ pub enum GolemError {
     },
     TemplateDownloadFailed {
         template_id: TemplateId,
-        template_version: i32,
+        template_version: u64,
         reason: String,
     },
     TemplateParseFailed {
         template_id: TemplateId,
-        template_version: i32,
+        template_version: u64,
         reason: String,
     },
     GetLatestVersionOfTemplateFailed {
@@ -113,7 +113,7 @@ impl GolemError {
 
     pub fn template_download_failed(
         template_id: TemplateId,
-        template_version: i32,
+        template_version: u64,
         reason: impl Into<String>,
     ) -> Self {
         GolemError::TemplateDownloadFailed {

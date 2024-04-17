@@ -85,7 +85,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_id: WorkerId,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
-        template_version: Option<i32>,
+        template_version: Option<u64>,
         account_id: AccountId,
         pending_worker: &PendingWorker,
     ) -> Result<Arc<Self>, GolemError>
@@ -251,7 +251,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_id: &WorkerId,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
-        template_version: Option<i32>,
+        template_version: Option<u64>,
         account_id: AccountId,
     ) where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
@@ -279,7 +279,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_id: &WorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
-        template_version: Option<i32>,
+        template_version: Option<u64>,
         account_id: AccountId,
     ) -> Result<Arc<Self>, GolemError>
     where
@@ -309,7 +309,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_id: &WorkerId,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
-        template_version: Option<i32>,
+        template_version: Option<u64>,
         account_id: AccountId,
     ) -> Result<Arc<Self>, GolemError>
     where
@@ -361,7 +361,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_id: WorkerId,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
-        template_version: Option<i32>,
+        template_version: Option<u64>,
         account_id: AccountId,
     ) -> Result<PendingOrFinal<PendingWorker, Arc<Self>>, GolemError>
     where
@@ -492,7 +492,7 @@ fn validate_worker(
     worker_metadata: WorkerMetadata,
     worker_args: Vec<String>,
     worker_env: Vec<(String, String)>,
-    template_version: Option<i32>,
+    template_version: Option<u64>,
 ) -> Result<(), GolemError> {
     let mut errors: Vec<String> = Vec::new();
     if worker_metadata.args != worker_args {

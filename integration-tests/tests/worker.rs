@@ -17,9 +17,20 @@ use assert2::check;
 
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_rpc::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
-use std::time::SystemTime;
+use golem_common::model::{
+    FilterComparator, StringFilterComparator, TemplateId, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerStatus,
+};
+use rand::seq::IteratorRandom;
+use std::time::{Duration, SystemTime};
+use tokio::time::sleep;
+use warp::http::{Response, StatusCode};
+use warp::hyper::Body;
+use warp::Filter;
 
 #[tokio::test]
 #[tracing::instrument]
@@ -168,4 +179,228 @@ async fn auction_example_1() {
     println!("result: {:?}", get_auctions_result);
 
     check!(create_results.iter().all(|r| r.is_ok()));
+}
+
+fn get_worker_ids(workers: Vec<WorkerMetadata>) -> HashSet<WorkerId> {
+    workers
+        .into_iter()
+        .map(|w| w.worker_id.worker_id)
+        .collect::<HashSet<WorkerId>>()
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn get_workers() {
+    let template_id = DEPS.store_template("shopping-cart").await;
+
+    let workers_count = 150;
+    let mut worker_ids = HashSet::new();
+
+    for i in 0..workers_count {
+        let worker_id = DEPS
+            .start_worker(&template_id, &format!("shopping-cart-test-{}", i))
+            .await;
+
+        worker_ids.insert(worker_id);
+    }
+
+    let check_worker_ids = worker_ids
+        .iter()
+        .choose_multiple(&mut rand::thread_rng(), workers_count / 10);
+
+    for worker_id in check_worker_ids {
+        let _ = DEPS
+            .invoke_and_await(
+                worker_id,
+                "golem:it/api/initialize-cart",
+                vec![Value::String("test-user-1".to_string())],
+            )
+            .await;
+
+        let (cursor, values) = DEPS
+            .get_workers_metadata(
+                &template_id,
+                Some(
+                    WorkerFilter::new_name(
+                        StringFilterComparator::Equal,
+                        worker_id.worker_name.clone(),
+                    )
+                    .and(
+                        WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Idle).or(
+                            WorkerFilter::new_status(
+                                FilterComparator::Equal,
+                                WorkerStatus::Running,
+                            ),
+                        ),
+                    ),
+                ),
+                0,
+                20,
+                true,
+            )
+            .await;
+
+        check!(values.len() == 1);
+        check!(cursor.is_none());
+
+        let ids = get_worker_ids(values);
+
+        check!(ids.contains(worker_id));
+    }
+
+    let mut found_worker_ids = HashSet::new();
+    let mut cursor = Some(0);
+
+    let count = workers_count / 5;
+
+    while found_worker_ids.len() < workers_count && cursor.is_some() {
+        let (cursor1, values1) = DEPS
+            .get_workers_metadata(&template_id, None, cursor.unwrap(), count as u64, true)
+            .await;
+
+        check!(values1.len() >= count);
+
+        found_worker_ids.extend(get_worker_ids(values1.clone()));
+
+        cursor = cursor1;
+    }
+
+    check!(found_worker_ids.eq(&worker_ids));
+
+    if let Some(cursor) = cursor {
+        let (_, values) = DEPS
+            .get_workers_metadata(&template_id, None, cursor, workers_count as u64, true)
+            .await;
+        check!(values.len() == 0);
+    }
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn get_running_workers() {
+    let template_id = DEPS.store_template("http-client-2").await;
+    let host_http_port = 8585;
+
+    let pooling_worker_ids: Arc<Mutex<HashSet<WorkerId>>> = Arc::new(Mutex::new(HashSet::new()));
+    let pooling_worker_ids_clone = pooling_worker_ids.clone();
+
+    let http_server = tokio::spawn(async move {
+        let route = warp::path::path("poll")
+            .and(warp::get())
+            .and(warp::query::<HashMap<String, String>>())
+            .map(move |query: HashMap<String, String>| {
+                let template_id = query.get("template_id");
+                let worker_name = query.get("worker_name");
+                if let (Some(template_id), Some(worker_name)) = (template_id, worker_name) {
+                    let template_id: TemplateId = template_id.as_str().try_into().unwrap();
+                    let worker_id = WorkerId {
+                        template_id,
+                        worker_name: worker_name.clone(),
+                    };
+                    let mut ids = pooling_worker_ids_clone.lock().unwrap();
+                    ids.insert(worker_id.clone());
+                }
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .body(Body::from("initial"))
+                    .unwrap()
+            });
+
+        warp::serve(route)
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
+            .await;
+    });
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let workers_count = 15;
+    let mut worker_ids = HashSet::new();
+
+    for i in 0..workers_count {
+        let worker_id = DEPS
+            .start_worker_with(
+                &template_id,
+                &format!("worker-http-client-{}", i),
+                vec![],
+                env.clone(),
+            )
+            .await;
+
+        worker_ids.insert(worker_id);
+    }
+
+    let mut found_worker_ids = HashSet::new();
+
+    for worker_id in worker_ids.clone() {
+        let _ = DEPS
+            .invoke(
+                &worker_id,
+                "golem:it/api/start-polling",
+                vec![Value::String("first".to_string())],
+            )
+            .await;
+    }
+
+    let mut wait_counter = 0;
+
+    loop {
+        sleep(Duration::from_secs(2)).await;
+        wait_counter += 1;
+        let ids = pooling_worker_ids.lock().unwrap().clone();
+
+        if worker_ids.eq(&ids) || wait_counter >= 3 {
+            break;
+        }
+    }
+
+    for worker_id in worker_ids.clone() {
+        let (_, values) = DEPS
+            .get_workers_metadata(
+                &template_id,
+                Some(
+                    WorkerFilter::new_name(
+                        StringFilterComparator::Equal,
+                        worker_id.worker_name.clone(),
+                    )
+                    .and(WorkerFilter::new_status(
+                        FilterComparator::Equal,
+                        WorkerStatus::Running,
+                    )),
+                ),
+                0,
+                workers_count as u64,
+                true,
+            )
+            .await;
+
+        found_worker_ids.extend(get_worker_ids(values));
+    }
+
+    let (_, values) = DEPS
+        .get_workers_metadata(
+            &template_id,
+            Some(WorkerFilter::new_status(
+                FilterComparator::Equal,
+                WorkerStatus::Running,
+            )),
+            0,
+            workers_count as u64,
+            true,
+        )
+        .await;
+
+    http_server.abort();
+
+    check!(found_worker_ids.len() == workers_count);
+    check!(found_worker_ids.eq(&worker_ids));
+
+    let found_worker_ids2 = get_worker_ids(values);
+
+    check!(found_worker_ids2.len() == workers_count);
+    check!(found_worker_ids2.eq(&worker_ids));
 }

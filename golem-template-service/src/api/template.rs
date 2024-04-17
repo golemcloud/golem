@@ -131,7 +131,7 @@ impl TemplateApi {
     async fn download_template(
         &self,
         template_id: Path<TemplateId>,
-        version: Query<Option<i32>>,
+        version: Query<Option<u64>>,
     ) -> Result<Binary<Body>> {
         let bytes = self
             .template_service
@@ -163,7 +163,7 @@ impl TemplateApi {
         #[oai(name = "template_id")] template_id: Path<TemplateId>,
         #[oai(name = "version")] version: Path<String>,
     ) -> Result<Json<Template>> {
-        let version_int = match version.0.parse::<i32>() {
+        let version_int = match version.0.parse::<u64>() {
             Ok(v) => v,
             Err(_) => {
                 return Err(TemplateError::BadRequest(Json(ErrorsBody {

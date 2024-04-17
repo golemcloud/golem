@@ -1,41 +1,34 @@
-## Submodules
-
-To initialise git submodules you can use this command:
-```shell
-git submodule update --init --recursive
-```
-
 ## Running integration tests
 
-Integration tests are stored in `golem-cli/tests` directory.
+Install [cargo make](https://github.com/sagiegurari/cargo-make)
 
-You can run all tests with
 ```shell
-./scripts/it.sh
+cargo install --force cargo-make
 ```
 
-To run individual tests you should first build all executables with `./scripts/build-all.sh` and then run tests in `golem-cli` directories:
+runs all unit tests, worker executor tests and integration tests
 ```shell
-cargo test --test integration worker_new_instance
+cargo make test
 ```
 
-With `QUIET=true` you can hide services output:
+runs unit tests only
 ```shell
-QUIET=true cargo test --test integration
+cargo make unit-tests
 ```
 
-### Running integration tests without docker
-
-Docker is used to run `Postgres` for `golem-services`. You can configure tests to use `Sqlite` DB with `GOLEM_TEST_DB=Sqlite`.
+runs worker executor tests only
 ```shell
-GOLEM_TEST_DB=Sqlite RUST_LOG=info cargo test --test integration
+cargo make integration-tests
 ```
 
-## Running sharding tests
-
-Same as integration tests, but with `--test sharding` instead of `--test integration`:
+runs CLI tests only
 ```shell
-GOLEM_TEST_DB=Sqlite RUST_LOG=info cargo test --test sharding
+cargo make cli-tests
+```
+
+runs sharding integration tests only
+```shell
+cargo make sharding-tests
 ```
 
 ## Local Testing
@@ -45,9 +38,6 @@ To spin up services using the latest code
 ```bash
 # Clone golem-services
 cd golem-services
-
-# init & update git submodules
-git submodule update --init --recursive
 
 # Find more info below if you are having issues running this command(example: Running from MAC may fail)
 # Target has to be x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu-gcc
@@ -123,7 +113,11 @@ From the root of the project
 
 ```bash
 rustup target add x86_64-unknown-linux-gnu
-cargo build --release --target x86_64-unknown-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-shard-manager
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
 ```
 
 ### ARM MAC
@@ -146,7 +140,11 @@ From the root of the project
 
 ```bash
 rustup target add aarch64-unknown-linux-gnu-gcc
-cargo build --release --target aarch64-unknown-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-shard-manager
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
 ```
 
 ### LINUX
@@ -155,7 +153,11 @@ From the root of the project
 
 ```bash
 rustup target add x86_64-unknown-linux-gnu
-cargo build --target x86_64-unknown-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-shard-manager
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
 ```
 
 ## Integration with existing API Gateways

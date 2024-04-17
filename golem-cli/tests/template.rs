@@ -1,5 +1,5 @@
 use crate::cli::{Cli, CliLive};
-use golem_cli::clients::template::TemplateView;
+use golem_cli::model::template::TemplateView;
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};
 use std::sync::Arc;
