@@ -28,7 +28,7 @@ impl InputHttpRequest {
         self.headers
             .get("host")
             .and_then(|host| host.to_str().ok())
-            .map(|host| Host::from_string(host))
+            .map(Host::from_string)
     }
 
     // Converts all request details to type-annotated-value

@@ -199,7 +199,7 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
                 );
                 Err(ApiDeploymentError::DeploymentConflict(deployment.site))
             }
-            Some(_) => self.deployment_repo.delete(&host).await.map_err(|err| {
+            Some(_) => self.deployment_repo.delete(host).await.map_err(|err| {
                 ApiDeploymentError::InternalError(format!("Error deleting api deployment: {}", err))
             }),
             None => Err(ApiDeploymentError::ApiDeploymentNotFound(

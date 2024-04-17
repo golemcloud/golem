@@ -84,7 +84,7 @@ impl Host {
     }
 
     pub fn from_string(host: &str) -> Host {
-        let parts: Vec<&str> = host.split(".").collect();
+        let parts: Vec<&str> = host.split('.').collect();
         let domain = Domain(parts[1..].join("."));
         let sub_domain = SubDomain(parts[0].to_string());
         Host { domain, sub_domain }
