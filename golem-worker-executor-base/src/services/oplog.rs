@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use async_mutex::Mutex;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -29,15 +31,27 @@ use crate::metrics::oplog::record_oplog_call;
 
 #[async_trait]
 pub trait OplogService {
-    async fn create(&self, worker_id: &WorkerId, initial_entry: OplogEntry);
-
-    async fn append(&self, worker_id: &WorkerId, arrays: &[OplogEntry]);
+    async fn create(
+        &self,
+        worker_id: &WorkerId,
+        initial_entry: OplogEntry,
+    ) -> Arc<dyn Oplog + Send + Sync>;
+    async fn open(&self, worker_id: &WorkerId) -> Arc<dyn Oplog + Send + Sync>;
 
     async fn get_size(&self, worker_id: &WorkerId) -> u64;
 
     async fn delete(&self, worker_id: &WorkerId);
 
     async fn read(&self, worker_id: &WorkerId, idx: u64, n: u64) -> Vec<OplogEntry>;
+}
+
+/// An open oplog providing write access
+#[async_trait]
+pub trait Oplog {
+    async fn add(&self, entry: OplogEntry);
+    async fn commit(&self);
+
+    async fn current_oplog_index(&self) -> u64;
 
     /// Waits until Redis writes all changes into at least `replicas` replicas (or the maximum
     /// available).
@@ -47,25 +61,34 @@ pub trait OplogService {
 }
 
 #[derive(Clone, Debug)]
-pub struct OplogServiceDefault {
+pub struct RedisOplogService {
     redis: RedisPool,
     replicas: u8,
+    max_operations_before_commit: u64,
 }
 
-impl OplogServiceDefault {
-    pub async fn new(redis: RedisPool) -> Self {
+impl RedisOplogService {
+    pub async fn new(redis: RedisPool, max_operations_before_commit: u64) -> Self {
         let replicas = redis
             .with("oplog", "new")
             .info_connected_slaves()
             .await
             .unwrap_or_else(|err| panic!("failed to get the number of replicas from Redis: {err}"));
-        Self { redis, replicas }
+        Self {
+            redis,
+            replicas,
+            max_operations_before_commit,
+        }
     }
 }
 
 #[async_trait]
-impl OplogService for OplogServiceDefault {
-    async fn create(&self, worker_id: &WorkerId, initial_entry: OplogEntry) {
+impl OplogService for RedisOplogService {
+    async fn create(
+        &self,
+        worker_id: &WorkerId,
+        initial_entry: OplogEntry,
+    ) -> Arc<dyn Oplog + Send + Sync> {
         record_oplog_call("create");
 
         let key = get_oplog_redis_key(worker_id);
@@ -102,51 +125,27 @@ impl OplogService for OplogServiceDefault {
                     "failed to append initial oplog entry for worker {worker_id} in Redis: {err}"
                 )
             });
+
+        self.open(worker_id).await
     }
 
-    async fn append(&self, worker_id: &WorkerId, arrays: &[OplogEntry]) {
-        record_oplog_call("append");
-
+    async fn open(&self, worker_id: &WorkerId) -> Arc<dyn Oplog + Send + Sync> {
         let key = get_oplog_redis_key(worker_id);
-
-        let len: usize = self
+        let oplog_size: u64 = self
             .redis
-            .with("oplog", "append")
-            .xlen(key)
+            .with("oplog", "open")
+            .xlen(&key)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to get oplog size for worker {worker_id} from Redis: {err}")
             });
-        let mut id = len + 1;
-
-        for entry in arrays {
-            let key = get_oplog_redis_key(worker_id);
-            let value = self.redis.serialize(entry).unwrap_or_else(|err| {
-                panic!(
-                    "failed to serialize oplog entry for worker {worker_id}: {:?}: {err}",
-                    entry
-                )
-            });
-
-            record_redis_serialized_size("oplog", "entry", value.len());
-
-            let field: RedisKey = "key".into();
-            let _: String = self
-                .redis
-                .with("oplog", "append")
-                .xadd(
-                    key,
-                    true,
-                    None,
-                    id.to_string(),
-                    (field, RedisValue::Bytes(value)),
-                )
-                .await
-                .unwrap_or_else(|err| {
-                    panic!("failed to append oplog entry for worker {worker_id} in Redis: {err}")
-                });
-            id += 1;
-        }
+        Arc::new(RedisOplog::new(
+            self.redis.clone(),
+            self.replicas,
+            self.max_operations_before_commit,
+            key,
+            oplog_size,
+        ))
     }
 
     async fn get_size(&self, worker_id: &WorkerId) -> u64 {
@@ -210,6 +209,98 @@ impl OplogService for OplogServiceDefault {
 
         entries
     }
+}
+
+fn get_oplog_redis_key(worker_id: &WorkerId) -> String {
+    format!("instance:oplog:{}", worker_id.to_redis_key())
+}
+
+struct RedisOplog {
+    state: Arc<Mutex<RedisOplogState>>,
+}
+
+impl RedisOplog {
+    fn new(
+        redis: RedisPool,
+        replicas: u8,
+        max_operations_before_commit: u64,
+        key: String,
+        oplog_size: u64,
+    ) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(RedisOplogState {
+                redis,
+                replicas,
+                max_operations_before_commit,
+                key,
+                buffer: VecDeque::new(),
+                last_committed_idx: oplog_size,
+                last_oplog_idx: oplog_size,
+            })),
+        }
+    }
+}
+
+struct RedisOplogState {
+    redis: RedisPool,
+    replicas: u8,
+    max_operations_before_commit: u64,
+    key: String,
+    buffer: VecDeque<OplogEntry>,
+    last_oplog_idx: u64,
+    last_committed_idx: u64,
+}
+
+impl RedisOplogState {
+    async fn append(&mut self, arrays: &[OplogEntry]) {
+        record_oplog_call("append");
+
+        for entry in arrays {
+            let value = self.redis.serialize(entry).unwrap_or_else(|err| {
+                panic!(
+                    "failed to serialize oplog entry for {}: {:?}: {err}",
+                    self.key, entry
+                )
+            });
+
+            record_redis_serialized_size("oplog", "entry", value.len());
+
+            let field: RedisKey = "key".into();
+            let id = self.last_committed_idx + 1;
+
+            let _: String = self
+                .redis
+                .with("oplog", "append")
+                .xadd(
+                    &self.key,
+                    true,
+                    None,
+                    id.to_string(),
+                    (field, RedisValue::Bytes(value)),
+                )
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to append oplog entry for {} in Redis: {err}",
+                        self.key
+                    )
+                });
+            self.last_committed_idx += 1;
+        }
+    }
+
+    async fn add(&mut self, entry: OplogEntry) {
+        self.buffer.push_back(entry);
+        if self.buffer.len() > self.max_operations_before_commit as usize {
+            self.commit().await;
+        }
+        self.last_oplog_idx += 1;
+    }
+
+    async fn commit(&mut self) {
+        let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
+        self.append(&entries).await
+    }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
         let replicas = replicas.min(self.replicas);
@@ -228,8 +319,28 @@ impl OplogService for OplogServiceDefault {
     }
 }
 
-fn get_oplog_redis_key(worker_id: &WorkerId) -> String {
-    format!("instance:oplog:{}", worker_id.to_redis_key())
+#[async_trait]
+impl Oplog for RedisOplog {
+    async fn add(&self, entry: OplogEntry) {
+        let mut state = self.state.lock().await;
+        state.add(entry).await
+    }
+
+    async fn commit(&self) {
+        let mut state = self.state.lock().await;
+        state.commit().await
+    }
+
+    async fn current_oplog_index(&self) -> u64 {
+        let state = self.state.lock().await;
+        state.last_oplog_idx
+    }
+
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
+        let mut state = self.state.lock().await;
+        state.commit().await;
+        state.wait_for_replicas(replicas, timeout).await
+    }
 }
 
 #[cfg(any(feature = "mocks", test))]
@@ -252,11 +363,15 @@ impl OplogServiceMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl OplogService for OplogServiceMock {
-    async fn create(&self, _worker_id: &WorkerId, _initial_entry: OplogEntry) {
+    async fn create(
+        &self,
+        _worker_id: &WorkerId,
+        _initial_entry: OplogEntry,
+    ) -> Arc<dyn Oplog + Send + Sync> {
         unimplemented!()
     }
 
-    async fn append(&self, _worker_id: &WorkerId, _arrays: &[OplogEntry]) {
+    async fn open(&self, _worker_id: &WorkerId) -> Arc<dyn Oplog + Send + Sync> {
         unimplemented!()
     }
 
@@ -269,10 +384,6 @@ impl OplogService for OplogServiceMock {
     }
 
     async fn read(&self, _worker_id: &WorkerId, _idx: u64, _n: u64) -> Vec<OplogEntry> {
-        unimplemented!()
-    }
-
-    async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
         unimplemented!()
     }
 }

@@ -25,6 +25,7 @@ pub mod blob_store;
 pub mod compiled_template;
 pub mod golem_config;
 pub mod invocation_key;
+pub mod invocation_queue;
 pub mod key_value;
 pub mod oplog;
 pub mod promise;
@@ -118,6 +119,14 @@ pub trait HasSchedulerService {
 
 pub trait HasExtraDeps<Ctx: WorkerCtx> {
     fn extra_deps(&self) -> Ctx::ExtraDeps;
+}
+
+pub trait HasInvocationQueue<Ctx: WorkerCtx> {
+    fn invocation_queue(&self) -> Arc<invocation_queue::InvocationQueue<Ctx>>;
+}
+
+pub trait HasOplog {
+    fn oplog(&self) -> Arc<dyn oplog::Oplog + Send + Sync>;
 }
 
 /// HasAll is a shortcut for requiring all available service dependencies

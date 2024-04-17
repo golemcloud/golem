@@ -268,13 +268,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     serializable_result
                 )
             });
-            self.state.set_oplog_entry(oplog_entry).await;
+            self.state.oplog.add(oplog_entry).await;
             self.state
                 .end_function(wrapped_function_type, begin_index)
                 .await
                 .map_err(|err| Into::<SerializedErr>::into(err).into())?;
             if *wrapped_function_type == WrappedFunctionType::WriteRemote {
-                self.state.commit_oplog().await;
+                self.state.oplog.commit().await;
             }
         }
         Ok(())

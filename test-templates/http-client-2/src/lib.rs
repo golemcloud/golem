@@ -7,6 +7,17 @@ use serde::{Deserialize, Serialize};
 
 struct Component;
 
+struct State {
+    global: u64,
+}
+
+static mut STATE: State = State { global: 0 };
+
+#[allow(static_mut_refs)]
+fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
+    unsafe { f(&mut STATE) }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ExampleRequest {
     name: String,
@@ -38,7 +49,8 @@ impl Guest for Component {
 
         println!("Sending {:?}", request_body);
 
-        let response: Response = client.post(&format!("http://localhost:{port}/post-example"))
+        let response: Response = client
+            .post(&format!("http://localhost:{port}/post-example"))
             .json(&request_body)
             .header("X-Test", "Golem")
             .basic_auth("some", Some("body"))
@@ -46,7 +58,9 @@ impl Guest for Component {
             .expect("Request failed");
 
         let status = response.status();
-        let body = response.json::<ExampleResponse>().expect("Invalid response");
+        let body = response
+            .json::<ExampleResponse>()
+            .expect("Invalid response");
 
         println!("Received {:?} {:?}", status, body);
 
@@ -80,5 +94,12 @@ impl Guest for Component {
             }
         }
     }
-}
 
+    fn increment() {
+        with_state(|s| s.global += 1);
+    }
+
+    fn get_count() -> u64 {
+        with_state(|s| s.global)
+    }
+}

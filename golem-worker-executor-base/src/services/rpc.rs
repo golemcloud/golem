@@ -583,7 +583,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             let result_values = invoke_and_await(
                 worker,
                 self,
-                Some(invocation_key),
+                invocation_key,
                 golem_common::model::CallingConvention::Component,
                 function_name,
                 input_values,
@@ -611,6 +611,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .into_iter()
                 .map(|wit_value| wit_value.into())
                 .collect();
+            let invocation_key = self.invocation_key_service.generate_key(worker_id);
 
             let worker =
                 Worker::get_or_create(self, worker_id, None, None, None, account_id.clone())
@@ -619,7 +620,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             invoke(
                 worker,
                 self,
-                None,
+                invocation_key,
                 golem_common::model::CallingConvention::Component,
                 function_name,
                 input_values,

@@ -1,7 +1,7 @@
 use crate::error::GolemError;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::golem_config::GolemConfig;
-use crate::services::oplog::{OplogService, OplogServiceDefault};
+use crate::services::oplog::{OplogService, RedisOplogService};
 use crate::services::worker::{WorkerService, WorkerServiceInMemory, WorkerServiceRedis};
 use crate::services::{golem_config, HasConfig, HasOplogService, HasWorkerService};
 use crate::worker::calculate_last_known_status;
@@ -116,7 +116,7 @@ pub trait WorkerEnumerationService {
 pub struct WorkerEnumerationServiceRedis {
     redis: RedisPool,
     worker_service: Arc<WorkerServiceRedis>,
-    oplog_service: Arc<OplogServiceDefault>,
+    oplog_service: Arc<RedisOplogService>,
     golem_config: Arc<golem_config::GolemConfig>,
 }
 
@@ -124,7 +124,7 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
     pub fn new(
         redis: RedisPool,
         worker_service: Arc<WorkerServiceRedis>,
-        oplog_service: Arc<OplogServiceDefault>,
+        oplog_service: Arc<RedisOplogService>,
         golem_config: Arc<golem_config::GolemConfig>,
     ) -> Self {
         Self {

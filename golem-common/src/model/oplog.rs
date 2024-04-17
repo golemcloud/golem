@@ -5,10 +5,12 @@ use bytes::Bytes;
 
 use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
-use crate::model::{AccountId, CallingConvention, InvocationKey, Timestamp, VersionedWorkerId};
+use crate::model::{
+    AccountId, CallingConvention, InvocationKey, Timestamp, VersionedWorkerId, WorkerInvocation,
+};
 use crate::serialization::{serialize, try_deserialize};
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
     Create {
         timestamp: Timestamp,
@@ -29,7 +31,7 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         function_name: String,
         request: Vec<u8>,
-        invocation_key: Option<InvocationKey>,
+        invocation_key: InvocationKey,
         calling_convention: Option<CallingConvention>,
     },
     /// The worker has completed an invocation
@@ -85,6 +87,11 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         begin_index: u64,
     },
+    /// An invocation request arrived while the worker was busy
+    PendingWorkerInvocation {
+        timestamp: Timestamp,
+        invocation: WorkerInvocation,
+    },
 }
 
 impl OplogEntry {
@@ -121,7 +128,7 @@ impl OplogEntry {
     pub fn exported_function_invoked<R: Encode>(
         function_name: String,
         request: &R,
-        invocation_key: Option<InvocationKey>,
+        invocation_key: InvocationKey,
         calling_convention: Option<CallingConvention>,
     ) -> Result<OplogEntry, String> {
         let serialized_request = serialize(request)?.to_vec();
@@ -217,6 +224,13 @@ impl OplogEntry {
         }
     }
 
+    pub fn pending_worker_invocation(invocation: WorkerInvocation) -> OplogEntry {
+        OplogEntry::PendingWorkerInvocation {
+            timestamp: Timestamp::now_utc(),
+            invocation,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: u64) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -233,6 +247,7 @@ impl OplogEntry {
                 | OplogEntry::Error { .. }
                 | OplogEntry::Interrupted { .. }
                 | OplogEntry::Exited { .. }
+                | OplogEntry::PendingWorkerInvocation { .. }
         )
     }
 
@@ -320,9 +335,9 @@ mod tests {
         let entry = OplogEntry::exported_function_invoked(
             "function_name".to_string(),
             &vec![val1.clone()],
-            Some(InvocationKey {
+            InvocationKey {
                 value: "invocation_key".to_string(),
-            }),
+            },
             Some(CallingConvention::Stdio),
         )
         .unwrap();

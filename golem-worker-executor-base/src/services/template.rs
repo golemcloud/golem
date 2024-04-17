@@ -60,6 +60,8 @@ pub trait TemplateService {
         engine: &Engine,
         template_id: &TemplateId,
     ) -> Result<(u64, Component), GolemError>;
+
+    async fn get_latest_version(&self, template_id: &TemplateId) -> Result<u64, GolemError>;
 }
 
 pub async fn configured(
@@ -227,6 +229,16 @@ impl TemplateService for TemplateServiceGrpc {
         .await?;
         let component = self.get(engine, template_id, latest_version).await?;
         Ok((latest_version, component))
+    }
+
+    async fn get_latest_version(&self, template_id: &TemplateId) -> Result<u64, GolemError> {
+        get_latest_version_via_grpc(
+            &self.endpoint,
+            &self.access_token,
+            &self.retry_config,
+            template_id,
+        )
+        .await
     }
 }
 
@@ -549,6 +561,35 @@ impl TemplateService for TemplateServiceLocalFileSystem {
             }),
         }
     }
+
+    async fn get_latest_version(&self, template_id: &TemplateId) -> Result<u64, GolemError> {
+        let prefix = format!("{}-", template_id);
+        let mut reader = tokio::fs::read_dir(&self.root).await?;
+        let mut matching_files = Vec::new();
+        while let Some(entry) = reader.next_entry().await? {
+            if let Ok(file_name) = entry.file_name().into_string() {
+                if file_name.starts_with(&prefix) && file_name.ends_with(".wasm") {
+                    matching_files.push((
+                        entry.path(),
+                        file_name[prefix.len()..file_name.len() - 5].to_string(),
+                    ));
+                }
+            }
+        }
+
+        let latest = matching_files
+            .into_iter()
+            .filter_map(|(_path, s)| s.parse::<u64>().ok())
+            .max();
+
+        match latest {
+            Some(version) => Ok(version),
+            None => Err(GolemError::GetLatestVersionOfTemplateFailed {
+                template_id: template_id.clone(),
+                reason: "Could not find any template with the given id".to_string(),
+            }),
+        }
+    }
 }
 
 #[cfg(any(feature = "mocks", test))]
@@ -585,6 +626,10 @@ impl TemplateService for TemplateServiceMock {
         _engine: &Engine,
         _template_id: &TemplateId,
     ) -> Result<(u64, Component), GolemError> {
+        unimplemented!()
+    }
+
+    async fn get_latest_version(&self, _template_id: &TemplateId) -> Result<u64, GolemError> {
         unimplemented!()
     }
 }
