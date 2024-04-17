@@ -2,8 +2,6 @@ use std::fmt::Display;
 
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Union};
-use poem_openapi::*;
-
 
 use crate::service::http::http_api_definition_validator::RouteValidationError;
 

@@ -11,8 +11,6 @@ use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 use tracing::{debug, info};
 
-
-use crate::repo::api_definition_repo::{ApiDefinitionRepo};
 use crate::repo::api_namespace::ApiNamespace;
 
 const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";

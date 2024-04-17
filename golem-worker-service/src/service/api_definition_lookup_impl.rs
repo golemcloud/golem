@@ -1,30 +1,16 @@
-
 use async_trait::async_trait;
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
 
-
-use golem_worker_service_base::auth::{CommonNamespace};
+use golem_worker_service_base::auth::CommonNamespace;
 use golem_worker_service_base::http::InputHttpRequest;
-use golem_worker_service_base::repo::api_definition_repo::{
-    ApiDefinitionRepo,
-};
-use golem_worker_service_base::service::api_definition::{
-    ApiDefinitionService,
-};
+use golem_worker_service_base::repo::api_definition_repo::ApiDefinitionRepo;
 use golem_worker_service_base::service::api_definition_lookup::{
     ApiDefinitionLookup, ApiDefinitionLookupError,
 };
 
-
-
-
-
-
-use http::HeaderMap;
-
+use golem_worker_service_base::repo::api_deployment_repo::ApiDeploymentRepo;
 use std::sync::Arc;
 use tracing::error;
-use golem_worker_service_base::repo::api_deployment_repo::ApiDeploymentRepo;
 
 pub struct CustomRequestDefinitionLookupDefault {
     register_api_definition_repo:
@@ -41,7 +27,7 @@ impl CustomRequestDefinitionLookupDefault {
     ) -> Self {
         Self {
             register_api_definition_repo,
-            api_deployment_repo
+            api_deployment_repo,
         }
     }
 }
@@ -61,21 +47,23 @@ impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition>
                 "Host header not found".to_string(),
             ))?;
 
-
-        let api_deployment =
-            self.api_deployment_repo.get(&host).await.map_err(|err| {
+        let api_deployment = self
+            .api_deployment_repo
+            .get(&host)
+            .await
+            .map_err(|err| {
                 error!("Error getting api deployment from the repo: {}", err);
                 ApiDefinitionLookupError(format!(
-                "Error getting api deployment from the repo: {}",
-                err
-            ))
-            })?.ok_or(ApiDefinitionLookupError(format!(
-            "Api deployment with host: {} not found",
-            &host
-        )))?;
+                    "Error getting api deployment from the repo: {}",
+                    err
+                ))
+            })?
+            .ok_or(ApiDefinitionLookupError(format!(
+                "Api deployment with host: {} not found",
+                &host
+            )))?;
 
-        let api_key =
-            api_deployment.api_definition_id;
+        let api_key = api_deployment.api_definition_id;
 
         let value = self
             .register_api_definition_repo
@@ -94,17 +82,4 @@ impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition>
             &api_key.id, &api_key.version
         )))
     }
-}
-
-fn get_header_value(headers: &HeaderMap, header_name: &str) -> Result<String, String> {
-    let header_value = headers
-        .iter()
-        .find(|(key, _)| key.as_str().to_lowercase() == header_name)
-        .map(|(_, value)| value)
-        .ok_or(format!("Missing {} header", header_name))?;
-
-    header_value
-        .to_str()
-        .map(|x| x.to_string())
-        .map_err(|e| format!("Invalid value for the header {} error: {}", header_name, e))
 }

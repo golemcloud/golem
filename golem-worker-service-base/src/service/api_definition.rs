@@ -15,7 +15,6 @@ use crate::repo::api_namespace::ApiNamespace;
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 use super::template::TemplateService;
-use poem_openapi::*;
 
 pub type ApiResult<T, E> = Result<T, ApiRegistrationError<E>>;
 

@@ -16,9 +16,7 @@ use golem_worker_service_base::repo::api_definition_repo::{
 use golem_worker_service_base::service::api_definition::{
     ApiDefinitionService, ApiDefinitionServiceDefault,
 };
-use golem_worker_service_base::service::api_definition_lookup::{
-    ApiDefinitionLookup,
-};
+use golem_worker_service_base::service::api_definition_lookup::ApiDefinitionLookup;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::http::http_api_definition_validator::{
@@ -30,10 +28,12 @@ use golem_worker_service_base::service::worker::{
 };
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 
+use golem_worker_service_base::repo::api_deployment_repo::{
+    ApiDeploymentRepo, InMemoryDeployment, RedisApiDeploy,
+};
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
-use golem_worker_service_base::repo::api_deployment_repo::{ApiDeploymentRepo, InMemoryDeployment, RedisApiDeploy};
 
 #[derive(Clone)]
 pub struct Services {
@@ -99,16 +99,15 @@ impl Services {
             format!("RedisApiRegistry - init error: {}", e)
         })?);
 
-        let deployment_repo: Arc<
-            dyn ApiDeploymentRepo<CommonNamespace> + Sync + Send,
-        >  = Arc::new(RedisApiDeploy::new(&config.redis).await.map_err(|e| {
-            error!("RedisApiDeploymentRepo - init error: {}", e);
-            format!("RedisApiDeploymentRepo - init error: {}", e)
-        })?);
+        let deployment_repo: Arc<dyn ApiDeploymentRepo<CommonNamespace> + Sync + Send> =
+            Arc::new(RedisApiDeploy::new(&config.redis).await.map_err(|e| {
+                error!("RedisApiDeploymentRepo - init error: {}", e);
+                format!("RedisApiDeploymentRepo - init error: {}", e)
+            })?);
 
         let definition_lookup_service = Arc::new(CustomRequestDefinitionLookupDefault::new(
             definition_repo.clone(),
-            deployment_repo.clone()
+            deployment_repo.clone(),
         ));
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
@@ -158,7 +157,7 @@ impl Services {
             dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         > = Arc::new(CustomRequestDefinitionLookupDefault::new(
             definition_repo.clone(),
-            deployment_repo.clone()
+            deployment_repo.clone(),
         ));
 
         let api_definition_validator_service: Arc<
