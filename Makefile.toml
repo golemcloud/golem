@@ -50,6 +50,7 @@ dependencies = [
     "set-golem-worker-service-version",
     "set-golem-worker-executor-version",
     "set-golem-shard-manager-version",
+    "set-golem-api-grpc-version",
     "set-golem-test-framework-version",
     "build-release-default",
     "build-release-override-linux-amd64",
@@ -283,6 +284,16 @@ condition = { env_set = ["VERSION"] }
 command = "sed"
 args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-test-framework/Cargo.toml"]
 
+[tasks.set-golem-api-grpc-version]
+description = "Sets the version in golem-api-grpc/Cargo.toml to the value of the VERSION environment variable"
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "s/0\\.0\\.0/${VERSION}/g", "golem-api-grpc/Cargo.toml"]
+
+[tasks.set-golem-api-grpc-version.mac]
+condition = { env_set = ["VERSION"] }
+command = "sed"
+args = ["-i", "", "s/0\\.0\\.0/${VERSION}/g", "golem-api-grpc/Cargo.toml"]
 
 [tasks.publish-golem-cli]
 description = "Publishes golem-cli package to crates.io"
