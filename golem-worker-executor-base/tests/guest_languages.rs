@@ -482,6 +482,8 @@ async fn javascript_example_3() {
     let_assert!(Some(Value::U64(start)) = result_set.into_iter().next());
     let_assert!(Some(Value::U64(end)) = result_get.into_iter().next());
 
+    check!(end > start, "End time is not greater than start time");
+
     let total_time = end - start;
 
     check!(total_time >= timeout_time);
