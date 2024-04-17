@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use golem_common::model::TemplateId;
 
 use crate::api_definition::http::MethodPattern;
-use crate::api_definition::{ApiDefinitionId, ApiVersion, Host};
+use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
 use crate::expression;
 use crate::expression::Expr;
 use crate::parser::ParseError;
@@ -17,7 +17,7 @@ use crate::parser::ParseError;
 pub struct ApiDeployment {
     pub api_definition_id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub site: Host,
+    pub site: ApiSite,
 }
 
 // Mostly this data structures that represents the actual incoming request

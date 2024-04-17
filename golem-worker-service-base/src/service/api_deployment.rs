@@ -1,4 +1,4 @@
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiVersion, Host};
+use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiVersion};
 use crate::repo::api_definition_repo::ApiDefinitionRepo;
 use crate::repo::api_deployment_repo::ApiDeploymentRepo;
 use crate::repo::api_namespace::ApiNamespace;
@@ -25,7 +25,7 @@ pub trait ApiDeploymentService<Namespace> {
 
     async fn get_by_host(
         &self,
-        host: &Host,
+        host: &ApiSite,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
     // Example: A version of API definition can only be utmost 1 deployment
@@ -39,15 +39,15 @@ pub trait ApiDeploymentService<Namespace> {
     async fn delete(
         &self,
         namespace: &Namespace,
-        host: &Host,
+        host: &ApiSite,
     ) -> Result<bool, ApiDeploymentError<Namespace>>;
 }
 
 pub enum ApiDeploymentError<Namespace> {
     ApiDefinitionNotFound(Namespace, ApiDefinitionId),
-    ApiDeploymentNotFound(Namespace, Host),
+    ApiDeploymentNotFound(Namespace, ApiSite),
     InternalError(String),
-    DeploymentConflict(Host),
+    DeploymentConflict(ApiSite),
 }
 
 pub struct ApiDeploymentServiceDefault<Namespace, ApiDefinition> {
@@ -150,7 +150,7 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
 
     async fn get_by_host(
         &self,
-        host: &Host,
+        host: &ApiSite,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
         self.deployment_repo.get(host).await.map_err(|err| {
             ApiDeploymentError::InternalError(format!("Error getting api deployment: {}", err))
@@ -184,7 +184,7 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
     async fn delete(
         &self,
         namespace: &Namespace,
-        host: &Host,
+        host: &ApiSite,
     ) -> Result<bool, ApiDeploymentError<Namespace>> {
         let deployment = self.deployment_repo.get(host).await.map_err(|err| {
             ApiDeploymentError::InternalError(format!("Error getting api deployment: {}", err))

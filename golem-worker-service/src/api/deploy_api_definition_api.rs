@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use golem_worker_service_base::api::ApiEndpointError;
-use golem_worker_service_base::api_definition::{ApiDefinitionId, Host};
+use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSite};
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -82,7 +82,7 @@ impl ApiDeploymentApi {
         let site = site_query.0;
 
         self.deployment_service
-            .delete(&CommonNamespace::default(), &Host::from_string(&site))
+            .delete(&CommonNamespace::default(), &ApiSite::from_string(&site))
             .await?;
 
         Ok(Json("API deployment deleted".to_string()))

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Mutex;
 
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, Host};
+use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
@@ -18,9 +18,10 @@ const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 pub trait ApiDeploymentRepo<Namespace: ApiNamespace> {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>>;
 
-    async fn get(&self, host: &Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
+    async fn get(&self, host: &ApiSite)
+        -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
 
-    async fn delete(&self, host: &Host) -> Result<bool, Box<dyn Error>>;
+    async fn delete(&self, host: &ApiSite) -> Result<bool, Box<dyn Error>>;
 
     async fn get_by_id(
         &self,
@@ -30,7 +31,7 @@ pub trait ApiDeploymentRepo<Namespace: ApiNamespace> {
 }
 
 pub struct InMemoryDeployment<Namespace> {
-    deployments: Mutex<HashMap<Host, ApiDeployment<Namespace>>>,
+    deployments: Mutex<HashMap<ApiSite, ApiDeployment<Namespace>>>,
 }
 
 impl<Namespace> Default for InMemoryDeployment<Namespace> {
@@ -58,7 +59,10 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeploymen
         Ok(())
     }
 
-    async fn get(&self, host: &Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
+    async fn get(
+        &self,
+        host: &ApiSite,
+    ) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
         debug!("Get API site: {}", host);
         let deployments = self.deployments.lock().unwrap();
 
@@ -67,7 +71,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeploymen
         Ok(deployment)
     }
 
-    async fn delete(&self, host: &Host) -> Result<bool, Box<dyn Error>> {
+    async fn delete(&self, host: &ApiSite) -> Result<bool, Box<dyn Error>> {
         debug!("Delete API site: {}", host);
         let mut deployments = self.deployments.lock().unwrap();
 
@@ -142,7 +146,10 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
             .map_err(|e| e.to_string().into())
     }
 
-    async fn get(&self, host: &Host) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
+    async fn get(
+        &self,
+        host: &ApiSite,
+    ) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
         info!("Get host id: {}", host);
 
         let key = redis_keys::api_deployment_redis_key(host);
@@ -166,7 +173,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         }
     }
 
-    async fn delete(&self, host: &Host) -> Result<bool, Box<dyn Error>> {
+    async fn delete(&self, host: &ApiSite) -> Result<bool, Box<dyn Error>> {
         debug!("Delete API site: {}", host);
         let key = redis_keys::api_deployment_redis_key(host);
         let value: Option<Bytes> = self
@@ -238,7 +245,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         let mut deployments = Vec::new();
 
         for site in sites {
-            let key = redis_keys::api_deployment_redis_key(&Host::from_string(site.as_str()));
+            let key = redis_keys::api_deployment_redis_key(&ApiSite(site));
 
             let value: Option<Bytes> = self
                 .pool
@@ -268,11 +275,11 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
 // api_deployment_key --> api_deployments
 
 mod redis_keys {
-    use crate::api_definition::{ApiDefinitionId, Host};
+    use crate::api_definition::{ApiDefinitionId, ApiSite};
     use crate::repo::api_deployment_repo::API_DEFINITION_REDIS_NAMESPACE;
     use crate::repo::api_namespace::ApiNamespace;
 
-    pub(crate) fn api_deployment_redis_key(api_site: &Host) -> String {
+    pub(crate) fn api_deployment_redis_key(api_site: &ApiSite) -> String {
         format!("{}:deployment:{}", API_DEFINITION_REDIS_NAMESPACE, api_site)
     }
 
@@ -289,7 +296,7 @@ mod redis_keys {
 
 #[cfg(test)]
 mod tests {
-    use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiVersion, Domain, Host, SubDomain};
+    use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiVersion};
 
     use crate::auth::CommonNamespace;
     use crate::repo::api_deployment_repo::redis_keys::{
@@ -304,10 +311,7 @@ mod tests {
 
         let namespace = CommonNamespace::default();
 
-        let site = Host {
-            domain: Domain("dev-api.golem.cloud".to_string()),
-            sub_domain: SubDomain("test".to_string()),
-        };
+        let site = ApiSite::from_str("test.dev-api.golem.cloud");
 
         let api_definition_id = ApiDefinitionId("api1".to_string());
         let version = ApiVersion("0.0.1".to_string());
@@ -348,7 +352,7 @@ mod tests {
     #[test]
     pub fn test_get_api_deployment_redis_key() {
         assert_eq!(
-            api_deployment_redis_key(&Host::from_string("foo.dev-api.golem.cloud")),
+            api_deployment_redis_key(&ApiSite::from_str("foo.dev-api.golem.cloud")),
             "apidefinition:deployment:foo.dev-api.golem.cloud"
         );
     }
