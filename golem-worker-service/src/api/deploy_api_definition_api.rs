@@ -83,7 +83,7 @@ impl ApiDeploymentApi {
             .get_by_id(&CommonNamespace::default(), &api_definition_id)
             .await?;
 
-        Ok(Json(values.iter().map(|v| v.into()).collect()))
+        Ok(Json(values.iter().map(|v| v.clone().into()).collect()))
     }
 
     #[oai(path = "/", method = "delete")]

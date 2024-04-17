@@ -33,6 +33,7 @@ use http::HeaderMap;
 use poem::Response;
 use std::sync::Arc;
 use tracing::error;
+use golem_worker_service_base::repo::api_deployment_repo::{ApiDeploymentRepo, InMemoryDeployment, RedisApiDeploy};
 
 #[derive(Clone)]
 pub struct Services {
@@ -98,8 +99,16 @@ impl Services {
             format!("RedisApiRegistry - init error: {}", e)
         })?);
 
+        let deployment_repo: Arc<
+            dyn ApiDeploymentRepo<CommonNamespace> + Sync + Send,
+        >  = Arc::new(RedisApiDeploy::new(&config.redis).await.map_err(|e| {
+            error!("RedisApiDeploymentRepo - init error: {}", e);
+            format!("RedisApiDeploymentRepo - init error: {}", e)
+        })?);
+
         let definition_lookup_service = Arc::new(CustomRequestDefinitionLookupDefault::new(
             definition_repo.clone(),
+            deployment_repo.clone()
         ));
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
@@ -142,10 +151,14 @@ impl Services {
             dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
         > = Arc::new(InMemoryRegistry::default());
 
+        let deployment_repo: Arc<dyn ApiDeploymentRepo<CommonNamespace> + Sync + Send> =
+            Arc::new(InMemoryDeployment::default());
+
         let definition_lookup_service: Arc<
             dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         > = Arc::new(CustomRequestDefinitionLookupDefault::new(
             definition_repo.clone(),
+            deployment_repo.clone()
         ));
 
         let api_definition_validator_service: Arc<

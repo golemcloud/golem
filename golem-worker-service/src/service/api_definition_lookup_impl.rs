@@ -33,7 +33,7 @@ use golem_worker_service_base::repo::api_deployment_repo::ApiDeploymentRepo;
 pub struct CustomRequestDefinitionLookupDefault {
     register_api_definition_repo:
         Arc<dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send>,
-    api_deployment_repo: Arc<dyn ApiDeploymentRepo<CommonNamespace>>,
+    api_deployment_repo: Arc<dyn ApiDeploymentRepo<CommonNamespace> + Sync + Send>,
 }
 
 impl CustomRequestDefinitionLookupDefault {
@@ -41,9 +41,11 @@ impl CustomRequestDefinitionLookupDefault {
         register_api_definition_repo: Arc<
             dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
         >,
+        api_deployment_repo: Arc<dyn ApiDeploymentRepo<CommonNamespace> + Sync + Send>,
     ) -> Self {
         Self {
             register_api_definition_repo,
+            api_deployment_repo
         }
     }
 }
@@ -65,7 +67,7 @@ impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition>
 
 
         let api_deployment =
-            self.api_deployment_repo.get(host).await.map_err(|err| {
+            self.api_deployment_repo.get(&host).await.map_err(|err| {
                 error!("Error getting api deployment from the repo: {}", err);
                 ApiDefinitionLookupError(format!(
                 "Error getting api deployment from the repo: {}",
