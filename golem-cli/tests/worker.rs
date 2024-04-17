@@ -2,7 +2,7 @@ use crate::cli::{Cli, CliLive};
 use golem_cli::model::invoke_result_view::InvokeResultView;
 use golem_cli::model::template::TemplateView;
 use golem_cli::model::InvocationKey;
-use golem_client::model::{VersionedWorkerId, WorkersMetadataResponse};
+use golem_client::model::{WorkerId, WorkersMetadataResponse};
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
@@ -128,7 +128,7 @@ fn worker_new_instance(
         make_template(deps, &format!("{name} worker new instance"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_new_instance");
     let cfg = &cli.config;
-    let worker_id: VersionedWorkerId = cli.run(&[
+    let worker_id: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -137,8 +137,8 @@ fn worker_new_instance(
         &template_id,
     ])?;
 
-    assert_eq!(worker_id.worker_id.template_id.to_string(), template_id);
-    assert_eq!(worker_id.worker_id.worker_name, worker_name);
+    assert_eq!(worker_id.template_id.to_string(), template_id);
+    assert_eq!(worker_id.worker_name, worker_name);
     Ok(())
 }
 
@@ -153,7 +153,7 @@ fn worker_get_invocation_key(
         make_template(deps, &format!("{name} worker invocation key"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_invocation_key");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -183,7 +183,7 @@ fn worker_invoke_and_await(
         make_template(deps, &format!("{name} worker_invoke_and_await"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -273,7 +273,7 @@ fn worker_invoke_and_await_wave_params(
     .template_id;
     let worker_name = format!("{name}_worker_invoke_and_await_wave_params");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -334,7 +334,7 @@ fn worker_invoke_no_params(
         make_template(deps, &format!("{name} worker_invoke_no_params"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_invoke_no_params");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -367,7 +367,7 @@ fn worker_invoke_json_params(
         make_template(deps, &format!("{name} worker_invoke_json_params"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_invoke_json_params");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -407,7 +407,7 @@ fn worker_invoke_wave_params(
     .template_id;
     let worker_name = format!("{name}_worker_invoke_wave_params");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -454,7 +454,7 @@ fn worker_connect(
     ])?;
     let template_id = template.template_id;
     let worker_name = format!("{name}_worker_connect");
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -563,7 +563,7 @@ fn worker_interrupt(
     ])?;
     let template_id = template.template_id;
     let worker_name = format!("{name}_worker_interrupt");
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -602,7 +602,7 @@ fn worker_simulated_crash(
     ])?;
     let template_id = template.template_id;
     let worker_name = format!("{name}_worker_simulated_crash");
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -637,7 +637,7 @@ fn worker_list(
 
     for i in 0..workers_count {
         let worker_name = format!("{name}_worker-{i}");
-        let worker_id: VersionedWorkerId = cli.run(&[
+        let worker_id: WorkerId = cli.run(&[
             "worker",
             "add",
             &cfg.arg('w', "worker-name"),
@@ -656,7 +656,7 @@ fn worker_list(
             &cfg.arg('T', "template-id"),
             &template_id,
             &cfg.arg('f', "filter"),
-            format!("name = {}", worker_id.worker_id.worker_name).as_str(),
+            format!("name = {}", worker_id.worker_name).as_str(),
             &cfg.arg('f', "filter"),
             "version >= 0",
             &cfg.arg('p', "precise"),
