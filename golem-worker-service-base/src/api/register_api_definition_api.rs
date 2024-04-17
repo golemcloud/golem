@@ -6,10 +6,19 @@ use serde::{Deserialize, Serialize};
 use golem_common::model::TemplateId;
 
 use crate::api_definition::http::MethodPattern;
-use crate::api_definition::{ApiDefinitionId, ApiVersion};
+use crate::api_definition::{ApiDefinitionId, ApiVersion, Host};
 use crate::expression;
 use crate::expression::Expr;
 use crate::parser::ParseError;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ApiDeployment {
+    pub api_definition_id: ApiDefinitionId,
+    pub version: ApiVersion,
+    pub site: Host,
+}
 
 // Mostly this data structures that represents the actual incoming request
 // exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
@@ -39,6 +48,16 @@ pub struct GolemWorkerBinding {
     pub function_name: String,
     pub function_params: Vec<String>,
     pub response: Option<String>,
+}
+
+impl<N> From<crate::api_definition::ApiDeployment<N>> for ApiDeployment {
+    fn from(value: crate::api_definition::ApiDeployment<N>) -> Self {
+        Self {
+            api_definition_id: value.api_definition_id.id,
+            version: value.api_definition_id.version,
+            site: value.site,
+        }
+    }
 }
 
 impl TryFrom<crate::api_definition::http::HttpApiDefinition> for HttpApiDefinition {

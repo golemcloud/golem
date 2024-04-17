@@ -2,6 +2,8 @@ use std::fmt::Display;
 
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Union};
+use poem_openapi::*;
+
 
 use crate::service::http::http_api_definition_validator::RouteValidationError;
 
@@ -89,6 +91,7 @@ impl ApiEndpointError {
 }
 
 mod conversion {
+    use std::fmt::Display;
     use golem_api_grpc::proto::golem::{
         apidefinition,
         apidefinition::{api_definition_error, ApiDefinitionError, RouteValidationErrorsBody},
@@ -99,6 +102,7 @@ mod conversion {
     use crate::repo::api_definition_repo::ApiRegistrationRepoError;
     use crate::service::api_definition::ApiRegistrationError;
     use crate::service::api_definition_validator::ValidationErrors;
+    use crate::service::api_deployment::ApiDeploymentError;
     use crate::service::http::http_api_definition_validator::RouteValidationError;
 
     use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
@@ -120,6 +124,23 @@ mod conversion {
                         .collect::<Vec<String>>()
                         .join(", ");
                     ApiEndpointError::bad_request(format!("Templates not found, {}", templates))
+                }
+            }
+        }
+    }
+
+    impl<Namespace: Display> From<ApiDeploymentError<Namespace>> for ApiEndpointError {
+        fn from(error: ApiDeploymentError<Namespace>) -> Self {
+            match error {
+                ApiDeploymentError::InternalError(e) => ApiEndpointError::internal(e),
+                ApiDeploymentError::ApiDefinitionNotFound(namespace, id) => {
+                    ApiEndpointError::not_found(format!("Api definition not found: {}/{}", namespace, id))
+                }
+                ApiDeploymentError::ApiDeploymentNotFound(namespace, host) => {
+                    ApiEndpointError::not_found(format!("Api deployment not found: {}/{}", namespace, host))
+                }
+                ApiDeploymentError::DeploymentConflict(conflict) => {
+                    ApiEndpointError::already_exists(format!("Deployment conflict: {}", conflict))
                 }
             }
         }

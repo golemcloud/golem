@@ -4,6 +4,7 @@ use std::fmt::Display;
 use crate::service::api_definition::ApiDefinitionKey;
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;
+use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 
 use crate::worker_binding::GolemWorkerBinding;
@@ -44,10 +45,10 @@ pub trait HasGolemWorkerBindings {
 pub struct Domain(pub String);
 
 #[derive(
-    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
+    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode
 )]
-pub struct ApiDeployment<ApiNamespace> {
-    pub api_definition_id: ApiDefinitionKey<ApiNamespace>,
+pub struct ApiDeployment<Namespace> {
+    pub api_definition_id: ApiDefinitionKey<Namespace>,
     pub site: Host,
 }
 
@@ -55,7 +56,7 @@ pub struct ApiDeployment<ApiNamespace> {
 pub struct SubDomain(pub String);
 
 #[derive(
-    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
+    Eq, Hash, PartialEq, Clone, Debug, serde::Serialize, serde::Deserialize, bincode::Encode, bincode::Decode, Object
 )]
 pub struct Host {
     pub domain: Domain,

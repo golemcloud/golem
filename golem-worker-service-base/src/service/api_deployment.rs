@@ -25,6 +25,12 @@ pub trait ApiDeploymentService<Namespace> {
         api_definition_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
+
+    async fn get_by_host(
+        &self,
+        host: &Host,
+    ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
+
     // Example: A version of API definition can only be utmost 1 deployment
     async fn get_by_id_and_version(
         &self,
@@ -40,12 +46,11 @@ pub trait ApiDeploymentService<Namespace> {
     ) -> Result<bool, ApiDeploymentError<Namespace>>;
 }
 
-enum ApiDeploymentError<Namespace> {
+pub enum ApiDeploymentError<Namespace> {
     ApiDefinitionNotFound(Namespace, ApiDefinitionId),
     ApiDeploymentNotFound(Namespace, Host),
     InternalError(String),
     DeploymentConflict(Host),
-    ValidationError(String),
 }
 
 pub struct ApiDeploymentServiceDefault<Namespace, ApiDefinition> {
@@ -144,6 +149,15 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
                     err
                 ))
             })
+    }
+
+    async fn get_by_host(
+        &self,
+        host: &Host,
+    ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
+        self.deployment_repo.get(host).await.map_err(|err| {
+            ApiDeploymentError::InternalError(format!("Error getting api deployment: {}", err))
+        })
     }
 
     async fn get_by_id_and_version(
