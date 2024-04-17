@@ -29,6 +29,7 @@ use golem_common::model::{PromiseId, WorkerId};
 use golem_common::redis::RedisPool;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
+use tracing::debug;
 
 use crate::error::GolemError;
 use crate::metrics::promises::record_promise_created;
@@ -95,6 +96,7 @@ impl PromiseService for PromiseServiceRedis {
             worker_id: worker_id.clone(),
             oplog_idx,
         };
+        debug!("Created promise {promise_id}");
 
         let key = get_promise_redis_key(&promise_id);
         let value = self

@@ -48,11 +48,11 @@ use crate::model::InterruptKind;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{
-    worker_event, All, HasActiveWorkers, HasAll, HasInvocationKeyService, HasPromiseService,
-    HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    worker_event, All, HasActiveWorkers, HasAll, HasInvocationKeyService, HasInvocationQueue,
+    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
-use crate::worker::{invoke, invoke_and_await, Worker};
+use crate::worker::{invoke_and_await, PendingWorker, Worker};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
 pub enum GrpcError<E> {
@@ -521,9 +521,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let calling_convention = request.calling_convention();
-        let invocation_key = request.invocation_key()?;
-
         let worker_details = self.get_or_create(request).await?;
+        let invocation_key = request.invocation_key()?.unwrap_or(
+            self.invocation_key_service()
+                .generate_key(&worker_details.metadata.worker_id.worker_id),
+        );
+
         let values = invoke_and_await(
             worker_details,
             self,
@@ -574,10 +577,47 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .await
     }
 
+    async fn get_or_create_pending<Req: GrpcInvokeRequest>(
+        &self,
+        request: &Req,
+    ) -> Result<PendingOrFinal<PendingWorker<Ctx>, Arc<Worker<Ctx>>>, GolemError> {
+        let worker_id = request.worker_id()?;
+        let account_id: AccountId = request.account_id()?;
+
+        self.validate_worker_id(&worker_id)?;
+
+        let metadata = self.worker_service().get(&worker_id).await;
+        self.validate_worker_status(&worker_id, &metadata).await?;
+
+        if let Some(limits) = request.account_limits() {
+            Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
+        }
+
+        let (worker_args, worker_env, template_version, account_id) = match metadata {
+            Some(metadata) => (
+                metadata.args,
+                metadata.env,
+                Some(metadata.worker_id.template_version),
+                metadata.account_id,
+            ),
+            None => (vec![], vec![], None, account_id),
+        };
+
+        Worker::get_or_create_pending(
+            self,
+            &worker_id,
+            worker_args.clone(),
+            worker_env.clone(),
+            template_version,
+            account_id,
+        )
+        .await
+    }
+
     async fn invoke_worker_internal<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<Option<Result<Vec<Val>, GolemError>>, GolemError> {
+    ) -> Result<(), GolemError> {
         let full_function_name = request.name();
 
         let proto_function_input: Vec<Val> = request.input();
@@ -588,21 +628,32 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let calling_convention = request.calling_convention();
-        let invocation_key = request.invocation_key()?;
 
-        let worker_details = self.get_or_create(request).await?;
-        let result = invoke(
-            worker_details,
-            self,
-            invocation_key,
-            calling_convention,
-            full_function_name,
-            function_input,
-        )
-        .await?;
-        Ok(result.map(|inner_result| {
-            inner_result.map(|values| values.into_iter().map(|val| val.into()).collect())
-        }))
+        let (invocation_queue, worker_id) = match self.get_or_create_pending(request).await? {
+            PendingOrFinal::Pending(pending_worker) => (
+                pending_worker.invocation_queue.clone(),
+                pending_worker.worker_id.clone(),
+            ),
+            PendingOrFinal::Final(worker) => (
+                worker.public_state.invocation_queue(),
+                worker.metadata.worker_id.worker_id.clone(),
+            ),
+        };
+
+        let invocation_key = request
+            .invocation_key()?
+            .unwrap_or(self.invocation_key_service().generate_key(&worker_id));
+
+        invocation_queue
+            .enqueue(
+                invocation_key,
+                full_function_name,
+                function_input,
+                calling_convention,
+            )
+            .await;
+
+        Ok(())
     }
 
     async fn revoke_shards_internal(
@@ -935,7 +986,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
             let event_service = match Worker::get_or_create_pending(
                 self,
-                metadata.worker_id.worker_id,
+                &metadata.worker_id.worker_id,
                 metadata.args,
                 metadata.env,
                 Some(metadata.worker_id.template_version),

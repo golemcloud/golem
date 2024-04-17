@@ -56,7 +56,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn subscribe_duration(&mut self, when: Duration) -> anyhow::Result<Resource<Pollable>> {
         record_host_function_call("clocks::monotonic_clock", "subscribe_duration");
         let now = self.now().await?;
-        self.state.commit_oplog().await;
+        self.state.oplog.commit().await;
         let when = now.saturating_add(when);
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await
     }
