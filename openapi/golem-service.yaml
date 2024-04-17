@@ -3181,6 +3181,7 @@ components:
       - version
 tags:
 - name: ApiDefinition
+- name: ApiDeployment
 - name: HealthCheck
 - name: Template
 - name: Worker
