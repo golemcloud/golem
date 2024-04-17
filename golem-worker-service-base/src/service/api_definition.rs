@@ -8,7 +8,7 @@ use golem_common::model::TemplateId;
 use golem_service_base::model::Template;
 
 use crate::api_definition::{
-    ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion, Host,
+    ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion,
 };
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 use crate::repo::api_namespace::ApiNamespace;

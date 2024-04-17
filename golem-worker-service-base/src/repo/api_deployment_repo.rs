@@ -2,17 +2,17 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Mutex;
 
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiVersion, HasApiDefinitionId, Host};
+use crate::api_definition::{ApiDefinitionId, ApiDeployment, Host};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
-use golem_common::model::AccountId;
-use golem_common::model::ProjectId;
+
+
 use golem_common::redis::RedisPool;
 use tracing::{debug, info};
 
-use crate::api_definition::HasHost;
-use crate::repo::api_definition_repo::{ApiDefinitionRepo, InMemoryRegistry};
+
+use crate::repo::api_definition_repo::{ApiDefinitionRepo};
 use crate::repo::api_namespace::ApiNamespace;
 
 const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
