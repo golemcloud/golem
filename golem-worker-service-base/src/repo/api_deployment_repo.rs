@@ -289,15 +289,13 @@ mod redis_keys {
 
 #[cfg(test)]
 mod tests {
-    use crate::api_definition::{ApiDefinitionId, ApiVersion, Domain, Host, SubDomain};
-    use golem_common::config::RedisConfig;
+    use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiVersion, Domain, Host, SubDomain};
 
-    use crate::api_definition::{ApiDeployment, Host};
     use crate::auth::CommonNamespace;
     use crate::repo::api_deployment_repo::redis_keys::{
         api_deployment_redis_key, api_deployments_redis_key,
     };
-    use crate::repo::api_deployment_repo::{ApiDeploymentRepo, InMemoryDeployment, RedisApiDeploy};
+    use crate::repo::api_deployment_repo::{ApiDeploymentRepo, InMemoryDeployment};
     use crate::service::api_definition::ApiDefinitionKey;
 
     #[tokio::test]
@@ -314,7 +312,7 @@ mod tests {
         let api_definition_id = ApiDefinitionId("api1".to_string());
         let version = ApiVersion("0.0.1".to_string());
 
-        let deployment = &ApiDeployment {
+        let deployment = ApiDeployment {
             api_definition_id: ApiDefinitionKey {
                 namespace: namespace.clone(),
                 id: api_definition_id.clone(),

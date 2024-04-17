@@ -105,16 +105,16 @@ impl<N> HasHost for ApiDeployment<N> {
 mod tests {
     use super::*;
 
+    #[test]
     pub fn test_roundtrip_host() {
         let host = Host::from_string("subdomain.domain.com");
         let host_str = host.to_string();
         let output = Host::from_string(&host_str);
         assert_eq!(
-            (output, output.domain, output.sub_domain),
+            (&output.domain, &output.sub_domain),
             (
-                host,
-                Domain("domain.com".to_string()),
-                SubDomain("subdomain".to_string())
+                &Domain("domain.com".to_string()),
+                &SubDomain("subdomain".to_string())
             )
         );
     }
