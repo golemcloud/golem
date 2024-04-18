@@ -258,7 +258,7 @@ async fn get_workers() {
             .get_workers_metadata(&template_id, None, cursor.unwrap(), count as u64, true)
             .await;
 
-        check!(values1.len() >= count);
+        check!(values1.len() > 0); // Each page should contain at least one element, but it is not guaranteed that it has count elements
 
         found_worker_ids.extend(get_worker_ids(values1.clone()));
 
