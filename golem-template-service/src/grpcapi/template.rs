@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use futures_util::stream::BoxStream;
+use futures_util::StreamExt;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::template::template_service_server::TemplateService;
@@ -72,6 +73,15 @@ fn bad_request_error(error: &str) -> TemplateError {
         })),
     }
 }
+
+fn internal_error(error: &str) -> TemplateError {
+    TemplateError {
+        error: Some(template_error::Error::InternalError(ErrorBody {
+            error: error.to_string(),
+        })),
+    }
+}
+
 
 pub struct TemplateGrpcApi {
     pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
@@ -237,6 +247,38 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<DownloadTemplateRequest>,
     ) -> Result<Response<Self::DownloadTemplateStream>, Status> {
+        // let request = request.into_inner();
+        // let id: TemplateId = request
+        //     .template_id
+        //     .and_then(|id| id.try_into().ok())
+        //     .ok_or_else(|| bad_request_error("Missing template id"))?;
+        // let version = request.version;
+        // match self.template_service.download_stream(&id, version).await {
+        //     Ok(response) => {
+        //         let stream: Self::DownloadTemplateStream = Box::pin(response.map(|content| {
+        //             let res = match content {
+        //                 Ok(content) => DownloadTemplateResponse {
+        //                     result: Some(download_template_response::Result::SuccessChunk(content.to_vec())),
+        //                 },
+        //                 Err(_) => DownloadTemplateResponse {
+        //                     result: Some(download_template_response::Result::Error(internal_error("Internal error"))),
+        //                 },
+        //             };
+        //             Ok(res)
+        //         }));
+        //         Ok(Response::new(stream))
+        //     },
+        //     Err(err) => {
+        //
+        //         let res = DownloadTemplateResponse {
+        //             result: Some(download_template_response::Result::Error(err.into())),
+        //         };
+        //
+        //         let stream: Self::DownloadTemplateStream = Box::pin(tokio_stream::iter([Ok(res)]));
+        //         Ok(Response::new(stream))
+        //     }
+        // }
+
         let res = match self.download(request.into_inner()).await {
             Ok(content) => DownloadTemplateResponse {
                 result: Some(download_template_response::Result::SuccessChunk(content)),

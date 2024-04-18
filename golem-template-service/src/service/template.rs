@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error;
 use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures_util::{Stream, StreamExt};
 use golem_common::model::TemplateId;
 use golem_template_service_base::service::template_compilation::TemplateCompilationService;
 use golem_template_service_base::service::template_processor::{
@@ -78,6 +80,13 @@ pub trait TemplateService {
         template_id: &TemplateId,
         version: Option<u64>,
     ) -> Result<Vec<u8>, TemplateError>;
+
+    async fn download_stream(
+        &self,
+        template_id: &TemplateId,
+        version: Option<u64>,
+    ) -> Box<dyn Stream<Item = Result<Vec<u8>, TemplateError>>>;
+
 
     async fn get_protected_data(
         &self,
@@ -261,6 +270,41 @@ impl TemplateService for TemplateServiceDefault {
             .await
             .tap_err(|e| error!("Error downloading template: {}", e))
             .map_err(|e| TemplateError::internal(e.to_string(), "Error downloading template"))
+    }
+
+    async fn download_stream(&self, template_id: &TemplateId, version: Option<u64>) -> Box<dyn Stream<Item = Result<Vec<u8>, TemplateError>>> {
+        let versioned_template_id = {
+            match version {
+                Some(version) => VersionedTemplateId {
+                    template_id: template_id.clone(),
+                    version,
+                },
+                None => {
+                    let res = self
+                        .template_repo
+                        .get_latest_version(&template_id.0)
+                        .await
+                        .map_err(TemplateError::from)
+                        .and_then(|r| r.map(Template::from)
+                            .map(|t| t.versioned_template_id)
+                            .ok_or(TemplateError::UnknownTemplateId(template_id.clone())));
+                    match res {
+                        Ok(id) => id,
+                        Err(e) => return Box::new(futures_util::stream::iter(vec![Err(e)])),
+                    }
+                },
+            }
+        };
+
+        let id = ProtectedTemplateId {
+            versioned_template_id,
+        };
+        let download_stream: Box<dyn Stream<Item=Result<Vec<u8>, Box<dyn Error>>>> = self.object_store
+            .get_stream(&self.get_protected_object_store_key(&id))
+            .await;
+
+
+        Box::new(download_stream.m(|e| TemplateError::internal(e.to_string(), "Error downloading template")))
     }
 
     async fn get_protected_data(
@@ -500,6 +544,10 @@ impl TemplateService for TemplateServiceNoOp {
         _version: Option<u64>,
     ) -> Result<Vec<u8>, TemplateError> {
         Ok(vec![])
+    }
+
+    async fn download_stream(&self, _template_id: &TemplateId, _version: Option<u64>) -> Box<dyn Stream<Item = Result<Vec<u8>, TemplateError>>> {
+        Box::new(futures_util::stream::empty())
     }
 
     async fn get_protected_data(
