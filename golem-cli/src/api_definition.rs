@@ -28,7 +28,11 @@ use clap::Subcommand;
 pub enum ApiDefinitionSubcommand {
     /// Lists all api definitions
     #[command()]
-    List {},
+    List {
+        /// Api definition id to get all versions. Optional.
+        #[arg(short, long)]
+        id: Option<ApiDefinitionId>,
+    },
 
     /// Creates an api definition
     ///
@@ -118,8 +122,8 @@ impl<C: ApiDefinitionClient + Send + Sync> ApiDefinitionHandler for ApiDefinitio
                     definition,
                 ))))
             }
-            ApiDefinitionSubcommand::List { .. } => {
-                let definitions = self.client.all_get().await?;
+            ApiDefinitionSubcommand::List { id } => {
+                let definitions = self.client.list(id.as_ref()).await?;
                 Ok(GolemResult::Ok(Box::new(definitions)))
             }
             ApiDefinitionSubcommand::Delete { id, version } => {
@@ -153,7 +157,7 @@ mod tests {
 
     #[async_trait]
     impl golem_client::api::ApiDefinitionClient for ApiDefinitionClientTest {
-        async fn oas_put(
+        async fn import_open_api(
             &self,
             _: &serde_json::Value,
         ) -> Result<HttpApiDefinition, Error<ApiDefinitionError>> {
@@ -171,14 +175,20 @@ mod tests {
             &self,
             api_definition_id: &str,
             version: &str,
-        ) -> Result<Vec<HttpApiDefinition>, Error<ApiDefinitionError>> {
+        ) -> Result<HttpApiDefinition, Error<ApiDefinitionError>> {
             let mut calls = self.calls.lock().unwrap();
             calls.push_str(format!("get: {}/{}", api_definition_id, version).as_str());
-            Ok(vec![])
+            Ok(HttpApiDefinition {
+                id: "".to_string(),
+                version: "".to_string(),
+                routes: vec![],
+            })
         }
 
-        async fn put(
+        async fn update(
             &self,
+            _id: &str,
+            _version: &str,
             value: &HttpApiDefinition,
         ) -> Result<HttpApiDefinition, Error<ApiDefinitionError>> {
             let mut calls = self.calls.lock().unwrap();
@@ -190,7 +200,7 @@ mod tests {
             })
         }
 
-        async fn post(
+        async fn create(
             &self,
             value: &HttpApiDefinition,
         ) -> Result<HttpApiDefinition, Error<ApiDefinitionError>> {
@@ -213,7 +223,10 @@ mod tests {
             Ok("deleted".to_string())
         }
 
-        async fn all_get(&self) -> Result<Vec<HttpApiDefinition>, Error<ApiDefinitionError>> {
+        async fn list(
+            &self,
+            _id: Option<&str>,
+        ) -> Result<Vec<HttpApiDefinition>, Error<ApiDefinitionError>> {
             let mut calls = self.calls.lock().unwrap();
             calls.push_str("all");
             Ok(vec![])
@@ -243,7 +256,7 @@ mod tests {
 
     #[tokio::test]
     pub async fn list() {
-        let checked = handle(ApiDefinitionSubcommand::List {}).await;
+        let checked = handle(ApiDefinitionSubcommand::List { id: None }).await;
         if let Ok(calls) = checked {
             assert_eq!(calls, "all");
         }
