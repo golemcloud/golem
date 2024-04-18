@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::{ResourceTable, StreamError};
@@ -19,6 +20,7 @@ use wasmtime_wasi::preview2::{ResourceTable, StreamError};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::serialized::SerializableStreamError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
 use crate::workerctx::WorkerCtx;
@@ -284,5 +286,11 @@ fn is_incoming_http_body_stream(table: &ResourceTable, stream: &Resource<InputSt
                     .is_some()
         }
         InputStream::File(_) => false,
+    }
+}
+
+impl From<GolemError> for StreamError {
+    fn from(value: GolemError) -> Self {
+        StreamError::Trap(anyhow!(value))
     }
 }

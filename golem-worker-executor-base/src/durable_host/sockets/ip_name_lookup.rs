@@ -17,6 +17,7 @@ use wasmtime::component::Resource;
 
 use crate::durable_host::serialized::{SerializableError, SerializableIpAddresses};
 use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
@@ -108,4 +109,10 @@ async fn drain_resolve_address_stream(
         }
     }
     Ok(addresses)
+}
+
+impl From<GolemError> for SocketError {
+    fn from(value: GolemError) -> Self {
+        Self::trap(value)
+    }
 }
