@@ -1,9 +1,9 @@
 use crate::cli::{Cli, CliLive};
-use golem_cli::model::invoke_result_view::InvokeResultView;
 use golem_cli::model::template::TemplateView;
-use golem_cli::model::InvocationKey;
+use golem_cli::model::{Format, InvocationKey};
 use golem_client::model::{VersionedWorkerId, WorkersMetadataResponse};
 use golem_test_framework::config::TestDependencies;
+use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
@@ -109,7 +109,7 @@ fn make_template_from_file(
     ])
 }
 
-fn make_template(
+pub fn make_template(
     deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
     template_name: &str,
     cli: &CliLive,
@@ -281,10 +281,9 @@ fn worker_invoke_and_await_wave_params(
         &cfg.arg('T', "template-id"),
         &template_id,
     ])?;
-    let res_set: InvokeResultView = cli.run(&[
+    let res_set = cli.with_format(Format::Text).run_string(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('H', "human-readable"),
         &cfg.arg('T', "template-id"),
         &template_id,
         &cfg.arg('w', "worker-name"),
@@ -298,12 +297,11 @@ fn worker_invoke_and_await_wave_params(
         &cfg.arg('p', "param"),
         r#"[1, 2, 3]"#,
     ])?;
-    assert_eq!(res_set, InvokeResultView::Wave(Vec::new()));
+    assert_eq!(res_set, "Empty result.\n");
 
-    let res_get: InvokeResultView = cli.run(&[
+    let res_get = cli.with_format(Format::Text).run_string(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('H', "human-readable"),
         &cfg.arg('T', "template-id"),
         &template_id,
         &cfg.arg('w', "worker-name"),
@@ -317,7 +315,13 @@ fn worker_invoke_and_await_wave_params(
     ])?;
     assert_eq!(
         res_get,
-        InvokeResultView::Wave(vec!["some([1, 2, 3])".to_string()])
+        formatdoc!(
+            "
+            Invocation results in WAVE format:
+            - some([1, 2, 3])
+
+            "
+        )
     );
 
     Ok(())
