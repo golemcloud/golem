@@ -125,7 +125,7 @@ args = ["fmt", "--all"]
 description = "Runs clippy checks and applies fixes"
 install_crate = "clippy"
 command = "cargo"
-args = ["clippy", "--fix", "--allow-dirty", "--", "-Dwarnings"]
+args = ["clippy", "--fix", "--allow-dirty", "--allow-staged", "--", "-Dwarnings"]
 
 ## ** TEST **
 

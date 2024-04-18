@@ -89,7 +89,7 @@ impl TextFormat for ApiDefinitionGetRes {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiDefinitionPostRes(pub HttpApiDefinition);
+pub struct ApiDefinitionAddRes(pub HttpApiDefinition);
 
 #[derive(Table)]
 struct RouteView {
@@ -97,8 +97,8 @@ struct RouteView {
     pub method: String,
     #[table(title = "Path")]
     pub path: String,
-    #[table(title = "Template")]
-    pub template: Uuid,
+    #[table(title = "Template", justify = "Justify::Right")]
+    pub template: String,
     #[table(title = "Worker")]
     pub worker_id: String,
     #[table(title = "Function")]
@@ -107,36 +107,59 @@ struct RouteView {
 
 impl From<&Route> for RouteView {
     fn from(value: &Route) -> Self {
+        let template_str = value.binding.template.to_string();
+        let template_end = &template_str[template_str.len() - 7..];
         RouteView {
             method: value.method.to_string(),
             path: value.path.to_string(),
-            template: value.binding.template,
+            template: format!("*{template_end}"),
             worker_id: value.binding.worker_id.to_string(),
             function_name: value.binding.function_name.to_string(),
         }
     }
 }
 
-impl TextFormat for ApiDefinitionPostRes {
-    fn print(&self) {
-        printdoc!(
-            "
-            New API Definition created with ID {} and version {}.
+fn print_api_definition(def: &HttpApiDefinition, action: &str) {
+    printdoc!(
+        "
+            API Definition {action} with ID {} and version {}.
             Routes:
             ",
-            self.0.id,
-            self.0.version
-        );
+        def.id,
+        def.version
+    );
 
-        print_stdout(
-            self.0
-                .routes
-                .iter()
-                .map(RouteView::from)
-                .collect::<Vec<_>>()
-                .with_title(),
-        )
-        .unwrap()
+    print_stdout(
+        def.routes
+            .iter()
+            .map(RouteView::from)
+            .collect::<Vec<_>>()
+            .with_title(),
+    )
+    .unwrap()
+}
+
+impl TextFormat for ApiDefinitionAddRes {
+    fn print(&self) {
+        print_api_definition(&self.0, "created");
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiDefinitionUpdateRes(pub HttpApiDefinition);
+
+impl TextFormat for ApiDefinitionUpdateRes {
+    fn print(&self) {
+        print_api_definition(&self.0, "updated");
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiDefinitionImportRes(pub HttpApiDefinition);
+
+impl TextFormat for ApiDefinitionImportRes {
+    fn print(&self) {
+        print_api_definition(&self.0, "imported");
     }
 }
 

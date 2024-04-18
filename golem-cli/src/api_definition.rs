@@ -15,7 +15,9 @@
 use async_trait::async_trait;
 
 use crate::clients::api_definition::ApiDefinitionClient;
-use crate::model::text::{ApiDefinitionGetRes, ApiDefinitionPostRes};
+use crate::model::text::{
+    ApiDefinitionAddRes, ApiDefinitionGetRes, ApiDefinitionImportRes, ApiDefinitionUpdateRes,
+};
 use crate::model::{
     ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult, PathBufOrStdin,
 };
@@ -29,9 +31,31 @@ pub enum ApiDefinitionSubcommand {
     List {},
 
     /// Creates an api definition
+    ///
+    /// Golem API definition file format expected
     #[command()]
-    Put {
-        /// The OAuth file to be used as the api definition
+    Add {
+        /// The Golem API definition file
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        definition: PathBufOrStdin, // TODO: validate exists
+    },
+
+    /// Updates an api definition
+    ///
+    /// Golem API definition file format expected
+    #[command()]
+    Update {
+        /// The Golem API definition file
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        definition: PathBufOrStdin, // TODO: validate exists
+    },
+
+    /// Import OpenAPI file as api definition
+    #[command()]
+    Import {
+        /// The OpenAPI json or yaml file to be used as the api definition
+        ///
+        /// Json format expected unless file name ends up in `.yaml`
         #[arg(value_hint = clap::ValueHint::FilePath)]
         definition: PathBufOrStdin, // TODO: validate exists
     },
@@ -78,9 +102,21 @@ impl<C: ApiDefinitionClient + Send + Sync> ApiDefinitionHandler for ApiDefinitio
                 let definition = self.client.get(id, version).await?;
                 Ok(GolemResult::Ok(Box::new(ApiDefinitionGetRes(definition))))
             }
-            ApiDefinitionSubcommand::Put { definition } => {
-                let definition = self.client.put(definition).await?;
-                Ok(GolemResult::Ok(Box::new(ApiDefinitionPostRes(definition))))
+            ApiDefinitionSubcommand::Add { definition } => {
+                let definition = self.client.create(definition).await?;
+                Ok(GolemResult::Ok(Box::new(ApiDefinitionAddRes(definition))))
+            }
+            ApiDefinitionSubcommand::Update { definition } => {
+                let definition = self.client.update(definition).await?;
+                Ok(GolemResult::Ok(Box::new(ApiDefinitionUpdateRes(
+                    definition,
+                ))))
+            }
+            ApiDefinitionSubcommand::Import { definition } => {
+                let definition = self.client.import(definition).await?;
+                Ok(GolemResult::Ok(Box::new(ApiDefinitionImportRes(
+                    definition,
+                ))))
             }
             ApiDefinitionSubcommand::List { .. } => {
                 let definitions = self.client.all_get().await?;
