@@ -263,19 +263,19 @@ args = ["publish", "-p", "golem-client", "--all-features", "--allow-dirty"]
 description = "Publishes golem-api-grpc package to crates.io"
 dependencies = ["build-release"]
 command = "cargo"
-args = ["publish", "-p", "golem-api-grpc", "--all-features", "--allow-dirty"]
+args = ["publish", "-p", "golem-api-grpc", "--all-features", "--allow-dirty", "--no-verify"]
 
 [tasks.publish-golem-common]
 description = "Publishes golem-common package to crates.io"
 dependencies = ["build-release"]
 command = "cargo"
-args = ["publish", "-p", "golem-common", "--all-features", "--allow-dirty"]
+args = ["publish", "-p", "golem-common", "--all-features", "--allow-dirty", "--no-verify"]
 
 [tasks.publish-golem-test-framework]
 description = "Publishes golem-test-framework package to crates.io"
 dependencies = ["build-release"]
 command = "cargo"
-args = ["publish", "-p", "golem-test-framework", "--all-features", "--allow-dirty"]
+args = ["publish", "-p", "golem-test-framework", "--all-features", "--allow-dirty", "--no-verify"]
 
 [tasks.publish-golem-cli]
 description = "Publishes golem-cli package to crates.io"
