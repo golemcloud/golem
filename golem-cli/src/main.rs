@@ -105,7 +105,7 @@ struct GolemCommand {
     #[command(flatten)]
     verbosity: Verbosity,
 
-    #[arg(short = 'F', long, default_value = "yaml")]
+    #[arg(short = 'F', long, default_value = "text")]
     format: Format,
 
     #[arg(short = 'u', long)]
@@ -241,7 +241,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
 
     let res = match cmd.command {
         Command::Template { subcommand } => template_srv.handle(subcommand).await,
-        Command::Worker { subcommand } => worker_srv.handle(subcommand).await,
+        Command::Worker { subcommand } => worker_srv.handle(cmd.format, subcommand).await,
         Command::New {
             example,
             package_name,
@@ -255,24 +255,24 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
             golem_wasm_rpc_stubgen::Command::Generate(args) => {
                 golem_wasm_rpc_stubgen::generate(args)
                     .map_err(|err| GolemError(format!("{err}")))
-                    .map(|_| GolemResult::Ok(Box::new("Done")))
+                    .map(|_| GolemResult::Str("Done".to_string()))
             }
             golem_wasm_rpc_stubgen::Command::Build(args) => golem_wasm_rpc_stubgen::build(args)
                 .await
                 .map_err(|err| GolemError(format!("{err}")))
-                .map(|_| GolemResult::Ok(Box::new("Done"))),
+                .map(|_| GolemResult::Str("Done".to_string())),
             golem_wasm_rpc_stubgen::Command::AddStubDependency(args) => {
                 golem_wasm_rpc_stubgen::add_stub_dependency(args)
                     .map_err(|err| GolemError(format!("{err}")))
-                    .map(|_| GolemResult::Ok(Box::new("Done")))
+                    .map(|_| GolemResult::Str("Done".to_string()))
             }
             golem_wasm_rpc_stubgen::Command::Compose(args) => golem_wasm_rpc_stubgen::compose(args)
                 .map_err(|err| GolemError(format!("{err}")))
-                .map(|_| GolemResult::Ok(Box::new("Done"))),
+                .map(|_| GolemResult::Str("Done".to_string())),
             golem_wasm_rpc_stubgen::Command::InitializeWorkspace(args) => {
                 golem_wasm_rpc_stubgen::initialize_workspace(args, "golem-cli", &["stubgen"])
                     .map_err(|err| GolemError(format!("{err}")))
-                    .map(|_| GolemResult::Ok(Box::new("Done")))
+                    .map(|_| GolemResult::Str("Done".to_string()))
             }
         },
         Command::ApiDefinition { subcommand } => api_definition_srv.handle(subcommand).await,
@@ -291,7 +291,9 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
                 Ok(())
             }
             GolemResult::Json(json) => match &cmd.format {
-                Format::Json => Ok(println!("{}", serde_json::to_string_pretty(&json).unwrap())),
+                Format::Json | Format::Text => {
+                    Ok(println!("{}", serde_json::to_string_pretty(&json).unwrap()))
+                }
                 Format::Yaml => Ok(println!("{}", serde_yaml::to_string(&json).unwrap())),
             },
         },

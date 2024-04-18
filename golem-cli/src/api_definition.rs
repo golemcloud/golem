@@ -15,6 +15,7 @@
 use async_trait::async_trait;
 
 use crate::clients::api_definition::ApiDefinitionClient;
+use crate::model::text::{ApiDefinitionGetRes, ApiDefinitionPostRes};
 use crate::model::{
     ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult, PathBufOrStdin,
 };
@@ -75,11 +76,11 @@ impl<C: ApiDefinitionClient + Send + Sync> ApiDefinitionHandler for ApiDefinitio
         match subcommand {
             ApiDefinitionSubcommand::Get { id, version } => {
                 let definition = self.client.get(id, version).await?;
-                Ok(GolemResult::Ok(Box::new(definition)))
+                Ok(GolemResult::Ok(Box::new(ApiDefinitionGetRes(definition))))
             }
             ApiDefinitionSubcommand::Put { definition } => {
                 let definition = self.client.put(definition).await?;
-                Ok(GolemResult::Ok(Box::new(definition)))
+                Ok(GolemResult::Ok(Box::new(ApiDefinitionPostRes(definition))))
             }
             ApiDefinitionSubcommand::List { .. } => {
                 let definitions = self.client.all_get().await?;
