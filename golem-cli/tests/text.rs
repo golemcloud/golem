@@ -2,7 +2,7 @@ use crate::cli::{Cli, CliLive};
 use crate::worker::make_template;
 use golem_cli::model::template::TemplateView;
 use golem_cli::model::Format;
-use golem_client::model::VersionedWorkerId;
+use golem_client::model::WorkerId;
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
@@ -272,7 +272,7 @@ fn text_worker_get_invocation_key(
         make_template(deps, &format!("{name} text worker invocation key"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_invocation_key");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -315,7 +315,7 @@ fn text_worker_invoke_and_await(
         make_template(deps, &format!("{name} text worker_invoke_and_await"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -358,7 +358,7 @@ fn text_worker_get(
     let template_id = make_template(deps, &format!("{name} text worker get"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_get");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -401,7 +401,7 @@ fn text_worker_list(
     let template_id = make_template(deps, &format!("{name} text worker list"), &cli)?.template_id;
     let worker_name = format!("{name:_<9}_worker_list");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
