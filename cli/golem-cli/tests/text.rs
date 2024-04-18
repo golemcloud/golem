@@ -621,20 +621,28 @@ fn text_api_definition_list(
     let template = make_shopping_cart_template(deps, &template_name, &cli)?;
     let def = golem_def(&template_name, &template.template_id);
     let path = make_golem_file(&def)?;
+    let cfg = &cli.config;
 
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
-    let res = cli
-        .with_format(Format::Text)
-        .run_string(&["api-definition", "list"])?;
+    let res = cli.with_format(Format::Text).run_string(&[
+        "api-definition",
+        "list",
+        &cfg.arg('i', "id"),
+        &template_name,
+    ])?;
 
-    let res = strip_ansi_escapes::strip_str(res);
+    let expected = formatdoc!(
+        "
+            +-----------------------------------+---------+--------------+
+            | ID                                | Version | Routes count |
+            +-----------------------------------+---------+--------------+
+            | {template_name} | 0.1.0   |            1 |
+            +-----------------------------------+---------+--------------+
+            "
+    );
 
-    let lines = res.lines().collect::<Vec<_>>();
-
-    let header_regex = Regex::new("| ID +| Version + | Routes count +|")?;
-
-    assert!(header_regex.is_match(lines.get(1).unwrap()));
+    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 
     Ok(())
 }
@@ -664,15 +672,20 @@ fn text_api_definition_get(
         "0.1.0",
     ])?;
 
-    let expected = formatdoc!(
-        "
-            +----------------------------------+---------+----------------------------------+
-            | ID                               | Version | Routes                           |
-            +----------------------------------+---------+----------------------------------+
-            | {template_name} | 0.1.0   | Get /{{user-id}}/get-cart-contents |
-            +----------------------------------+---------+----------------------------------+
+    let template_end = &template.template_id[template.template_id.len() - 7..];
+
+    let expected =
+        formatdoc!(
             "
-    );
+            API Definition with ID {template_name} and version 0.1.0.
+            Routes:
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            | Method | Path                         | Template | Worker                         | Function                       |
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{template_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            "
+        );
 
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 
