@@ -241,7 +241,7 @@ fn text_worker_add(
     ])?;
 
     let regex_res = Regex::new(
-        "New worker created for template ([^ ]+), with name ([^ ]+), using template version 0.\n",
+        "New worker created for template ([^ ]+), with name ([^ ]+).\n",
     )
     .unwrap();
 
