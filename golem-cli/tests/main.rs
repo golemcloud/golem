@@ -5,6 +5,7 @@ use tracing::info;
 
 pub mod cli;
 mod template;
+mod text;
 mod worker;
 
 fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
@@ -13,7 +14,8 @@ fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
     let mut tests = Vec::new();
 
     tests.append(&mut template::all(deps.clone()));
-    tests.append(&mut worker::all(deps));
+    tests.append(&mut worker::all(deps.clone()));
+    tests.append(&mut text::all(deps));
 
     libtest_mimic::run(&args, tests)
 }

@@ -20,6 +20,7 @@ use itertools::Itertools;
 
 use crate::clients::template::TemplateClient;
 use crate::model::template::TemplateView;
+use crate::model::text::{TemplateAddView, TemplateUpdateView};
 use crate::model::{
     GolemError, GolemResult, PathBufOrStdin, TemplateId, TemplateIdOrName, TemplateName,
 };
@@ -90,7 +91,7 @@ impl<C: TemplateClient + Send + Sync> TemplateHandler for TemplateHandlerLive<C>
                 let template = self.client.add(template_name, template_file).await?;
                 let view: TemplateView = template.into();
 
-                Ok(GolemResult::Ok(Box::new(view)))
+                Ok(GolemResult::Ok(Box::new(TemplateAddView(view))))
             }
             TemplateSubcommand::Update {
                 template_id_or_name,
@@ -100,7 +101,7 @@ impl<C: TemplateClient + Send + Sync> TemplateHandler for TemplateHandlerLive<C>
                 let template = self.client.update(id, template_file).await?;
                 let view: TemplateView = template.into();
 
-                Ok(GolemResult::Ok(Box::new(view)))
+                Ok(GolemResult::Ok(Box::new(TemplateUpdateView(view))))
             }
             TemplateSubcommand::List { template_name } => {
                 let templates = self.client.find(template_name).await?;
