@@ -27,12 +27,15 @@ use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, PathBufOrS
 
 #[async_trait]
 pub trait ApiDefinitionClient {
-    async fn all_get(&self) -> Result<Vec<HttpApiDefinition>, GolemError>;
+    async fn list(
+        &self,
+        id: Option<&ApiDefinitionId>,
+    ) -> Result<Vec<HttpApiDefinition>, GolemError>;
     async fn get(
         &self,
         id: ApiDefinitionId,
         version: ApiDefinitionVersion,
-    ) -> Result<Vec<HttpApiDefinition>, GolemError>;
+    ) -> Result<HttpApiDefinition, GolemError>;
     async fn create(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError>;
     async fn update(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError>;
     async fn import(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError>;
@@ -95,19 +98,19 @@ async fn create_or_update_api_definition<
             let value: serde_json::value::Value = serde_json::from_str(definition_str.as_str())
                 .map_err(|e| GolemError(format!("Failed to parse json: {e:?}")))?;
 
-            Ok(client.oas_put(&value).await?)
+            Ok(client.import_open_api(&value).await?)
         }
         Action::Create => {
             let value: HttpApiDefinition = serde_json::from_str(definition_str.as_str())
                 .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
 
-            Ok(client.post(&value).await?)
+            Ok(client.create(&value).await?)
         }
         Action::Update => {
             let value: HttpApiDefinition = serde_json::from_str(definition_str.as_str())
                 .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
 
-            Ok(client.put(&value).await?)
+            Ok(client.update(&value.id, &value.version, &value).await?)
         }
     }
 }
@@ -116,17 +119,20 @@ async fn create_or_update_api_definition<
 impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClient
     for ApiDefinitionClientLive<C>
 {
-    async fn all_get(&self) -> Result<Vec<HttpApiDefinition>, GolemError> {
+    async fn list(
+        &self,
+        id: Option<&ApiDefinitionId>,
+    ) -> Result<Vec<HttpApiDefinition>, GolemError> {
         info!("Getting api definitions");
 
-        Ok(self.client.all_get().await?)
+        Ok(self.client.list(id.map(|id| id.0.as_str())).await?)
     }
 
     async fn get(
         &self,
         id: ApiDefinitionId,
         version: ApiDefinitionVersion,
-    ) -> Result<Vec<HttpApiDefinition>, GolemError> {
+    ) -> Result<HttpApiDefinition, GolemError> {
         info!("Getting api definition for {}/{}", id.0, version.0);
 
         Ok(self.client.get(id.0.as_str(), version.0.as_str()).await?)

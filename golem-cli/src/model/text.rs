@@ -17,30 +17,6 @@ pub trait TextFormat {
 }
 
 #[derive(Table)]
-struct ApiDefinitionDetailedView {
-    #[table(title = "ID")]
-    pub id: String,
-    #[table(title = "Version")]
-    pub version: String,
-    #[table(title = "Routes")]
-    pub routes: String,
-}
-
-impl From<&HttpApiDefinition> for ApiDefinitionDetailedView {
-    fn from(value: &HttpApiDefinition) -> Self {
-        Self {
-            id: value.id.to_string(),
-            version: value.version.to_string(),
-            routes: value
-                .routes
-                .iter()
-                .map(|r| format!("{} {}", r.method.to_string(), r.path))
-                .join("\n"),
-        }
-    }
-}
-
-#[derive(Table)]
 struct HttpApiDefinitionView {
     #[table(title = "ID")]
     pub id: String,
@@ -73,18 +49,11 @@ impl TextFormat for Vec<HttpApiDefinition> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiDefinitionGetRes(pub Vec<HttpApiDefinition>);
+pub struct ApiDefinitionGetRes(pub HttpApiDefinition);
 
 impl TextFormat for ApiDefinitionGetRes {
     fn print(&self) {
-        print_stdout(
-            self.0
-                .iter()
-                .map(ApiDefinitionDetailedView::from)
-                .collect::<Vec<_>>()
-                .with_title(),
-        )
-        .unwrap()
+        print_api_definition(&self.0, "")
     }
 }
 
@@ -122,7 +91,7 @@ impl From<&Route> for RouteView {
 fn print_api_definition(def: &HttpApiDefinition, action: &str) {
     printdoc!(
         "
-            API Definition {action} with ID {} and version {}.
+            API Definition {action}with ID {} and version {}.
             Routes:
             ",
         def.id,
@@ -141,7 +110,7 @@ fn print_api_definition(def: &HttpApiDefinition, action: &str) {
 
 impl TextFormat for ApiDefinitionAddRes {
     fn print(&self) {
-        print_api_definition(&self.0, "created");
+        print_api_definition(&self.0, "created ");
     }
 }
 
@@ -150,7 +119,7 @@ pub struct ApiDefinitionUpdateRes(pub HttpApiDefinition);
 
 impl TextFormat for ApiDefinitionUpdateRes {
     fn print(&self) {
-        print_api_definition(&self.0, "updated");
+        print_api_definition(&self.0, "updated ");
     }
 }
 
@@ -159,7 +128,7 @@ pub struct ApiDefinitionImportRes(pub HttpApiDefinition);
 
 impl TextFormat for ApiDefinitionImportRes {
     fn print(&self) {
-        print_api_definition(&self.0, "imported");
+        print_api_definition(&self.0, "imported ");
     }
 }
 

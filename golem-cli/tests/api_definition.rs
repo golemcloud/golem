@@ -39,6 +39,11 @@ fn make(
             api_definition_list,
         ),
         Trial::test_in_context(
+            format!("api_definition_list_versions{suffix}"),
+            ctx.clone(),
+            api_definition_list_versions,
+        ),
+        Trial::test_in_context(
             format!("api_definition_get{suffix}"),
             ctx.clone(),
             api_definition_get,
@@ -279,6 +284,34 @@ fn api_definition_list(
     Ok(())
 }
 
+fn api_definition_list_versions(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let template_name = format!("api_definition_list_versions{name}");
+    let template = make_shopping_cart_template(deps, &template_name, &cli)?;
+    let def = golem_def(&template_name, &template.template_id);
+    let path = make_golem_file(&def)?;
+    let cfg = &cli.config;
+
+    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+
+    let res: Vec<HttpApiDefinition> = cli.run(&[
+        "api-definition",
+        "list",
+        &cfg.arg('i', "id"),
+        &template_name,
+    ])?;
+
+    assert_eq!(res.len(), 1);
+    assert_eq!(*res.first().unwrap(), def);
+
+    Ok(())
+}
+
 fn api_definition_get(
     (deps, name, cli): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
@@ -295,7 +328,7 @@ fn api_definition_get(
 
     let cfg = &cli.config;
 
-    let res_list: Vec<HttpApiDefinition> = cli.run(&[
+    let res: HttpApiDefinition = cli.run(&[
         "api-definition",
         "get",
         &cfg.arg('i', "id"),
@@ -304,11 +337,7 @@ fn api_definition_get(
         "0.1.0",
     ])?;
 
-    assert_eq!(res_list.len(), 1);
-
-    let res = res_list.first().unwrap();
-
-    assert_eq!(*res, def);
+    assert_eq!(res, def);
 
     Ok(())
 }
@@ -329,7 +358,7 @@ fn api_definition_delete(
 
     let cfg = &cli.config;
 
-    let res_list: Vec<HttpApiDefinition> = cli.run(&[
+    let res: HttpApiDefinition = cli.run(&[
         "api-definition",
         "get",
         &cfg.arg('i', "id"),
@@ -338,11 +367,7 @@ fn api_definition_delete(
         "0.1.0",
     ])?;
 
-    assert_eq!(res_list.len(), 1);
-
-    let res = res_list.first().unwrap();
-
-    assert_eq!(*res, def);
+    assert_eq!(res, def);
 
     cli.run_unit(&[
         "api-definition",
@@ -355,11 +380,9 @@ fn api_definition_delete(
 
     let res_list: Vec<HttpApiDefinition> = cli.run(&[
         "api-definition",
-        "get",
+        "list",
         &cfg.arg('i', "id"),
         &template_name,
-        &cfg.arg('V', "version"),
-        "0.1.0",
     ])?;
 
     assert!(res_list.is_empty());

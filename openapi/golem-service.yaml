@@ -803,10 +803,11 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v1/api/definitions/oas:
+  /v1/api/definitions/import:
     put:
       tags:
       - ApiDefinition
+      operationId: import_open_api
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -859,18 +860,10 @@ paths:
     get:
       tags:
       - ApiDefinition
+      operationId: list
       parameters:
       - in: query
         name: api-definition-id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
-      - in: query
-        name: version
-        required: true
         deprecated: false
         schema:
           type: string
@@ -921,9 +914,10 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-    put:
+    post:
       tags:
       - ApiDefinition
+      operationId: create
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -973,9 +967,92 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-    post:
+  /v1/api/definitions/{id}/{version}:
+    get:
       tags:
       - ApiDefinition
+      operationId: get
+      parameters:
+      - in: path
+        name: id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    put:
+      tags:
+      - ApiDefinition
+      operationId: update
+      parameters:
+      - in: path
+        name: id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -1028,23 +1105,24 @@ paths:
     delete:
       tags:
       - ApiDefinition
+      operationId: delete
       parameters:
-      - in: query
-        name: api-definition-id
+      - in: path
+        name: id
         required: true
         deprecated: false
         schema:
           type: string
         explode: true
-        style: form
-      - in: query
+        style: simple
+      - in: path
         name: version
         required: true
         deprecated: false
         schema:
           type: string
         explode: true
-        style: form
+        style: simple
       responses:
         '200':
           description: ''
@@ -1052,55 +1130,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 type: string
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: string
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-  /v1/api/definitions/all:
-    get:
-      tags:
-      - ApiDefinition
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/HttpApiDefinition'
         '400':
           description: ''
           content:
