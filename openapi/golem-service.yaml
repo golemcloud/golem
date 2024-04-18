@@ -119,7 +119,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerId'
+                $ref: '#/components/schemas/WorkerCreationResponse'
         '400':
           description: ''
           content:
@@ -2461,6 +2461,17 @@ components:
       - name
       - args
       - env
+    WorkerCreationResponse:
+      type: object
+      properties:
+        worker_id:
+          $ref: '#/components/schemas/WorkerId'
+        component_version:
+          type: integer
+          format: uint64
+      required:
+      - worker_id
+      - component_version
     WorkerEnvFilter:
       type: object
       properties:
