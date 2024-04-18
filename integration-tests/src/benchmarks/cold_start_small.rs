@@ -16,7 +16,7 @@ use async_trait::async_trait;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder};
-use integration_tests::{run_benchmark, run_echo, setup, Context};
+use integration_tests::benchmarks::{run_benchmark, run_echo, setup, Context};
 
 struct ColdStartEchoSmall {
     config: CliParams,
