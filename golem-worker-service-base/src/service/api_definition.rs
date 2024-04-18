@@ -11,6 +11,7 @@ use crate::api_definition::{
     ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion,
 };
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
+use crate::repo::api_namespace::ApiNamespace;
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 use super::template::TemplateService;
@@ -66,36 +67,6 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ApiDefinition, ValidationErro
     ) -> ApiResult<Vec<ApiDefinition>, ValidationError>;
 }
 
-pub trait ApiNamespace:
-    Eq
-    + Hash
-    + PartialEq
-    + Clone
-    + Debug
-    + Display
-    + Send
-    + Sync
-    + bincode::Encode
-    + bincode::Decode
-    + serde::de::DeserializeOwned
-{
-}
-impl<
-        T: Eq
-            + Hash
-            + PartialEq
-            + Clone
-            + Debug
-            + Display
-            + Send
-            + Sync
-            + bincode::Encode
-            + bincode::Decode
-            + serde::de::DeserializeOwned,
-    > ApiNamespace for T
-{
-}
-
 // An ApiDefinitionKey is just the original ApiDefinitionId with additional information of version and a possibility of namespace.
 // A namespace here can be for example: account, project, production, dev or a composite value, or infact as simple
 // as a constant string or unit.
@@ -116,6 +87,18 @@ impl<Namespace: Display> ApiDefinitionKey<Namespace> {
             id: self.id.clone(),
             version: self.version.clone(),
         }
+    }
+}
+
+impl<Namespace: Display> Display for ApiDefinitionKey<Namespace> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{namespace}::{id}::{version}",
+            namespace = self.namespace,
+            id = self.id,
+            version = self.version
+        )
     }
 }
 

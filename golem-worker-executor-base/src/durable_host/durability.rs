@@ -24,7 +24,7 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
     ) -> Result<Success, Err>
     where
         Success: Send,
-        Err: Send,
+        Err: From<GolemError> + Send,
         AsyncFn: for<'b> FnOnce(
                 &'b mut DurableWorkerCtx<Ctx>,
             )
@@ -77,7 +77,7 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
     ) -> Result<Success, Err>
     where
         Success: Clone + Send,
-        Err: Send,
+        Err: From<GolemError> + Send,
         AsyncFn: for<'b> FnOnce(
                 &'b mut DurableWorkerCtx<Ctx>,
             )
@@ -108,7 +108,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
     ) -> Result<Success, Err>
     where
         Success: Send,
-        Err: Send,
+        Err: From<GolemError> + Send,
         AsyncFn: for<'b> FnOnce(
                 &'b mut DurableWorkerCtx<Ctx>,
             )
@@ -130,8 +130,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         let begin_index = self
             .state
             .begin_function(&wrapped_function_type.clone())
-            .await
-            .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+            .await?;
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
             let result = function(self).await;
@@ -150,22 +149,18 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             result
         } else {
             let oplog_entry =
-                crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)
-                    .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+                crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
+            Self::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = oplog_entry
                 .payload::<Result<SerializedSuccess, SerializedErr>>()
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to deserialize function response: {:?}: {err}",
-                        oplog_entry
-                    )
-                })
+                .map_err(|err| {
+                    GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
+                })?
                 .unwrap();
 
             self.state
                 .end_function(&wrapped_function_type, begin_index)
-                .await
-                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+                .await?;
 
             match response {
                 Ok(serialized_success) => {
@@ -185,7 +180,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
     ) -> Result<Success, Err>
     where
         Success: Clone + Send,
-        Err: Send,
+        Err: From<GolemError> + Send,
         AsyncFn: for<'b> FnOnce(
                 &'b mut DurableWorkerCtx<Ctx>,
             )
@@ -199,8 +194,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         let begin_index = self
             .state
             .begin_function(&wrapped_function_type.clone())
-            .await
-            .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+            .await?;
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
             let result = function(self).await;
@@ -219,22 +213,18 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             result
         } else {
             let oplog_entry =
-                crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)
-                    .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+                crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
+            Self::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = oplog_entry
                 .payload::<Result<SerializedSuccess, SerializedErr>>()
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to deserialize function response: {:?}: {err}",
-                        oplog_entry
-                    )
-                })
+                .map_err(|err| {
+                    GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
+                })?
                 .unwrap();
 
             self.state
                 .end_function(&wrapped_function_type, begin_index)
-                .await
-                .map_err(|err| Into::<SerializedErr>::into(err).into())?;
+                .await?;
 
             response
                 .map(|serialized_success| serialized_success.into())
@@ -268,15 +258,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     serializable_result
                 )
             });
-            self.state.set_oplog_entry(oplog_entry).await;
+            self.state.oplog.add(oplog_entry).await;
             self.state
                 .end_function(wrapped_function_type, begin_index)
                 .await
                 .map_err(|err| Into::<SerializedErr>::into(err).into())?;
             if *wrapped_function_type == WrappedFunctionType::WriteRemote {
-                self.state.commit_oplog().await;
+                self.state.oplog.commit().await;
             }
         }
         Ok(())
+    }
+
+    fn validate_oplog_entry(
+        oplog_entry: &OplogEntry,
+        expected_function_name: &str,
+    ) -> Result<(), GolemError> {
+        if let OplogEntry::ImportedFunctionInvoked { function_name, .. } = oplog_entry {
+            if function_name != expected_function_name {
+                Err(GolemError::unexpected_oplog_entry(
+                    expected_function_name,
+                    function_name,
+                ))
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
     }
 }

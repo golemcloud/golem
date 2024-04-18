@@ -98,7 +98,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
 }
 
 pub struct GetWorkersEntry {
-    template_id: golem_common::model::TemplateId,
+    template_id: TemplateId,
     filter: Option<golem_common::model::WorkerFilter>,
     precise: bool,
     count: u64,
@@ -107,7 +107,7 @@ pub struct GetWorkersEntry {
 
 impl GetWorkersEntry {
     pub fn new(
-        template_id: golem_common::model::TemplateId,
+        template_id: TemplateId,
         filter: Option<golem_common::model::WorkerFilter>,
         precise: bool,
     ) -> Self {
@@ -132,7 +132,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         Ok(self
             .public_state
             .promise_service
-            .create(&self.worker_id.worker_id, self.state.oplog_idx)
+            .create(&self.worker_id, self.state.current_oplog_index().await)
             .await
             .into())
     }
@@ -216,9 +216,9 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<OplogIndex> {
         record_host_function_call("golem::api", "get_oplog_index");
-        let result = self.state.oplog_idx;
+        let result = self.state.current_oplog_index().await;
         if self.state.is_live() {
-            self.state.set_oplog_entry(OplogEntry::nop()).await;
+            self.state.oplog.add(OplogEntry::nop()).await;
         } else {
             let _ = get_oplog_entry!(self.state, OplogEntry::NoOp);
         }
@@ -227,7 +227,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
     async fn set_oplog_index(&mut self, oplog_idx: OplogIndex) -> anyhow::Result<()> {
         record_host_function_call("golem::api", "set_oplog_index");
-        let jump_source = self.state.oplog_idx;
+        let jump_source = self.state.current_oplog_index().await;
         let jump_target = oplog_idx;
         if jump_target > jump_source {
             Err(anyhow!(
@@ -245,8 +245,8 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
             // Write an oplog entry with the new jump and then restart the worker
             self.state.deleted_regions.add(jump.clone());
-            self.state.set_oplog_entry(OplogEntry::jump(jump)).await;
-            self.state.commit_oplog().await;
+            self.state.oplog.add(OplogEntry::jump(jump)).await;
+            self.state.oplog.commit().await;
 
             debug!(
                 "Interrupting live execution of {} for jumping from {jump_source} to {jump_target}",
@@ -269,7 +269,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             );
             loop {
                 // Applying a timeout to make sure the worker remains interruptible
-                if self.state.commit_oplog_to_replicas(replicas, timeout).await {
+                if self.state.oplog.wait_for_replicas(replicas, timeout).await {
                     debug!(
                         "Worker {} committed oplog to {} replicas",
                         self.worker_id, replicas
@@ -293,12 +293,13 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
     async fn mark_begin_operation(&mut self) -> anyhow::Result<OplogIndex> {
         record_host_function_call("golem::api", "mark_begin_operation");
-        let begin_index = self.state.oplog_idx;
+        let begin_index = self.state.current_oplog_index().await;
 
         self.state.consume_hint_entries().await;
         if self.state.is_live() {
             self.state
-                .set_oplog_entry(OplogEntry::begin_atomic_region())
+                .oplog
+                .add(OplogEntry::begin_atomic_region())
                 .await;
         } else {
             let _ = get_oplog_entry!(self.state, OplogEntry::BeginAtomicRegion)?;
@@ -318,20 +319,18 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                     debug!("Worker {}'s atomic operation starting at {} is not committed, ignoring persisted entries", self.worker_id, begin_index);
 
                     // We need to jump to the end of the oplog
-                    self.state.oplog_idx = self.state.oplog_size;
+                    self.state.replay_idx = self.state.replay_target;
 
                     // But this is not enough, because if the retried transactional block succeeds,
                     // and later we replay it, we need to skip the first attempt and only replay the second.
                     // Se we add a Jump entry to the oplog that registers a deleted region.
                     let deleted_region = OplogRegion {
-                        start: begin_index + 1,         // need to keep the BeginAtomicRegion entry
-                        end: self.state.oplog_size + 1, // skipping the Jump entry too
+                        start: begin_index + 1,            // need to keep the BeginAtomicRegion entry
+                        end: self.state.replay_target + 1, // skipping the Jump entry too
                     };
                     self.state.deleted_regions.add(deleted_region.clone());
-                    self.state
-                        .set_oplog_entry(OplogEntry::jump(deleted_region))
-                        .await;
-                    self.state.commit_oplog().await;
+                    self.state.oplog.add(OplogEntry::jump(deleted_region)).await;
+                    self.state.oplog.commit().await;
                 }
             }
         }
@@ -343,7 +342,8 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         self.state.consume_hint_entries().await;
         if self.state.is_live() {
             self.state
-                .set_oplog_entry(OplogEntry::end_atomic_region(begin))
+                .oplog
+                .add(OplogEntry::end_atomic_region(begin))
                 .await;
         } else {
             let _ = get_oplog_entry!(self.state, OplogEntry::EndAtomicRegion)?;
@@ -368,7 +368,8 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         self.state.consume_hint_entries().await;
         if self.state.is_live() {
             self.state
-                .set_oplog_entry(OplogEntry::change_retry_policy(new_retry_policy))
+                .oplog
+                .add(OplogEntry::change_retry_policy(new_retry_policy))
                 .await;
         } else {
             let _ = get_oplog_entry!(self.state, OplogEntry::ChangeRetryPolicy)?;
@@ -388,7 +389,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         record_host_function_call("golem::api", "set_oplog_persistence_level");
         // commit all pending entries and change persistence level
         if self.state.is_live() {
-            self.state.commit_oplog().await;
+            self.state.oplog.commit().await;
         }
         self.state.persistence_level = new_persistence_level.into();
         debug!(
@@ -653,11 +654,11 @@ impl From<golem::api::host::WorkerAnyFilter> for golem_common::model::WorkerFilt
 impl From<golem_common::model::WorkerMetadata> for golem::api::host::WorkerMetadata {
     fn from(value: golem_common::model::WorkerMetadata) -> Self {
         Self {
-            worker_id: value.worker_id.worker_id.into(),
+            worker_id: value.worker_id.into(),
             args: value.args,
             env: value.env,
             status: value.last_known_status.status.into(),
-            template_version: value.worker_id.template_version,
+            template_version: value.last_known_status.component_version,
             retry_count: 0,
         }
     }

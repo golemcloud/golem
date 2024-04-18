@@ -275,8 +275,8 @@ pub struct SchedulerConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct OplogConfig {
-    pub max_operations_before_commit: i32,
-    pub operations_to_load: i32,
+    pub max_operations_before_commit: u64,
+    pub operations_to_load: u64,
     pub debug_enabled: bool,
 }
 

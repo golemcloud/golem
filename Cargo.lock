@@ -1512,7 +1512,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0610544180c38b88101fecf2dd634b174a62eef6946f84dfc6a7127512b381c"
 dependencies = [
  "bitflags 1.3.2",
- "textwrap",
+ "textwrap 0.11.0",
  "unicode-width",
 ]
 
@@ -1565,6 +1565,29 @@ name = "clap_lex"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98cc8fbded0c607b7ba9dd60cd98df59af97e84d24e49c8557331cfc26d301ce"
+
+[[package]]
+name = "cli-table"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adfbb116d9e2c4be7011360d0c0bee565712c11e969c9609b25b619366dc379d"
+dependencies = [
+ "cli-table-derive",
+ "csv",
+ "termcolor",
+ "unicode-width",
+]
+
+[[package]]
+name = "cli-table-derive"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af3bfb9da627b0a6c467624fb7963921433774ed435493b5c08a3053e829ad4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
 
 [[package]]
 name = "colorchoice"
@@ -3082,7 +3105,7 @@ dependencies = [
  "bytes 1.6.0",
  "cargo_metadata",
  "futures-core",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.21",
  "prost 0.12.3",
  "prost-types 0.12.3",
  "serde",
@@ -3102,6 +3125,7 @@ dependencies = [
  "chrono",
  "clap 4.5.4",
  "clap-verbosity-flag",
+ "cli-table",
  "derive_more",
  "dirs 5.0.1",
  "env_logger 0.11.3",
@@ -3110,7 +3134,7 @@ dependencies = [
  "golem-examples",
  "golem-test-framework",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.21",
  "golem-wasm-rpc-stubgen",
  "h2 0.3.25",
  "http 1.1.0",
@@ -3124,15 +3148,18 @@ dependencies = [
  "postgres",
  "rand 0.8.5",
  "redis 0.24.0",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
  "serde_json_path",
  "serde_yaml",
+ "strip-ansi-escapes",
  "strum 0.25.0",
  "strum_macros 0.25.3",
  "testcontainers",
  "testcontainers-modules",
+ "textwrap 0.16.1",
  "tokio",
  "tokio-postgres",
  "tokio-tungstenite 0.20.1",
@@ -3178,7 +3205,7 @@ dependencies = [
  "fred",
  "futures-core",
  "golem-api-grpc",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.21",
  "humantime-serde",
  "iso8601-timestamp",
  "lazy_static",
@@ -3247,7 +3274,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.21",
  "http 0.2.12",
  "http 1.1.0",
  "hyper 1.2.0",
@@ -3339,7 +3366,7 @@ dependencies = [
  "golem-service-base",
  "golem-template-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.21",
  "http 0.2.12",
  "humantime-serde",
  "lazy_static",
@@ -3394,7 +3421,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.21",
  "k8s-openapi",
  "kill_tree",
  "kube",
@@ -3449,6 +3476,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-wasm-rpc"
+version = "0.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb1b4a24800a34235d8f5773c462b68b7db61d17d3b0af6a705f206e7331128c"
+dependencies = [
+ "arbitrary",
+ "bigdecimal",
+ "bincode 2.0.0-rc.3",
+ "golem-wasm-ast",
+ "prost 0.12.3",
+ "prost-build 0.12.3",
+ "serde",
+ "serde_json",
+ "wasm-wave 0.4.0",
+ "wasmtime 17.0.0",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "golem-wasm-rpc-stubgen"
 version = "0.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3462,7 +3508,7 @@ dependencies = [
  "dir-diff",
  "fs_extra",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.20",
  "heck 0.4.1",
  "id-arena",
  "indexmap 2.2.6",
@@ -3497,7 +3543,7 @@ dependencies = [
  "figment",
  "golem-api-grpc",
  "golem-common",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.21",
  "golem-worker-executor-base",
  "humantime-serde",
  "prometheus",
@@ -3551,7 +3597,7 @@ dependencies = [
  "golem-common",
  "golem-test-framework",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.21",
  "golem-wit",
  "http 0.2.12",
  "http 1.1.0",
@@ -3608,7 +3654,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.21",
  "golem-worker-service-base",
  "http 0.2.12",
  "http 1.1.0",
@@ -3660,7 +3706,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.21",
  "http 0.2.12",
  "http 1.1.0",
  "humantime-serde",
@@ -4254,7 +4300,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-test-framework",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.21",
  "rand 0.8.5",
  "tokio",
  "tracing",
@@ -7274,6 +7320,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c5e1a9a646d36c3599cd173a41282daf47c44583ad367b8e6837255952e5c67"
 
 [[package]]
+name = "smawk"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7c388c1b5e93756d0c740965c41e8822f866621d41acbdf6336a6a168f8840c"
+
+[[package]]
 name = "socket2"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7592,6 +7644,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "strip-ansi-escapes"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55ff8ef943b384c414f54aefa961dd2bd853add74ec75e7ac74cf91dba62bcfa"
+dependencies = [
+ "vte",
+]
+
+[[package]]
 name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7792,6 +7853,17 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d326610f408c7a4eb6f51c37c330e496b08506c9457c9d34287ecc38809fb060"
 dependencies = [
+ "unicode-width",
+]
+
+[[package]]
+name = "textwrap"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23d434d3f8967a09480fb04132ebe0a3e088c173e6d0ee7897abbdf4eab0f8b9"
+dependencies = [
+ "smawk",
+ "unicode-linebreak",
  "unicode-width",
 ]
 
@@ -8450,6 +8522,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
 
 [[package]]
+name = "unicode-linebreak"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
+
+[[package]]
 name = "unicode-normalization"
 version = "0.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8579,6 +8657,26 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
+
+[[package]]
+name = "vte"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5022b5fbf9407086c180e9557be968742d839e68346af7792b8592489732197"
+dependencies = [
+ "utf8parse",
+ "vte_generate_state_changes",
+]
+
+[[package]]
+name = "vte_generate_state_changes"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d257817081c7dffcdbab24b9e62d2def62e2ff7d00b1c20062551e6cccc145ff"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
 
 [[package]]
 name = "wait-timeout"

@@ -25,7 +25,7 @@ use golem_common::model::{
     WorkerStatus,
 };
 use golem_service_base::model::{
-    GolemErrorUnknown, PromiseId, ResourceLimits, VersionedWorkerId, WorkerId, WorkerMetadata,
+    GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
 };
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
@@ -42,12 +42,6 @@ pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 
 #[async_trait]
 pub trait WorkerService<AuthCtx> {
-    async fn get_by_id(
-        &self,
-        worker_id: &WorkerId,
-        auth_ctx: &AuthCtx,
-    ) -> WorkerResult<VersionedWorkerId>;
-
     async fn create(
         &self,
         worker_id: &WorkerId,
@@ -56,7 +50,7 @@ pub trait WorkerService<AuthCtx> {
         environment_variables: HashMap<String, String>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<VersionedWorkerId>;
+    ) -> WorkerResult<WorkerId>;
 
     async fn connect(
         &self,
@@ -190,17 +184,6 @@ impl<AuthCtx> WorkerService<AuthCtx> for WorkerServiceDefault<AuthCtx>
 where
     AuthCtx: Send + Sync,
 {
-    async fn get_by_id(
-        &self,
-        worker_id: &WorkerId,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<VersionedWorkerId> {
-        Ok(VersionedWorkerId {
-            worker_id: worker_id.clone(),
-            template_version_used: 0,
-        })
-    }
-
     async fn create(
         &self,
         worker_id: &WorkerId,
@@ -209,7 +192,7 @@ where
         environment_variables: HashMap<String, String>,
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<VersionedWorkerId> {
+    ) -> WorkerResult<WorkerId> {
         self.retry_on_invalid_shard_id(
             &worker_id.clone(),
             &(worker_id.clone(), template_version, arguments, environment_variables, metadata),
@@ -249,12 +232,7 @@ where
                 })
             }).await?;
 
-        let worker_id = VersionedWorkerId {
-            worker_id: worker_id.clone(),
-            template_version_used: template_version,
-        };
-
-        Ok(worker_id)
+        Ok(worker_id.clone())
     }
 
     async fn connect(
@@ -436,7 +414,7 @@ where
                     .into_iter()
                     .map(|parameter| parameter.into())
                     .collect(),
-                calling_convention.clone(),
+                *calling_convention,
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
         let results_val = self
@@ -459,7 +437,7 @@ where
 
         results_val
             .result
-            .validate_function_result(function_results, calling_convention.clone())
+            .validate_function_result(function_results, *calling_convention)
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
     }
 
@@ -489,13 +467,13 @@ where
                     .into_iter()
                     .map(|parameter| parameter.into())
                     .collect(),
-                calling_convention.clone(),
+                *calling_convention,
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         let invoke_response = self.retry_on_invalid_shard_id(
             worker_id,
-            &(worker_id.clone(), function_name, params_val, invocation_key.clone(), calling_convention.clone(), metadata),
+            &(worker_id.clone(), function_name, params_val, invocation_key.clone(), *calling_convention, metadata),
             |worker_executor_client, (worker_id, function_name, params_val, invocation_key, calling_convention, metadata)| {
                 Box::pin(async move {
                     let response = worker_executor_client.invoke_and_await_worker(
@@ -504,7 +482,7 @@ where
                             name: function_name.clone(),
                             input: params_val.clone(),
                             invocation_key: Some(invocation_key.clone().into()),
-                            calling_convention: calling_convention.clone().into(),
+                            calling_convention: (*calling_convention).into(),
                             account_id: metadata.account_id.clone().map(|id| id.into()),
                             account_limits: metadata.limits.clone().map(|id| id.into()),
                         }
@@ -1310,17 +1288,6 @@ impl<AuthCtx> WorkerService<AuthCtx> for WorkerServiceNoOp
 where
     AuthCtx: Send + Sync,
 {
-    async fn get_by_id(
-        &self,
-        _worker_id: &WorkerId,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<VersionedWorkerId> {
-        Ok(VersionedWorkerId {
-            worker_id: WorkerId::new(TemplateId::new_v4(), "no-op".to_string()).unwrap(),
-            template_version_used: 0,
-        })
-    }
-
     async fn create(
         &self,
         _worker_id: &WorkerId,
@@ -1329,11 +1296,8 @@ where
         _environment_variables: HashMap<String, String>,
         _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<VersionedWorkerId> {
-        Ok(VersionedWorkerId {
-            worker_id: WorkerId::new(TemplateId::new_v4(), "no-op".to_string()).unwrap(),
-            template_version_used: 0,
-        })
+    ) -> WorkerResult<WorkerId> {
+        Ok(WorkerId::new(TemplateId::new_v4(), "no-op".to_string()).unwrap())
     }
 
     async fn connect(

@@ -93,7 +93,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator
                     worker_id,
                     metadata.args,
                     metadata.env,
-                    Some(metadata.worker_id.template_version),
+                    Some(metadata.last_known_status.component_version),
                     metadata.account_id,
                 )
                 .await

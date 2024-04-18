@@ -14,6 +14,7 @@
 
 pub mod invoke_result_view;
 pub mod template;
+pub mod text;
 pub mod wave;
 
 use std::ffi::OsStr;
@@ -21,6 +22,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use crate::model::text::TextFormat;
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Command, Error, FromArgMatches};
@@ -50,11 +52,13 @@ pub trait PrintRes {
 impl<T> PrintRes for T
 where
     T: Serialize,
+    T: TextFormat,
 {
     fn println(&self, format: &Format) {
         match format {
             Format::Json => println!("{}", serde_json::to_string_pretty(self).unwrap()),
             Format::Yaml => println!("{}", serde_yaml::to_string(self).unwrap()),
+            Format::Text => self.print(),
         }
     }
 }
@@ -121,6 +125,7 @@ impl std::error::Error for GolemError {
 pub enum Format {
     Json,
     Yaml,
+    Text,
 }
 
 impl Display for Format {
@@ -128,6 +133,7 @@ impl Display for Format {
         let s = match self {
             Self::Json => "json",
             Self::Yaml => "yaml",
+            Self::Text => "text",
         };
         Display::fmt(&s, f)
     }
@@ -140,6 +146,7 @@ impl FromStr for Format {
         match s {
             "json" => Ok(Format::Json),
             "yaml" => Ok(Format::Yaml),
+            "text" => Ok(Format::Text),
             _ => {
                 let all = Format::iter()
                     .map(|x| format!("\"{x}\""))
@@ -275,8 +282,8 @@ impl TypedValueParser for JsonValueParser {
 pub struct ExampleDescription {
     pub name: ExampleName,
     pub language: GuestLanguage,
-    pub description: String,
     pub tier: GuestLanguageTier,
+    pub description: String,
 }
 
 impl ExampleDescription {

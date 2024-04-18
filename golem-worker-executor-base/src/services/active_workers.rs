@@ -27,7 +27,7 @@ use crate::workerctx::WorkerCtx;
 
 /// Holds the metadata and wasmtime structures of the active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
-    cache: Cache<WorkerId, PendingWorker, Arc<Worker<Ctx>>, GolemError>,
+    cache: Cache<WorkerId, PendingWorker<Ctx>, Arc<Worker<Ctx>>, GolemError>,
 }
 
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
@@ -64,9 +64,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         f2: F2,
     ) -> Result<Arc<Worker<Ctx>>, GolemError>
     where
-        F1: FnOnce() -> Result<PendingWorker, GolemError>,
+        F1: FnOnce() -> Result<PendingWorker<Ctx>, GolemError>,
         F2: FnOnce(
-            &PendingWorker,
+            &PendingWorker<Ctx>,
         )
             -> Pin<Box<dyn Future<Output = Result<Arc<Worker<Ctx>>, GolemError>> + Send>>,
     {
@@ -78,11 +78,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         worker_id: WorkerId,
         f1: F1,
         f2: F2,
-    ) -> Result<PendingOrFinal<PendingWorker, Arc<Worker<Ctx>>>, GolemError>
+    ) -> Result<PendingOrFinal<PendingWorker<Ctx>, Arc<Worker<Ctx>>>, GolemError>
     where
-        F1: FnOnce() -> Result<PendingWorker, GolemError>,
+        F1: FnOnce() -> Result<PendingWorker<Ctx>, GolemError>,
         F2: FnOnce(
-                &PendingWorker,
+                &PendingWorker<Ctx>,
             )
                 -> Pin<Box<dyn Future<Output = Result<Arc<Worker<Ctx>>, GolemError>> + Send>>
             + Send

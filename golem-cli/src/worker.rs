@@ -28,9 +28,10 @@ use tracing::{error, info};
 use crate::clients::worker::{WorkerClient, WorkerClientLive};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::template::function_params_types;
+use crate::model::text::WorkerAddView;
 use crate::model::wave::type_to_analysed;
 use crate::model::{
-    GolemError, GolemResult, InvocationKey, JsonValueParser, TemplateId, TemplateIdOrName,
+    Format, GolemError, GolemResult, InvocationKey, JsonValueParser, TemplateId, TemplateIdOrName,
     WorkerName,
 };
 use crate::parse_key_val;
@@ -108,12 +109,6 @@ pub enum WorkerSubcommand {
         /// Enables the STDIO cal;ing convention, passing the parameters through stdin instead of a typed exported interface
         #[arg(short = 's', long, default_value_t = false)]
         use_stdio: bool,
-
-        /// Human-readable response format.
-        ///
-        /// Temporary flag. Should be replaced with the new --format option.
-        #[arg(short = 'H', long, default_value_t = false)]
-        human_readable: bool,
     },
 
     /// Triggers a function invocation on a worker without waiting for its completion
@@ -240,7 +235,11 @@ pub enum WorkerSubcommand {
 
 #[async_trait]
 pub trait WorkerHandler {
-    async fn handle(&self, subcommand: WorkerSubcommand) -> Result<GolemResult, GolemError>;
+    async fn handle(
+        &self,
+        format: Format,
+        subcommand: WorkerSubcommand,
+    ) -> Result<GolemResult, GolemError>;
 }
 
 pub struct WorkerHandlerLive<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> {
@@ -434,7 +433,11 @@ enum AsyncTemplateRequest {
 impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> WorkerHandler
     for WorkerHandlerLive<'r, C, R>
 {
-    async fn handle(&self, subcommand: WorkerSubcommand) -> Result<GolemResult, GolemError> {
+    async fn handle(
+        &self,
+        format: Format,
+        subcommand: WorkerSubcommand,
+    ) -> Result<GolemResult, GolemError> {
         match subcommand {
             WorkerSubcommand::Add {
                 template_id_or_name,
@@ -449,7 +452,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                     .new_worker(worker_name, template_id, args, env)
                     .await?;
 
-                Ok(GolemResult::Ok(Box::new(inst)))
+                Ok(GolemResult::Ok(Box::new(WorkerAddView(inst))))
             }
             WorkerSubcommand::InvocationKey {
                 template_id_or_name,
@@ -472,8 +475,8 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 parameters,
                 wave,
                 use_stdio,
-                human_readable,
             } => {
+                let human_readable = format == Format::Text;
                 let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
                 let (parameters, template_meta) = resolve_parameters(

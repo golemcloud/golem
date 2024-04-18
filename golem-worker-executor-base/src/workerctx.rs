@@ -18,8 +18,8 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, InvocationKey, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
@@ -33,15 +33,16 @@ use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::invocation_key::InvocationKeyService;
+use crate::services::invocation_queue::InvocationQueue;
 use crate::services::key_value::KeyValueService;
-use crate::services::oplog::OplogService;
+use crate::services::oplog::{Oplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::recovery::RecoveryManagement;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::{worker_enumeration, HasAll};
+use crate::services::{worker_enumeration, HasAll, HasInvocationQueue, HasOplog};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -60,15 +61,15 @@ pub trait WorkerCtx:
     + Sized
     + 'static
 {
-    /// PublicState is a subset of the worker context which is accessible outside of the worker
+    /// PublicState is a subset of the worker context which is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
-    type PublicState: PublicWorkerIo + Clone + Send + Sync;
+    type PublicState: PublicWorkerIo + HasInvocationQueue<Self> + HasOplog + Clone + Send + Sync;
 
     /// Creates a new worker context
     ///
     /// Arguments:
-    /// - `worker_id`: The versioned worker ID (consists of the template id, version, and worker name)
+    /// - `worker_id`: The worker ID (consists of the template id and worker name)
     /// - `account_id`: The account that initiated the creation of the worker
     /// - `promise_service`: The service for managing promises
     /// - `invocation_key_service`: The service for managing invocation keys
@@ -86,7 +87,7 @@ pub trait WorkerCtx:
     /// - `worker_config`: Configuration for this specific worker
     /// - `execution_status`: Lock created to store the execution status
     async fn create(
-        worker_id: VersionedWorkerId,
+        worker_id: WorkerId,
         account_id: AccountId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
@@ -99,6 +100,8 @@ pub trait WorkerCtx:
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
+        oplog: Arc<dyn Oplog + Send + Sync>,
+        invocation_queue: Arc<InvocationQueue<Self>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
@@ -118,7 +121,7 @@ pub trait WorkerCtx:
     fn resource_limiter(&mut self) -> &mut dyn ResourceLimiterAsync;
 
     /// Get the worker ID associated with this worker context
-    fn worker_id(&self) -> &VersionedWorkerId;
+    fn worker_id(&self) -> &WorkerId;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -174,7 +177,7 @@ pub trait FuelManagement {
 #[async_trait]
 pub trait InvocationManagement {
     /// Sets the invocation key associated with the current invocation of the worker.
-    async fn set_current_invocation_key(&mut self, invocation_key: Option<InvocationKey>);
+    async fn set_current_invocation_key(&mut self, invocation_key: InvocationKey);
 
     /// Gets the invocation key associated with the current invocation of the worker.
     async fn get_current_invocation_key(&self) -> Option<InvocationKey>;
@@ -231,6 +234,9 @@ pub trait StatusManagement {
     /// Stores the current worker status
     async fn store_worker_status(&self, status: WorkerStatus);
 
+    /// Update the pending invocations of the worker
+    async fn update_pending_invocations(&self);
+
     /// Called when a worker is getting deactivated
     async fn deactivate(&self);
 }
@@ -250,7 +256,7 @@ pub trait InvocationHooks {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        calling_convention: Option<&CallingConvention>,
+        calling_convention: Option<CallingConvention>,
     ) -> anyhow::Result<()>;
 
     /// Called when a worker invocation fails, before the worker gets deactivated
@@ -311,7 +317,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker but by general it can be no-op.
     async fn prepare_instance(
-        worker_id: &VersionedWorkerId,
+        worker_id: &WorkerId,
         instance: &wasmtime::component::Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<(), GolemError>;

@@ -3,63 +3,6 @@ info:
   title: Golem API
   version: '2.0'
 paths:
-  /v2/templates/workers/{worker_id}:
-    get:
-      tags:
-      - Worker
-      operationId: get_worker_by_id
-      parameters:
-      - in: path
-        name: worker_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/VersionedWorkerId'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/GolemErrorBody'
   /v2/templates/{template_id}/workers:
     get:
       tags:
@@ -176,7 +119,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/VersionedWorkerId'
+                $ref: '#/components/schemas/WorkerCreationResponse'
         '400':
           description: ''
           content:
@@ -1194,6 +1137,171 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/api/deployments:
+    get:
+      tags:
+      - ApiDeployment
+      parameters:
+      - in: query
+        name: api-definition-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiDeployment'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    put:
+      tags:
+      - ApiDeployment
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ApiDeployment'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ApiDeployment'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    delete:
+      tags:
+      - ApiDeployment
+      parameters:
+      - in: query
+        name: site
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /healthcheck:
     get:
       tags:
@@ -1656,6 +1764,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
 components:
   schemas:
+    ApiDeployment:
+      type: object
+      properties:
+        apiDefinitionId:
+          type: string
+        version:
+          type: string
+        site:
+          type: string
+      required:
+      - apiDefinitionId
+      - version
+      - site
     CallingConvention:
       type: string
       enum:
@@ -2303,17 +2424,6 @@ components:
       required:
       - templateId
       - version
-    VersionedWorkerId:
-      type: object
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        templateVersionUsed:
-          type: integer
-          format: uint64
-      required:
-      - workerId
-      - templateVersionUsed
     WorkerAndFilter:
       type: object
       properties:
@@ -2351,6 +2461,17 @@ components:
       - name
       - args
       - env
+    WorkerCreationResponse:
+      type: object
+      properties:
+        worker_id:
+          $ref: '#/components/schemas/WorkerId'
+        component_version:
+          type: integer
+          format: uint64
+      required:
+      - worker_id
+      - component_version
     WorkerEnvFilter:
       type: object
       properties:
@@ -3181,6 +3302,7 @@ components:
       - version
 tags:
 - name: ApiDefinition
+- name: ApiDeployment
 - name: HealthCheck
 - name: Template
 - name: Worker

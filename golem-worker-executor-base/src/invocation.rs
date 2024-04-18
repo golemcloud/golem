@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use anyhow::anyhow;
-use golem_common::model::{
-    parse_function_name, CallingConvention, VersionedWorkerId, WorkerStatus,
-};
+use golem_common::model::{parse_function_name, CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output};
 use golem_wasm_rpc::Value;
 use tracing::{debug, error, warn};
@@ -44,7 +42,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    calling_convention: &CallingConvention,
+    calling_convention: CallingConvention,
     was_live_before: bool,
 ) -> bool {
     let mut store = store.as_context_mut();
@@ -157,12 +155,12 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
 }
 
 async fn invoke_or_fail<Ctx: WorkerCtx>(
-    worker_id: &VersionedWorkerId,
+    worker_id: &WorkerId,
     full_function_name: String,
     function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    calling_convention: &CallingConvention,
+    calling_convention: CallingConvention,
     was_live_before: bool,
 ) -> anyhow::Result<Option<Vec<Value>>> {
     let mut store = store.as_context_mut();
@@ -231,7 +229,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
                 &mut store,
                 function,
                 &function_input,
-                calling_convention.try_into().unwrap(),
+                (&calling_convention).try_into().unwrap(),
                 &format!("{worker_id}/{full_function_name}"),
             )
             .await

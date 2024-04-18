@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::Display;
+
 use std::io::Read;
 
 use async_trait::async_trait;
+
 use golem_client::model::HttpApiDefinition;
+
 use tokio::fs::read_to_string;
 use tracing::info;
 
@@ -29,7 +33,9 @@ pub trait ApiDefinitionClient {
         id: ApiDefinitionId,
         version: ApiDefinitionVersion,
     ) -> Result<Vec<HttpApiDefinition>, GolemError>;
-    async fn put(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError>;
+    async fn create(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError>;
+    async fn update(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError>;
+    async fn import(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError>;
     async fn delete(
         &self,
         id: ApiDefinitionId,
@@ -40,6 +46,70 @@ pub trait ApiDefinitionClient {
 #[derive(Clone)]
 pub struct ApiDefinitionClientLive<C: golem_client::api::ApiDefinitionClient + Sync + Send> {
     pub client: C,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum Action {
+    Create,
+    Update,
+    Import,
+}
+
+impl Display for Action {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            Action::Create => "Creating",
+            Action::Update => "Updating",
+            Action::Import => "Importing",
+        };
+        write!(f, "{}", str)
+    }
+}
+
+async fn create_or_update_api_definition<
+    C: golem_client::api::ApiDefinitionClient + Sync + Send,
+>(
+    action: Action,
+    client: &C,
+    path: PathBufOrStdin,
+) -> Result<HttpApiDefinition, GolemError> {
+    info!("{action} api definition from {path:?}");
+
+    let definition_str: String = match path {
+        PathBufOrStdin::Path(path) => read_to_string(path)
+            .await
+            .map_err(|e| GolemError(format!("Failed to read from file: {e:?}")))?,
+        PathBufOrStdin::Stdin => {
+            let mut content = String::new();
+
+            let _ = std::io::stdin()
+                .read_to_string(&mut content)
+                .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
+
+            content
+        }
+    };
+
+    match action {
+        Action::Import => {
+            let value: serde_json::value::Value = serde_json::from_str(definition_str.as_str())
+                .map_err(|e| GolemError(format!("Failed to parse json: {e:?}")))?;
+
+            Ok(client.oas_put(&value).await?)
+        }
+        Action::Create => {
+            let value: HttpApiDefinition = serde_json::from_str(definition_str.as_str())
+                .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
+
+            Ok(client.post(&value).await?)
+        }
+        Action::Update => {
+            let value: HttpApiDefinition = serde_json::from_str(definition_str.as_str())
+                .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
+
+            Ok(client.put(&value).await?)
+        }
+    }
 }
 
 #[async_trait]
@@ -62,28 +132,16 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
         Ok(self.client.get(id.0.as_str(), version.0.as_str()).await?)
     }
 
-    async fn put(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError> {
-        info!("Creating api definition from {path:?}");
+    async fn create(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError> {
+        create_or_update_api_definition(Action::Create, &self.client, path).await
+    }
 
-        let definition_str: String = match path {
-            PathBufOrStdin::Path(path) => read_to_string(path)
-                .await
-                .map_err(|e| GolemError(format!("Failed to read from file: {e:?}")))?,
-            PathBufOrStdin::Stdin => {
-                let mut content = String::new();
+    async fn update(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError> {
+        create_or_update_api_definition(Action::Update, &self.client, path).await
+    }
 
-                let _ = std::io::stdin()
-                    .read_to_string(&mut content)
-                    .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
-
-                content
-            }
-        };
-
-        let value: serde_json::Value = serde_json::from_str(definition_str.as_str())
-            .map_err(|e| GolemError(format!("Failed to parse json: {e:?}")))?;
-
-        Ok(self.client.oas_put(&value).await?)
+    async fn import(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError> {
+        create_or_update_api_definition(Action::Import, &self.client, path).await
     }
 
     async fn delete(
