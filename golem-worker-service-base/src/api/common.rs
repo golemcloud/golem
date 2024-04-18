@@ -86,10 +86,12 @@ mod conversion {
         common::ErrorBody,
     };
     use poem_openapi::payload::Json;
+    use std::fmt::Display;
 
     use crate::repo::api_definition_repo::ApiRegistrationRepoError;
     use crate::service::api_definition::ApiRegistrationError;
     use crate::service::api_definition_validator::ValidationErrors;
+    use crate::service::api_deployment::ApiDeploymentError;
     use crate::service::http::http_api_definition_validator::RouteValidationError;
 
     use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
@@ -107,6 +109,29 @@ mod conversion {
                 ApiRegistrationError::ValidationError(e) => e.into(),
                 e @ ApiRegistrationError::TemplateNotFoundError(_) => {
                     ApiEndpointError::bad_request(e)
+                }
+            }
+        }
+    }
+
+    impl<Namespace: Display> From<ApiDeploymentError<Namespace>> for ApiEndpointError {
+        fn from(error: ApiDeploymentError<Namespace>) -> Self {
+            match error {
+                ApiDeploymentError::InternalError(e) => ApiEndpointError::internal(e),
+                ApiDeploymentError::ApiDefinitionNotFound(namespace, id) => {
+                    ApiEndpointError::not_found(format!(
+                        "Api definition not found: {}/{}",
+                        namespace, id
+                    ))
+                }
+                ApiDeploymentError::ApiDeploymentNotFound(namespace, host) => {
+                    ApiEndpointError::not_found(format!(
+                        "Api deployment not found: {}/{}",
+                        namespace, host
+                    ))
+                }
+                ApiDeploymentError::DeploymentConflict(conflict) => {
+                    ApiEndpointError::already_exists(format!("Deployment conflict: {}", conflict))
                 }
             }
         }
