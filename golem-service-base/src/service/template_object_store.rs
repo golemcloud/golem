@@ -26,7 +26,9 @@ use futures::stream;
 use futures::Stream;
 use tracing::{debug, info};
 
-pub struct GetTemplateStream(Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Unpin>);
+pub struct GetTemplateStream(
+    Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Unpin + Send + Sync>,
+);
 
 impl Stream for GetTemplateStream {
     type Item = Result<Vec<u8>, anyhow::Error>;
@@ -37,7 +39,7 @@ impl Stream for GetTemplateStream {
 
 impl GetTemplateStream {
     pub fn new(
-        stream: impl Stream<Item = Result<Vec<u8>, anyhow::Error>> + Unpin + 'static,
+        stream: impl Stream<Item = Result<Vec<u8>, anyhow::Error>> + Unpin + Send + Sync + 'static,
     ) -> Self {
         Self(Box::new(stream))
     }

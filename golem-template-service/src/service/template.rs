@@ -64,17 +64,6 @@ impl From<RepoError> for TemplateError {
     }
 }
 
-pub struct DownloadTemplateStream(GetTemplateStream);
-
-impl Stream for DownloadTemplateStream {
-    type Item = Result<Vec<u8>, TemplateError>;
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.0)
-            .poll_next(cx)
-            .map_err(|e| TemplateError::Internal(e))
-    }
-}
-
 #[async_trait]
 pub trait TemplateService {
     async fn create(
@@ -99,7 +88,7 @@ pub trait TemplateService {
         &self,
         template_id: &TemplateId,
         version: Option<u64>,
-    ) -> Result<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>>>, TemplateError>;
+    ) -> Result<GetTemplateStream, TemplateError>;
 
     async fn get_protected_data(
         &self,
@@ -289,7 +278,7 @@ impl TemplateService for TemplateServiceDefault {
         &self,
         template_id: &TemplateId,
         version: Option<u64>,
-    ) -> Result<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>>>, TemplateError> {
+    ) -> Result<GetTemplateStream, TemplateError> {
         let versioned_template_id = {
             match version {
                 Some(version) => VersionedTemplateId {
@@ -317,7 +306,7 @@ impl TemplateService for TemplateServiceDefault {
             .get_stream(&self.get_protected_object_store_key(&id))
             .await;
 
-        Ok(Box::new(download_stream))
+        Ok(download_stream)
         // todo!()
     }
 
@@ -564,8 +553,8 @@ impl TemplateService for TemplateServiceNoOp {
         &self,
         _template_id: &TemplateId,
         _version: Option<u64>,
-    ) -> Result<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>>>, TemplateError> {
-        Ok(Box::new(futures_util::stream::empty()))
+    ) -> Result<GetTemplateStream, TemplateError> {
+        Ok(GetTemplateStream::empty())
     }
 
     async fn get_protected_data(
