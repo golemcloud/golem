@@ -66,13 +66,14 @@ impl From<RepoError> for TemplateError {
 
 pub struct DownloadTemplateStream(GetTemplateStream);
 
-impl Stream for DownloadTemplateStream{
+impl Stream for DownloadTemplateStream {
     type Item = Result<Vec<u8>, TemplateError>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.0).poll_next(cx).map_err(|e| TemplateError::internal(e.to_string(), "Failed"))
+        Pin::new(&mut self.0)
+            .poll_next(cx)
+            .map_err(|e| TemplateError::Internal(e))
     }
 }
-
 
 #[async_trait]
 pub trait TemplateService {
@@ -98,8 +99,7 @@ pub trait TemplateService {
         &self,
         template_id: &TemplateId,
         version: Option<u64>,
-    ) -> Box<dyn Stream<Item = Result<Vec<u8>, TemplateError>>>;
-
+    ) -> Result<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>>>, TemplateError>;
 
     async fn get_protected_data(
         &self,
@@ -285,39 +285,39 @@ impl TemplateService for TemplateServiceDefault {
             .map_err(|e| TemplateError::internal(e.to_string(), "Error downloading template"))
     }
 
-    async fn download_stream(&self, template_id: &TemplateId, version: Option<u64>) -> Box<dyn Stream<Item = Result<Vec<u8>, TemplateError>>> {
+    async fn download_stream(
+        &self,
+        template_id: &TemplateId,
+        version: Option<u64>,
+    ) -> Result<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>>>, TemplateError> {
         let versioned_template_id = {
             match version {
                 Some(version) => VersionedTemplateId {
                     template_id: template_id.clone(),
                     version,
                 },
-                None => {
-                    let res = self
-                        .template_repo
-                        .get_latest_version(&template_id.0)
-                        .await
-                        .map_err(TemplateError::from)
-                        .and_then(|r| r.map(Template::from)
+                None => self
+                    .template_repo
+                    .get_latest_version(&template_id.0)
+                    .await
+                    .map_err(TemplateError::from)
+                    .and_then(|r| {
+                        r.map(Template::from)
                             .map(|t| t.versioned_template_id)
-                            .ok_or(TemplateError::UnknownTemplateId(template_id.clone())));
-                    match res {
-                        Ok(id) => id,
-                        Err(e) => return Box::new(futures_util::stream::iter(vec![Err(e)])),
-                    }
-                },
+                            .ok_or(TemplateError::UnknownTemplateId(template_id.clone()))
+                    })?,
             }
         };
 
         let id = ProtectedTemplateId {
             versioned_template_id,
         };
-        let download_stream= self.object_store
+        let download_stream = self
+            .object_store
             .get_stream(&self.get_protected_object_store_key(&id))
             .await;
 
-
-        Box::new(download_stream.map_err(|e| TemplateError::internal(e.to_string(), "Error downloading template")))
+        Ok(Box::new(download_stream))
         // todo!()
     }
 
@@ -560,8 +560,12 @@ impl TemplateService for TemplateServiceNoOp {
         Ok(vec![])
     }
 
-    async fn download_stream(&self, _template_id: &TemplateId, _version: Option<u64>) -> Box<dyn Stream<Item = Result<Vec<u8>, TemplateError>>> {
-        Box::new(futures_util::stream::empty())
+    async fn download_stream(
+        &self,
+        _template_id: &TemplateId,
+        _version: Option<u64>,
+    ) -> Result<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>>>, TemplateError> {
+        Ok(Box::new(futures_util::stream::empty()))
     }
 
     async fn get_protected_data(

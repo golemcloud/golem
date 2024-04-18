@@ -29,6 +29,7 @@ tonic = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 thiserror = { workspace = true }
+anyhow.workspace = true
 
 [dev-dependencies]
 proptest = { workspace = true }
