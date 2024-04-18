@@ -60,8 +60,8 @@ impl ByteStream {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Error;
     use crate::stream::ByteStream;
+    use anyhow::Error;
     use futures::{stream, TryStreamExt};
 
     #[tokio::test]
