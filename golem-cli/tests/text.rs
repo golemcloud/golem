@@ -240,10 +240,8 @@ fn text_worker_add(
         &template_id,
     ])?;
 
-    let regex_res = Regex::new(
-        "New worker created for template ([^ ]+), with name ([^ ]+).\n",
-    )
-    .unwrap();
+    let regex_res =
+        Regex::new("New worker created for template ([^ ]+), with name ([^ ]+).\n").unwrap();
 
     let matched = regex_res.captures(&res);
 
