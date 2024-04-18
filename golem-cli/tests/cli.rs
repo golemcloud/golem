@@ -1,3 +1,4 @@
+use golem_cli::model::Format;
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::Failed;
 use serde::de::DeserializeOwned;
@@ -25,10 +26,11 @@ impl CliConfig {
 }
 
 pub trait Cli {
-    fn run<T: DeserializeOwned, S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<T, Failed>;
-    fn run_json<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Value, Failed>;
-    fn run_unit<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<(), Failed>;
-    fn run_stdout<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Child, Failed>;
+    fn run<T: DeserializeOwned>(&self, args: &[&str]) -> Result<T, Failed>;
+    fn run_string(&self, args: &[&str]) -> Result<String, Failed>;
+    fn run_json(&self, args: &[&str]) -> Result<Value, Failed>;
+    fn run_unit(&self, args: &[&str]) -> Result<(), Failed>;
+    fn run_stdout(&self, args: &[&str]) -> Result<Child, Failed>;
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +39,7 @@ pub struct CliLive {
     golem_template_port: u16,
     golem_worker_port: u16,
     golem_cli_path: PathBuf,
+    format: Format,
 }
 
 impl CliLive {
@@ -46,6 +49,7 @@ impl CliLive {
             golem_template_port: self.golem_template_port,
             golem_worker_port: self.golem_worker_port,
             golem_cli_path: self.golem_cli_path.clone(),
+            format: self.format,
         }
     }
 
@@ -55,6 +59,14 @@ impl CliLive {
             golem_template_port: self.golem_template_port,
             golem_worker_port: self.golem_worker_port,
             golem_cli_path: self.golem_cli_path.clone(),
+            format: self.format,
+        }
+    }
+
+    pub fn with_format(&self, format: Format) -> Self {
+        CliLive {
+            format,
+            ..self.clone()
         }
     }
 
@@ -76,6 +88,7 @@ impl CliLive {
                 golem_template_port: deps.template_service().public_http_port(),
                 golem_worker_port: deps.worker_service().public_http_port(),
                 golem_cli_path,
+                format: Format::Json,
             })
         } else {
             Err(format!(
@@ -104,7 +117,7 @@ impl CliLive {
             .env("GOLEM_TEMPLATE_BASE_URL", self.template_base_url())
             .env("GOLEM_WORKER_BASE_URL", self.worker_base_url())
             .arg(self.config.arg('F', "format"))
-            .arg("json")
+            .arg(self.format.to_string())
             .arg("-v")
             .args(args)
             .output()?;
@@ -128,27 +141,28 @@ impl CliLive {
 }
 
 impl Cli for CliLive {
-    fn run<'a, T: DeserializeOwned, S: AsRef<OsStr> + Debug>(
-        &self,
-        args: &[S],
-    ) -> Result<T, Failed> {
+    fn run<'a, T: DeserializeOwned>(&self, args: &[&str]) -> Result<T, Failed> {
         let stdout = self.run_inner(args)?;
 
         Ok(serde_json::from_str(&stdout)?)
     }
 
-    fn run_json<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Value, Failed> {
+    fn run_string(&self, args: &[&str]) -> Result<String, Failed> {
+        self.run_inner(args)
+    }
+
+    fn run_json(&self, args: &[&str]) -> Result<Value, Failed> {
         let stdout = self.run_inner(args)?;
 
         Ok(serde_json::from_str(&stdout)?)
     }
 
-    fn run_unit<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<(), Failed> {
+    fn run_unit(&self, args: &[&str]) -> Result<(), Failed> {
         let _ = self.run_inner(args)?;
         Ok(())
     }
 
-    fn run_stdout<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Child, Failed> {
+    fn run_stdout(&self, args: &[&str]) -> Result<Child, Failed> {
         println!(
             "Executing Golem CLI command: {} {args:?}",
             self.golem_cli_path.to_str().unwrap_or("")
@@ -158,7 +172,7 @@ impl Cli for CliLive {
             .env("GOLEM_TEMPLATE_BASE_URL", self.template_base_url())
             .env("GOLEM_WORKER_BASE_URL", self.worker_base_url())
             .arg(self.config.arg('F', "format"))
-            .arg("json")
+            .arg(self.format.to_string())
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
