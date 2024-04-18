@@ -123,7 +123,8 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                     env: env.into_iter().collect(),
                 },
             )
-            .await?)
+            .await?
+            .worker_id)
     }
 
     async fn get_invocation_key(
