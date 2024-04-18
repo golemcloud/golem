@@ -214,7 +214,9 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         match response.result {
             None => panic!("No response from create_worker"),
-            Some(launch_new_worker_response::Result::Success(worker_id)) => Ok(worker_id
+            Some(launch_new_worker_response::Result::Success(response)) => Ok(response
+                .worker_id
+                .expect("No worker id in response")
                 .try_into()
                 .expect("Failed to parse result worker id")),
             Some(launch_new_worker_response::Result::Error(WorkerError { error: Some(error) })) => {

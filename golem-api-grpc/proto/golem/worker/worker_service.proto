@@ -46,9 +46,14 @@ message LaunchNewWorkerRequest {
 
 message LaunchNewWorkerResponse {
   oneof result {
-    golem.worker.WorkerId success = 1;
+    LaunchNewWorkerSuccessResponse success = 1;
     golem.worker.WorkerError error = 2;
   }
+}
+
+message LaunchNewWorkerSuccessResponse {
+  golem.worker.WorkerId workerId = 1;
+  uint64 component_version = 2;
 }
 
 message CompletePromiseRequest {

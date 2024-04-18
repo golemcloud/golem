@@ -15,7 +15,9 @@
 use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
-use golem_common::model::{parse_function_name, ShardId, TemplateId, WorkerFilter, WorkerStatus};
+use golem_common::model::{
+    parse_function_name, ComponentVersion, ShardId, TemplateId, WorkerFilter, WorkerStatus,
+};
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use http::Uri;
 use poem_openapi::{Enum, NewType, Object, Union};
@@ -31,6 +33,12 @@ pub struct WorkerCreationRequest {
     pub env: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct WorkerCreationResponse {
+    pub worker_id: WorkerId,
+    pub component_version: ComponentVersion,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
 pub struct TemplateName(pub String);
 
@@ -39,7 +47,7 @@ pub struct TemplateName(pub String);
 #[oai(rename_all = "camelCase")]
 pub struct VersionedTemplateId {
     pub template_id: TemplateId,
-    pub version: u64,
+    pub version: ComponentVersion,
 }
 
 impl VersionedTemplateId {

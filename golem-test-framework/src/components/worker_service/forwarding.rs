@@ -24,7 +24,8 @@ use golem_api_grpc::proto::golem::worker::{
     GetInvocationKeyResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
     InvokeRequest, InvokeResponse, InvokeResult, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LogEvent, ResumeWorkerRequest, ResumeWorkerResponse, WorkerError, WorkerId,
+    LaunchNewWorkerSuccessResponse, LogEvent, ResumeWorkerRequest, ResumeWorkerResponse,
+    WorkerError, WorkerId,
 };
 use golem_api_grpc::proto::golem::workerexecutor::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
@@ -96,7 +97,10 @@ impl WorkerService for ForwardingWorkerService {
             Some(workerexecutor::create_worker_response::Result::Success(_)) => {
                 LaunchNewWorkerResponse {
                     result: Some(worker::launch_new_worker_response::Result::Success(
-                        worker_id,
+                        LaunchNewWorkerSuccessResponse {
+                            worker_id: Some(worker_id),
+                            component_version: latest_template_version,
+                        },
                     )),
                 }
             }

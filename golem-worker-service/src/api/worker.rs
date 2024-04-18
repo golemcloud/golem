@@ -30,7 +30,7 @@ impl WorkerApi {
         &self,
         template_id: Path<TemplateId>,
         request: Json<WorkerCreationRequest>,
-    ) -> Result<Json<WorkerId>> {
+    ) -> Result<Json<WorkerCreationResponse>> {
         let template_id = template_id.0;
         let latest_template = self
             .template_service
@@ -49,7 +49,7 @@ impl WorkerApi {
         let WorkerCreationRequest { name, args, env } = request.0;
 
         let worker_id = make_worker_id(template_id, name)?;
-        let worker = self
+        let worker_id = self
             .worker_service
             .create(
                 &worker_id,
@@ -61,7 +61,10 @@ impl WorkerApi {
             )
             .await?;
 
-        Ok(Json(worker))
+        Ok(Json(WorkerCreationResponse {
+            worker_id,
+            component_version: latest_template.versioned_template_id.version,
+        }))
     }
 
     #[oai(
