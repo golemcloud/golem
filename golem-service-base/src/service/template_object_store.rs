@@ -24,26 +24,43 @@ use aws_config::BehaviorVersion;
 use aws_sdk_s3::primitives::ByteStream;
 use futures::Stream;
 use futures::stream;
+use hyper::body::Bytes;
 use tracing::{debug, info};
 
-pub struct GetTemplateStream {inner:  dyn Stream<Item = Result<Vec<u8>, Box<dyn Error>>> + Sized}
+pub struct GetTemplateStream(Box<dyn Stream<Item = Result<Vec<u8>, Box<dyn Error>>> + Unpin>);
 
 impl Stream for GetTemplateStream {
     type Item = Result<Vec<u8>, Box<dyn Error>>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(cx).map_ok(|b| b.to_vec()).map_err(|e| e.into())
+        Pin::new(&mut self.0).poll_next(cx)
     }
 }
 
+
+pub struct AwsByteStream(ByteStream);
+
+impl futures::stream::Stream for AwsByteStream {
+    type Item = Result<Vec<u8>, Box<dyn Error>>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0).poll_next(cx).map_ok(|b| b.to_vec()).map_err(|e| e.into())
+    }
+}
+
+
 impl GetTemplateStream {
     pub fn empty() -> Self {
-        Self {
-         inner:   ByteStream::from(vec![])
-        }
+        Self(Box::new(stream::empty()))
     }
 
-    pub fn error() -> Self {
-        Self(ByteStream::from(vec![]))
+    pub fn error(error: Box<dyn Error>) -> Self {
+        Self(Box::new(stream::iter(vec![Err(error)])))
+
+    }
+}
+
+impl From<ByteStream> for GetTemplateStream {
+    fn from(stream: ByteStream) -> Self {
+        Self( Box::new(AwsByteStream(stream)))
     }
 }
 
@@ -105,6 +122,7 @@ impl TemplateObjectStore for AwsS3TemplateObjectStore {
         Ok(data.to_vec())
     }
 
+
     async fn get_stream(&self, object_key: &str) -> GetTemplateStream {
         let key = self.get_key(object_key);
 
@@ -118,10 +136,10 @@ impl TemplateObjectStore for AwsS3TemplateObjectStore {
             .send()
             .await {
             Ok(response) => {
-                Box::new(GetTemplateStream(response.body))
+                response.body.into()
             }
             Err(error) => {
-                Box::new(stream::iter(vec![Err(error.into())]))
+                GetTemplateStream::error(error.into())
             }
         }
     }
@@ -202,10 +220,11 @@ impl TemplateObjectStore for FsTemplateObjectStore {
         let file_path = dir_path.join(object_key);
 
         match ByteStream::from_path(file_path).await {
-            Ok(stream) => Box::new(GetTemplateStream(stream)),
-            Err(error) => Box::new(stream::iter(vec![Err(error.into())])),
+            Ok(stream) => stream.into(),
+            Err(error) => GetTemplateStream::error(error.into()),
         }
     }
+
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error>> {
         let dir_path = self.get_dir_path();

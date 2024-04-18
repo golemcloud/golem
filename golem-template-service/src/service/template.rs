@@ -14,10 +14,12 @@
 
 use std::error::Error;
 use std::fmt::Display;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use futures_util::{Stream, StreamExt};
+use futures_util::{Stream, StreamExt, TryStreamExt};
 use golem_common::model::TemplateId;
 use golem_template_service_base::service::template_compilation::TemplateCompilationService;
 use golem_template_service_base::service::template_processor::{
@@ -30,6 +32,7 @@ use crate::repo::template::TemplateRepo;
 use crate::repo::RepoError;
 use crate::service::template_object_store::TemplateObjectStore;
 use golem_service_base::model::*;
+use golem_service_base::service::template_object_store::GetTemplateStream;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TemplateError {
@@ -60,6 +63,16 @@ impl From<RepoError> for TemplateError {
         TemplateError::Internal(anyhow::Error::msg(error.to_string()))
     }
 }
+
+pub struct DownloadTemplateStream(GetTemplateStream);
+
+impl Stream for DownloadTemplateStream{
+    type Item = Result<Vec<u8>, TemplateError>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0).poll_next(cx).map_err(|e| TemplateError::internal(e.to_string(), "Failed"))
+    }
+}
+
 
 #[async_trait]
 pub trait TemplateService {
@@ -299,12 +312,13 @@ impl TemplateService for TemplateServiceDefault {
         let id = ProtectedTemplateId {
             versioned_template_id,
         };
-        let download_stream: Box<dyn Stream<Item=Result<Vec<u8>, Box<dyn Error>>>> = self.object_store
+        let download_stream= self.object_store
             .get_stream(&self.get_protected_object_store_key(&id))
             .await;
 
 
-        Box::new(download_stream.m(|e| TemplateError::internal(e.to_string(), "Error downloading template")))
+        Box::new(download_stream.map_err(|e| TemplateError::internal(e.to_string(), "Error downloading template")))
+        // todo!()
     }
 
     async fn get_protected_data(
