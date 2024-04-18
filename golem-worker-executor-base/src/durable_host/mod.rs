@@ -555,7 +555,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             if let Some(function_output) = response {
                 let is_diverged = function_output != output;
                 if is_diverged {
-                    return Err(anyhow!("Function {:?} with inputs {:?} has diverged! Output was {:?} when function was replayed but was {:?} when function was originally invoked", full_function_name, function_input, output, function_output));
+                    return Err(anyhow!(GolemError::unexpected_oplog_entry(
+                        format!("{full_function_name}({function_input:?}) => {function_output:?}"),
+                        format!("{full_function_name}({function_input:?}) => {output:?}"),
+                    )));
                 }
             }
         }
