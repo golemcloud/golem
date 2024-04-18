@@ -33,7 +33,7 @@ use golem_api_grpc::proto::golem::template::{
 };
 use golem_api_grpc::proto::golem::template::{template_error, Template, TemplateError};
 use golem_common::model::TemplateId;
-use golem_service_base::service::template_object_store::GetTemplateStream;
+use golem_service_base::stream::ByteStream;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::service::template;
@@ -150,7 +150,7 @@ impl TemplateGrpcApi {
     async fn download(
         &self,
         request: DownloadTemplateRequest,
-    ) -> Result<GetTemplateStream, TemplateError> {
+    ) -> Result<ByteStream, TemplateError> {
         let id: TemplateId = request
             .template_id
             .and_then(|id| id.try_into().ok())
@@ -250,15 +250,12 @@ impl TemplateService for TemplateGrpcApi {
         &self,
         request: Request<DownloadTemplateRequest>,
     ) -> Result<Response<Self::DownloadTemplateStream>, Status> {
-        // TODO: Add a log here for error.
         match self.download(request.into_inner()).await {
             Ok(response) => {
                 let stream = response.map(|content| {
                     let res = match content {
                         Ok(content) => DownloadTemplateResponse {
-                            result: Some(download_template_response::Result::SuccessChunk(
-                                content.to_vec(),
-                            )),
+                            result: Some(download_template_response::Result::SuccessChunk(content)),
                         },
                         Err(_) => DownloadTemplateResponse {
                             result: Some(download_template_response::Result::Error(
@@ -273,7 +270,7 @@ impl TemplateService for TemplateGrpcApi {
             }
             Err(err) => {
                 let res = DownloadTemplateResponse {
-                    result: Some(download_template_response::Result::Error(err.into())),
+                    result: Some(download_template_response::Result::Error(err)),
                 };
 
                 let stream: Self::DownloadTemplateStream = Box::pin(tokio_stream::iter([Ok(res)]));

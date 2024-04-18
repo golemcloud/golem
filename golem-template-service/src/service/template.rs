@@ -12,14 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
 use std::fmt::Display;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use futures_util::{Stream, StreamExt, TryStreamExt};
 use golem_common::model::TemplateId;
 use golem_template_service_base::service::template_compilation::TemplateCompilationService;
 use golem_template_service_base::service::template_processor::{
@@ -32,7 +28,7 @@ use crate::repo::template::TemplateRepo;
 use crate::repo::RepoError;
 use crate::service::template_object_store::TemplateObjectStore;
 use golem_service_base::model::*;
-use golem_service_base::service::template_object_store::GetTemplateStream;
+use golem_service_base::stream::ByteStream;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TemplateError {
@@ -88,7 +84,7 @@ pub trait TemplateService {
         &self,
         template_id: &TemplateId,
         version: Option<u64>,
-    ) -> Result<GetTemplateStream, TemplateError>;
+    ) -> Result<ByteStream, TemplateError>;
 
     async fn get_protected_data(
         &self,
@@ -278,7 +274,7 @@ impl TemplateService for TemplateServiceDefault {
         &self,
         template_id: &TemplateId,
         version: Option<u64>,
-    ) -> Result<GetTemplateStream, TemplateError> {
+    ) -> Result<ByteStream, TemplateError> {
         let versioned_template_id = {
             match version {
                 Some(version) => VersionedTemplateId {
@@ -307,7 +303,6 @@ impl TemplateService for TemplateServiceDefault {
             .await;
 
         Ok(download_stream)
-        // todo!()
     }
 
     async fn get_protected_data(
@@ -553,8 +548,8 @@ impl TemplateService for TemplateServiceNoOp {
         &self,
         _template_id: &TemplateId,
         _version: Option<u64>,
-    ) -> Result<GetTemplateStream, TemplateError> {
-        Ok(GetTemplateStream::empty())
+    ) -> Result<ByteStream, TemplateError> {
+        Ok(ByteStream::empty())
     }
 
     async fn get_protected_data(

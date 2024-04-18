@@ -12,66 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::AtomicBool;
 use std::task::{Context, Poll};
 
 use crate::config::{TemplateStoreLocalConfig, TemplateStoreS3Config};
+use crate::stream::ByteStream;
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
-use aws_sdk_s3::primitives::ByteStream;
-use futures::stream;
 use futures::Stream;
 use tracing::{debug, info};
-
-pub struct GetTemplateStream {
-    error: AtomicBool,
-    inner: Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Unpin + Send + Sync>,
-}
-
-impl Stream for GetTemplateStream {
-    type Item = Result<Vec<u8>, anyhow::Error>;
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // TODO: Can we just get bool?
-        if *self.error.get_mut() {
-            Poll::Ready(None)
-        } else {
-            let result = Pin::new(&mut self.inner).poll_next(cx);
-            if let Poll::Ready(Some(Err(_))) = result {
-                self.error.store(true, std::sync::atomic::Ordering::Relaxed)
-            }
-            result
-        }
-    }
-}
-
-impl GetTemplateStream {
-    pub fn new(
-        stream: impl Stream<Item = Result<Vec<u8>, anyhow::Error>> + Unpin + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            inner: Box::new(stream),
-            error: AtomicBool::new(false),
-        }
-    }
-
-    pub fn empty() -> Self {
-        Self::new(stream::empty())
-    }
-
-    pub fn error(error: impl Error + Send + Sync + 'static) -> Self {
-        Self::new(stream::iter(vec![Err(anyhow::Error::new(error))]))
-    }
-}
 
 #[async_trait]
 pub trait TemplateObjectStore {
     async fn get(&self, object_key: &str) -> Result<Vec<u8>, anyhow::Error>;
 
-    async fn get_stream(&self, object_key: &str) -> GetTemplateStream;
+    async fn get_stream(&self, object_key: &str) -> ByteStream;
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), anyhow::Error>;
 }
@@ -82,9 +39,9 @@ pub struct AwsS3TemplateObjectStore {
     object_prefix: String,
 }
 
-pub struct AwsByteStream(ByteStream);
+pub struct AwsByteStream(aws_sdk_s3::primitives::ByteStream);
 
-impl futures::stream::Stream for AwsByteStream {
+impl Stream for AwsByteStream {
     type Item = Result<Vec<u8>, anyhow::Error>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.0)
@@ -94,8 +51,8 @@ impl futures::stream::Stream for AwsByteStream {
     }
 }
 
-impl From<ByteStream> for GetTemplateStream {
-    fn from(stream: ByteStream) -> Self {
+impl From<aws_sdk_s3::primitives::ByteStream> for ByteStream {
+    fn from(stream: aws_sdk_s3::primitives::ByteStream) -> Self {
         Self::new(AwsByteStream(stream))
     }
 }
@@ -143,7 +100,7 @@ impl TemplateObjectStore for AwsS3TemplateObjectStore {
         Ok(data.to_vec())
     }
 
-    async fn get_stream(&self, object_key: &str) -> GetTemplateStream {
+    async fn get_stream(&self, object_key: &str) -> ByteStream {
         let key = self.get_key(object_key);
 
         info!("Getting object: {}/{}", self.bucket_name, key);
@@ -157,7 +114,7 @@ impl TemplateObjectStore for AwsS3TemplateObjectStore {
             .await
         {
             Ok(response) => response.body.into(),
-            Err(error) => GetTemplateStream::error(error),
+            Err(error) => ByteStream::error(error),
         }
     }
 
@@ -166,13 +123,11 @@ impl TemplateObjectStore for AwsS3TemplateObjectStore {
 
         info!("Putting object: {}/{}", self.bucket_name, key);
 
-        let body = ByteStream::from(data);
-
         self.client
             .put_object()
             .bucket(&self.bucket_name)
             .key(key)
-            .body(body)
+            .body(aws_sdk_s3::primitives::ByteStream::from(data))
             .send()
             .await?;
 
@@ -229,16 +184,16 @@ impl TemplateObjectStore for FsTemplateObjectStore {
         }
     }
 
-    async fn get_stream(&self, object_key: &str) -> GetTemplateStream {
+    async fn get_stream(&self, object_key: &str) -> ByteStream {
         let dir_path = self.get_dir_path();
 
         debug!("Getting object: {}/{}", dir_path.display(), object_key);
 
         let file_path = dir_path.join(object_key);
 
-        match ByteStream::from_path(file_path).await {
+        match aws_sdk_s3::primitives::ByteStream::from_path(file_path).await {
             Ok(stream) => stream.into(),
-            Err(error) => GetTemplateStream::error(error),
+            Err(error) => ByteStream::error(error),
         }
     }
 
@@ -261,6 +216,7 @@ impl TemplateObjectStore for FsTemplateObjectStore {
 mod tests {
     use crate::config::TemplateStoreLocalConfig;
     use crate::service::template_object_store::{FsTemplateObjectStore, TemplateObjectStore};
+    use futures::TryStreamExt;
 
     #[tokio::test]
     pub async fn test_fs_object_store() {
@@ -275,10 +231,19 @@ mod tests {
 
         let data = b"hello world".to_vec();
 
-        store.put(object_key, data).await.unwrap();
+        store.put(object_key, data.clone()).await.unwrap();
 
-        let data = store.get(object_key).await.unwrap();
+        let get_data = store.get(object_key).await.unwrap();
 
-        assert_eq!(data, data);
+        assert_eq!(get_data, data.clone());
+
+        let stream = store.get_stream(object_key).await;
+        let stream_data: Vec<Vec<u8>> = stream.try_collect::<Vec<_>>().await.unwrap();
+        let stream_data: Vec<u8> = stream_data.into_iter().flatten().collect();
+        assert_eq!(stream_data, data);
+
+        let stream = store.get_stream("not_existing").await;
+        let stream_data = stream.try_collect::<Vec<_>>().await;
+        assert!(stream_data.is_err());
     }
 }
