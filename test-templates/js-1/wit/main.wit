@@ -2,5 +2,14 @@ package golem:it;
 
 world js1 {
     import wasi:clocks/wall-clock@0.2.0;
-    export hello: func(name: string) -> string;
+    export hello: func(name: string) -> hello-record;
+
+    record hello-record {
+        random: f64,
+        random-string: string,
+        // milliseconds
+        js-now: u64,
+        // milliseconds
+        wasi-now: u64,
+    }
 }
