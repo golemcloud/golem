@@ -16,6 +16,7 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::AtomicBool;
 use std::task::{Context, Poll};
 
 use crate::config::{TemplateStoreLocalConfig, TemplateStoreS3Config};
@@ -26,14 +27,24 @@ use futures::stream;
 use futures::Stream;
 use tracing::{debug, info};
 
-pub struct GetTemplateStream(
-    Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Unpin + Send + Sync>,
-);
+pub struct GetTemplateStream {
+    error: AtomicBool,
+    inner: Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Unpin + Send + Sync>,
+}
 
 impl Stream for GetTemplateStream {
     type Item = Result<Vec<u8>, anyhow::Error>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.0).poll_next(cx)
+        // TODO: Can we just get bool?
+        if *self.error.get_mut() {
+            Poll::Ready(None)
+        } else {
+            let result = Pin::new(&mut self.inner).poll_next(cx);
+            if let Poll::Ready(Some(Err(_))) = result {
+                self.error.store(true, std::sync::atomic::Ordering::Relaxed)
+            }
+            result
+        }
     }
 }
 
@@ -41,15 +52,18 @@ impl GetTemplateStream {
     pub fn new(
         stream: impl Stream<Item = Result<Vec<u8>, anyhow::Error>> + Unpin + Send + Sync + 'static,
     ) -> Self {
-        Self(Box::new(stream))
+        Self {
+            inner: Box::new(stream),
+            error: AtomicBool::new(false),
+        }
     }
 
     pub fn empty() -> Self {
-        Self(Box::new(stream::empty()))
+        Self::new(stream::empty())
     }
 
     pub fn error(error: impl Error + Send + Sync + 'static) -> Self {
-        Self(Box::new(stream::iter(vec![Err(anyhow::Error::new(error))])))
+        Self::new(stream::iter(vec![Err(anyhow::Error::new(error))]))
     }
 }
 
@@ -82,7 +96,7 @@ impl futures::stream::Stream for AwsByteStream {
 
 impl From<ByteStream> for GetTemplateStream {
     fn from(stream: ByteStream) -> Self {
-        Self(Box::new(AwsByteStream(stream)))
+        Self::new(AwsByteStream(stream))
     }
 }
 
