@@ -33,6 +33,7 @@ service WorkerExecutor {
   rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc GetRunningWorkersMetadata(GetRunningWorkersMetadataRequest) returns (GetRunningWorkersMetadataResponse);
   rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
+  rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
 }
 
 message InvokeWorkerResponse {
@@ -219,4 +220,22 @@ message GetWorkersMetadataResponse {
 message GetWorkersMetadataSuccessResponse {
   repeated golem.worker.WorkerMetadata workers = 1;
   optional uint64 cursor = 2;
+}
+
+message UpdateWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  uint64 target_version = 2;
+  UpdateMode mode = 3;
+}
+
+enum UpdateMode {
+  AUTOMATIC = 0;
+  MANUAL = 1;
+}
+
+message UpdateWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
 }

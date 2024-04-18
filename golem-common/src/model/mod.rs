@@ -224,20 +224,6 @@ impl WorkerId {
         format!("{}/{}", self.template_id, self.worker_name)
     }
 
-    pub fn into_proto(self) -> golem_api_grpc::proto::golem::worker::WorkerId {
-        golem_api_grpc::proto::golem::worker::WorkerId {
-            template_id: Some(self.template_id.into()),
-            name: self.worker_name,
-        }
-    }
-
-    pub fn from_proto(proto: golem_api_grpc::proto::golem::worker::WorkerId) -> Self {
-        Self {
-            template_id: proto.template_id.unwrap().try_into().unwrap(),
-            worker_name: proto.name,
-        }
-    }
-
     pub fn to_json_string(&self) -> String {
         serde_json::to_string(self)
             .unwrap_or_else(|_| panic!("failed to serialize worker id {self}"))
