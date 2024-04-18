@@ -31,7 +31,7 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{VersionedWorkerId, WorkerId, WorkerStatus};
+use golem_common::model::{WorkerId, WorkerStatus};
 use golem_common::retries::get_delay;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
@@ -50,7 +50,7 @@ pub trait RecoveryManagement {
     /// performed, and `trap_type` distinguishes errors, interrupts and exit signals.
     async fn schedule_recovery_on_trap(
         &self,
-        worker_id: &VersionedWorkerId,
+        worker_id: &WorkerId,
         retry_config: &RetryConfig,
         previous_tries: u64,
         trap_type: &TrapType,
@@ -62,14 +62,14 @@ pub trait RecoveryManagement {
     /// and exited workers can never.
     async fn schedule_recovery_on_startup(
         &self,
-        worker_id: &VersionedWorkerId,
+        worker_id: &WorkerId,
         retry_config: &RetryConfig,
         last_error: &Option<LastError>,
     ) -> RecoveryDecision;
 }
 
 pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
-    scheduled_recoveries: Arc<Mutex<HashMap<VersionedWorkerId, JoinHandle<()>>>>,
+    scheduled_recoveries: Arc<Mutex<HashMap<WorkerId, JoinHandle<()>>>>,
     active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -83,7 +83,7 @@ pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
     promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     golem_config: Arc<golem_config::GolemConfig>,
-    recovery_override: Option<Arc<dyn Fn(VersionedWorkerId) + Send + Sync>>,
+    recovery_override: Option<Arc<dyn Fn(WorkerId) + Send + Sync>>,
     invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
@@ -300,7 +300,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         recovery_override: F,
     ) -> Self
     where
-        F: Fn(VersionedWorkerId) + Send + Sync + 'static,
+        F: Fn(WorkerId) + Send + Sync + 'static,
     {
         Self {
             scheduled_recoveries: Arc::new(Mutex::new(HashMap::new())),
@@ -373,7 +373,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 
     async fn schedule_recovery(
         &self,
-        worker_id: &VersionedWorkerId,
+        worker_id: &WorkerId,
         decision: RecoveryDecision,
     ) -> RecoveryDecision {
         match decision {
@@ -390,9 +390,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                     match &clone.recovery_override {
                         Some(f) => f(worker_id_clone.clone()),
                         None => {
-                            let interrupted = clone
-                                .is_marked_as_interrupted(&worker_id_clone.worker_id)
-                                .await;
+                            let interrupted =
+                                clone.is_marked_as_interrupted(&worker_id_clone).await;
                             if !interrupted {
                                 info!(
                                     "Initiating immediate recovery for worker: {worker_id_clone}"
@@ -421,9 +420,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                     match &clone.recovery_override {
                         Some(f) => f(worker_id_clone.clone()),
                         None => {
-                            let interrupted = clone
-                                .is_marked_as_interrupted(&worker_id_clone.worker_id)
-                                .await;
+                            let interrupted =
+                                clone.is_marked_as_interrupted(&worker_id_clone).await;
                             if !interrupted {
                                 info!(
                                     "Initiating scheduled recovery for worker: {worker_id_clone}"
@@ -445,7 +443,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         decision
     }
 
-    async fn cancel_scheduled_recovery(&self, worker_id: &VersionedWorkerId) {
+    async fn cancel_scheduled_recovery(&self, worker_id: &WorkerId) {
         if let Some(handle) = self.scheduled_recoveries.lock().await.remove(worker_id) {
             handle.abort();
         }
@@ -464,7 +462,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     async fn schedule_recovery_on_trap(
         &self,
-        worker_id: &VersionedWorkerId,
+        worker_id: &WorkerId,
         retry_config: &RetryConfig,
         previous_tries: u64,
         trap_type: &TrapType,
@@ -478,7 +476,7 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
 
     async fn schedule_recovery_on_startup(
         &self,
-        worker_id: &VersionedWorkerId,
+        worker_id: &WorkerId,
         retry_config: &RetryConfig,
         previous_error: &Option<LastError>,
     ) -> RecoveryDecision {
@@ -490,20 +488,20 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     }
 }
 
-async fn recover_worker<Ctx: WorkerCtx, T>(this: &T, worker_id: &VersionedWorkerId)
+async fn recover_worker<Ctx: WorkerCtx, T>(this: &T, worker_id: &WorkerId)
 where
     T: HasAll<Ctx> + Clone + Send + Sync + 'static,
 {
     info!("Recovering worker: {worker_id}");
 
-    match this.worker_service().get(&worker_id.worker_id).await {
+    match this.worker_service().get(worker_id).await {
         Some(worker) => {
             let worker_details = Worker::get_or_create_with_config(
                 this,
-                &worker_id.worker_id.clone(),
+                &worker_id.clone(),
                 worker.args,
                 worker.env,
-                Some(worker_id.template_version),
+                Some(worker.last_known_status.component_version),
                 worker.account_id,
             )
             .await;
@@ -552,7 +550,7 @@ impl RecoveryManagementMock {
 impl RecoveryManagement for RecoveryManagementMock {
     async fn schedule_recovery_on_trap(
         &self,
-        _worker_id: &VersionedWorkerId,
+        _worker_id: &WorkerId,
         _retry_config: &RetryConfig,
         _previous_tries: u64,
         _trap_type: &TrapType,
@@ -562,7 +560,7 @@ impl RecoveryManagement for RecoveryManagementMock {
 
     async fn schedule_recovery_on_startup(
         &self,
-        _worker_id: &VersionedWorkerId,
+        _worker_id: &WorkerId,
         _retry_config: &RetryConfig,
         _previous_error: &Option<LastError>,
     ) -> RecoveryDecision {
@@ -605,8 +603,8 @@ mod tests {
     use golem_common::config::RetryConfig;
     use golem_common::model::oplog::WorkerError;
     use golem_common::model::{
-        AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerId,
-        WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+        AccountId, CallingConvention, InvocationKey, TemplateId, WorkerId, WorkerMetadata,
+        WorkerStatus, WorkerStatusRecord,
     };
     use golem_wasm_rpc::wasmtime::ResourceStore;
     use golem_wasm_rpc::{Uri, Value};
@@ -622,7 +620,7 @@ mod tests {
     use crate::services::scheduler::SchedulerService;
 
     struct EmptyContext {
-        worker_id: VersionedWorkerId,
+        worker_id: WorkerId,
         public_state: EmptyPublicState,
         rpc: Arc<dyn Rpc + Send + Sync>,
     }
@@ -802,7 +800,7 @@ mod tests {
         }
 
         async fn prepare_instance(
-            _worker_id: &VersionedWorkerId,
+            _worker_id: &WorkerId,
             _instance: &Instance,
             _store: &mut (impl AsContextMut<Data = Self> + Send),
         ) -> Result<(), GolemError> {
@@ -836,7 +834,7 @@ mod tests {
         type PublicState = EmptyPublicState;
 
         async fn create(
-            _worker_id: VersionedWorkerId,
+            _worker_id: WorkerId,
             _account_id: AccountId,
             _promise_service: Arc<dyn PromiseService + Send + Sync>,
             _invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
@@ -874,7 +872,7 @@ mod tests {
             self
         }
 
-        fn worker_id(&self) -> &VersionedWorkerId {
+        fn worker_id(&self) -> &WorkerId {
             &self.worker_id
         }
 
@@ -930,7 +928,7 @@ mod tests {
         recovery_fn: F,
     ) -> RecoveryManagementDefault<EmptyContext>
     where
-        F: Fn(VersionedWorkerId) + Send + Sync + 'static,
+        F: Fn(WorkerId) + Send + Sync + 'static,
     {
         let deps: All<EmptyContext> = All::mocked(()).await;
         let active_workers = Arc::new(ActiveWorkers::bounded(100, 0.01, Duration::from_secs(60)));
@@ -962,15 +960,12 @@ mod tests {
         )
     }
 
-    fn create_test_id() -> VersionedWorkerId {
+    fn create_test_id() -> WorkerId {
         let uuid = uuid::Uuid::parse_str("14e55083-2ff5-44ec-a414-595a748b19a0").unwrap();
 
-        VersionedWorkerId {
-            worker_id: WorkerId {
-                template_id: TemplateId(uuid),
-                worker_name: "test-worker".to_string(),
-            },
-            template_version: 1,
+        WorkerId {
+            template_id: TemplateId(uuid),
+            worker_name: "test-worker".to_string(),
         }
     }
 
@@ -978,8 +973,7 @@ mod tests {
     async fn immediately_recovers_worker_on_startup_with_no_errors() {
         let test_id = create_test_id();
         let start_time = Instant::now();
-        let (sender, mut receiver) =
-            tokio::sync::broadcast::channel::<(VersionedWorkerId, Duration)>(1);
+        let (sender, mut receiver) = tokio::sync::broadcast::channel::<(WorkerId, Duration)>(1);
         let svc = create_recovery_management(move |id| {
             let schedule_time = Instant::now();
             let elapsed = schedule_time.duration_since(start_time);
@@ -998,8 +992,7 @@ mod tests {
     async fn does_not_recover_worker_on_startup_with_many_errors() {
         let test_id = create_test_id();
         let start_time = Instant::now();
-        let (sender, mut receiver) =
-            tokio::sync::broadcast::channel::<(VersionedWorkerId, Duration)>(1);
+        let (sender, mut receiver) = tokio::sync::broadcast::channel::<(WorkerId, Duration)>(1);
         let svc = create_recovery_management(move |id| {
             let schedule_time = Instant::now();
             let elapsed = schedule_time.duration_since(start_time);

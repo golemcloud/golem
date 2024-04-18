@@ -3,7 +3,7 @@ use crate::model::template::TemplateView;
 use crate::model::{ExampleDescription, InvocationKey};
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use golem_client::model::{
-    HttpApiDefinition, Route, VersionedWorkerId, WorkerMetadata, WorkersMetadataResponse,
+    HttpApiDefinition, Route, WorkerId, WorkerMetadata, WorkersMetadataResponse,
 };
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier};
 use indoc::{eprintdoc, printdoc};
@@ -260,17 +260,16 @@ impl TextFormat for Vec<TemplateView> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkerAddView(pub VersionedWorkerId);
+pub struct WorkerAddView(pub WorkerId);
 
 impl TextFormat for WorkerAddView {
     fn print(&self) {
         printdoc!(
             "
-            New worker created for template {}, with name {}, using template version {}.
+            New worker created for template {}, with name {}.
             ",
-            self.0.worker_id.template_id,
-            self.0.worker_id.worker_name,
-            self.0.template_version_used,
+            self.0.template_id,
+            self.0.worker_name,
         )
     }
 }

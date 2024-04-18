@@ -309,7 +309,7 @@ impl WorkerEnumerationService
             let mut index = 0;
             for worker in workers {
                 if index >= cursor
-                    && worker.worker_id.worker_id.template_id == *template_id
+                    && worker.worker_id.template_id == *template_id
                     && filter.clone().map_or(true, |f| f.matches(&worker))
                 {
                     template_workers.push(worker);

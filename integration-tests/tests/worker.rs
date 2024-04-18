@@ -184,7 +184,7 @@ async fn auction_example_1() {
 fn get_worker_ids(workers: Vec<WorkerMetadata>) -> HashSet<WorkerId> {
     workers
         .into_iter()
-        .map(|w| w.worker_id.worker_id)
+        .map(|w| w.worker_id)
         .collect::<HashSet<WorkerId>>()
 }
 

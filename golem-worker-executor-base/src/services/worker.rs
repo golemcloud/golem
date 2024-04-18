@@ -98,10 +98,11 @@ impl WorkerService for WorkerServiceRedis {
     async fn add(&self, worker_metadata: &WorkerMetadata) -> Result<(), GolemError> {
         record_worker_call("add");
 
-        let worker_id = &worker_metadata.worker_id.worker_id;
+        let worker_id = &worker_metadata.worker_id;
 
         let initial_oplog_entry = OplogEntry::create(
             worker_metadata.worker_id.clone(),
+            worker_metadata.last_known_status.component_version,
             worker_metadata.args.clone(),
             worker_metadata.env.clone(),
             worker_metadata.account_id.clone(),
@@ -188,6 +189,7 @@ impl WorkerService for WorkerServiceRedis {
             None => None,
             Some(OplogEntry::Create {
                 worker_id,
+                component_version,
                 args,
                 env,
                 account_id,
@@ -199,7 +201,10 @@ impl WorkerService for WorkerServiceRedis {
                     env,
                     account_id,
                     created_at: timestamp,
-                    last_known_status: WorkerStatusRecord::default(),
+                    last_known_status: WorkerStatusRecord {
+                        component_version,
+                        ..WorkerStatusRecord::default()
+                    },
                 };
 
                 let status_value: Option<Bytes> = self
@@ -388,10 +393,8 @@ impl WorkerServiceInMemory {
 #[async_trait]
 impl WorkerService for WorkerServiceInMemory {
     async fn add(&self, worker_metadata: &WorkerMetadata) -> Result<(), GolemError> {
-        self.workers.insert(
-            worker_metadata.worker_id.worker_id.clone(),
-            worker_metadata.clone(),
-        );
+        self.workers
+            .insert(worker_metadata.worker_id.clone(), worker_metadata.clone());
         Ok(())
     }
 
