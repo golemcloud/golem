@@ -241,7 +241,7 @@ dependencies = [
 description = "Sets the version in all Cargo.toml files to the value of the VERSION environment variable"
 condition = { env_set = ["VERSION"] }
 script = '''
-grep -rl --include '.*Cargo\.toml' '0\.0\.0' | xargs sed -i "s/0\.0\.0/${VERSION}/g"
+grep -rl --include 'Cargo.toml' '0\.0\.0' | xargs sed -i "s/0\.0\.0/${VERSION}/g"
 '''
 
 [tasks.set-version.mac]
