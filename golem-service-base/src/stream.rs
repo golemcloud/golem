@@ -62,7 +62,7 @@ impl ByteStream {
 mod tests {
     use crate::stream::ByteStream;
     use anyhow::Error;
-    use futures::{stream, TryStreamExt};
+    use futures::{stream, StreamExt, TryStreamExt};
 
     #[tokio::test]
     pub async fn test_byte_stream() {
@@ -83,10 +83,19 @@ mod tests {
             Ok(vec![4, 5, 6]),
             Err(Error::msg("error2")),
         ]));
-
         let result: Result<Vec<Vec<u8>>, Error> = stream.try_collect::<Vec<_>>().await;
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "error1".to_string());
+
+        let stream = ByteStream::new(stream::iter(vec![
+            Ok(vec![1, 2, 3]),
+            Err(Error::msg("error1")),
+            Ok(vec![4, 5, 6]),
+            Ok(vec![7, 8, 9]),
+        ]));
+
+        let result = stream.collect::<Vec<Result<Vec<u8>, Error>>>().await.len();
+        assert_eq!(result, 2);
     }
 }

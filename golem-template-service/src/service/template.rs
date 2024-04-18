@@ -258,6 +258,10 @@ impl TemplateService for TemplateServiceDefault {
                     .ok_or(TemplateError::UnknownTemplateId(template_id.clone()))?,
             }
         };
+        info!(
+            "Downloading template {} version {}",
+            template_id, versioned_template_id.version
+        );
 
         let id = ProtectedTemplateId {
             versioned_template_id,
@@ -284,25 +288,27 @@ impl TemplateService for TemplateServiceDefault {
                 None => self
                     .template_repo
                     .get_latest_version(&template_id.0)
-                    .await
-                    .map_err(TemplateError::from)
-                    .and_then(|r| {
-                        r.map(Template::from)
-                            .map(|t| t.versioned_template_id)
-                            .ok_or(TemplateError::UnknownTemplateId(template_id.clone()))
-                    })?,
+                    .await?
+                    .map(Template::from)
+                    .map(|t| t.versioned_template_id)
+                    .ok_or(TemplateError::UnknownTemplateId(template_id.clone()))?,
             }
         };
+        info!(
+            "Downloading template {} version {}",
+            template_id, versioned_template_id.version
+        );
 
         let id = ProtectedTemplateId {
             versioned_template_id,
         };
-        let download_stream = self
+
+        let stream = self
             .object_store
             .get_stream(&self.get_protected_object_store_key(&id))
             .await;
 
-        Ok(download_stream)
+        Ok(stream)
     }
 
     async fn get_protected_data(
@@ -311,7 +317,7 @@ impl TemplateService for TemplateServiceDefault {
         version: Option<u64>,
     ) -> Result<Option<Vec<u8>>, TemplateError> {
         info!(
-            "Getting template  {} version {} data",
+            "Getting template {} version {} data",
             template_id,
             version.map_or("N/A".to_string(), |v| v.to_string())
         );

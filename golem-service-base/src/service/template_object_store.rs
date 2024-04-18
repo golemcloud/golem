@@ -33,12 +33,6 @@ pub trait TemplateObjectStore {
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), anyhow::Error>;
 }
 
-pub struct AwsS3TemplateObjectStore {
-    client: aws_sdk_s3::Client,
-    bucket_name: String,
-    object_prefix: String,
-}
-
 pub struct AwsByteStream(aws_sdk_s3::primitives::ByteStream);
 
 impl Stream for AwsByteStream {
@@ -55,6 +49,12 @@ impl From<aws_sdk_s3::primitives::ByteStream> for ByteStream {
     fn from(stream: aws_sdk_s3::primitives::ByteStream) -> Self {
         Self::new(AwsByteStream(stream))
     }
+}
+
+pub struct AwsS3TemplateObjectStore {
+    client: aws_sdk_s3::Client,
+    bucket_name: String,
+    object_prefix: String,
 }
 
 impl AwsS3TemplateObjectStore {
