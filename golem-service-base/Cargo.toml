@@ -11,10 +11,12 @@ golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bigdecimal = "0.4.2"
+futures = { workspace = true }
 http = { workspace = true }
 http_02 = { workspace = true }
 hyper = { workspace = true }
