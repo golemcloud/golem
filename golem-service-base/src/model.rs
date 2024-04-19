@@ -2687,7 +2687,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union)]
 #[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
+#[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
 pub enum UpdateRecord {
     PendingUpdate(PendingUpdate),
     SuccessfulUpdate(SuccessfulUpdate),
