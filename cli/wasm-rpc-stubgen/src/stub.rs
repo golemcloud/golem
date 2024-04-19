@@ -332,7 +332,7 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
 fn collect_stub_functions<'a>(
     functions: impl Iterator<Item = &'a Function>,
 ) -> anyhow::Result<Vec<FunctionStub>> {
-    let mut function_stub = vec![];
+    let mut function_stubs = vec![];
 
     for f in functions {
         let mut params = Vec::new();
@@ -358,21 +358,21 @@ fn collect_stub_functions<'a>(
         };
 
         if results.is_empty() {
-            function_stub.push(FunctionStub {
+            function_stubs.push(FunctionStub {
                 name: format!("blocking-{}", f.name),
-                params: params.clone(),
+                params: *params.clone(),
                 results: results.clone(),
             })
         }
 
-        function_stub.push(FunctionStub {
+        function_stubs.push(FunctionStub {
             name: f.name.clone(),
             params,
             results,
         });
     }
 
-    Ok(function_stub)
+    Ok(function_stubs)
 }
 
 fn collect_stub_resources<'a>(
