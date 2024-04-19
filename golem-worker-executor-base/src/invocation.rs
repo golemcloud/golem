@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use anyhow::anyhow;
-use golem_common::model::{
-    parse_function_name, CallingConvention, VersionedWorkerId, WorkerStatus,
-};
+use golem_common::model::{parse_function_name, CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output};
 use golem_wasm_rpc::Value;
 use tracing::{debug, error, warn};
@@ -157,7 +155,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
 }
 
 async fn invoke_or_fail<Ctx: WorkerCtx>(
-    worker_id: &VersionedWorkerId,
+    worker_id: &WorkerId,
     full_function_name: String,
     function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,

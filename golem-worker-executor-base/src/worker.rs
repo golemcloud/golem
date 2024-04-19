@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -20,11 +21,11 @@ use async_mutex::Mutex;
 use bytes::Bytes;
 use golem_common::cache::PendingOrFinal;
 use golem_common::config::RetryConfig;
-use golem_common::model::oplog::OplogEntry;
+use golem_common::model::oplog::{OplogEntry, UpdateDescription};
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder};
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, Timestamp, VersionedWorkerId, WorkerId,
-    WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, FailedUpdateRecord, InvocationKey, SuccessfulUpdateRecord,
+    Timestamp, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::Receiver;
@@ -101,7 +102,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .get(
                     &this.engine(),
                     &template_id,
-                    worker_metadata.worker_id.template_version,
+                    worker_metadata.last_known_status.component_version,
                 )
                 .await?;
 
@@ -130,6 +131,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 this.config(),
                 WorkerConfig::new(
                     worker_metadata.worker_id.clone(),
+                    worker_metadata.last_known_status.component_version,
                     worker_args,
                     worker_env,
                     worker_metadata.last_known_status.deleted_regions.clone(),
@@ -142,7 +144,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             let mut store = Store::new(&this.engine(), context);
             store.set_epoch_deadline(this.config().limits.epoch_ticks);
-            let worker_id_clone = worker_metadata.worker_id.worker_id.clone();
+            let worker_id_clone = worker_metadata.worker_id.clone();
             store.epoch_deadline_callback(move |mut store| {
                 let current_level = store.get_fuel().unwrap_or(0);
                 if store.data().is_out_of_fuel(current_level as i64) {
@@ -201,7 +203,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             info!(
                 "Worker {}/{} activated",
                 worker_id.slug(),
-                worker_metadata.worker_id.template_version
+                worker_metadata.last_known_status.component_version
             );
 
             Ok(result)
@@ -428,7 +430,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasInvocationKeyService,
     {
         this.invocation_key_service()
-            .lookup_key(&self.metadata.worker_id.worker_id, invocation_key)
+            .lookup_key(&self.metadata.worker_id, invocation_key)
     }
 
     /// Marks the worker as interrupting - this should eventually make the worker interrupted.
@@ -495,7 +497,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<WorkerMetadata, GolemError> {
         let template_id = worker_id.template_id.clone();
 
-        let template_version = match template_version {
+        let component_version = match template_version {
             Some(component_version) => component_version,
             None => {
                 this.template_service()
@@ -504,25 +506,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         };
 
-        let versioned_worker_id = VersionedWorkerId {
-            worker_id: worker_id.clone(),
-            template_version,
-        };
-
         match this.worker_service().get(worker_id).await {
             None => {
+                let initial_status = calculate_last_known_status(this, worker_id, &None).await?;
                 let worker_metadata = WorkerMetadata {
-                    worker_id: versioned_worker_id.clone(),
+                    worker_id: worker_id.clone(),
                     args: worker_args,
                     env: worker_env,
                     account_id,
                     created_at: Timestamp::now_utc(),
-                    last_known_status: calculate_last_known_status(
-                        this,
-                        &versioned_worker_id.worker_id,
-                        &None,
-                    )
-                    .await?,
+                    last_known_status: WorkerStatusRecord {
+                        component_version,
+                        ..initial_status
+                    },
                 };
                 this.worker_service().add(&worker_metadata).await?;
                 Ok(worker_metadata)
@@ -530,7 +526,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Some(previous_metadata) => Ok(WorkerMetadata {
                 last_known_status: calculate_last_known_status(
                     this,
-                    &versioned_worker_id.worker_id,
+                    worker_id,
                     &Some(previous_metadata.clone()),
                 )
                 .await?,
@@ -618,10 +614,10 @@ fn validate_worker(
         errors.push(error)
     }
     if let Some(version) = template_version {
-        if worker_metadata.worker_id.template_version != version {
+        if worker_metadata.last_known_status.component_version != version {
             let error = format!(
                 "Worker is already running with different template version: {:?} != {:?}",
-                worker_metadata.worker_id.template_version, version
+                worker_metadata.last_known_status.component_version, version
             );
             errors.push(error)
         }
@@ -630,7 +626,7 @@ fn validate_worker(
         Ok(())
     } else {
         Err(GolemError::worker_creation_failed(
-            worker_metadata.worker_id.worker_id,
+            worker_metadata.worker_id,
             errors.join("\n"),
         ))
     }
@@ -653,7 +649,7 @@ where
         LookupResult::Complete(output) => Ok(Some(output)),
         LookupResult::Invalid => Err(GolemError::invalid_request(format!(
             "Invalid invocation key {} for {}",
-            invocation_key, worker.metadata.worker_id.worker_id
+            invocation_key, worker.metadata.worker_id
         ))),
         LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
         LookupResult::Pending => {
@@ -719,7 +715,7 @@ pub async fn invoke_and_await<Ctx: WorkerCtx, T>(
 where
     T: HasInvocationKeyService,
 {
-    let worker_id = worker.metadata.worker_id.worker_id.clone();
+    let worker_id = worker.metadata.worker_id.clone();
     match invoke(
         worker,
         this,
@@ -801,6 +797,14 @@ where
         let deleted_regions = calculate_deleted_regions(last_known.deleted_regions, &new_entries);
         let pending_invocations =
             calculate_pending_invocations(last_known.pending_invocations, &new_entries);
+        let (pending_updates, failed_updates, successful_updates, component_version) =
+            calculate_update_fields(
+                last_known.pending_updates,
+                last_known.failed_updates,
+                last_known.successful_updates,
+                last_known.component_version,
+                &new_entries,
+            );
 
         Ok(WorkerStatusRecord {
             oplog_idx: last_oplog_index,
@@ -808,6 +812,10 @@ where
             overridden_retry_config,
             pending_invocations,
             deleted_regions,
+            pending_updates,
+            failed_updates,
+            successful_updates,
+            component_version,
         })
     }
 }
@@ -886,6 +894,9 @@ fn calculate_latest_worker_status(
                 result = WorkerStatus::Running;
             }
             OplogEntry::PendingWorkerInvocation { .. } => {}
+            OplogEntry::PendingUpdate { .. } => {}
+            OplogEntry::FailedUpdate { .. } => {}
+            OplogEntry::SuccessfulUpdate { .. } => {}
         }
     }
     result
@@ -952,4 +963,59 @@ fn calculate_pending_invocations(
         }
     }
     result
+}
+
+fn calculate_update_fields(
+    initial_pending_updates: VecDeque<UpdateDescription>,
+    initial_failed_updates: Vec<FailedUpdateRecord>,
+    initial_successful_updates: Vec<SuccessfulUpdateRecord>,
+    initial_version: u64,
+    entries: &Vec<OplogEntry>,
+) -> (
+    VecDeque<UpdateDescription>,
+    Vec<FailedUpdateRecord>,
+    Vec<SuccessfulUpdateRecord>,
+    u64,
+) {
+    let mut pending_updates = initial_pending_updates;
+    let mut failed_updates = initial_failed_updates;
+    let mut successful_updates = initial_successful_updates;
+    let mut version = initial_version;
+    for entry in entries {
+        match entry {
+            OplogEntry::Create {
+                component_version, ..
+            } => {
+                version = *component_version;
+            }
+            OplogEntry::PendingUpdate { description, .. } => {
+                pending_updates.push_back(description.clone());
+            }
+            OplogEntry::FailedUpdate {
+                timestamp,
+                target_version,
+                details,
+            } => {
+                failed_updates.push(FailedUpdateRecord {
+                    timestamp: *timestamp,
+                    target_version: *target_version,
+                    details: details.clone(),
+                });
+                pending_updates.pop_front();
+            }
+            OplogEntry::SuccessfulUpdate {
+                timestamp,
+                target_version,
+            } => {
+                successful_updates.push(SuccessfulUpdateRecord {
+                    timestamp: *timestamp,
+                    target_version: *target_version,
+                });
+                version = *target_version;
+                pending_updates.pop_front();
+            }
+            _ => {}
+        }
+    }
+    (pending_updates, failed_updates, successful_updates, version)
 }

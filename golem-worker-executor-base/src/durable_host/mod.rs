@@ -50,8 +50,8 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, TemplateId, VersionedWorkerId, WorkerFilter,
-    WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, InvocationKey, TemplateId, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -99,7 +99,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: ResourceTable,
     wasi: WasiCtx,
     wasi_http: WasiHttpCtx,
-    pub worker_id: VersionedWorkerId,
+    pub worker_id: WorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState<Ctx>,
     #[allow(unused)] // note: need to keep reference to it to keep the temp dir alive
@@ -109,7 +109,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn create(
-        worker_id: VersionedWorkerId,
+        worker_id: WorkerId,
         account_id: AccountId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
@@ -146,8 +146,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_id, worker_config.deleted_regions
         );
 
-        let stdio =
-            ManagedStandardIo::new(worker_id.worker_id.clone(), invocation_key_service.clone());
+        let stdio = ManagedStandardIo::new(worker_id.clone(), invocation_key_service.clone());
         let stdin = ManagedStdIn::from_standard_io(stdio.clone()).await;
         let stdout = ManagedStdOut::from_standard_io(stdio.clone());
         let stderr = ManagedStdErr::from_stderr(Stderr);
@@ -189,7 +188,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         key_value_service,
                         blob_store_service,
                         config: config.clone(),
-                        worker_id: worker_id.worker_id.clone(),
+                        worker_id: worker_id.clone(),
                         account_id: account_id.clone(),
                         current_invocation_key: None,
                         active_workers: active_workers.clone(),
@@ -220,7 +219,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.public_state
     }
 
-    pub fn worker_id(&self) -> &VersionedWorkerId {
+    pub fn worker_id(&self) -> &WorkerId {
         &self.worker_id
     }
 
@@ -285,12 +284,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn get_worker_status(&self) -> WorkerStatus {
-        match self
-            .state
-            .worker_service
-            .get(&self.worker_id.worker_id)
-            .await
-        {
+        match self.state.worker_service.get(&self.worker_id).await {
             Some(metadata) => {
                 if metadata.last_known_status.oplog_idx
                     == self.state.oplog.current_oplog_index().await
@@ -306,16 +300,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn store_worker_status(&self, status: WorkerStatus) {
         let oplog_idx = self.state.oplog.current_oplog_index().await;
+        let last_known_status = self
+            .execution_status
+            .read()
+            .unwrap()
+            .last_known_status()
+            .clone();
         let status_record = WorkerStatusRecord {
             status,
             deleted_regions: self.state.deleted_regions.clone(),
             overridden_retry_config: self.state.overridden_retry_policy.clone(),
             pending_invocations: self.public_state.invocation_queue().pending_invocations(),
+            pending_updates: last_known_status.pending_updates,
+            failed_updates: last_known_status.failed_updates,
+            successful_updates: last_known_status.successful_updates,
+            component_version: last_known_status.component_version,
             oplog_idx,
         };
         self.state
             .worker_service
-            .update_status(&self.worker_id.worker_id, &status_record)
+            .update_status(&self.worker_id, &status_record)
             .await;
 
         let mut execution_status = self.execution_status.write().unwrap();
@@ -324,17 +328,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn update_pending_invocations(&self) {
         let oplog_idx = self.state.oplog.current_oplog_index().await;
+        let last_known_status = self
+            .execution_status
+            .read()
+            .unwrap()
+            .last_known_status()
+            .clone();
         let status = self.get_worker_status().await;
         let status_record = WorkerStatusRecord {
             status,
             deleted_regions: self.state.deleted_regions.clone(),
             overridden_retry_config: self.state.overridden_retry_policy.clone(),
             pending_invocations: self.public_state.invocation_queue().pending_invocations(),
+            pending_updates: last_known_status.pending_updates,
+            failed_updates: last_known_status.failed_updates,
+            successful_updates: last_known_status.successful_updates,
+            component_version: last_known_status.component_version,
             oplog_idx,
         };
         self.state
             .worker_service
-            .update_status(&self.worker_id.worker_id, &status_record)
+            .update_status(&self.worker_id, &status_record)
             .await;
 
         let mut execution_status = self.execution_status.write().unwrap();
@@ -439,7 +453,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 
     async fn deactivate(&self) {
         debug!("deactivating worker {}", self.worker_id);
-        self.state.active_workers.remove(&self.worker_id.worker_id);
+        self.state.active_workers.remove(&self.worker_id);
     }
 }
 
@@ -555,7 +569,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             if let Some(function_output) = response {
                 let is_diverged = function_output != output;
                 if is_diverged {
-                    return Err(anyhow!("Function {:?} with inputs {:?} has diverged! Output was {:?} when function was replayed but was {:?} when function was originally invoked", full_function_name, function_input, output, function_output));
+                    return Err(anyhow!(GolemError::unexpected_oplog_entry(
+                        format!("{full_function_name}({function_input:?}) => {function_output:?}"),
+                        format!("{full_function_name}({function_input:?}) => {output:?}"),
+                    )));
                 }
             }
         }
@@ -628,7 +645,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 
     async fn prepare_instance(
-        worker_id: &VersionedWorkerId,
+        worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<(), GolemError> {
@@ -667,9 +684,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .await;
 
                         if !finished {
-                            break Err(GolemError::failed_to_resume_instance(
-                                worker_id.worker_id.clone(),
-                            ));
+                            break Err(GolemError::failed_to_resume_instance(worker_id.clone()));
                         } else {
                             let result = store
                                 .as_context()
@@ -679,7 +694,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             if matches!(result, LookupResult::Complete(Err(_))) {
                                 // TODO: include the inner error in the failure?
                                 break Err(GolemError::failed_to_resume_instance(
-                                    worker_id.worker_id.clone(),
+                                    worker_id.clone(),
                                 ));
                             }
                         }
@@ -725,8 +740,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         for worker in workers {
             let worker_id = worker.worker_id.clone();
             let actualized_metadata =
-                calculate_last_known_status(this, &worker_id.worker_id, &Some(worker)).await?;
-            let last_error = Self::get_last_error_and_retry_count(this, &worker_id.worker_id).await;
+                calculate_last_known_status(this, &worker_id, &Some(worker)).await?;
+            let last_error = Self::get_last_error_and_retry_count(this, &worker_id).await;
             let decision = this
                 .recovery_management()
                 .schedule_recovery_on_startup(

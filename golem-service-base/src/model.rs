@@ -15,7 +15,9 @@
 use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
-use golem_common::model::{parse_function_name, ShardId, TemplateId, WorkerFilter, WorkerStatus};
+use golem_common::model::{
+    parse_function_name, ComponentVersion, ShardId, TemplateId, WorkerFilter, WorkerStatus,
+};
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use http::Uri;
 use poem_openapi::{Enum, NewType, Object, Union};
@@ -31,6 +33,12 @@ pub struct WorkerCreationRequest {
     pub env: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct WorkerCreationResponse {
+    pub worker_id: WorkerId,
+    pub component_version: ComponentVersion,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
 pub struct TemplateName(pub String);
 
@@ -39,7 +47,7 @@ pub struct TemplateName(pub String);
 #[oai(rename_all = "camelCase")]
 pub struct VersionedTemplateId {
     pub template_id: TemplateId,
-    pub version: u64,
+    pub version: ComponentVersion,
 }
 
 impl VersionedTemplateId {
@@ -1889,36 +1897,6 @@ impl From<WorkerId> for golem_api_grpc::proto::golem::worker::WorkerId {
 impl std::fmt::Display for WorkerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.template_id, self.worker_name.0)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct VersionedWorkerId {
-    pub worker_id: WorkerId,
-    pub template_version_used: u64,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::VersionedWorkerId> for VersionedWorkerId {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::VersionedWorkerId,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            template_version_used: value.template_version,
-        })
-    }
-}
-
-impl From<VersionedWorkerId> for golem_api_grpc::proto::golem::worker::VersionedWorkerId {
-    fn from(value: VersionedWorkerId) -> Self {
-        Self {
-            worker_id: Some(value.worker_id.into()),
-            template_version: value.template_version_used,
-        }
     }
 }
 

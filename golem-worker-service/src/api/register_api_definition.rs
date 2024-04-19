@@ -2,7 +2,7 @@ use std::result::Result;
 use std::sync::Arc;
 
 use golem_worker_service_base::api_definition::http::JsonOpenApiDefinition;
-use poem_openapi::param::Query;
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tracing::{error, info};
@@ -37,7 +37,7 @@ impl RegisterApiDefinitionApi {
         Self { definition_service }
     }
 
-    #[oai(path = "/oas", method = "put")]
+    #[oai(path = "/import", method = "put", operation_id = "import_open_api")]
     async fn create_or_update_open_api(
         &self,
         Json(openapi): Json<JsonOpenApiDefinition>,
@@ -55,7 +55,7 @@ impl RegisterApiDefinitionApi {
         Ok(Json(definition))
     }
 
-    #[oai(path = "/", method = "post")]
+    #[oai(path = "/", method = "post", operation_id = "create")]
     async fn create(
         &self,
         payload: Json<HttpApiDefinition>,
@@ -74,9 +74,11 @@ impl RegisterApiDefinitionApi {
 
         Ok(Json(definition))
     }
-    #[oai(path = "/", method = "put")]
+    #[oai(path = "/:id/:version", method = "put", operation_id = "update")]
     async fn update(
         &self,
+        id: Path<ApiDefinitionId>,
+        version: Path<ApiVersion>,
         payload: Json<HttpApiDefinition>,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
         info!("Update API definition - id: {}", &payload.id);
@@ -85,6 +87,16 @@ impl RegisterApiDefinitionApi {
             .0
             .try_into()
             .map_err(ApiEndpointError::bad_request)?;
+
+        if id.0 != definition.id {
+            return Err(ApiEndpointError::bad_request("Unmatched url and body ids."));
+        }
+
+        if version.0 != definition.version {
+            return Err(ApiEndpointError::bad_request(
+                "Unmatched url and body versions.",
+            ));
+        }
 
         self.definition_service
             .update(&definition, CommonNamespace::default(), &EmptyAuthCtx {})
@@ -100,15 +112,15 @@ impl RegisterApiDefinitionApi {
         Ok(Json(definition))
     }
 
-    #[oai(path = "/", method = "get")]
+    #[oai(path = "/:id/:version", method = "get", operation_id = "get")]
     async fn get(
         &self,
-        #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
-        #[oai(name = "version")] api_definition_id_version: Query<ApiVersion>,
-    ) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
-        let api_definition_id = api_definition_id_query.0;
+        id: Path<ApiDefinitionId>,
+        version: Path<ApiVersion>,
+    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+        let api_definition_id = id.0;
 
-        let api_version = api_definition_id_version.0;
+        let api_version = version.0;
 
         info!(
             "Get API definition - id: {}, version: {}",
@@ -125,26 +137,23 @@ impl RegisterApiDefinitionApi {
             )
             .await?;
 
-        let values: Vec<HttpApiDefinition> = match data {
-            Some(d) => {
-                let definition: HttpApiDefinition =
-                    d.try_into().map_err(ApiEndpointError::internal)?;
-                vec![definition]
-            }
-            None => vec![],
-        };
+        let data = data.ok_or(ApiEndpointError::not_found(format!(
+            "Can't find api definition with id {api_definition_id}, and version {api_version}"
+        )))?;
 
-        Ok(Json(values))
+        let value: HttpApiDefinition = data.try_into().map_err(ApiEndpointError::internal)?;
+
+        Ok(Json(value))
     }
 
-    #[oai(path = "/", method = "delete")]
+    #[oai(path = "/:id/:version", method = "delete", operation_id = "delete")]
     async fn delete(
         &self,
-        #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
-        #[oai(name = "version")] api_definition_version_query: Query<ApiVersion>,
+        id: Path<ApiDefinitionId>,
+        version: Path<ApiVersion>,
     ) -> Result<Json<String>, ApiEndpointError> {
-        let api_definition_id = api_definition_id_query.0;
-        let api_definition_version = api_definition_version_query.0;
+        let api_definition_id = id.0;
+        let api_definition_version = version.0;
 
         info!("Delete API definition - id: {}", &api_definition_id);
 
@@ -165,12 +174,20 @@ impl RegisterApiDefinitionApi {
         }
     }
 
-    #[oai(path = "/all", method = "get")]
-    async fn get_all(&self) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
-        let data = self
-            .definition_service
-            .get_all(CommonNamespace::default(), &EmptyAuthCtx {})
-            .await?;
+    #[oai(path = "/", method = "get", operation_id = "list")]
+    async fn list(
+        &self,
+        #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
+    ) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
+        let data = if let Some(id) = api_definition_id_query.0 {
+            self.definition_service
+                .get_all_versions(&id, CommonNamespace::default(), &EmptyAuthCtx {})
+                .await?
+        } else {
+            self.definition_service
+                .get_all(CommonNamespace::default(), &EmptyAuthCtx {})
+                .await?
+        };
 
         let values = data
             .into_iter()
@@ -266,7 +283,10 @@ mod test {
         };
 
         let response = client
-            .put("/v1/api/definitions")
+            .put(format!(
+                "/v1/api/definitions/{}/{}",
+                definition.id.0, definition.version.0
+            ))
             .body_json(&definition)
             .send()
             .await;
@@ -303,7 +323,7 @@ mod test {
             .await;
         response.assert_status_is_ok();
 
-        let response = client.get("/v1/api/definitions/all").send().await;
+        let response = client.get("/v1/api/definitions").send().await;
         response.assert_status_is_ok();
         let body = response.json().await;
         body.value().array().assert_len(2)
@@ -315,7 +335,7 @@ mod test {
         let client = TestClient::new(api);
 
         let response = client
-            .put("/v1/api/definitions/oas")
+            .put("/v1/api/definitions/import")
             .content_type("application/json")
             .body("Invalid JSON")
             .send()
@@ -324,7 +344,7 @@ mod test {
         response.assert_status(StatusCode::BAD_REQUEST);
 
         let response = client
-            .put("/v1/api/definitions/oas")
+            .put("/v1/api/definitions/import")
             .body_json(&serde_json::json!({
                 "some": "json"
             }))
@@ -405,7 +425,7 @@ mod test {
         "###;
 
         let response = client
-            .put("/v1/api/definitions/oas")
+            .put("/v1/api/definitions/import")
             .content_type("application/json")
             .body(openapi)
             .send()
