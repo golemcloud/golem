@@ -360,7 +360,7 @@ fn collect_stub_functions<'a>(
         if results.is_empty() {
             function_stubs.push(FunctionStub {
                 name: format!("blocking-{}", f.name),
-                params: *params.clone(),
+                params: params.clone(),
                 results: results.clone(),
             })
         }
