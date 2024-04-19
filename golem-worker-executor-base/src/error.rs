@@ -368,7 +368,7 @@ impl From<GolemError> for golem::worker::WorkerExecutionError {
                 error: Some(
                     golem::worker::worker_execution_error::Error::WorkerAlreadyExists(
                         golem::worker::WorkerAlreadyExists {
-                            worker_id: Some(worker_id.into_proto()),
+                            worker_id: Some(worker_id.into()),
                         },
                     ),
                 ),
@@ -377,7 +377,7 @@ impl From<GolemError> for golem::worker::WorkerExecutionError {
                 error: Some(
                     golem::worker::worker_execution_error::Error::WorkerNotFound(
                         golem::worker::WorkerNotFound {
-                            worker_id: Some(worker_id.into_proto()),
+                            worker_id: Some(worker_id.into()),
                         },
                     ),
                 ),
@@ -387,7 +387,7 @@ impl From<GolemError> for golem::worker::WorkerExecutionError {
                     error: Some(
                         golem::worker::worker_execution_error::Error::WorkerCreationFailed(
                             golem::worker::WorkerCreationFailed {
-                                worker_id: Some(worker_id.into_proto()),
+                                worker_id: Some(worker_id.into()),
                                 details,
                             },
                         ),
@@ -398,7 +398,7 @@ impl From<GolemError> for golem::worker::WorkerExecutionError {
                 error: Some(
                     golem::worker::worker_execution_error::Error::FailedToResumeWorker(
                         golem::worker::FailedToResumeWorker {
-                            worker_id: Some(worker_id.into_proto()),
+                            worker_id: Some(worker_id.into()),
                         },
                     ),
                 ),

@@ -1844,6 +1844,20 @@ components:
             type: string
       required:
       - errors
+    FailedUpdate:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+        details:
+          type: string
+      required:
+      - timestamp
+      - targetVersion
     FilterComparator:
       type: string
       enum:
@@ -2367,6 +2381,18 @@ components:
       - Options
       - Trace
       - Head
+    PendingUpdate:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - targetVersion
     PromiseId:
       type: object
       properties:
@@ -2425,6 +2451,60 @@ components:
       - NotEqual
       - Like
       - NotLike
+    SuccessfulUpdate:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - targetVersion
+    UpdateRecord:
+      discriminator:
+        propertyName: type
+        mapping:
+          pendingUpdate: '#/components/schemas/UpdateRecord_PendingUpdate'
+          successfulUpdate: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
+          failedUpdate: '#/components/schemas/UpdateRecord_FailedUpdate'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/UpdateRecord_PendingUpdate'
+      - $ref: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
+      - $ref: '#/components/schemas/UpdateRecord_FailedUpdate'
+    UpdateRecord_FailedUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: failedUpdate
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/FailedUpdate'
+    UpdateRecord_PendingUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: pendingUpdate
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/PendingUpdate'
+    UpdateRecord_SuccessfulUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: successfulUpdate
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/SuccessfulUpdate'
     ValidationErrorsBody:
       type: object
       properties:
@@ -2648,6 +2728,18 @@ components:
         retryCount:
           type: integer
           format: uint64
+        pendingInvocationCount:
+          type: integer
+          format: uint64
+        updates:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpdateRecord'
+        createdAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
       required:
       - workerId
       - args
@@ -2655,6 +2747,9 @@ components:
       - status
       - templateVersion
       - retryCount
+      - pendingInvocationCount
+      - updates
+      - createdAt
     WorkerNameFilter:
       type: object
       properties:
