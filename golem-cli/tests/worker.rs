@@ -92,7 +92,7 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
     short_args
 }
 
-fn make_template_from_file(
+pub fn make_template_from_file(
     deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
     template_name: &str,
     cli: &CliLive,

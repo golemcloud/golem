@@ -125,7 +125,7 @@ args = ["fmt", "--all"]
 description = "Runs clippy checks and applies fixes"
 install_crate = "clippy"
 command = "cargo"
-args = ["clippy", "--fix", "--allow-dirty", "--", "-Dwarnings"]
+args = ["clippy", "--fix", "--allow-dirty", "--allow-staged", "--", "-Dwarnings"]
 
 ## ** TEST **
 
@@ -234,6 +234,9 @@ args = ["-v", "./target/golem-service.yaml", "./openapi/golem-service.yaml"]
 description = "Publishes packages to crates.io"
 dependencies = [
     "publish-golem-client",
+    "publish-golem-api-grpc",
+    "publish-golem-common",
+    "publish-golem-test-framework",
     "publish-golem-cli"
 ]
 
@@ -255,6 +258,24 @@ description = "Publishes golem-client package to crates.io"
 dependencies = ["build-release"]
 command = "cargo"
 args = ["publish", "-p", "golem-client", "--all-features", "--allow-dirty"]
+
+[tasks.publish-golem-api-grpc]
+description = "Publishes golem-api-grpc package to crates.io"
+dependencies = ["build-release"]
+command = "cargo"
+args = ["publish", "-p", "golem-api-grpc", "--all-features", "--allow-dirty", "--no-verify"]
+
+[tasks.publish-golem-common]
+description = "Publishes golem-common package to crates.io"
+dependencies = ["build-release"]
+command = "cargo"
+args = ["publish", "-p", "golem-common", "--all-features", "--allow-dirty", "--no-verify"]
+
+[tasks.publish-golem-test-framework]
+description = "Publishes golem-test-framework package to crates.io"
+dependencies = ["build-release"]
+command = "cargo"
+args = ["publish", "-p", "golem-test-framework", "--all-features", "--allow-dirty", "--no-verify"]
 
 [tasks.publish-golem-cli]
 description = "Publishes golem-cli package to crates.io"

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures_util::TryStreamExt;
 use std::sync::Arc;
 
 use crate::service::template::{TemplateError as TemplateServiceError, TemplateService};
@@ -135,9 +136,11 @@ impl TemplateApi {
     ) -> Result<Binary<Body>> {
         let bytes = self
             .template_service
-            .download(&template_id.0, version.0)
+            .download_stream(&template_id.0, version.0)
             .await?;
-        Ok(Binary(Body::from(bytes)))
+        Ok(Binary(Body::from_bytes_stream(bytes.map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        }))))
     }
 
     #[oai(

@@ -1,0 +1,10 @@
+package golem:it;
+
+interface api {
+  set-timeout: func(time: u64) -> u64;  
+  get: func() -> u64;
+}
+
+world js3 {
+  export api;
+}
