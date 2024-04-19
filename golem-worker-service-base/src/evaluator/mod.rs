@@ -8,6 +8,7 @@ use getter::Getter;
 use path::Path;
 
 use crate::expression::{Expr, InnerNumber};
+use crate::merge::Merge;
 
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
@@ -173,7 +174,36 @@ impl Evaluator for Expr {
                     }
                 }
 
-                Expr::Let(_, _) | Expr::Multiple(_) => todo!(),
+                Expr::Let(str, expr) => {
+                    let value = go(expr, input)?;
+                    let typ = AnalysedType::from(&value);
+
+                    let result = TypeAnnotatedValue::Record {
+                        value: vec![(str.to_string(), value)],
+                        typ: vec![(str.to_string(), typ)],
+                    };
+
+                    input.merge(&result);
+
+                    Ok(result)
+                }
+
+                // TODO;
+                Expr::Multiple(multiple) => {
+                    let mut result: Vec<TypeAnnotatedValue> = vec![];
+
+                    for expr in multiple {
+                        match go(expr, input) {
+                            Ok(value) => {
+                                input.merge(&value);
+                                result.push(value);
+                            }
+                            Err(result) => return Err(result),
+                        }
+                    }
+
+                    Ok(result.last().unwrap().clone())
+                }
 
                 Expr::Sequence(exprs) => {
                     let mut result: Vec<TypeAnnotatedValue> = vec![];
@@ -1297,6 +1327,30 @@ mod tests {
                 },
             ],
         });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_evaluation_with_multiple_lines() {
+        let program = r"
+            let x = { a : 1 };
+            let y = { b : 2 };
+            let z = x.a > y.b;
+            z
+          ";
+
+        let expr = expression::from_string(format!("${{{}}}", program)).unwrap();
+
+        // We don't need any information any request to evaluate the above program
+        let empty_input = &TypeAnnotatedValue::Record {
+            value: vec![],
+            typ: vec![],
+        };
+
+        let result = expr.evaluate(empty_input);
+
+        let expected = Ok(TypeAnnotatedValue::Bool(false));
 
         assert_eq!(result, expected);
     }
