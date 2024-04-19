@@ -332,37 +332,48 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
 fn collect_stub_functions<'a>(
     functions: impl Iterator<Item = &'a Function>,
 ) -> anyhow::Result<Vec<FunctionStub>> {
-    Ok(functions
-        .map(|f| {
-            let mut params = Vec::new();
-            for (name, typ) in &f.params {
-                params.push(FunctionParamStub {
-                    name: name.clone(),
-                    typ: *typ,
-                });
-            }
+    let mut function_stub = vec![];
 
-            let results = match &f.results {
-                Results::Named(params) => {
-                    let mut param_stubs = Vec::new();
-                    for (name, typ) in params {
-                        param_stubs.push(FunctionParamStub {
-                            name: name.clone(),
-                            typ: *typ,
-                        });
-                    }
-                    FunctionResultStub::Multi(param_stubs)
+    for f in functions {
+        let mut params = Vec::new();
+        for (name, typ) in &f.params {
+            params.push(FunctionParamStub {
+                name: name.clone(),
+                typ: *typ,
+            });
+        }
+
+        let results = match &f.results {
+            Results::Named(params) => {
+                let mut param_stubs = Vec::new();
+                for (name, typ) in params {
+                    param_stubs.push(FunctionParamStub {
+                        name: name.clone(),
+                        typ: *typ,
+                    });
                 }
-                Results::Anon(single) => FunctionResultStub::Single(*single),
-            };
-
-            FunctionStub {
-                name: f.name.clone(),
-                params,
-                results,
+                FunctionResultStub::Multi(param_stubs)
             }
-        })
-        .collect())
+            Results::Anon(single) => FunctionResultStub::Single(*single),
+        };
+
+        if results.is_empty() {
+            function_stub.push(FunctionStub {
+                name: format!("blocking-{}", f.name),
+                params: params.clone(),
+                results: results.clone(),
+            })
+        }
+
+        function_stub.push(
+        FunctionStub {
+            name: f.name.clone(),
+            params,
+            results,
+        });
+    }
+
+    Ok(function_stub)
 }
 
 fn collect_stub_resources<'a>(
