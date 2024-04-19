@@ -254,6 +254,7 @@ fn generate_function_stub_source(
             &param_name_access,
             &def.resolve,
             quote! { WitValue::builder() },
+            false,
         )?);
     }
 
@@ -540,47 +541,152 @@ fn wit_value_builder(
     name: &TokenStream,
     resolve: &Resolve,
     builder_expr: TokenStream,
+    is_reference: bool,
 ) -> anyhow::Result<TokenStream> {
     match typ {
-        Type::Bool => Ok(quote! {
-            #builder_expr.bool(#name)
-        }),
-        Type::U8 => Ok(quote! {
-            #builder_expr.u8(#name)
-        }),
-        Type::U16 => Ok(quote! {
-            #builder_expr.u16(#name)
-        }),
-        Type::U32 => Ok(quote! {
-            #builder_expr.u32(#name)
-        }),
-        Type::U64 => Ok(quote! {
-            #builder_expr.u64(#name)
-        }),
-        Type::S8 => Ok(quote! {
-            #builder_expr.s8(#name)
-        }),
-        Type::S16 => Ok(quote! {
-            #builder_expr.s16(#name)
-        }),
-        Type::S32 => Ok(quote! {
-            #builder_expr.s32(#name)
-        }),
-        Type::S64 => Ok(quote! {
-            #builder_expr.s64(#name)
-        }),
-        Type::Float32 => Ok(quote! {
-            #builder_expr.f32(#name)
-        }),
-        Type::Float64 => Ok(quote! {
-            #builder_expr.f64(#name)
-        }),
-        Type::Char => Ok(quote! {
-            #builder_expr.char(#name)
-        }),
-        Type::String => Ok(quote! {
-            #builder_expr.string(&#name)
-        }),
+        Type::Bool => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.bool(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.bool(#name)
+                })
+            }
+        }
+        Type::U8 => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.u8(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.u8(#name)
+                })
+            }
+        }
+        Type::U16 => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.u16(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.u16(#name)
+                })
+            }
+        }
+        Type::U32 => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.u32(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.u32(#name)
+                })
+            }
+        }
+        Type::U64 => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.u64(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.u64(#name)
+                })
+            }
+        }
+        Type::S8 => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.s8(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.s8(#name)
+                })
+            }
+        }
+        Type::S16 => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.s16(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.s16(#name)
+                })
+            }
+        }
+        Type::S32 => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.s32(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.s32(#name)
+                })
+            }
+        }
+        Type::S64 => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.s64(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.s64(#name)
+                })
+            }
+        }
+        Type::Float32 => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.f32(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.f32(#name)
+                })
+            }
+        }
+        Type::Float64 => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.f64(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.f64(#name)
+                })
+            }
+        }
+        Type::Char => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.char(*#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.char(#name)
+                })
+            }
+        }
+        Type::String => {
+            if is_reference {
+                Ok(quote! {
+                    #builder_expr.string(#name)
+                })
+            } else {
+                Ok(quote! {
+                    #builder_expr.string(&#name)
+                })
+            }
+        }
         Type::Id(type_id) => {
             let typedef = resolve
                 .types
@@ -619,7 +725,7 @@ fn wit_value_builder(
                 }
                 TypeDefKind::Future(_) => Ok(quote!(todo!("future"))),
                 TypeDefKind::Stream(_) => Ok(quote!(todo!("stream"))),
-                TypeDefKind::Type(typ) => wit_value_builder(typ, name, resolve, builder_expr),
+                TypeDefKind::Type(typ) => wit_value_builder(typ, name, resolve, builder_expr, is_reference),
                 TypeDefKind::Unknown => Ok(quote!(todo!("unknown"))),
             }
         }
@@ -642,6 +748,7 @@ fn wit_record_value_builder(
             &field_access,
             resolve,
             quote! { #builder_expr.item() },
+            false,
         )?;
     }
 
@@ -679,8 +786,13 @@ fn wit_tuple_value_builder(
     for (n, typ) in tuple.types.iter().enumerate() {
         let field_name = syn::Index::from(n);
         let field_access = quote! { #name.#field_name };
-        builder_expr =
-            wit_value_builder(typ, &field_access, resolve, quote! { #builder_expr.item() })?;
+        builder_expr = wit_value_builder(
+            typ,
+            &field_access,
+            resolve,
+            quote! { #builder_expr.item() },
+            false,
+        )?;
     }
 
     Ok(quote! { #builder_expr.finish() })
@@ -726,6 +838,7 @@ fn wit_variant_value_builder(
                     &quote! { inner },
                     resolve,
                     quote! { case_builder },
+                    true,
                 )?;
 
                 case_idx_patterns.push(quote! {
@@ -794,6 +907,7 @@ fn wit_option_value_builder(
         &quote! { #name.as_ref().unwrap() },
         resolve,
         quote! { some_builder },
+        true,
     )?;
 
     Ok(quote! {
@@ -810,9 +924,13 @@ fn wit_result_value_builder(
     builder_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
     let ok_expr = match &result.ok {
-        Some(ok) => {
-            wit_value_builder(ok, &quote! { ok_value }, resolve, quote! { result_builder })?
-        }
+        Some(ok) => wit_value_builder(
+            ok,
+            &quote! { ok_value },
+            resolve,
+            quote! { result_builder },
+            true,
+        )?,
         None => quote! { unreachable!() },
     };
     let err_expr = match &result.err {
@@ -821,6 +939,7 @@ fn wit_result_value_builder(
             &quote! { err_value },
             resolve,
             quote! { result_builder },
+            true,
         )?,
         None => quote! { unreachable!() },
     };
@@ -847,8 +966,13 @@ fn wit_list_value_builder(
     resolve: &Resolve,
     builder_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let inner_builder_expr =
-        wit_value_builder(inner, &quote! { item }, resolve, quote! { item_builder })?;
+    let inner_builder_expr = wit_value_builder(
+        inner,
+        &quote! { item },
+        resolve,
+        quote! { item_builder },
+        true,
+    )?;
 
     Ok(quote! {
         #builder_expr.list_fn(&#name, |item, item_builder| {
