@@ -1419,9 +1419,7 @@ where
             template_version: 0,
             retry_count: 0,
             pending_invocation_count: 0,
-            pending_update_count: 0,
-            failed_updates: vec![],
-            successful_updates: vec![],
+            updates: vec![],
             created_at: Timestamp::now_utc(),
             last_error: None,
         })

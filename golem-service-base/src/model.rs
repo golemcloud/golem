@@ -2635,9 +2635,7 @@ pub struct WorkerMetadata {
     pub template_version: ComponentVersion,
     pub retry_count: u64,
     pub pending_invocation_count: u64,
-    pub pending_update_count: u64,
-    pub failed_updates: Vec<FailedUpdate>,
-    pub successful_updates: Vec<SuccessfulUpdate>,
+    pub updates: Vec<UpdateRecord>,
     pub created_at: Timestamp,
     pub last_error: Option<String>,
 }
@@ -2656,17 +2654,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             template_version: value.template_version,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
-            pending_update_count: value.pending_update_count,
-            failed_updates: value
-                .failed_updates
+            updates: value
+                .updates
                 .into_iter()
-                .map(|failed_update| failed_update.try_into())
-                .collect::<Result<_, _>>()?,
-            successful_updates: value
-                .successful_updates
-                .into_iter()
-                .map(|successful_update| successful_update.try_into())
-                .collect::<Result<_, _>>()?,
+                .map(|update| update.try_into())
+                .collect::<Result<Vec<UpdateRecord>, String>>()?,
             created_at: value.created_at.ok_or("Missing created_at")?.into(),
             last_error: value.last_error,
         })
@@ -2686,82 +2678,117 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             template_version: value.template_version,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
-            pending_update_count: value.pending_update_count,
-            failed_updates: value
-                .failed_updates
-                .into_iter()
-                .map(|failed_update| failed_update.into())
-                .collect(),
-            successful_updates: value
-                .successful_updates
-                .into_iter()
-                .map(|successful_update| successful_update.into())
-                .collect(),
+            updates: value.updates.iter().cloned().map(|u| u.into()).collect(),
             created_at: Some(value.created_at.into()),
             last_error: value.last_error,
         }
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub enum UpdateRecord {
+    PendingUpdate(PendingUpdate),
+    SuccessfulUpdate(SuccessfulUpdate),
+    FailedUpdate(FailedUpdate),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct FailedUpdate {
-    pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
-    pub details: Option<String>,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::FailedUpdate> for FailedUpdate {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::FailedUpdate,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-            target_version: value.target_version,
-            details: value.details,
-        })
-    }
-}
-
-impl From<FailedUpdate> for golem_api_grpc::proto::golem::worker::FailedUpdate {
-    fn from(value: FailedUpdate) -> Self {
-        Self {
-            timestamp: Some(value.timestamp.into()),
-            target_version: value.target_version,
-            details: value.details,
-        }
-    }
+pub struct PendingUpdate {
+    timestamp: Timestamp,
+    target_version: ComponentVersion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct SuccessfulUpdate {
-    pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
+    timestamp: Timestamp,
+    target_version: ComponentVersion,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::worker::SuccessfulUpdate> for SuccessfulUpdate {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct FailedUpdate {
+    timestamp: Timestamp,
+    target_version: ComponentVersion,
+    details: Option<String>,
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateRecord> for UpdateRecord {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::worker::SuccessfulUpdate,
+        value: golem_api_grpc::proto::golem::worker::UpdateRecord,
     ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-            target_version: value.target_version,
-        })
+        match value.update.ok_or("Missing update field")? {
+            golem_api_grpc::proto::golem::worker::update_record::Update::Failed(failed) => {
+                Ok(Self::FailedUpdate(FailedUpdate {
+                    timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
+                    target_version: value.target_version,
+                    details: { failed.details },
+                }))
+            }
+            golem_api_grpc::proto::golem::worker::update_record::Update::Pending(_) => {
+                Ok(Self::PendingUpdate(PendingUpdate {
+                    timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
+                    target_version: value.target_version,
+                }))
+            }
+            golem_api_grpc::proto::golem::worker::update_record::Update::Successful(_) => {
+                Ok(Self::SuccessfulUpdate(SuccessfulUpdate {
+                    timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
+                    target_version: value.target_version,
+                }))
+            }
+        }
     }
 }
 
-impl From<SuccessfulUpdate> for golem_api_grpc::proto::golem::worker::SuccessfulUpdate {
-    fn from(value: SuccessfulUpdate) -> Self {
-        Self {
-            timestamp: Some(value.timestamp.into()),
-            target_version: value.target_version,
+impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
+    fn from(value: UpdateRecord) -> Self {
+        match value {
+            UpdateRecord::FailedUpdate(FailedUpdate {
+                timestamp,
+                target_version,
+                details,
+            }) => Self {
+                timestamp: Some(timestamp.into()),
+                target_version,
+                update: Some(
+                    golem_api_grpc::proto::golem::worker::update_record::Update::Failed(
+                        golem_api_grpc::proto::golem::worker::FailedUpdate { details },
+                    ),
+                ),
+            },
+            UpdateRecord::PendingUpdate(PendingUpdate {
+                timestamp,
+                target_version,
+            }) => Self {
+                timestamp: Some(timestamp.into()),
+                target_version,
+                update: Some(
+                    golem_api_grpc::proto::golem::worker::update_record::Update::Pending(
+                        golem_api_grpc::proto::golem::worker::PendingUpdate {},
+                    ),
+                ),
+            },
+            UpdateRecord::SuccessfulUpdate(SuccessfulUpdate {
+                timestamp,
+                target_version,
+            }) => Self {
+                timestamp: Some(timestamp.into()),
+                target_version,
+                update: Some(
+                    golem_api_grpc::proto::golem::worker::update_record::Update::Successful(
+                        golem_api_grpc::proto::golem::worker::SuccessfulUpdate {},
+                    ),
+                ),
+            },
         }
     }
 }

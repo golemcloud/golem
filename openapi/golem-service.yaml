@@ -2381,6 +2381,18 @@ components:
       - Options
       - Trace
       - Head
+    PendingUpdate:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - targetVersion
     PromiseId:
       type: object
       properties:
@@ -2451,6 +2463,12 @@ components:
       required:
       - timestamp
       - targetVersion
+    UpdateRecord:
+      type: object
+      anyOf:
+      - $ref: '#/components/schemas/PendingUpdate'
+      - $ref: '#/components/schemas/SuccessfulUpdate'
+      - $ref: '#/components/schemas/FailedUpdate'
     ValidationErrorsBody:
       type: object
       properties:
@@ -2677,17 +2695,10 @@ components:
         pendingInvocationCount:
           type: integer
           format: uint64
-        pendingUpdateCount:
-          type: integer
-          format: uint64
-        failedUpdates:
+        updates:
           type: array
           items:
-            $ref: '#/components/schemas/FailedUpdate'
-        successfulUpdates:
-          type: array
-          items:
-            $ref: '#/components/schemas/SuccessfulUpdate'
+            $ref: '#/components/schemas/UpdateRecord'
         createdAt:
           type: string
           format: date-time
@@ -2701,9 +2712,7 @@ components:
       - templateVersion
       - retryCount
       - pendingInvocationCount
-      - pendingUpdateCount
-      - failedUpdates
-      - successfulUpdates
+      - updates
       - createdAt
     WorkerNameFilter:
       type: object

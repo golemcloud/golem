@@ -35,7 +35,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::config::RetryConfig;
-use crate::model::oplog::{OplogIndex, UpdateDescription};
+use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
 
@@ -583,8 +583,8 @@ pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub deleted_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
-    pub pending_invocations: Vec<WorkerInvocation>,
-    pub pending_updates: VecDeque<UpdateDescription>,
+    pub pending_invocations: Vec<TimestampedWorkerInvocation>,
+    pub pending_updates: VecDeque<TimestampedUpdateDescription>,
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
     pub component_version: ComponentVersion,
@@ -733,6 +733,12 @@ pub enum WorkerInvocation {
     ManualUpdate {
         target_version: ComponentVersion,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+pub struct TimestampedWorkerInvocation {
+    pub timestamp: Timestamp,
+    pub invocation: WorkerInvocation,
 }
 
 #[derive(

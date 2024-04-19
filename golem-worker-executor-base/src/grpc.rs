@@ -30,8 +30,8 @@ use golem_common::cache::PendingOrFinal;
 use golem_common::model as common_model;
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, ShardId, WorkerFilter, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, InvocationKey, ShardId, TimestampedWorkerInvocation,
+    WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::protobuf::Val;
 use tokio::sync::mpsc;
@@ -818,7 +818,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 if metadata
                     .last_known_status
                     .pending_updates
-                    .contains(&update_description)
+                    .iter()
+                    .any(|update| update.description == update_description)
                 {
                     return Err(GolemError::invalid_request(
                         "The same update is already in progress",
@@ -896,7 +897,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
             UpdateMode::Manual => {
                 if metadata.last_known_status.pending_invocations.iter().any(|invocation|
-                  matches!(invocation, WorkerInvocation::ManualUpdate { target_version } if *target_version == request.target_version)
+                  matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_version, .. }, ..} if *target_version == request.target_version)
                 ) {
                     return Err(GolemError::invalid_request(
                         "The same update is already in progress",
@@ -941,6 +942,57 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         latest_status: WorkerStatusRecord,
         last_error_and_retry_count: Option<LastError>,
     ) -> golem::worker::WorkerMetadata {
+        let mut updates = Vec::new();
+
+        for pending_invocation in &latest_status.pending_invocations {
+            if let TimestampedWorkerInvocation {
+                timestamp,
+                invocation: WorkerInvocation::ManualUpdate { target_version },
+            } = pending_invocation
+            {
+                updates.push(golem::worker::UpdateRecord {
+                    timestamp: Some((*timestamp).into()),
+                    target_version: *target_version,
+                    update: Some(golem::worker::update_record::Update::Pending(
+                        golem::worker::PendingUpdate {},
+                    )),
+                });
+            }
+        }
+        for pending_update in &latest_status.pending_updates {
+            updates.push(golem::worker::UpdateRecord {
+                timestamp: Some(pending_update.timestamp.into()),
+                target_version: *pending_update.description.target_version(),
+                update: Some(golem::worker::update_record::Update::Pending(
+                    golem::worker::PendingUpdate {},
+                )),
+            });
+        }
+        for successful_update in &latest_status.successful_updates {
+            updates.push(golem::worker::UpdateRecord {
+                timestamp: Some(successful_update.timestamp.into()),
+                target_version: successful_update.target_version,
+                update: Some(golem::worker::update_record::Update::Successful(
+                    golem::worker::SuccessfulUpdate {},
+                )),
+            });
+        }
+        for failed_update in &latest_status.failed_updates {
+            updates.push(golem::worker::UpdateRecord {
+                timestamp: Some(failed_update.timestamp.into()),
+                target_version: failed_update.target_version,
+                update: Some(golem::worker::update_record::Update::Failed(
+                    golem::worker::FailedUpdate {
+                        details: failed_update.details.clone(),
+                    },
+                )),
+            });
+        }
+        updates.sort_by_key(|record| {
+            record.timestamp.as_ref().unwrap().seconds * 1_000_000_000
+                + record.timestamp.as_ref().unwrap().nanos as i64
+        });
+
         golem::worker::WorkerMetadata {
             worker_id: Some(metadata.worker_id.into()),
             args: metadata.args.clone(),
@@ -954,24 +1006,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .unwrap_or_default(),
 
             pending_invocation_count: latest_status.pending_invocations.len() as u64,
-            pending_update_count: latest_status.pending_updates.len() as u64,
-            failed_updates: latest_status
-                .failed_updates
-                .iter()
-                .map(|update| golem::worker::FailedUpdate {
-                    timestamp: Some(update.timestamp.into()),
-                    target_version: update.target_version,
-                    details: update.details.clone(),
-                })
-                .collect(),
-            successful_updates: latest_status
-                .successful_updates
-                .iter()
-                .map(|update| golem::worker::SuccessfulUpdate {
-                    timestamp: Some(update.timestamp.into()),
-                    target_version: update.target_version,
-                })
-                .collect(),
+            updates,
             created_at: Some(metadata.created_at.into()),
             last_error: last_error_and_retry_count.map(|last_error| last_error.error.to_string()),
         }

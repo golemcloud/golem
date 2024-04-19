@@ -21,11 +21,12 @@ use async_mutex::Mutex;
 use bytes::Bytes;
 use golem_common::cache::PendingOrFinal;
 use golem_common::config::RetryConfig;
-use golem_common::model::oplog::{OplogEntry, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder};
 use golem_common::model::{
     AccountId, CallingConvention, FailedUpdateRecord, InvocationKey, SuccessfulUpdateRecord,
-    Timestamp, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::Receiver;
@@ -675,8 +676,8 @@ impl<Ctx: WorkerCtx> PendingWorker<Ctx> {
         worker_id: WorkerId,
         config: Arc<GolemConfig>,
         oplog: Arc<dyn Oplog + Send + Sync>,
-        initial_pending_invocations: &[WorkerInvocation],
-        initial_pending_updates: &[UpdateDescription],
+        initial_pending_invocations: &[TimestampedWorkerInvocation],
+        initial_pending_updates: &[TimestampedUpdateDescription],
     ) -> Result<PendingWorker<Ctx>, GolemError> {
         let invocation_queue = Arc::new(InvocationQueue::new(
             worker_id.clone(),
@@ -1056,19 +1057,30 @@ fn calculate_overridden_retry_policy(
 }
 
 fn calculate_pending_invocations(
-    initial: Vec<WorkerInvocation>,
+    initial: Vec<TimestampedWorkerInvocation>,
     entries: &[OplogEntry],
-) -> Vec<WorkerInvocation> {
+) -> Vec<TimestampedWorkerInvocation> {
     let mut result = initial;
     for entry in entries {
         match entry {
-            OplogEntry::PendingWorkerInvocation { invocation, .. } => {
-                result.push(invocation.clone());
+            OplogEntry::PendingWorkerInvocation {
+                timestamp,
+                invocation,
+                ..
+            } => {
+                result.push(TimestampedWorkerInvocation {
+                    timestamp: *timestamp,
+                    invocation: invocation.clone(),
+                });
             }
             OplogEntry::ExportedFunctionInvoked { invocation_key, .. } => {
                 result.retain(|invocation| match invocation {
-                    WorkerInvocation::ExportedFunction {
-                        invocation_key: key,
+                    TimestampedWorkerInvocation {
+                        invocation:
+                            WorkerInvocation::ExportedFunction {
+                                invocation_key: key,
+                                ..
+                            },
                         ..
                     } => key != invocation_key,
                     _ => true,
@@ -1078,8 +1090,12 @@ fn calculate_pending_invocations(
                 description: UpdateDescription::SnapshotBased { target_version, .. },
                 ..
             } => result.retain(|invocation| match invocation {
-                WorkerInvocation::ManualUpdate {
-                    target_version: version,
+                TimestampedWorkerInvocation {
+                    invocation:
+                        WorkerInvocation::ManualUpdate {
+                            target_version: version,
+                            ..
+                        },
                     ..
                 } => version != target_version,
                 _ => true,
@@ -1091,13 +1107,13 @@ fn calculate_pending_invocations(
 }
 
 fn calculate_update_fields(
-    initial_pending_updates: VecDeque<UpdateDescription>,
+    initial_pending_updates: VecDeque<TimestampedUpdateDescription>,
     initial_failed_updates: Vec<FailedUpdateRecord>,
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
     initial_version: u64,
     entries: &Vec<OplogEntry>,
 ) -> (
-    VecDeque<UpdateDescription>,
+    VecDeque<TimestampedUpdateDescription>,
     Vec<FailedUpdateRecord>,
     Vec<SuccessfulUpdateRecord>,
     u64,
@@ -1113,8 +1129,15 @@ fn calculate_update_fields(
             } => {
                 version = *component_version;
             }
-            OplogEntry::PendingUpdate { description, .. } => {
-                pending_updates.push_back(description.clone());
+            OplogEntry::PendingUpdate {
+                timestamp,
+                description,
+                ..
+            } => {
+                pending_updates.push_back(TimestampedUpdateDescription {
+                    timestamp: *timestamp,
+                    description: description.clone(),
+                });
             }
             OplogEntry::FailedUpdate {
                 timestamp,

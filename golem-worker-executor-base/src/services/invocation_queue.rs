@@ -27,9 +27,10 @@ use crate::services::oplog::Oplog;
 use crate::services::HasOplog;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::{OplogEntry, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
-    CallingConvention, ComponentVersion, InvocationKey, WorkerId, WorkerInvocation,
+    CallingConvention, ComponentVersion, InvocationKey, TimestampedWorkerInvocation, WorkerId,
+    WorkerInvocation,
 };
 
 /// Per-worker invocation queue service
@@ -44,8 +45,8 @@ use golem_common::model::{
 pub struct InvocationQueue<Ctx: WorkerCtx> {
     worker_id: WorkerId,
     oplog: Arc<dyn Oplog + Send + Sync>,
-    queue: Arc<RwLock<VecDeque<WorkerInvocation>>>,
-    pending_updates: Arc<RwLock<VecDeque<UpdateDescription>>>,
+    queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
+    pending_updates: Arc<RwLock<VecDeque<TimestampedUpdateDescription>>>,
     running: Arc<Mutex<Option<RunningInvocationQueue<Ctx>>>>,
 }
 
@@ -53,8 +54,8 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
     pub fn new(
         worker_id: WorkerId,
         oplog: Arc<dyn Oplog + Send + Sync>,
-        initial_pending_invocations: &[WorkerInvocation],
-        initial_pending_updates: &[UpdateDescription],
+        initial_pending_invocations: &[TimestampedWorkerInvocation],
+        initial_pending_updates: &[TimestampedUpdateDescription],
     ) -> Self {
         let queue = Arc::new(RwLock::new(VecDeque::from_iter(
             initial_pending_invocations.iter().cloned(),
@@ -108,10 +109,16 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
                     function_input,
                     calling_convention,
                 };
-                self.queue.write().unwrap().push_back(invocation.clone());
-                self.oplog
-                    .add(OplogEntry::pending_worker_invocation(invocation))
-                    .await;
+                let entry = OplogEntry::pending_worker_invocation(invocation.clone());
+                let timestamped_invocation = TimestampedWorkerInvocation {
+                    timestamp: entry.timestamp(),
+                    invocation,
+                };
+                self.queue
+                    .write()
+                    .unwrap()
+                    .push_back(timestamped_invocation);
+                self.oplog.add(entry).await;
                 self.oplog.commit().await;
             }
         }
@@ -122,13 +129,16 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
     /// The update itself is not performed by the invocation queue's processing loop,
     /// it is going to affect how the worker is recovered next time.
     pub async fn enqueue_update(&self, update_description: UpdateDescription) {
+        let entry = OplogEntry::pending_update(update_description.clone());
+        let timestamped_update = TimestampedUpdateDescription {
+            timestamp: entry.timestamp(),
+            description: update_description,
+        };
         self.pending_updates
             .write()
             .unwrap()
-            .push_back(update_description.clone());
-        self.oplog
-            .add(OplogEntry::pending_update(update_description))
-            .await;
+            .push_back(timestamped_update);
+        self.oplog.add(entry).await;
         self.oplog.commit().await;
     }
 
@@ -147,20 +157,26 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
                     self.worker_id
                 );
                 let invocation = WorkerInvocation::ManualUpdate { target_version };
-                self.queue.write().unwrap().push_back(invocation.clone());
-                self.oplog
-                    .add(OplogEntry::pending_worker_invocation(invocation))
-                    .await;
+                let entry = OplogEntry::pending_worker_invocation(invocation.clone());
+                let timestamped_invocation = TimestampedWorkerInvocation {
+                    timestamp: entry.timestamp(),
+                    invocation,
+                };
+                self.queue
+                    .write()
+                    .unwrap()
+                    .push_back(timestamped_invocation);
+                self.oplog.add(entry).await;
                 self.oplog.commit().await;
             }
         }
     }
 
-    pub fn pending_invocations(&self) -> Vec<WorkerInvocation> {
+    pub fn pending_invocations(&self) -> Vec<TimestampedWorkerInvocation> {
         self.queue.read().unwrap().iter().cloned().collect()
     }
 
-    pub fn pending_updates(&self) -> VecDeque<UpdateDescription> {
+    pub fn pending_updates(&self) -> VecDeque<TimestampedUpdateDescription> {
         self.pending_updates.read().unwrap().clone()
     }
 }
@@ -168,12 +184,15 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
 struct RunningInvocationQueue<Ctx: WorkerCtx> {
     _handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<()>,
-    queue: Arc<RwLock<VecDeque<WorkerInvocation>>>,
+    queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
     worker: Weak<Worker<Ctx>>,
 }
 
 impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
-    pub fn new(worker: Arc<Worker<Ctx>>, queue: Arc<RwLock<VecDeque<WorkerInvocation>>>) -> Self {
+    pub fn new(
+        worker: Arc<Worker<Ctx>>,
+        queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
+    ) -> Self {
         let worker_id = worker.metadata.worker_id.clone();
 
         let worker = Arc::downgrade(&worker);
@@ -226,6 +245,11 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
     }
 
     async fn enqueue_worker_invocation(&self, invocation: WorkerInvocation) {
+        let entry = OplogEntry::pending_worker_invocation(invocation.clone());
+        let timestamped_invocation = TimestampedWorkerInvocation {
+            timestamp: entry.timestamp(),
+            invocation,
+        };
         if let Some(worker) = self.worker.upgrade() {
             if worker.store.try_lock().is_none() {
                 debug!(
@@ -233,21 +257,20 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                     worker.metadata.worker_id
                 );
                 // The worker is currently busy, so we write the pending worker invocation to the oplog
-                worker
-                    .public_state
-                    .oplog()
-                    .add(OplogEntry::pending_worker_invocation(invocation.clone()))
-                    .await;
+                worker.public_state.oplog().add(entry).await;
                 worker.public_state.oplog().commit().await;
             }
         }
-        self.queue.write().unwrap().push_back(invocation);
+        self.queue
+            .write()
+            .unwrap()
+            .push_back(timestamped_invocation);
         self.sender.send(()).unwrap()
     }
 
     async fn invocation_loop(
         mut receiver: UnboundedReceiver<()>,
-        active: Arc<RwLock<VecDeque<WorkerInvocation>>>,
+        active: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
         worker: Weak<Worker<Ctx>>,
         worker_id: WorkerId,
     ) {
@@ -267,7 +290,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                 let mut store_mutex = store.lock().await;
                 let store = store_mutex.deref_mut();
 
-                match message {
+                match message.invocation {
                     WorkerInvocation::ExportedFunction {
                         invocation_key,
                         full_function_name,
