@@ -353,7 +353,7 @@ fn generate_function_stub_source(
         quote! {}
     };
 
-    if (&function.results.is_empty() && !&function.name.starts_with("blocking-")) {
+    if function.results.is_empty() && !function.name.starts_with("blocking-") {
         Ok(quote! {
             fn #function_name(#(#params),*) -> #result_type {
                 #init
