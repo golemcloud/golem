@@ -365,8 +365,7 @@ fn collect_stub_functions<'a>(
             })
         }
 
-        function_stub.push(
-        FunctionStub {
+        function_stub.push(FunctionStub {
             name: f.name.clone(),
             params,
             results,
