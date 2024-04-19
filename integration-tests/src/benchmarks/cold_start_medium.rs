@@ -35,7 +35,7 @@ impl Benchmark for ColdStartEchoMedium {
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.config.clone(), "js-1").await
+        setup(self.config.clone(), "js-echo").await
     }
 
     async fn warmup(&self, _: &Self::IterationContext) {}

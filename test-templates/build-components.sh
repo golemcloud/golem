@@ -5,12 +5,12 @@ rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopp
 zig_test_components=("zig-1" "zig-2")
 tinygo_test_components=("tinygo-wasi" "tinygo-wasi-http")
 grain_test_components=("grain-1")
-js_test_components=("js-1" "js-2" "js-3")
+js_test_components=("js-1" "js-2" "js-3" "js-echo")
 java_test_components=("java-1" "java-2")
 dotnet_test_components=("csharp-1")
 swift_test_components=("swift-1")
 c_test_components=("c-1")
-python_test_components=("python-1")
+python_test_components=("python-1" "py-echo")
 
 # Optional arguments:
 # - rebuild: clean all projects before building them

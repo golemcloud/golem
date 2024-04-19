@@ -35,7 +35,7 @@ impl Benchmark for ColdStartEchoSmall {
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.config.clone(), "option-service").await
+        setup(self.config.clone(), "rust-echo").await
     }
 
     async fn warmup(&self, _: &Self::IterationContext) {}

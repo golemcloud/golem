@@ -1,0 +1,10 @@
+package golem:it;
+
+interface api {
+
+  echo: func(input: string) -> string;
+}
+
+world js-echo {
+  export api;
+}

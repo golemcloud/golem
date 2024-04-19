@@ -26,6 +26,7 @@ exclude = [
     "test-templates/clock-service",
     "test-templates/clocks",
     "test-templates/directories",
+    "test-templates/rust-echo",
     "test-templates/environment-service",
     "test-templates/failing-component",
     "test-templates/file-service",

@@ -62,9 +62,7 @@ pub async fn run_echo(length: usize, context: &Context, recorder: BenchmarkRecor
                     .invoke_and_await(
                         &worker_id_clone,
                         "golem:it/api/echo",
-                        vec![Value::Option(Some(Box::new(Value::String(
-                            "hello".to_string(),
-                        ))))],
+                        vec![Value::String("hello".to_string())],
                     )
                     .await
                     .expect("invoke_and_await failed");

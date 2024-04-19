@@ -35,7 +35,7 @@ impl Benchmark for ColdStartEchoLarge {
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.config.clone(), "python-1").await
+        setup(self.config.clone(), "py-echo").await
     }
 
     async fn warmup(&self, _: &Self::IterationContext) {}
