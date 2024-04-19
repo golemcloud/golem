@@ -2020,8 +2020,11 @@ components:
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
+        reason:
+          $ref: '#/components/schemas/GolemError'
       required:
       - workerId
+      - reason
     GolemErrorGetLatestVersionOfComponentFailed:
       type: object
       properties:
