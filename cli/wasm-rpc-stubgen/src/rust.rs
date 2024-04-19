@@ -353,18 +353,33 @@ fn generate_function_stub_source(
         quote! {}
     };
 
-    Ok(quote! {
-        fn #function_name(#(#params),*) -> #result_type {
-            #init
-            let result = #rpc.invoke_and_await(
-                #remote_function_name,
-                &[
-                    #(#input_values),*
-                ],
-            ).expect(&format!("Failed to invoke remote {}", #remote_function_name));
-            (#(#output_values),*)
-        }
-    })
+    if (&function.results.is_empty() && !&function.name.starts_with("blocking-")) {
+        Ok(quote! {
+            fn #function_name(#(#params),*) -> #result_type {
+                #init
+                let result = #rpc.invoke(
+                    #remote_function_name,
+                    &[
+                        #(#input_values),*
+                    ],
+                ).expect(&format!("Failed to invoke remote {}", #remote_function_name));
+                (#(#output_values),*)
+            }
+        })
+    } else {
+        Ok(quote! {
+            fn #function_name(#(#params),*) -> #result_type {
+                #init
+                let result = #rpc.invoke_and_await(
+                    #remote_function_name,
+                    &[
+                        #(#input_values),*
+                    ],
+                ).expect(&format!("Failed to invoke remote {}", #remote_function_name));
+                (#(#output_values),*)
+            }
+        })
+    }
 }
 
 fn get_remote_function_name(
