@@ -581,12 +581,9 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
             } => {
                 let template_id = self.templates.resolve_id(template_id_or_name).await?;
 
-                let result = self.client.connect(worker_name, template_id).await;
+                self.client.connect(worker_name, template_id).await?;
 
-                match result {
-                    Ok(_) => Err(GolemError("Unexpected connection closure".to_string())),
-                    Err(err) => Err(GolemError(err.to_string())),
-                }
+                Err(GolemError("Unexpected connection closure".to_string()))
             }
             WorkerSubcommand::Interrupt {
                 template_id_or_name,
