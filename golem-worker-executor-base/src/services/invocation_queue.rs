@@ -179,6 +179,10 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
     pub fn pending_updates(&self) -> VecDeque<TimestampedUpdateDescription> {
         self.pending_updates.read().unwrap().clone()
     }
+
+    pub fn pop_pending_update(&self) -> Option<TimestampedUpdateDescription> {
+        self.pending_updates.write().unwrap().pop_front()
+    }
 }
 
 struct RunningInvocationQueue<Ctx: WorkerCtx> {

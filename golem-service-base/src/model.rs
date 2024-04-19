@@ -2099,6 +2099,7 @@ impl From<GolemErrorWorkerCreationFailed>
 #[error("Failed to resume worker: {worker_id}")]
 pub struct GolemErrorFailedToResumeWorker {
     pub worker_id: WorkerId,
+    pub reason: Box<GolemError>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::FailedToResumeWorker>
@@ -2114,6 +2115,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FailedToResumeWorker>
                 .worker_id
                 .ok_or("Missing field: worker_id")?
                 .try_into()?,
+            reason: Box::new((*value.reason.ok_or("Missing field: reason")?).try_into()?),
         })
     }
 }
@@ -2124,6 +2126,7 @@ impl From<GolemErrorFailedToResumeWorker>
     fn from(value: GolemErrorFailedToResumeWorker) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
+            reason: Some(Box::new((*value.reason).into())),
         }
     }
 }
@@ -2877,7 +2880,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerExecutionError> for Gol
                 Ok(GolemError::WorkerCreationFailed(err.try_into()?))
             }
             Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::FailedToResumeWorker(err)) => {
-                Ok(GolemError::FailedToResumeWorker(err.try_into()?))
+                Ok(GolemError::FailedToResumeWorker((*err).try_into()?))
             }
             Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ComponentDownloadFailed(err)) => {
                 Ok(GolemError::ComponentDownloadFailed(err.try_into()?))
@@ -2964,7 +2967,7 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::WorkerExecutionE
             }
             GolemError::FailedToResumeWorker(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::FailedToResumeWorker(err.into())),
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::FailedToResumeWorker(Box::new(err.into()))),
                 }
             }
             GolemError::ComponentDownloadFailed(err) => {

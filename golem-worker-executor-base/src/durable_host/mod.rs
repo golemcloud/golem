@@ -50,13 +50,13 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, InvocationKey, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, ComponentId, FailedUpdateRecord, InvocationKey, SuccessfulUpdateRecord,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::AsContextMut;
 use wasmtime_wasi::preview2::{I32Exit, ResourceTable, Stderr, Subscribe, WasiCtx, WasiView};
@@ -298,61 +298,35 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    pub async fn store_worker_status(&self, status: WorkerStatus) {
-        let oplog_idx = self.state.oplog.current_oplog_index().await;
-        let last_known_status = self
+    pub async fn update_worker_status(&self, f: impl FnOnce(&mut WorkerStatusRecord)) {
+        let mut status = self
             .execution_status
             .read()
             .unwrap()
             .last_known_status()
             .clone();
-        let status_record = WorkerStatusRecord {
-            status,
-            deleted_regions: self.state.deleted_regions.clone(),
-            overridden_retry_config: self.state.overridden_retry_policy.clone(),
-            pending_invocations: self.public_state.invocation_queue().pending_invocations(),
-            pending_updates: self.public_state.invocation_queue().pending_updates(),
-            failed_updates: last_known_status.failed_updates,
-            successful_updates: last_known_status.successful_updates,
-            component_version: last_known_status.component_version,
-            oplog_idx,
-        };
+
+        status.deleted_regions = self.state.deleted_regions.clone();
+        status.overridden_retry_config = self.state.overridden_retry_policy.clone();
+        status.pending_invocations = self.public_state.invocation_queue().pending_invocations();
+        status.pending_updates = self.public_state.invocation_queue().pending_updates();
+        status.oplog_idx = self.state.oplog.current_oplog_index().await;
+        f(&mut status);
         self.state
             .worker_service
-            .update_status(&self.worker_id, &status_record)
+            .update_status(&self.worker_id, &status)
             .await;
 
         let mut execution_status = self.execution_status.write().unwrap();
-        execution_status.set_last_known_status(status_record);
+        execution_status.set_last_known_status(status);
+    }
+
+    pub async fn store_worker_status(&self, status: WorkerStatus) {
+        self.update_worker_status(|s| s.status = status).await;
     }
 
     pub async fn update_pending_invocations(&self) {
-        let oplog_idx = self.state.oplog.current_oplog_index().await;
-        let last_known_status = self
-            .execution_status
-            .read()
-            .unwrap()
-            .last_known_status()
-            .clone();
-        let status = self.get_worker_status().await;
-        let status_record = WorkerStatusRecord {
-            status,
-            deleted_regions: self.state.deleted_regions.clone(),
-            overridden_retry_config: self.state.overridden_retry_policy.clone(),
-            pending_invocations: self.public_state.invocation_queue().pending_invocations(),
-            pending_updates: self.public_state.invocation_queue().pending_updates(),
-            failed_updates: last_known_status.failed_updates,
-            successful_updates: last_known_status.successful_updates,
-            component_version: last_known_status.component_version,
-            oplog_idx,
-        };
-        self.state
-            .worker_service
-            .update_status(&self.worker_id, &status_record)
-            .await;
-
-        let mut execution_status = self.execution_status.write().unwrap();
-        execution_status.set_last_known_status(status_record);
+        self.update_worker_status(|_| {}).await;
     }
 
     pub fn get_stdio(&self) -> ManagedStandardIo {
@@ -378,6 +352,59 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
         self.state.rpc.clone()
+    }
+
+    /// Records the result of an automatic update, if any was active, and returns whether the worker
+    /// should be restarted to retry recovering without the pending update.
+    pub async fn finalize_automatic_update(&mut self, result: &Result<(), GolemError>) -> bool {
+        let pending_update = self.public_state.invocation_queue.pop_pending_update();
+        match pending_update {
+            Some(pending_update) => match result {
+                Ok(_) => {
+                    let target_version = *pending_update.description.target_version();
+                    info!(
+                        "Automatic update to {} finished successfully for {}",
+                        target_version, self.worker_id
+                    );
+                    let entry = OplogEntry::successful_update(target_version);
+                    let timestamp = entry.timestamp();
+                    self.public_state.oplog.add(entry).await;
+                    self.update_worker_status(|status| {
+                        status.component_version = target_version;
+                        status.successful_updates.push(SuccessfulUpdateRecord {
+                            timestamp,
+                            target_version,
+                        })
+                    })
+                    .await;
+                    false
+                }
+                Err(error) => {
+                    let target_version = *pending_update.description.target_version();
+
+                    warn!(
+                        "Automatic update to {} failed for {}: {}",
+                        target_version, self.worker_id, error
+                    );
+                    let entry = OplogEntry::failed_update(target_version, Some(error.to_string()));
+                    let timestamp = entry.timestamp();
+                    self.public_state.oplog.add(entry).await;
+                    self.update_worker_status(|status| {
+                        status.failed_updates.push(FailedUpdateRecord {
+                            timestamp,
+                            target_version,
+                            details: Some(error.to_string()),
+                        })
+                    })
+                    .await;
+                    true
+                }
+            },
+            None => {
+                debug!("No pending updates to finalize for {}", self.worker_id);
+                false
+            }
+        }
     }
 }
 
@@ -662,10 +689,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .durable_ctx_mut()
                     .state
                     .get_oplog_entry_exported_function_invoked()
-                    .await?;
+                    .await;
                 match oplog_entry {
-                    None => break Ok(()),
-                    Some((function_name, function_input, invocation_key, calling_convention)) => {
+                    Err(error) => break Err(error),
+                    Ok(None) => break Ok(()),
+                    Ok(Some((
+                        function_name,
+                        function_input,
+                        invocation_key,
+                        calling_convention,
+                    ))) => {
                         debug!("prepare_instance invoking function {function_name} on {worker_id}");
                         store
                             .as_context_mut()
@@ -684,16 +717,17 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .await;
 
                         if !finished {
-                            break Err(GolemError::failed_to_resume_worker(worker_id.clone()));
+                            break Err(GolemError::runtime(format!(
+                                "The worker could not finish replaying a function {function_name}"
+                            )));
                         } else {
                             let result = store
                                 .as_context()
                                 .data()
                                 .durable_ctx()
                                 .get_current_invocation_result();
-                            if matches!(result, LookupResult::Complete(Err(_))) {
-                                // TODO: include the inner error in the failure?
-                                break Err(GolemError::failed_to_resume_worker(worker_id.clone()));
+                            if let LookupResult::Complete(Err(error)) = result {
+                                break Err(error);
                             }
                         }
 
@@ -706,8 +740,21 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         };
         record_resume_worker(start.elapsed());
         record_number_of_replayed_functions(count);
-        debug!("Finished prepare_instance for {worker_id}");
-        result
+
+        let retry = store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .finalize_automatic_update(&result)
+            .await;
+
+        if retry {
+            debug!("Retrying prepare_instance for {worker_id} after failed update attempt");
+            Self::prepare_instance(worker_id, instance, store).await
+        } else {
+            debug!("Finished prepare_instance for {worker_id}");
+            result.map_err(|err| GolemError::failed_to_resume_instance(worker_id.clone(), err))
+        }
     }
 
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(

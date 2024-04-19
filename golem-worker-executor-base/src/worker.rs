@@ -98,12 +98,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let result = {
             let component_id = worker_id.component_id.clone();
 
+            let component_version = worker_metadata
+                .last_known_status
+                .pending_updates
+                .front()
+                .map_or(
+                    worker_metadata.last_known_status.component_version,
+                    |update| {
+                        let target_version = *update.description.target_version();
+                        info!("Attempting automatic update for {worker_id} to version {target_version} from {}",
+                            worker_metadata.last_known_status.component_version
+                        );
+                        target_version
+                    },
+                );
             let component = this
                 .component_service()
                 .get(
                     &this.engine(),
                     &component_id,
-                    worker_metadata.last_known_status.component_version,
+                    component_version,
                 )
                 .await?;
 
