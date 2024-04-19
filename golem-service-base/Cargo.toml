@@ -11,6 +11,7 @@ golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
@@ -29,7 +30,6 @@ tonic = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 thiserror = { workspace = true }
-anyhow.workspace = true
 
 [dev-dependencies]
 proptest = { workspace = true }
