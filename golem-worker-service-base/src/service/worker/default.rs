@@ -21,8 +21,8 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 };
 
 use golem_common::model::{
-    AccountId, CallingConvention, FilterComparator, InvocationKey, TemplateId, WorkerFilter,
-    WorkerStatus,
+    AccountId, CallingConvention, FilterComparator, InvocationKey, TemplateId, Timestamp,
+    WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
     GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
@@ -1418,6 +1418,12 @@ where
             status: golem_common::model::WorkerStatus::Running,
             template_version: 0,
             retry_count: 0,
+            pending_invocation_count: 0,
+            pending_update_count: 0,
+            failed_updates: vec![],
+            successful_updates: vec![],
+            created_at: Timestamp::now_utc(),
+            last_error: None,
         })
     }
 

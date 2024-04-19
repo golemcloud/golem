@@ -27,8 +27,10 @@ use crate::services::oplog::Oplog;
 use crate::services::HasOplog;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::OplogEntry;
-use golem_common::model::{CallingConvention, InvocationKey, WorkerId, WorkerInvocation};
+use golem_common::model::oplog::{OplogEntry, UpdateDescription};
+use golem_common::model::{
+    CallingConvention, ComponentVersion, InvocationKey, WorkerId, WorkerInvocation,
+};
 
 /// Per-worker invocation queue service
 ///
@@ -43,6 +45,7 @@ pub struct InvocationQueue<Ctx: WorkerCtx> {
     worker_id: WorkerId,
     oplog: Arc<dyn Oplog + Send + Sync>,
     queue: Arc<RwLock<VecDeque<WorkerInvocation>>>,
+    pending_updates: Arc<RwLock<VecDeque<UpdateDescription>>>,
     running: Arc<Mutex<Option<RunningInvocationQueue<Ctx>>>>,
 }
 
@@ -51,15 +54,20 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         worker_id: WorkerId,
         oplog: Arc<dyn Oplog + Send + Sync>,
         initial_pending_invocations: &[WorkerInvocation],
+        initial_pending_updates: &[UpdateDescription],
     ) -> Self {
         let queue = Arc::new(RwLock::new(VecDeque::from_iter(
             initial_pending_invocations.iter().cloned(),
+        )));
+        let pending_updates = Arc::new(RwLock::new(VecDeque::from_iter(
+            initial_pending_updates.iter().cloned(),
         )));
 
         InvocationQueue {
             worker_id,
             oplog,
             queue,
+            pending_updates,
             running: Arc::new(Mutex::new(None)),
         }
     }
@@ -70,6 +78,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         *running = Some(RunningInvocationQueue::new(worker, self.queue.clone()));
     }
 
+    /// Enqueue invocation of an exported function
     pub async fn enqueue(
         &self,
         invocation_key: InvocationKey,
@@ -93,7 +102,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
                     "Worker {} is initializing, persisting pending invocation",
                     self.worker_id
                 );
-                let invocation = WorkerInvocation {
+                let invocation = WorkerInvocation::ExportedFunction {
                     invocation_key,
                     full_function_name,
                     function_input,
@@ -108,8 +117,51 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         }
     }
 
+    /// Enqueue attempting an update.
+    ///
+    /// The update itself is not performed by the invocation queue's processing loop,
+    /// it is going to affect how the worker is recovered next time.
+    pub async fn enqueue_update(&self, update_description: UpdateDescription) {
+        self.pending_updates
+            .write()
+            .unwrap()
+            .push_back(update_description.clone());
+        self.oplog
+            .add(OplogEntry::pending_update(update_description))
+            .await;
+        self.oplog.commit().await;
+    }
+
+    /// Enqueues a manual update.
+    ///
+    /// This enqueues a special function invocation that saves the component's state and
+    /// triggers a restart immediately.
+    pub async fn enqueue_manual_update(&self, target_version: ComponentVersion) {
+        match self.running.lock().await.as_ref() {
+            Some(running) => {
+                running.enqueue_manual_update(target_version).await;
+            }
+            None => {
+                debug!(
+                    "Worker {} is initializing, persisting manual update request",
+                    self.worker_id
+                );
+                let invocation = WorkerInvocation::ManualUpdate { target_version };
+                self.queue.write().unwrap().push_back(invocation.clone());
+                self.oplog
+                    .add(OplogEntry::pending_worker_invocation(invocation))
+                    .await;
+                self.oplog.commit().await;
+            }
+        }
+    }
+
     pub fn pending_invocations(&self) -> Vec<WorkerInvocation> {
         self.queue.read().unwrap().iter().cloned().collect()
+    }
+
+    pub fn pending_updates(&self) -> VecDeque<UpdateDescription> {
+        self.pending_updates.read().unwrap().clone()
     }
 }
 
@@ -159,12 +211,21 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
         function_input: Vec<Value>,
         calling_convention: CallingConvention,
     ) {
-        let invocation = WorkerInvocation {
+        let invocation = WorkerInvocation::ExportedFunction {
             invocation_key,
             full_function_name,
             function_input,
             calling_convention,
         };
+        self.enqueue_worker_invocation(invocation).await;
+    }
+
+    pub async fn enqueue_manual_update(&self, target_version: ComponentVersion) {
+        let invocation = WorkerInvocation::ManualUpdate { target_version };
+        self.enqueue_worker_invocation(invocation).await;
+    }
+
+    async fn enqueue_worker_invocation(&self, invocation: WorkerInvocation) {
         if let Some(worker) = self.worker.upgrade() {
             if worker.store.try_lock().is_none() {
                 debug!(
@@ -206,24 +267,37 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                 let mut store_mutex = store.lock().await;
                 let store = store_mutex.deref_mut();
 
-                store
-                    .data_mut()
-                    .set_current_invocation_key(message.invocation_key)
-                    .await;
+                match message {
+                    WorkerInvocation::ExportedFunction {
+                        invocation_key,
+                        full_function_name,
+                        function_input,
+                        calling_convention,
+                    } => {
+                        store
+                            .data_mut()
+                            .set_current_invocation_key(invocation_key)
+                            .await;
 
-                // Make sure to update the pending invocation queue in the status record before
-                // the invocation writes the invocation start oplog entry
-                store.data_mut().update_pending_invocations().await;
+                        // Make sure to update the pending invocation queue in the status record before
+                        // the invocation writes the invocation start oplog entry
+                        store.data_mut().update_pending_invocations().await;
 
-                let _ = invoke_worker(
-                    message.full_function_name,
-                    message.function_input,
-                    store,
-                    instance,
-                    message.calling_convention,
-                    true, // Invocation queue is always initialized _after_ the worker recovery
-                )
-                .await;
+                        let _ = invoke_worker(
+                            full_function_name,
+                            function_input,
+                            store,
+                            instance,
+                            calling_convention,
+                            true, // Invocation queue is always initialized _after_ the worker recovery
+                        )
+                        .await;
+                    }
+                    WorkerInvocation::ManualUpdate { target_version: _ } => {
+                        // TODO: invoke snapshot save function, write pending update oplog entry and deactivate the worker
+                        todo!()
+                    }
+                }
             } else {
                 warn!(
                     "Lost invocation message because the worker {worker_id} was dropped: {message:?}"

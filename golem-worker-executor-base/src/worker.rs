@@ -316,6 +316,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .last_known_status
             .pending_invocations
             .clone();
+        let initial_pending_updates = worker_metadata
+            .last_known_status
+            .pending_updates
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
 
         let worker_details = this
             .active_workers()
@@ -327,6 +333,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         config_clone,
                         oplog,
                         &initial_pending_invocations,
+                        &initial_pending_updates,
                     )
                 },
                 |pending_worker| {
@@ -356,8 +363,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Gets an already active worker or creates a new one and returns the pending worker object
     ///
-    /// The pending worker object holds a reference to the event service of the worker that is getting
-    /// created, allowing the caller to connect to the worker's event stream even before it is fully
+    /// The pending worker object holds a reference to the event service, invocation queue and oplog
+    /// of the worker that is getting created, allowing the caller to connect to the worker's event stream even before it is fully
     /// initialized.
     pub async fn get_or_create_pending<T>(
         this: &T,
@@ -392,6 +399,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .last_known_status
             .pending_invocations
             .clone();
+        let initial_pending_updates = worker_metadata
+            .last_known_status
+            .pending_updates
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
 
         this.active_workers()
             .get_pending_with(
@@ -402,6 +415,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         config_clone,
                         oplog,
                         &initial_pending_invocations,
+                        &initial_pending_updates,
                     )
                 },
                 move |pending_worker| {
@@ -420,6 +434,95 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 },
             )
             .await
+    }
+
+    /// Creates a new worker and returns the pending worker object, and pauses loading
+    /// the worker until an explicit call to a oneshot resume channel.
+    ///
+    /// If the worker is already active, the function fails.
+    ///
+    /// The pending worker object holds a reference to the event service, invocation queue and oplog
+    /// of the worker that is getting created, allowing the caller to connect to the worker's event stream even before it is fully
+    /// initialized.
+    pub async fn get_or_create_paused_pending<T>(
+        this: &T,
+        worker_id: &WorkerId,
+        worker_args: Vec<String>,
+        worker_env: Vec<(String, String)>,
+        template_version: Option<u64>,
+        account_id: AccountId,
+    ) -> Result<(PendingWorker<Ctx>, tokio::sync::oneshot::Sender<()>), GolemError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        let this_clone = this.clone();
+        let worker_id_clone_1 = worker_id.clone();
+        let worker_id_clone_2 = worker_id.clone();
+        let worker_args_clone = worker_args.clone();
+        let worker_env_clone = worker_env.clone();
+        let config_clone = this.config().clone();
+
+        let worker_metadata = Self::get_or_create_worker_metadata(
+            this,
+            worker_id,
+            template_version,
+            worker_args.clone(),
+            worker_env.clone(),
+            account_id,
+        )
+        .await?;
+
+        let oplog = this.oplog_service().open(worker_id).await;
+        let initial_pending_invocations = worker_metadata
+            .last_known_status
+            .pending_invocations
+            .clone();
+        let initial_pending_updates = worker_metadata
+            .last_known_status
+            .pending_updates
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let (resume_sender, resume_receiver) = tokio::sync::oneshot::channel();
+
+        let pending_or_final = this
+            .active_workers()
+            .get_pending_with(
+                worker_id.clone(),
+                || {
+                    PendingWorker::new(
+                        worker_id_clone_1,
+                        config_clone,
+                        oplog,
+                        &initial_pending_invocations,
+                        &initial_pending_updates,
+                    )
+                },
+                move |pending_worker| {
+                    let pending_worker_clone = pending_worker.clone();
+                    Box::pin(async move {
+                        resume_receiver.await.unwrap();
+                        Worker::new(
+                            &this_clone,
+                            worker_id_clone_2,
+                            worker_args_clone,
+                            worker_env_clone,
+                            worker_metadata,
+                            &pending_worker_clone,
+                        )
+                        .await
+                    })
+                },
+            )
+            .await?;
+
+        match pending_or_final {
+            PendingOrFinal::Pending(pending) => Ok((pending, resume_sender)),
+            PendingOrFinal::Final(_) => Err(GolemError::unknown(
+                "Worker was unexpectedly already active",
+            )),
+        }
     }
 
     /// Looks up a given invocation key's current status.
@@ -573,11 +676,13 @@ impl<Ctx: WorkerCtx> PendingWorker<Ctx> {
         config: Arc<GolemConfig>,
         oplog: Arc<dyn Oplog + Send + Sync>,
         initial_pending_invocations: &[WorkerInvocation],
+        initial_pending_updates: &[UpdateDescription],
     ) -> Result<PendingWorker<Ctx>, GolemError> {
         let invocation_queue = Arc::new(InvocationQueue::new(
             worker_id.clone(),
             oplog.clone(),
             initial_pending_invocations,
+            initial_pending_updates,
         ));
 
         Ok(PendingWorker {
@@ -894,7 +999,11 @@ fn calculate_latest_worker_status(
                 result = WorkerStatus::Running;
             }
             OplogEntry::PendingWorkerInvocation { .. } => {}
-            OplogEntry::PendingUpdate { .. } => {}
+            OplogEntry::PendingUpdate { .. } => {
+                if result == WorkerStatus::Failed {
+                    result = WorkerStatus::Retrying;
+                }
+            }
             OplogEntry::FailedUpdate { .. } => {}
             OplogEntry::SuccessfulUpdate { .. } => {}
         }
@@ -957,8 +1066,24 @@ fn calculate_pending_invocations(
                 result.push(invocation.clone());
             }
             OplogEntry::ExportedFunctionInvoked { invocation_key, .. } => {
-                result.retain(|invocation| &invocation.invocation_key != invocation_key);
+                result.retain(|invocation| match invocation {
+                    WorkerInvocation::ExportedFunction {
+                        invocation_key: key,
+                        ..
+                    } => key != invocation_key,
+                    _ => true,
+                });
             }
+            OplogEntry::PendingUpdate {
+                description: UpdateDescription::SnapshotBased { target_version, .. },
+                ..
+            } => result.retain(|invocation| match invocation {
+                WorkerInvocation::ManualUpdate {
+                    target_version: version,
+                    ..
+                } => version != target_version,
+                _ => true,
+            }),
             _ => {}
         }
     }

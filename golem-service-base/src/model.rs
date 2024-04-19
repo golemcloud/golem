@@ -2639,7 +2639,7 @@ pub struct WorkerMetadata {
     pub failed_updates: Vec<FailedUpdate>,
     pub successful_updates: Vec<SuccessfulUpdate>,
     pub created_at: Timestamp,
-    pub last_error: Option<String>
+    pub last_error: Option<String>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -2668,7 +2668,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
                 .map(|successful_update| successful_update.try_into())
                 .collect::<Result<_, _>>()?,
             created_at: value.created_at.ok_or("Missing created_at")?.into(),
-            last_error: value.last_error
+            last_error: value.last_error,
         })
     }
 }
@@ -2698,6 +2698,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
                 .map(|successful_update| successful_update.into())
                 .collect(),
             created_at: Some(value.created_at.into()),
+            last_error: value.last_error,
         }
     }
 }
@@ -2760,7 +2761,7 @@ impl From<SuccessfulUpdate> for golem_api_grpc::proto::golem::worker::Successful
     fn from(value: SuccessfulUpdate) -> Self {
         Self {
             timestamp: Some(value.timestamp.into()),
-            target_version: value.target_version.into(),
+            target_version: value.target_version,
         }
     }
 }

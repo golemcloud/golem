@@ -28,9 +28,10 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 };
 use golem_common::cache::PendingOrFinal;
 use golem_common::model as common_model;
+use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, ShardId, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, InvocationKey, ShardId, WorkerFilter, WorkerId, WorkerInvocation,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::protobuf::Val;
 use tokio::sync::mpsc;
@@ -798,27 +799,81 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
 
         let metadata = self.worker_service().get(&worker_id).await;
-        let worker_status = Ctx::compute_latest_worker_status(self, &worker_id, &metadata).await?;
+        let mut worker_status =
+            Ctx::compute_latest_worker_status(self, &worker_id, &metadata).await?;
         let metadata = metadata.ok_or(GolemError::worker_not_found(worker_id.clone()))?;
+
+        if metadata.last_known_status.component_version == request.target_version {
+            return Err(GolemError::invalid_request(
+                "Worker is already at the target version",
+            ));
+        }
 
         match request.mode() {
             UpdateMode::Automatic => {
+                let update_description = UpdateDescription::Automatic {
+                    target_version: request.target_version,
+                };
+
+                if metadata
+                    .last_known_status
+                    .pending_updates
+                    .contains(&update_description)
+                {
+                    return Err(GolemError::invalid_request(
+                        "The same update is already in progress",
+                    ));
+                }
+
                 match &worker_status.status {
                     WorkerStatus::Exited => {
                         warn!("Attempted updating worker {worker_id} which already exited")
                     }
-                    WorkerStatus::Failed => {
-                        // TODO: reset to retrying
-                        // TODO: write to the oplog and activate
-                    }
                     WorkerStatus::Idle
                     | WorkerStatus::Interrupted
                     | WorkerStatus::Suspended
-                    | WorkerStatus::Retrying => {
-                        // TODO: write to the oplog and activate
+                    | WorkerStatus::Retrying
+                    | WorkerStatus::Failed => {
+                        // The worker is not active.
+                        //
+                        // We start activating it but block on a signal.
+                        // This way we eliminate the race condition of activating the worker, but have
+                        // time to inject the pending update oplog entry so the at the time the worker
+                        // really gets activated it is going to see it and perform the update.
+                        let (pending_worker, resume) = Worker::get_or_create_paused_pending(
+                            self,
+                            &worker_id,
+                            metadata.args,
+                            metadata.env,
+                            Some(worker_status.component_version),
+                            metadata.account_id,
+                        )
+                        .await?;
+
+                        pending_worker
+                            .invocation_queue
+                            .enqueue_update(update_description.clone())
+                            .await;
+
+                        if worker_status.status == WorkerStatus::Failed {
+                            // If the worker was previously in a permanently failed state,
+                            // we reset this state to Retrying, so we can fix the failure cause
+                            // with an update.
+                            worker_status.status = WorkerStatus::Retrying;
+                        }
+                        worker_status.pending_updates =
+                            pending_worker.invocation_queue.pending_updates();
+                        self.worker_service()
+                            .update_status(&worker_id, &worker_status)
+                            .await;
+
+                        resume.send(()).unwrap();
                     }
                     WorkerStatus::Running => {
-                        let worker_state = Worker::get_or_create_with_config(
+                        // If the worker is already running we need to write to its oplog the
+                        // update attempt, and then interrupt it and have it immediately restarting
+                        // to begin the update.
+                        let worker = Worker::get_or_create_with_config(
                             self,
                             &metadata.worker_id,
                             metadata.args,
@@ -828,14 +883,53 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         )
                         .await?;
 
-                        // TODO: write to the oplog and call set_interrupting
-                        worker_state.set_interrupting(InterruptKind::Restart);
+                        worker
+                            .public_state
+                            .invocation_queue()
+                            .enqueue_update(update_description.clone())
+                            .await;
+
+                        worker.set_interrupting(InterruptKind::Restart);
                     }
                 }
             }
 
             UpdateMode::Manual => {
-                // TODO: check status and enqueue update through the invocation queue
+                if metadata.last_known_status.pending_invocations.iter().any(|invocation|
+                  matches!(invocation, WorkerInvocation::ManualUpdate { target_version } if *target_version == request.target_version)
+                ) {
+                    return Err(GolemError::invalid_request(
+                        "The same update is already in progress",
+                    ));
+                }
+
+                // For manual update we need to invoke the worker to save the custom snapshot.
+                // This is in a race condition with other worker invocations, so the whole update
+                // process need to be initiated through the worker's invocation queue.
+
+                let pending_or_final = Worker::get_or_create_pending(
+                    self,
+                    &metadata.worker_id,
+                    metadata.args,
+                    metadata.env,
+                    Some(worker_status.component_version),
+                    metadata.account_id,
+                )
+                .await?;
+                let (invocation_queue, _worker_id) = match pending_or_final {
+                    PendingOrFinal::Pending(pending_worker) => (
+                        pending_worker.invocation_queue.clone(),
+                        pending_worker.worker_id.clone(),
+                    ),
+                    PendingOrFinal::Final(worker) => (
+                        worker.public_state.invocation_queue(),
+                        worker.metadata.worker_id.clone(),
+                    ),
+                };
+
+                invocation_queue
+                    .enqueue_manual_update(request.target_version)
+                    .await;
             }
         }
 
@@ -1562,12 +1656,11 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
     }
 
     fn worker_id(&self) -> Result<common_model::WorkerId, GolemError> {
-        Ok(self
-            .worker_id
+        self.worker_id
             .clone()
             .ok_or(GolemError::invalid_request("worker_id not found"))?
             .try_into()
-            .map_err(GolemError::invalid_request)?)
+            .map_err(GolemError::invalid_request)
     }
 
     fn invocation_key(&self) -> Result<Option<InvocationKey>, GolemError> {
@@ -1605,12 +1698,11 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
     }
 
     fn worker_id(&self) -> Result<common_model::WorkerId, GolemError> {
-        Ok(self
-            .worker_id
+        self.worker_id
             .clone()
             .ok_or(GolemError::invalid_request("worker_id not found"))?
             .try_into()
-            .map_err(GolemError::invalid_request)?)
+            .map_err(GolemError::invalid_request)
     }
 
     fn invocation_key(&self) -> Result<Option<InvocationKey>, GolemError> {

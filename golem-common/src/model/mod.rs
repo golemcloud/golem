@@ -723,11 +723,16 @@ impl From<WorkerStatus> for i32 {
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
-pub struct WorkerInvocation {
-    pub invocation_key: InvocationKey,
-    pub full_function_name: String,
-    pub function_input: Vec<golem_wasm_rpc::Value>,
-    pub calling_convention: CallingConvention,
+pub enum WorkerInvocation {
+    ExportedFunction {
+        invocation_key: InvocationKey,
+        full_function_name: String,
+        function_input: Vec<golem_wasm_rpc::Value>,
+        calling_convention: CallingConvention,
+    },
+    ManualUpdate {
+        target_version: ComponentVersion,
+    },
 }
 
 #[derive(
