@@ -18,8 +18,8 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, VersionedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, InvocationKey, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
@@ -69,7 +69,7 @@ pub trait WorkerCtx:
     /// Creates a new worker context
     ///
     /// Arguments:
-    /// - `worker_id`: The versioned worker ID (consists of the template id, version, and worker name)
+    /// - `worker_id`: The worker ID (consists of the template id and worker name)
     /// - `account_id`: The account that initiated the creation of the worker
     /// - `promise_service`: The service for managing promises
     /// - `invocation_key_service`: The service for managing invocation keys
@@ -87,7 +87,7 @@ pub trait WorkerCtx:
     /// - `worker_config`: Configuration for this specific worker
     /// - `execution_status`: Lock created to store the execution status
     async fn create(
-        worker_id: VersionedWorkerId,
+        worker_id: WorkerId,
         account_id: AccountId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
@@ -121,7 +121,7 @@ pub trait WorkerCtx:
     fn resource_limiter(&mut self) -> &mut dyn ResourceLimiterAsync;
 
     /// Get the worker ID associated with this worker context
-    fn worker_id(&self) -> &VersionedWorkerId;
+    fn worker_id(&self) -> &WorkerId;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -317,7 +317,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker but by general it can be no-op.
     async fn prepare_instance(
-        worker_id: &VersionedWorkerId,
+        worker_id: &WorkerId,
         instance: &wasmtime::component::Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<(), GolemError>;

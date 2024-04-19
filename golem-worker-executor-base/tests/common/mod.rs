@@ -16,8 +16,8 @@ use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 
 use golem_common::model::{
-    AccountId, InvocationKey, TemplateId, VersionedWorkerId, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, InvocationKey, TemplateId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
@@ -400,7 +400,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     }
 
     async fn prepare_instance(
-        worker_id: &VersionedWorkerId,
+        worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
     ) -> Result<(), GolemError> {
@@ -572,7 +572,7 @@ impl WorkerCtx for TestWorkerCtx {
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
     async fn create(
-        worker_id: VersionedWorkerId,
+        worker_id: WorkerId,
         account_id: AccountId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
@@ -628,7 +628,7 @@ impl WorkerCtx for TestWorkerCtx {
         self
     }
 
-    fn worker_id(&self) -> &VersionedWorkerId {
+    fn worker_id(&self) -> &WorkerId {
         self.durable_ctx.worker_id()
     }
 

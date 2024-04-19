@@ -25,13 +25,14 @@ use golem_api_grpc::proto::golem::worker::{
     GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
     InvokeAndAwaitRequest, InvokeAndAwaitRequestJson, InvokeAndAwaitResponse,
     InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson, InvokeResponse, InvokeResultJson,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::{
     worker_error, worker_execution_error, InvocationKey, InvokeResult, UnknownError,
-    VersionedWorkerId, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
+    WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
 };
-use golem_common::model::WorkerFilter;
+use golem_common::model::{ComponentVersion, WorkerFilter, WorkerId};
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::ConnectWorkerStream;
 use tap::TapFallible;
@@ -75,7 +76,12 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<LaunchNewWorkerRequest>,
     ) -> Result<Response<LaunchNewWorkerResponse>, Status> {
         let response = match self.launch_new_worker(request.into_inner()).await {
-            Ok(worker_id) => launch_new_worker_response::Result::Success(worker_id),
+            Ok((worker_id, component_version)) => {
+                launch_new_worker_response::Result::Success(LaunchNewWorkerSuccessResponse {
+                    worker_id: Some(worker_id.into()),
+                    component_version,
+                })
+            }
             Err(error) => launch_new_worker_response::Result::Error(error),
         };
 
@@ -279,7 +285,7 @@ impl WorkerGrpcApi {
     async fn launch_new_worker(
         &self,
         request: LaunchNewWorkerRequest,
-    ) -> Result<VersionedWorkerId, GrpcWorkerError> {
+    ) -> Result<(WorkerId, ComponentVersion), GrpcWorkerError> {
         let template_id: golem_common::model::TemplateId = request
             .template_id
             .and_then(|id| id.try_into().ok())
@@ -310,7 +316,10 @@ impl WorkerGrpcApi {
             )
             .await?;
 
-        Ok(worker.into())
+        Ok((
+            worker.into(),
+            latest_template_version.versioned_template_id.version,
+        ))
     }
 
     async fn delete_worker(&self, request: DeleteWorkerRequest) -> Result<(), GrpcWorkerError> {

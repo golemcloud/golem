@@ -122,7 +122,7 @@ struct RunningInvocationQueue<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
     pub fn new(worker: Arc<Worker<Ctx>>, queue: Arc<RwLock<VecDeque<WorkerInvocation>>>) -> Self {
-        let worker_id = worker.metadata.worker_id.worker_id.clone();
+        let worker_id = worker.metadata.worker_id.clone();
 
         let worker = Arc::downgrade(&worker);
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -169,7 +169,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
             if worker.store.try_lock().is_none() {
                 debug!(
                     "Worker {} is busy, persisting pending invocation",
-                    worker.metadata.worker_id.worker_id
+                    worker.metadata.worker_id
                 );
                 // The worker is currently busy, so we write the pending worker invocation to the oplog
                 worker

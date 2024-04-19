@@ -12,21 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use crate::config::{TemplateStoreLocalConfig, TemplateStoreS3Config};
+use crate::stream::ByteStream;
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
-use aws_sdk_s3::primitives::ByteStream;
+use futures::Stream;
 use tracing::{debug, info};
 
 #[async_trait]
 pub trait TemplateObjectStore {
-    async fn get(&self, object_key: &str) -> Result<Vec<u8>, Box<dyn Error>>;
+    async fn get(&self, object_key: &str) -> Result<Vec<u8>, anyhow::Error>;
 
-    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error>>;
+    async fn get_stream(&self, object_key: &str) -> ByteStream;
+
+    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), anyhow::Error>;
+}
+
+pub struct AwsByteStream(aws_sdk_s3::primitives::ByteStream);
+
+impl Stream for AwsByteStream {
+    type Item = Result<Vec<u8>, anyhow::Error>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0)
+            .poll_next(cx)
+            .map_ok(|b| b.to_vec())
+            .map_err(|e| e.into())
+    }
+}
+
+impl From<aws_sdk_s3::primitives::ByteStream> for ByteStream {
+    fn from(stream: aws_sdk_s3::primitives::ByteStream) -> Self {
+        Self::new(AwsByteStream(stream))
+    }
 }
 
 pub struct AwsS3TemplateObjectStore {
@@ -61,7 +83,7 @@ impl AwsS3TemplateObjectStore {
 
 #[async_trait]
 impl TemplateObjectStore for AwsS3TemplateObjectStore {
-    async fn get(&self, object_key: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    async fn get(&self, object_key: &str) -> Result<Vec<u8>, anyhow::Error> {
         let key = self.get_key(object_key);
 
         info!("Getting object: {}/{}", self.bucket_name, key);
@@ -78,18 +100,34 @@ impl TemplateObjectStore for AwsS3TemplateObjectStore {
         Ok(data.to_vec())
     }
 
-    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error>> {
+    async fn get_stream(&self, object_key: &str) -> ByteStream {
+        let key = self.get_key(object_key);
+
+        info!("Getting object: {}/{}", self.bucket_name, key);
+
+        match self
+            .client
+            .get_object()
+            .bucket(&self.bucket_name)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(response) => response.body.into(),
+            Err(error) => ByteStream::error(error),
+        }
+    }
+
+    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), anyhow::Error> {
         let key = self.get_key(object_key);
 
         info!("Putting object: {}/{}", self.bucket_name, key);
-
-        let body = ByteStream::from(data);
 
         self.client
             .put_object()
             .bucket(&self.bucket_name)
             .key(key)
-            .body(body)
+            .body(aws_sdk_s3::primitives::ByteStream::from(data))
             .send()
             .await?;
 
@@ -132,7 +170,7 @@ impl FsTemplateObjectStore {
 
 #[async_trait]
 impl TemplateObjectStore for FsTemplateObjectStore {
-    async fn get(&self, object_key: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    async fn get(&self, object_key: &str) -> Result<Vec<u8>, anyhow::Error> {
         let dir_path = self.get_dir_path();
 
         debug!("Getting object: {}/{}", dir_path.display(), object_key);
@@ -142,11 +180,24 @@ impl TemplateObjectStore for FsTemplateObjectStore {
         if file_path.exists() {
             fs::read(file_path).map_err(|e| e.into())
         } else {
-            Err("Object not found".into())
+            Err(anyhow::Error::msg("Object not found"))
         }
     }
 
-    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error>> {
+    async fn get_stream(&self, object_key: &str) -> ByteStream {
+        let dir_path = self.get_dir_path();
+
+        debug!("Getting object: {}/{}", dir_path.display(), object_key);
+
+        let file_path = dir_path.join(object_key);
+
+        match aws_sdk_s3::primitives::ByteStream::from_path(file_path).await {
+            Ok(stream) => stream.into(),
+            Err(error) => ByteStream::error(error),
+        }
+    }
+
+    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), anyhow::Error> {
         let dir_path = self.get_dir_path();
 
         debug!("Putting object: {}/{}", dir_path.display(), object_key);
@@ -165,6 +216,7 @@ impl TemplateObjectStore for FsTemplateObjectStore {
 mod tests {
     use crate::config::TemplateStoreLocalConfig;
     use crate::service::template_object_store::{FsTemplateObjectStore, TemplateObjectStore};
+    use futures::TryStreamExt;
 
     #[tokio::test]
     pub async fn test_fs_object_store() {
@@ -179,10 +231,19 @@ mod tests {
 
         let data = b"hello world".to_vec();
 
-        store.put(object_key, data).await.unwrap();
+        store.put(object_key, data.clone()).await.unwrap();
 
-        let data = store.get(object_key).await.unwrap();
+        let get_data = store.get(object_key).await.unwrap();
 
-        assert_eq!(data, data);
+        assert_eq!(get_data, data.clone());
+
+        let stream = store.get_stream(object_key).await;
+        let stream_data: Vec<Vec<u8>> = stream.try_collect::<Vec<_>>().await.unwrap();
+        let stream_data: Vec<u8> = stream_data.into_iter().flatten().collect();
+        assert_eq!(stream_data, data);
+
+        let stream = store.get_stream("not_existing").await;
+        let stream_data = stream.try_collect::<Vec<_>>().await;
+        assert!(stream_data.is_err());
     }
 }

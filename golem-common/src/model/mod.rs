@@ -14,13 +14,12 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::str::FromStr;
 use std::time::Duration;
 
-use crate::config::RetryConfig;
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -35,6 +34,8 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::config::RetryConfig;
+use crate::model::oplog::{OplogIndex, UpdateDescription};
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
 
@@ -208,30 +209,7 @@ impl From<u64> for Timestamp {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
-pub struct VersionedWorkerId {
-    #[serde(rename = "instance_id")]
-    pub worker_id: WorkerId,
-    #[serde(rename = "component_version")]
-    pub template_version: u64,
-}
-
-impl VersionedWorkerId {
-    pub fn slug(&self) -> String {
-        format!("{}#{}", self.worker_id.slug(), self.template_version)
-    }
-
-    pub fn to_json_string(&self) -> String {
-        serde_json::to_string(self)
-            .unwrap_or_else(|_| panic!("failed to serialize versioned worker id: {self}"))
-    }
-}
-
-impl Display for VersionedWorkerId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.slug())
-    }
-}
+pub type ComponentVersion = u64;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct WorkerId {
@@ -328,7 +306,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
 pub struct PromiseId {
     #[serde(rename = "instance_id")]
     pub worker_id: WorkerId,
-    pub oplog_idx: u64,
+    pub oplog_idx: OplogIndex,
 }
 
 impl PromiseId {
@@ -589,7 +567,7 @@ impl From<CallingConvention> for i32 {
 
 #[derive(Clone, Debug)]
 pub struct WorkerMetadata {
-    pub worker_id: VersionedWorkerId,
+    pub worker_id: WorkerId,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub account_id: AccountId,
@@ -598,7 +576,7 @@ pub struct WorkerMetadata {
 }
 
 impl WorkerMetadata {
-    pub fn default(worker_id: VersionedWorkerId, account_id: AccountId) -> WorkerMetadata {
+    pub fn default(worker_id: WorkerId, account_id: AccountId) -> WorkerMetadata {
         WorkerMetadata {
             worker_id,
             args: vec![],
@@ -620,7 +598,11 @@ pub struct WorkerStatusRecord {
     pub deleted_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<WorkerInvocation>,
-    pub oplog_idx: u64,
+    pub pending_updates: VecDeque<UpdateDescription>,
+    pub failed_updates: Vec<FailedUpdateRecord>,
+    pub successful_updates: Vec<SuccessfulUpdateRecord>,
+    pub component_version: ComponentVersion,
+    pub oplog_idx: OplogIndex,
 }
 
 impl Default for WorkerStatusRecord {
@@ -630,9 +612,26 @@ impl Default for WorkerStatusRecord {
             deleted_regions: DeletedRegions::new(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),
+            pending_updates: VecDeque::new(),
+            failed_updates: Vec::new(),
+            successful_updates: Vec::new(),
+            component_version: 0,
             oplog_idx: 0,
         }
     }
+}
+
+#[derive(Clone, Debug, Encode, Decode)]
+pub struct FailedUpdateRecord {
+    pub timestamp: Timestamp,
+    pub target_version: ComponentVersion,
+    pub details: Option<String>,
+}
+
+#[derive(Clone, Debug, Encode, Decode)]
+pub struct SuccessfulUpdateRecord {
+    pub timestamp: Timestamp,
+    pub target_version: ComponentVersion,
 }
 
 /// Represents last known status of a worker
@@ -947,11 +946,11 @@ impl Display for WorkerStatusFilter {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
 pub struct WorkerVersionFilter {
     pub comparator: FilterComparator,
-    pub value: u64,
+    pub value: ComponentVersion,
 }
 
 impl WorkerVersionFilter {
-    pub fn new(comparator: FilterComparator, value: u64) -> Self {
+    pub fn new(comparator: FilterComparator, value: ComponentVersion) -> Self {
         Self { comparator, value }
     }
 }
@@ -1111,10 +1110,10 @@ impl WorkerFilter {
     pub fn matches(&self, metadata: &WorkerMetadata) -> bool {
         match self.clone() {
             WorkerFilter::Name(WorkerNameFilter { comparator, value }) => {
-                comparator.matches(&metadata.worker_id.worker_id.worker_name, &value)
+                comparator.matches(&metadata.worker_id.worker_name, &value)
             }
             WorkerFilter::Version(WorkerVersionFilter { comparator, value }) => {
-                let version: u64 = metadata.worker_id.template_version;
+                let version: ComponentVersion = metadata.last_known_status.component_version;
                 comparator.matches(&version, &value)
             }
             WorkerFilter::Env(WorkerEnvFilter {
@@ -1186,7 +1185,7 @@ impl WorkerFilter {
         WorkerFilter::Env(WorkerEnvFilter::new(name, comparator, value))
     }
 
-    pub fn new_version(comparator: FilterComparator, value: u64) -> Self {
+    pub fn new_version(comparator: FilterComparator, value: ComponentVersion) -> Self {
         WorkerFilter::Version(WorkerVersionFilter::new(comparator, value))
     }
 
@@ -1623,15 +1622,15 @@ impl From<FilterComparator> for i32 {
 
 #[cfg(test)]
 mod tests {
-    use bincode::{Decode, Encode};
-    use serde::{Deserialize, Serialize};
     use std::str::FromStr;
     use std::vec;
 
+    use bincode::{Decode, Encode};
+    use serde::{Deserialize, Serialize};
+
     use crate::model::{
         parse_function_name, AccountId, FilterComparator, StringFilterComparator, TemplateId,
-        Timestamp, VersionedWorkerId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-        WorkerStatusRecord,
+        Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
 
     #[test]
@@ -1889,12 +1888,9 @@ mod tests {
     fn worker_filter_matches() {
         let template_id = TemplateId::new_v4();
         let worker_metadata = WorkerMetadata {
-            worker_id: VersionedWorkerId {
-                worker_id: WorkerId {
-                    worker_name: "worker-1".to_string(),
-                    template_id,
-                },
-                template_version: 1,
+            worker_id: WorkerId {
+                worker_name: "worker-1".to_string(),
+                template_id,
             },
             args: vec![],
             env: vec![
@@ -1905,7 +1901,10 @@ mod tests {
                 value: "account-1".to_string(),
             },
             created_at: Timestamp::now_utc(),
-            last_known_status: WorkerStatusRecord::default(),
+            last_known_status: WorkerStatusRecord {
+                component_version: 1,
+                ..WorkerStatusRecord::default()
+            },
         };
 
         assert!(

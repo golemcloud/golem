@@ -28,6 +28,7 @@ use crate::repo::template::TemplateRepo;
 use crate::repo::RepoError;
 use crate::service::template_object_store::TemplateObjectStore;
 use golem_service_base::model::*;
+use golem_service_base::stream::ByteStream;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TemplateError {
@@ -78,6 +79,12 @@ pub trait TemplateService {
         template_id: &TemplateId,
         version: Option<u64>,
     ) -> Result<Vec<u8>, TemplateError>;
+
+    async fn download_stream(
+        &self,
+        template_id: &TemplateId,
+        version: Option<u64>,
+    ) -> Result<ByteStream, TemplateError>;
 
     async fn get_protected_data(
         &self,
@@ -251,6 +258,10 @@ impl TemplateService for TemplateServiceDefault {
                     .ok_or(TemplateError::UnknownTemplateId(template_id.clone()))?,
             }
         };
+        info!(
+            "Downloading template {} version {}",
+            template_id, versioned_template_id.version
+        );
 
         let id = ProtectedTemplateId {
             versioned_template_id,
@@ -263,13 +274,50 @@ impl TemplateService for TemplateServiceDefault {
             .map_err(|e| TemplateError::internal(e.to_string(), "Error downloading template"))
     }
 
+    async fn download_stream(
+        &self,
+        template_id: &TemplateId,
+        version: Option<u64>,
+    ) -> Result<ByteStream, TemplateError> {
+        let versioned_template_id = {
+            match version {
+                Some(version) => VersionedTemplateId {
+                    template_id: template_id.clone(),
+                    version,
+                },
+                None => self
+                    .template_repo
+                    .get_latest_version(&template_id.0)
+                    .await?
+                    .map(Template::from)
+                    .map(|t| t.versioned_template_id)
+                    .ok_or(TemplateError::UnknownTemplateId(template_id.clone()))?,
+            }
+        };
+        info!(
+            "Downloading template {} version {}",
+            template_id, versioned_template_id.version
+        );
+
+        let id = ProtectedTemplateId {
+            versioned_template_id,
+        };
+
+        let stream = self
+            .object_store
+            .get_stream(&self.get_protected_object_store_key(&id))
+            .await;
+
+        Ok(stream)
+    }
+
     async fn get_protected_data(
         &self,
         template_id: &TemplateId,
         version: Option<u64>,
     ) -> Result<Option<Vec<u8>>, TemplateError> {
         info!(
-            "Getting template  {} version {} data",
+            "Getting template {} version {} data",
             template_id,
             version.map_or("N/A".to_string(), |v| v.to_string())
         );
@@ -500,6 +548,14 @@ impl TemplateService for TemplateServiceNoOp {
         _version: Option<u64>,
     ) -> Result<Vec<u8>, TemplateError> {
         Ok(vec![])
+    }
+
+    async fn download_stream(
+        &self,
+        _template_id: &TemplateId,
+        _version: Option<u64>,
+    ) -> Result<ByteStream, TemplateError> {
+        Ok(ByteStream::empty())
     }
 
     async fn get_protected_data(

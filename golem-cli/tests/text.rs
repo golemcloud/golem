@@ -1,8 +1,11 @@
+use crate::api_definition::{
+    golem_def, make_golem_file, make_open_api_file, make_shopping_cart_template,
+};
 use crate::cli::{Cli, CliLive};
 use crate::worker::make_template;
 use golem_cli::model::template::TemplateView;
 use golem_cli::model::Format;
-use golem_client::model::VersionedWorkerId;
+use golem_client::model::{HttpApiDefinition, WorkerId};
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
@@ -61,6 +64,31 @@ fn make(
             format!("text_example_list{suffix}"),
             ctx.clone(),
             text_example_list,
+        ),
+        Trial::test_in_context(
+            format!("text_api_definition_import{suffix}"),
+            ctx.clone(),
+            text_api_definition_import,
+        ),
+        Trial::test_in_context(
+            format!("text_api_definition_add{suffix}"),
+            ctx.clone(),
+            text_api_definition_add,
+        ),
+        Trial::test_in_context(
+            format!("text_api_definition_update{suffix}"),
+            ctx.clone(),
+            text_api_definition_update,
+        ),
+        Trial::test_in_context(
+            format!("text_api_definition_list{suffix}"),
+            ctx.clone(),
+            text_api_definition_list,
+        ),
+        Trial::test_in_context(
+            format!("text_api_definition_get{suffix}"),
+            ctx.clone(),
+            text_api_definition_get,
         ),
     ]
 }
@@ -240,10 +268,8 @@ fn text_worker_add(
         &template_id,
     ])?;
 
-    let regex_res = Regex::new(
-        "New worker created for template ([^ ]+), with name ([^ ]+), using template version 0.\n",
-    )
-    .unwrap();
+    let regex_res =
+        Regex::new("New worker created for template ([^ ]+), with name ([^ ]+).\n").unwrap();
 
     let matched = regex_res.captures(&res);
 
@@ -272,7 +298,7 @@ fn text_worker_get_invocation_key(
         make_template(deps, &format!("{name} text worker invocation key"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_invocation_key");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -315,7 +341,7 @@ fn text_worker_invoke_and_await(
         make_template(deps, &format!("{name} text worker_invoke_and_await"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -358,7 +384,7 @@ fn text_worker_get(
     let template_id = make_template(deps, &format!("{name} text worker get"), &cli)?.template_id;
     let worker_name = format!("{name}_worker_get");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -401,7 +427,7 @@ fn text_worker_list(
     let template_id = make_template(deps, &format!("{name} text worker list"), &cli)?.template_id;
     let worker_name = format!("{name:_<9}_worker_list");
     let cfg = &cli.config;
-    let _: VersionedWorkerId = cli.run(&[
+    let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -464,6 +490,202 @@ fn text_example_list(
             +------------+----------+-------+--------------------+
             "
     );
+
+    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+
+    Ok(())
+}
+
+fn text_api_definition_import(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let template_name = format!("text_api_definition_import{name}");
+    let template = make_shopping_cart_template(deps, &template_name, &cli)?;
+    let path = make_open_api_file(&template_name, &template.template_id)?;
+
+    let res = cli.with_format(Format::Text).run_string(&[
+        "api-definition",
+        "import",
+        path.to_str().unwrap(),
+    ])?;
+
+    let template_end = &template.template_id[template.template_id.len() - 7..];
+
+    let expected =
+        formatdoc!(
+            "
+            API Definition imported with ID {template_name} and version 0.1.0.
+            Routes:
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            | Method | Path                         | Template | Worker                         | Function                       |
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{template_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            "
+        );
+
+    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+
+    Ok(())
+}
+
+fn text_api_definition_add(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let template_name = format!("text_api_definition_add{name}");
+    let template = make_shopping_cart_template(deps, &template_name, &cli)?;
+    let def = golem_def(&template_name, &template.template_id);
+    let path = make_golem_file(&def)?;
+
+    let res = cli.with_format(Format::Text).run_string(&[
+        "api-definition",
+        "add",
+        path.to_str().unwrap(),
+    ])?;
+
+    let template_end = &template.template_id[template.template_id.len() - 7..];
+
+    let expected =
+        formatdoc!(
+            "
+            API Definition created with ID {template_name} and version 0.1.0.
+            Routes:
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            | Method | Path                         | Template | Worker                         | Function                       |
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{template_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            "
+        );
+
+    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+
+    Ok(())
+}
+
+fn text_api_definition_update(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let template_name = format!("text_api_definition_update{name}");
+    let template = make_shopping_cart_template(deps, &template_name, &cli)?;
+    let def = golem_def(&template_name, &template.template_id);
+    let path = make_golem_file(&def)?;
+
+    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let res = cli.with_format(Format::Text).run_string(&[
+        "api-definition",
+        "update",
+        path.to_str().unwrap(),
+    ])?;
+
+    let template_end = &template.template_id[template.template_id.len() - 7..];
+
+    let expected =
+        formatdoc!(
+            "
+            API Definition updated with ID {template_name} and version 0.1.0.
+            Routes:
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            | Method | Path                         | Template | Worker                         | Function                       |
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{template_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            "
+        );
+
+    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+
+    Ok(())
+}
+
+fn text_api_definition_list(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let template_name = format!("text_api_definition_list{name:_>9}");
+    let template = make_shopping_cart_template(deps, &template_name, &cli)?;
+    let def = golem_def(&template_name, &template.template_id);
+    let path = make_golem_file(&def)?;
+    let cfg = &cli.config;
+
+    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+
+    let res = cli.with_format(Format::Text).run_string(&[
+        "api-definition",
+        "list",
+        &cfg.arg('i', "id"),
+        &template_name,
+    ])?;
+
+    let expected = formatdoc!(
+        "
+            +-----------------------------------+---------+--------------+
+            | ID                                | Version | Routes count |
+            +-----------------------------------+---------+--------------+
+            | {template_name} | 0.1.0   |            1 |
+            +-----------------------------------+---------+--------------+
+            "
+    );
+
+    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+
+    Ok(())
+}
+
+fn text_api_definition_get(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let template_name = format!("text_api_definition_get{name:_>9}");
+    let template = make_shopping_cart_template(deps, &template_name, &cli)?;
+    let def = golem_def(&template_name, &template.template_id);
+    let path = make_golem_file(&def)?;
+
+    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+
+    let cfg = &cli.config;
+
+    let res = cli.with_format(Format::Text).run_string(&[
+        "api-definition",
+        "get",
+        &cfg.arg('i', "id"),
+        &template_name,
+        &cfg.arg('V', "version"),
+        "0.1.0",
+    ])?;
+
+    let template_end = &template.template_id[template.template_id.len() - 7..];
+
+    let expected =
+        formatdoc!(
+            "
+            API Definition with ID {template_name} and version 0.1.0.
+            Routes:
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            | Method | Path                         | Template | Worker                         | Function                       |
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{template_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            "
+        );
 
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 

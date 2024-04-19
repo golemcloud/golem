@@ -952,8 +952,8 @@ async fn get_instance_metadata() {
         metadata1.last_known_status.status == WorkerStatus::Running
     );
     check!(metadata2.last_known_status.status == WorkerStatus::Idle);
-    check!(metadata1.worker_id.template_version == 0);
-    check!(metadata1.worker_id.worker_id == worker_id);
+    check!(metadata1.last_known_status.component_version == 0);
+    check!(metadata1.worker_id == worker_id);
     check!(
         metadata1.account_id
             == AccountId {

@@ -1140,4 +1140,52 @@ mod tests {
 
         assert_eq!(result, expected);
     }
+
+    #[test]
+    fn test_let_binding() {
+        let expression_parser = ExprParser {};
+
+        let result = expression_parser.parse("${let x = 1;}").unwrap();
+
+        let expected = Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1)));
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn multi_line_expressions() {
+        let expression_parser = ExprParser {};
+
+        let program = r"
+           let x = 1;
+           let y = x > 1;
+           let z = y < x;
+           x
+        ";
+
+        let result = expression_parser
+            .parse(format!("${{{}}}", program).as_str())
+            .unwrap();
+
+        let expected = Expr::Multiple(vec![
+            Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
+            Expr::Let(
+                "y".to_string(),
+                Box::new(Expr::GreaterThan(
+                    Box::new(Expr::Variable("x".to_string())),
+                    Box::new(Expr::unsigned_integer(1)),
+                )),
+            ),
+            Expr::Let(
+                "z".to_string(),
+                Box::new(Expr::LessThan(
+                    Box::new(Expr::Variable("y".to_string())),
+                    Box::new(Expr::Variable("x".to_string())),
+                )),
+            ),
+            Expr::Variable("x".to_string()),
+        ]);
+
+        assert_eq!(result, expected);
+    }
 }
