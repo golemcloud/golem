@@ -1815,6 +1815,20 @@ components:
             type: string
       required:
       - errors
+    FailedUpdate:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+        details:
+          type: string
+      required:
+      - timestamp
+      - targetVersion
     FilterComparator:
       type: string
       enum:
@@ -2396,6 +2410,18 @@ components:
       - NotEqual
       - Like
       - NotLike
+    SuccessfulUpdate:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - targetVersion
     ValidationErrorsBody:
       type: object
       properties:
@@ -2619,6 +2645,25 @@ components:
         retryCount:
           type: integer
           format: uint64
+        pendingInvocationCount:
+          type: integer
+          format: uint64
+        pendingUpdateCount:
+          type: integer
+          format: uint64
+        failedUpdates:
+          type: array
+          items:
+            $ref: '#/components/schemas/FailedUpdate'
+        successfulUpdates:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuccessfulUpdate'
+        createdAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
       required:
       - workerId
       - args
@@ -2626,6 +2671,11 @@ components:
       - status
       - templateVersion
       - retryCount
+      - pendingInvocationCount
+      - pendingUpdateCount
+      - failedUpdates
+      - successfulUpdates
+      - createdAt
     WorkerNameFilter:
       type: object
       properties:
