@@ -12,19 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::stub::StubDefinition;
-use crate::wit;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::Path;
+
 use anyhow::{anyhow, bail, Context};
 use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
     Profiles, StripSetting,
 };
-use golem_wasm_rpc::WASM_RPC_VERSION;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
-use std::path::Path;
 use toml::Value;
+
+use golem_wasm_rpc::WASM_RPC_VERSION;
+
+use crate::stub::StubDefinition;
+use crate::wit;
 
 #[derive(Serialize, Deserialize, Default)]
 struct MetadataRoot {
@@ -43,7 +46,7 @@ struct ComponentTarget {
     #[serde(default = "default_path")]
     path: String,
     #[serde(default)]
-    dependencies: HashMap<String, WitDependency>,
+    dependencies: BTreeMap<String, WitDependency>,
 }
 
 fn default_path() -> String {
@@ -55,7 +58,7 @@ impl Default for ComponentTarget {
         Self {
             world: None,
             path: "wit".to_string(),
-            dependencies: HashMap::new(),
+            dependencies: BTreeMap::new(),
         }
     }
 }
@@ -68,7 +71,7 @@ struct WitDependency {
 pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     let mut manifest = Manifest::default();
 
-    let mut wit_dependencies = HashMap::new();
+    let mut wit_dependencies = BTreeMap::new();
 
     wit_dependencies.insert(
         def.root_package_name.to_string(),
@@ -86,7 +89,7 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         },
     );
     for dep in &def.unresolved_deps {
-        let mut dirs = HashSet::new();
+        let mut dirs = BTreeSet::new();
         for source in dep.source_files() {
             let relative = source.strip_prefix(&def.source_wit_root)?;
             let dir = relative
@@ -240,7 +243,7 @@ pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> an
             if let Some(ref mut component) = metadata.component {
                 let mut new_target = ComponentTarget::default();
                 let target = component.target.as_mut().unwrap_or(&mut new_target);
-                let existing: HashSet<_> = target.dependencies.keys().cloned().collect();
+                let existing: BTreeSet<_> = target.dependencies.keys().cloned().collect();
                 for name in names {
                     if !existing.contains(name) {
                         let relative_path = format!("wit/deps/{}", name);
