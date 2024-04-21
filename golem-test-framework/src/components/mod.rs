@@ -118,10 +118,10 @@ async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str) {
         if success {
             break;
         } else {
-            if start.elapsed().as_secs() > 30 {
+            if start.elapsed().as_secs() > 90 {
                 panic!("Failed to verify that {name} is running");
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     }
 }
