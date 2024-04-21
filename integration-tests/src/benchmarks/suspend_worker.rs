@@ -29,12 +29,12 @@ struct Context {
     worker_ids: Vec<WorkerId>,
 }
 
-struct InvokeWorkerLatency {
+struct SuspendWorkerLatency {
     config: CliParams,
 }
 
 #[async_trait]
-impl Benchmark for InvokeWorkerLatency {
+impl Benchmark for SuspendWorkerLatency {
     type IterationContext = Context;
 
     fn name() -> &'static str {
@@ -73,11 +73,7 @@ impl Benchmark for InvokeWorkerLatency {
             let fiber = tokio::task::spawn(async move {
                 context_clone
                     .deps
-                    .invoke_and_await(
-                        &worker_id_clone,
-                        "sleep-for",
-                        vec![Value::F64(1.0)],
-                    )
+                    .invoke_and_await(&worker_id_clone, "sleep-for", vec![Value::F64(1.0)])
                     .await
                     .expect("invoke_and_await failed");
             });
@@ -96,21 +92,19 @@ impl Benchmark for InvokeWorkerLatency {
             let context_clone = context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
-            // let length = self.config.benchmark_config.length;
+            let length = self.config.benchmark_config.length;
             let fiber = tokio::task::spawn(async move {
-                let start = SystemTime::now();
-                context_clone
-                    .deps
-                    .invoke_and_await(
-                        &worker_id_clone,
-                        "sleep-for",
-                        vec![Value::F64(10.0)],
-                    )
-                    .await
-                    .expect("invoke_and_await failed");
-                let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                recorder_clone.duration(&"invocation".to_string(), elapsed);
-                recorder_clone.duration(&format!("worker-{n}"), elapsed);
+                for _ in 0..length {
+                    let start = SystemTime::now();
+                    context_clone
+                        .deps
+                        .invoke_and_await(&worker_id_clone, "sleep-for", vec![Value::F64(10.0)])
+                        .await
+                        .expect("invoke_and_await failed");
+                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
+                    recorder_clone.duration(&"invocation".to_string(), elapsed);
+                    recorder_clone.duration(&format!("worker-{n}"), elapsed);
+                }
             });
             fibers.push(fiber);
         }
@@ -129,6 +123,6 @@ impl Benchmark for InvokeWorkerLatency {
 async fn main() {
     let params = CliParams::parse();
     CliTestDependencies::init_logging(&params);
-    let result = InvokeWorkerLatency::run_benchmark(params).await;
+    let result = SuspendWorkerLatency::run_benchmark(params).await;
     println!("{}", result);
 }
