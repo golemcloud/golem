@@ -1801,11 +1801,21 @@ components:
         version:
           type: string
         site:
-          type: string
+          $ref: '#/components/schemas/ApiSite'
       required:
       - apiDefinitionId
       - version
       - site
+    ApiSite:
+      type: object
+      properties:
+        host:
+          type: string
+        subdomain:
+          type: string
+      required:
+      - host
+      - subdomain
     CallingConvention:
       type: string
       enum:
