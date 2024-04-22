@@ -25,6 +25,8 @@ use golem_api_grpc::proto::golem::template::{
     GetLatestTemplateRequest, GetTemplatesRequest, UpdateTemplateRequest,
     UpdateTemplateRequestChunk, UpdateTemplateRequestHeader,
 };
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
@@ -87,22 +89,36 @@ pub trait TemplateService {
     async fn add_template(&self, local_path: &Path) -> TemplateId {
         let mut client = self.client().await;
         let file_name = local_path.file_name().unwrap().to_string_lossy();
-        let data = std::fs::read(local_path)
+        let mut file = File::open(local_path)
+            .await
             .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
 
-        let chunks: Vec<CreateTemplateRequest> = vec![
-            CreateTemplateRequest {
-                data: Some(Data::Header(CreateTemplateRequestHeader {
-                    project_id: None,
-                    template_name: file_name.to_string(),
-                })),
-            },
-            CreateTemplateRequest {
-                data: Some(Data::Chunk(CreateTemplateRequestChunk {
-                    template_chunk: data,
-                })),
-            },
-        ];
+        let mut chunks: Vec<CreateTemplateRequest> = vec![CreateTemplateRequest {
+            data: Some(Data::Header(CreateTemplateRequestHeader {
+                project_id: None,
+                template_name: file_name.to_string(),
+            })),
+        }];
+
+        loop {
+            let mut buffer = [0; 4096];
+
+            let n = file
+                .read(&mut buffer)
+                .await
+                .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
+
+            if n == 0 {
+                break;
+            } else {
+                chunks.push(CreateTemplateRequest {
+                    data: Some(Data::Chunk(CreateTemplateRequestChunk {
+                        template_chunk: buffer[0..n].to_vec(),
+                    })),
+                });
+            }
+        }
+
         let response = client
             .create_template(tokio_stream::iter(chunks))
             .await
@@ -132,25 +148,40 @@ pub trait TemplateService {
 
     async fn update_template(&self, template_id: &TemplateId, local_path: &Path) -> u64 {
         let mut client = self.client().await;
-        let data = std::fs::read(local_path)
+
+        let mut file = File::open(local_path)
+            .await
             .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
 
-        let chunks: Vec<UpdateTemplateRequest> = vec![
-            UpdateTemplateRequest {
-                data: Some(update_template_request::Data::Header(
-                    UpdateTemplateRequestHeader {
-                        template_id: Some(template_id.clone().into()),
-                    },
-                )),
-            },
-            UpdateTemplateRequest {
-                data: Some(update_template_request::Data::Chunk(
-                    UpdateTemplateRequestChunk {
-                        template_chunk: data,
-                    },
-                )),
-            },
-        ];
+        let mut chunks: Vec<UpdateTemplateRequest> = vec![UpdateTemplateRequest {
+            data: Some(update_template_request::Data::Header(
+                UpdateTemplateRequestHeader {
+                    template_id: Some(template_id.clone().into()),
+                },
+            )),
+        }];
+
+        loop {
+            let mut buffer = [0; 4096];
+
+            let n = file
+                .read(&mut buffer)
+                .await
+                .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
+
+            if n == 0 {
+                break;
+            } else {
+                chunks.push(UpdateTemplateRequest {
+                    data: Some(update_template_request::Data::Chunk(
+                        UpdateTemplateRequestChunk {
+                            template_chunk: buffer[0..n].to_vec(),
+                        },
+                    )),
+                });
+            }
+        }
+
         let response = client
             .update_template(tokio_stream::iter(chunks))
             .await
