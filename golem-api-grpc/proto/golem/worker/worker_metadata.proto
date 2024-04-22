@@ -5,6 +5,7 @@ package golem.worker;
 import "golem/common/account_id.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";
+import "google/protobuf/timestamp.proto";
 
 message WorkerMetadata {
   WorkerId worker_id = 1;
@@ -14,4 +15,28 @@ message WorkerMetadata {
   WorkerStatus status = 5;
   uint64 template_version = 6;
   uint64 retry_count = 7;
+  uint64 pending_invocation_count = 8;
+  repeated UpdateRecord updates = 9;
+  google.protobuf.Timestamp created_at = 10;
+  optional string last_error = 11;
+}
+
+message UpdateRecord {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 target_version = 2;
+  oneof update {
+    PendingUpdate pending = 3;
+    FailedUpdate failed = 4;
+    SuccessfulUpdate successful = 5;
+  }
+}
+
+message PendingUpdate {
+}
+
+message FailedUpdate {
+  optional string details = 3;
+}
+
+message SuccessfulUpdate {
 }

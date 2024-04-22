@@ -35,7 +35,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::config::RetryConfig;
-use crate::model::oplog::{OplogIndex, UpdateDescription};
+use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
 
@@ -222,20 +222,6 @@ pub struct WorkerId {
 impl WorkerId {
     pub fn slug(&self) -> String {
         format!("{}/{}", self.template_id, self.worker_name)
-    }
-
-    pub fn into_proto(self) -> golem_api_grpc::proto::golem::worker::WorkerId {
-        golem_api_grpc::proto::golem::worker::WorkerId {
-            template_id: Some(self.template_id.into()),
-            name: self.worker_name,
-        }
-    }
-
-    pub fn from_proto(proto: golem_api_grpc::proto::golem::worker::WorkerId) -> Self {
-        Self {
-            template_id: proto.template_id.unwrap().try_into().unwrap(),
-            worker_name: proto.name,
-        }
     }
 
     pub fn to_json_string(&self) -> String {
@@ -597,8 +583,8 @@ pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub deleted_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
-    pub pending_invocations: Vec<WorkerInvocation>,
-    pub pending_updates: VecDeque<UpdateDescription>,
+    pub pending_invocations: Vec<TimestampedWorkerInvocation>,
+    pub pending_updates: VecDeque<TimestampedUpdateDescription>,
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
     pub component_version: ComponentVersion,
@@ -737,11 +723,22 @@ impl From<WorkerStatus> for i32 {
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
-pub struct WorkerInvocation {
-    pub invocation_key: InvocationKey,
-    pub full_function_name: String,
-    pub function_input: Vec<golem_wasm_rpc::Value>,
-    pub calling_convention: CallingConvention,
+pub enum WorkerInvocation {
+    ExportedFunction {
+        invocation_key: InvocationKey,
+        full_function_name: String,
+        function_input: Vec<golem_wasm_rpc::Value>,
+        calling_convention: CallingConvention,
+    },
+    ManualUpdate {
+        target_version: ComponentVersion,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+pub struct TimestampedWorkerInvocation {
+    pub timestamp: Timestamp,
+    pub invocation: WorkerInvocation,
 }
 
 #[derive(
