@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use golem_common::model::{
-    FilterComparator, StringFilterComparator, TemplateId, WorkerFilter, WorkerId, WorkerMetadata,
+    FilterComparator, StringFilterComparator, ComponentId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
 use rand::seq::IteratorRandom;
@@ -35,8 +35,8 @@ use warp::Filter;
 #[tokio::test]
 #[tracing::instrument]
 async fn shopping_cart_example() {
-    let template_id = DEPS.store_template("shopping-cart").await;
-    let worker_id = DEPS.start_worker(&template_id, "shopping-cart-1").await;
+    let component_id = DEPS.store_component("shopping-cart").await;
+    let worker_id = DEPS.start_worker(&component_id, "shopping-cart-1").await;
 
     let _ = DEPS
         .invoke_and_await(
@@ -129,16 +129,16 @@ async fn shopping_cart_example() {
 #[tokio::test]
 #[tracing::instrument]
 async fn auction_example_1() {
-    let registry_template_id = DEPS.store_template("auction_registry_composed").await;
-    let auction_template_id = DEPS.store_template("auction").await;
+    let registry_component_id = DEPS.store_component("auction_registry_composed").await;
+    let auction_component_id = DEPS.store_component("auction").await;
 
     let mut env = HashMap::new();
     env.insert(
-        "AUCTION_TEMPLATE_ID".to_string(),
-        auction_template_id.to_string(),
+        "AUCTION_COMPONENT_ID".to_string(),
+        auction_component_id.to_string(),
     );
     let registry_worker_id = DEPS
-        .start_worker_with(&registry_template_id, "auction-registry-1", vec![], env)
+        .start_worker_with(&registry_component_id, "auction-registry-1", vec![], env)
         .await;
 
     let _ = DEPS.log_output(&registry_worker_id).await;
@@ -191,14 +191,14 @@ fn get_worker_ids(workers: Vec<WorkerMetadata>) -> HashSet<WorkerId> {
 #[tokio::test]
 #[tracing::instrument]
 async fn get_workers() {
-    let template_id = DEPS.store_template("shopping-cart").await;
+    let component_id = DEPS.store_component("shopping-cart").await;
 
     let workers_count = 150;
     let mut worker_ids = HashSet::new();
 
     for i in 0..workers_count {
         let worker_id = DEPS
-            .start_worker(&template_id, &format!("shopping-cart-test-{}", i))
+            .start_worker(&component_id, &format!("shopping-cart-test-{}", i))
             .await;
 
         worker_ids.insert(worker_id);
@@ -219,7 +219,7 @@ async fn get_workers() {
 
         let (cursor, values) = DEPS
             .get_workers_metadata(
-                &template_id,
+                &component_id,
                 Some(
                     WorkerFilter::new_name(
                         StringFilterComparator::Equal,
@@ -255,7 +255,7 @@ async fn get_workers() {
 
     while found_worker_ids.len() < workers_count && cursor.is_some() {
         let (cursor1, values1) = DEPS
-            .get_workers_metadata(&template_id, None, cursor.unwrap(), count as u64, true)
+            .get_workers_metadata(&component_id, None, cursor.unwrap(), count as u64, true)
             .await;
 
         check!(values1.len() > 0); // Each page should contain at least one element, but it is not guaranteed that it has count elements
@@ -269,7 +269,7 @@ async fn get_workers() {
 
     if let Some(cursor) = cursor {
         let (_, values) = DEPS
-            .get_workers_metadata(&template_id, None, cursor, workers_count as u64, true)
+            .get_workers_metadata(&component_id, None, cursor, workers_count as u64, true)
             .await;
         check!(values.len() == 0);
     }
@@ -278,7 +278,7 @@ async fn get_workers() {
 #[tokio::test]
 #[tracing::instrument]
 async fn get_running_workers() {
-    let template_id = DEPS.store_template("http-client-2").await;
+    let component_id = DEPS.store_component("http-client-2").await;
     let host_http_port = 8585;
 
     let pooling_worker_ids: Arc<Mutex<HashSet<WorkerId>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -289,12 +289,12 @@ async fn get_running_workers() {
             .and(warp::get())
             .and(warp::query::<HashMap<String, String>>())
             .map(move |query: HashMap<String, String>| {
-                let template_id = query.get("template_id");
+                let component_id = query.get("component_id");
                 let worker_name = query.get("worker_name");
-                if let (Some(template_id), Some(worker_name)) = (template_id, worker_name) {
-                    let template_id: TemplateId = template_id.as_str().try_into().unwrap();
+                if let (Some(component_id), Some(worker_name)) = (component_id, worker_name) {
+                    let component_id: ComponentId = component_id.as_str().try_into().unwrap();
                     let worker_id = WorkerId {
-                        template_id,
+                        component_id: component_id,
                         worker_name: worker_name.clone(),
                     };
                     let mut ids = pooling_worker_ids_clone.lock().unwrap();
@@ -324,7 +324,7 @@ async fn get_running_workers() {
     for i in 0..workers_count {
         let worker_id = DEPS
             .start_worker_with(
-                &template_id,
+                &component_id,
                 &format!("worker-http-client-{}", i),
                 vec![],
                 env.clone(),
@@ -361,7 +361,7 @@ async fn get_running_workers() {
     for worker_id in worker_ids.clone() {
         let (_, values) = DEPS
             .get_workers_metadata(
-                &template_id,
+                &component_id,
                 Some(
                     WorkerFilter::new_name(
                         StringFilterComparator::Equal,
@@ -383,7 +383,7 @@ async fn get_running_workers() {
 
     let (_, values) = DEPS
         .get_workers_metadata(
-            &template_id,
+            &component_id,
             Some(WorkerFilter::new_status(
                 FilterComparator::Equal,
                 WorkerStatus::Running,

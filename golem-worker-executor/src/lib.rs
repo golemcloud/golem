@@ -32,7 +32,7 @@ use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, Remot
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
 use golem_worker_executor_base::services::shard_manager::ShardManagerService;
-use golem_worker_executor_base::services::template::TemplateService;
+use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_enumeration::{
@@ -65,7 +65,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<Context>>,
         runtime: Handle,
-        template_service: Arc<dyn TemplateService + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -95,7 +95,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
-            template_service.clone(),
+            component_service.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -115,7 +115,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
-            template_service.clone(),
+            component_service.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -136,7 +136,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             engine,
             linker,
             runtime.clone(),
-            template_service,
+            component_service,
             shard_manager_service,
             worker_service,
             worker_enumeration_service,

@@ -15,7 +15,7 @@
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
+use crate::components::component_service::ComponentService;
 use crate::components::worker_service::{env_vars, wait_for_startup, WorkerService};
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
@@ -42,7 +42,7 @@ impl SpawnedWorkerService {
         http_port: u16,
         grpc_port: u16,
         custom_request_port: u16,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -62,7 +62,7 @@ impl SpawnedWorkerService {
                 http_port,
                 grpc_port,
                 custom_request_port,
-                template_service,
+                component_service,
                 shard_manager,
                 rdb,
                 redis,

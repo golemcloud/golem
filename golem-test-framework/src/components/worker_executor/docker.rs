@@ -23,7 +23,7 @@ use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
 
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
+use crate::components::component_service::ComponentService;
 use crate::components::worker_service::WorkerService;
 use tracing::{info, Level};
 
@@ -39,7 +39,7 @@ impl DockerWorkerExecutor {
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
@@ -49,7 +49,7 @@ impl DockerWorkerExecutor {
         let env_vars = env_vars(
             http_port,
             grpc_port,
-            template_service,
+            component_service,
             shard_manager,
             worker_service,
             redis,

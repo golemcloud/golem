@@ -277,7 +277,7 @@ mod tests {
     use fred::error::RedisError;
     use fred::mocks::{MockCommand, Mocks};
     use fred::prelude::RedisValue;
-    use golem_common::model::{PromiseId, TemplateId, WorkerId};
+    use golem_common::model::{PromiseId, ComponentId, WorkerId};
     use golem_common::redis::RedisPool;
     use uuid::Uuid;
 
@@ -414,13 +414,13 @@ mod tests {
 
     #[tokio::test]
     pub async fn promises_added_to_expected_buckets() {
-        let c1: TemplateId = TemplateId(Uuid::new_v4());
+        let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst2".to_string(),
         };
 
@@ -496,13 +496,13 @@ mod tests {
 
     #[tokio::test]
     pub async fn cancel_removes_entry() {
-        let c1: TemplateId = TemplateId(Uuid::new_v4());
+        let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst2".to_string(),
         };
 
@@ -621,13 +621,13 @@ mod tests {
 
     #[tokio::test]
     pub async fn process_current_hours_past_schedules() {
-        let c1: TemplateId = TemplateId(Uuid::new_v4());
+        let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst2".to_string(),
         };
 
@@ -717,13 +717,13 @@ mod tests {
 
     #[tokio::test]
     pub async fn process_past_and_current_hours_past_schedules() {
-        let c1: TemplateId = TemplateId(Uuid::new_v4());
+        let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst2".to_string(),
         };
 
@@ -874,13 +874,13 @@ mod tests {
 
     #[tokio::test]
     pub async fn process_past_and_current_hours_past_schedules_2() {
-        let c1: TemplateId = TemplateId(Uuid::new_v4());
+        let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst2".to_string(),
         };
 
@@ -1059,13 +1059,13 @@ mod tests {
 
     #[tokio::test]
     pub async fn process_past_and_current_hours_past_schedules_3() {
-        let c1: TemplateId = TemplateId(Uuid::new_v4());
+        let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            template_id: c1.clone(),
+            component_id: c1.clone(),
             worker_name: "inst2".to_string(),
         };
 

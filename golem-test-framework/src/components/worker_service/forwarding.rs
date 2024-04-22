@@ -17,7 +17,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tonic::Streaming;
 
-use crate::components::template_service::TemplateService;
+use crate::components::component_service::ComponentService;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
 use golem_api_grpc::proto::golem::worker::{
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetInvocationKeyRequest,
@@ -36,17 +36,17 @@ use crate::components::worker_service::WorkerService;
 
 pub struct ForwardingWorkerService {
     worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
-    template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
 }
 
 impl ForwardingWorkerService {
     pub fn new(
         worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     ) -> Self {
         Self {
             worker_executor,
-            template_service,
+            component_service,
         }
     }
 }
@@ -54,25 +54,25 @@ impl ForwardingWorkerService {
 #[async_trait]
 impl WorkerService for ForwardingWorkerService {
     async fn create_worker(&self, request: LaunchNewWorkerRequest) -> LaunchNewWorkerResponse {
-        let template_id = request
-            .template_id
+        let component_id = request
+            .component_id
             .as_ref()
-            .expect("Requires template ID")
+            .expect("Requires component ID")
             .clone()
             .try_into()
-            .expect("Requires valid template ID");
+            .expect("Requires valid component ID");
         let worker_id = WorkerId {
-            template_id: request.template_id,
+            component_id: request.component_id,
             name: request.name,
         };
-        let latest_template_version = self.template_service.get_latest_version(&template_id).await;
+        let latest_component_version = self.component_service.get_latest_version(&component_id).await;
         let response = self
             .worker_executor
             .client()
             .await
             .create_worker(CreateWorkerRequest {
                 worker_id: Some(worker_id.clone()),
-                template_version: latest_template_version,
+                component_version: latest_component_version,
                 args: request.args,
                 env: request.env,
                 account_id: Some(
@@ -99,7 +99,7 @@ impl WorkerService for ForwardingWorkerService {
                     result: Some(worker::launch_new_worker_response::Result::Success(
                         LaunchNewWorkerSuccessResponse {
                             worker_id: Some(worker_id),
-                            component_version: latest_template_version,
+                            component_version: latest_component_version,
                         },
                     )),
                 }

@@ -219,21 +219,21 @@ impl RegisterApiDefinitionApi {
 #[cfg(test)]
 mod test {
     use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
-    use golem_worker_service_base::service::template::TemplateServiceNoop;
+    use golem_worker_service_base::service::component::ComponentServiceNoop;
     use http::StatusCode;
     use poem::test::TestClient;
 
     use golem_worker_service_base::repo::api_definition_repo::InMemoryRegistry;
     use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
 
-    use crate::service::template::TemplateService;
+    use crate::service::component::ComponentService;
 
     use super::*;
 
     fn make_route() -> poem::Route {
-        let template_service: TemplateService = Arc::new(TemplateServiceNoop {});
+        let component_service: ComponentService = Arc::new(ComponentServiceNoop {});
         let definition_service = ApiDefinitionServiceDefault::new(
-            template_service,
+            component_service,
             Arc::new(InMemoryRegistry::default()),
             Arc::new(ApiDefinitionValidatorNoop {}),
         );
@@ -368,7 +368,7 @@ mod test {
                     "worker-id": "worker-${request.path.user-id}",
                     "function-name": "golem:it/api/get-cart-contents",
                     "function-params": [],
-                    "template-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+                    "component-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
                     "response" : "${{headers : {ContentType: 'json', userid: 'foo'}, body: worker.response, status: 200}}"
                   },
                   "get": {

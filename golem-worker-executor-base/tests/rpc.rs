@@ -11,16 +11,16 @@ async fn auction_example_1() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let registry_template_id = executor.store_template("auction_registry_composed").await;
-    let auction_template_id = executor.store_template("auction").await;
+    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let auction_component_id = executor.store_component("auction").await;
 
     let mut env = HashMap::new();
     env.insert(
-        "AUCTION_TEMPLATE_ID".to_string(),
-        auction_template_id.to_string(),
+        "AUCTION_COMPONENT_ID".to_string(),
+        auction_component_id.to_string(),
     );
     let registry_worker_id = executor
-        .start_worker_with(&registry_template_id, "auction-registry-1", vec![], env)
+        .start_worker_with(&registry_component_id, "auction-registry-1", vec![], env)
         .await;
 
     let _ = executor.log_output(&registry_worker_id).await;
@@ -76,16 +76,16 @@ async fn auction_example_2() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let registry_template_id = executor.store_template("auction_registry_composed").await;
-    let auction_template_id = executor.store_template("auction").await;
+    let registry_component_id = executor.store_component("auction_registry_composed").await;
+    let auction_component_id = executor.store_component("auction").await;
 
     let mut env = HashMap::new();
     env.insert(
-        "AUCTION_TEMPLATE_ID".to_string(),
-        auction_template_id.to_string(),
+        "AUCTION_COMPONENT_ID".to_string(),
+        auction_component_id.to_string(),
     );
     let registry_worker_id = executor
-        .start_worker_with(&registry_template_id, "auction-registry-1", vec![], env)
+        .start_worker_with(&registry_component_id, "auction-registry-1", vec![], env)
         .await;
 
     let _ = executor.log_output(&registry_worker_id).await;
@@ -141,16 +141,16 @@ async fn counter_resource_test_1() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let counters_template_id = executor.store_template("counters").await;
-    let caller_template_id = executor.store_template("caller_composed").await;
+    let counters_component_id = executor.store_component("counters").await;
+    let caller_component_id = executor.store_component("caller_composed").await;
 
     let mut env = HashMap::new();
     env.insert(
-        "COUNTERS_TEMPLATE_ID".to_string(),
-        counters_template_id.to_string(),
+        "COUNTERS_COMPONENT_ID".to_string(),
+        counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_template_id, "rpc-counters-1", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-1", vec![], env)
         .await;
 
     let result = executor
@@ -175,16 +175,16 @@ async fn counter_resource_test_2() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let counters_template_id = executor.store_template("counters").await;
-    let caller_template_id = executor.store_template("caller_composed").await;
+    let counters_component_id = executor.store_component("counters").await;
+    let caller_component_id = executor.store_component("caller_composed").await;
 
     let mut env = HashMap::new();
     env.insert(
-        "COUNTERS_TEMPLATE_ID".to_string(),
-        counters_template_id.to_string(),
+        "COUNTERS_COMPONENT_ID".to_string(),
+        counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_template_id, "rpc-counters-2", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-2", vec![], env)
         .await;
 
     let result1 = executor
@@ -206,16 +206,16 @@ async fn counter_resource_test_2_with_restart() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let counters_template_id = executor.store_template("counters").await;
-    let caller_template_id = executor.store_template("caller_composed").await;
+    let counters_component_id = executor.store_component("counters").await;
+    let caller_component_id = executor.store_component("caller_composed").await;
 
     let mut env = HashMap::new();
     env.insert(
-        "COUNTERS_TEMPLATE_ID".to_string(),
-        counters_template_id.to_string(),
+        "COUNTERS_COMPONENT_ID".to_string(),
+        counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_template_id, "rpc-counters-2r", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-2r", vec![], env)
         .await;
 
     let result1 = executor
@@ -241,16 +241,16 @@ async fn counter_resource_test_3() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let counters_template_id = executor.store_template("counters").await;
-    let caller_template_id = executor.store_template("caller_composed").await;
+    let counters_component_id = executor.store_component("counters").await;
+    let caller_component_id = executor.store_component("caller_composed").await;
 
     let mut env = HashMap::new();
     env.insert(
-        "COUNTERS_TEMPLATE_ID".to_string(),
-        counters_template_id.to_string(),
+        "COUNTERS_COMPONENT_ID".to_string(),
+        counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_template_id, "rpc-counters-3", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-3", vec![], env)
         .await;
 
     let result1 = executor
@@ -272,16 +272,16 @@ async fn counter_resource_test_3_with_restart() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let counters_template_id = executor.store_template("counters").await;
-    let caller_template_id = executor.store_template("caller_composed").await;
+    let counters_component_id = executor.store_component("counters").await;
+    let caller_component_id = executor.store_component("caller_composed").await;
 
     let mut env = HashMap::new();
     env.insert(
-        "COUNTERS_TEMPLATE_ID".to_string(),
-        counters_template_id.to_string(),
+        "COUNTERS_COMPONENT_ID".to_string(),
+        counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_template_id, "rpc-counters-3r", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-3r", vec![], env)
         .await;
 
     let result1 = executor

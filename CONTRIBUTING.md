@@ -114,9 +114,9 @@ From the root of the project
 ```bash
 rustup target add x86_64-unknown-linux-gnu
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-shard-manager
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-component-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-component-compilation-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
 ```
 
@@ -141,9 +141,9 @@ From the root of the project
 ```bash
 rustup target add aarch64-unknown-linux-gnu-gcc
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-shard-manager
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-component-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-component-compilation-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
 ```
 
@@ -154,9 +154,9 @@ From the root of the project
 ```bash
 rustup target add x86_64-unknown-linux-gnu
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-shard-manager
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-component-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service
-cargo build --release --target aarch64-unknown-linux-gnu --package golem-template-compilation-service
+cargo build --release --target aarch64-unknown-linux-gnu --package golem-component-compilation-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-executor
 ```
 

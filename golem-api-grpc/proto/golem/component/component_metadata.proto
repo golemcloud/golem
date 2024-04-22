@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem.component;
+
+import "golem/component/export.proto";
+import "golem/component/producers.proto";
+
+message ComponentMetadata {
+  repeated Export exports = 1;
+  repeated Producers producers = 2;
+}

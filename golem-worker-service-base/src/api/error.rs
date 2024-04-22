@@ -4,7 +4,7 @@ use tonic::Status;
 
 use golem_service_base::model::*;
 
-use crate::service::template::TemplateServiceError;
+use crate::service::component::ComponentServiceError;
 use crate::service::worker::WorkerServiceError;
 
 // The dependents og golem-worker-service-base
@@ -72,8 +72,8 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
             ServiceError::TypeChecker(_) => WorkerApiBaseError::BadRequest(Json(ErrorsBody {
                 errors: vec![error.to_string()],
             })),
-            ServiceError::VersionedTemplateIdNotFound(_)
-            | ServiceError::TemplateNotFound(_)
+            ServiceError::VersionedComponentIdNotFound(_)
+            | ServiceError::ComponentNotFound(_)
             | ServiceError::AccountIdNotFound(_)
             | ServiceError::WorkerNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
                 error: error.to_string(),
@@ -81,21 +81,21 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
             ServiceError::Golem(golem_error) => {
                 WorkerApiBaseError::InternalError(Json(GolemErrorBody { golem_error }))
             }
-            ServiceError::Template(error) => error.into(),
+            ServiceError::Component(error) => error.into(),
         }
     }
 }
 
-impl From<TemplateServiceError> for WorkerApiBaseError {
-    fn from(value: TemplateServiceError) -> Self {
+impl From<ComponentServiceError> for WorkerApiBaseError {
+    fn from(value: ComponentServiceError) -> Self {
         match value {
-            TemplateServiceError::BadRequest(errors) => {
+            ComponentServiceError::BadRequest(errors) => {
                 WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors }))
             }
-            TemplateServiceError::AlreadyExists(error) => {
+            ComponentServiceError::AlreadyExists(error) => {
                 WorkerApiBaseError::AlreadyExists(Json(ErrorBody { error }))
             }
-            TemplateServiceError::Internal(error) => {
+            ComponentServiceError::Internal(error) => {
                 WorkerApiBaseError::InternalError(Json(GolemErrorBody {
                     golem_error: GolemError::Unknown(GolemErrorUnknown {
                         details: error.to_string(),
@@ -103,13 +103,13 @@ impl From<TemplateServiceError> for WorkerApiBaseError {
                 }))
             }
 
-            TemplateServiceError::NotFound(error) => {
+            ComponentServiceError::NotFound(error) => {
                 WorkerApiBaseError::NotFound(Json(ErrorBody { error }))
             }
-            TemplateServiceError::Unauthorized(error) => {
+            ComponentServiceError::Unauthorized(error) => {
                 WorkerApiBaseError::Unauthorized(Json(ErrorBody { error }))
             }
-            TemplateServiceError::Forbidden(error) => {
+            ComponentServiceError::Forbidden(error) => {
                 WorkerApiBaseError::Forbidden(Json(ErrorBody { error }))
             }
         }

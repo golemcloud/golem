@@ -10,7 +10,7 @@ operations_to_load = 128
 debug_enabled = false
 
 [limits]
-max_active_instances = 1024
+max_active_workers = 1024
 concurrency_limit_per_connection = 1024
 max_concurrent_streams = 1024
 event_broadcast_capacity = 16
@@ -25,34 +25,34 @@ min_delay = "100ms"
 max_delay = "1s"
 multiplier = 3
 
-[template_cache]
+[component_cache]
 max_capacity = 32
 time_to_idle = "12h"
 
-[template_service]
+[component_service]
 type = "Grpc"
 
-[template_service.config]
-max_template_size = 52428800 # 50 Mb
+[component_service.config]
+max_component_size = 52428800 # 50 Mb
 # host
 # port
 # access_token
 
-[template_service.config.retries]
+[component_service.config.retries]
 max_attempts = 3
 min_delay = "100ms"
 max_delay = "1s"
 multiplier = 3
 
-[compiled_template_service]
+[compiled_component_service]
 type = "S3"
 
-[compiled_template_service.config]
+[compiled_component_service.config]
 object_prefix = ""
 # region
 # bucket
 
-[compiled_template_service.config.retries]
+[compiled_component_service.config.retries]
 max_attempts = 3
 min_delay = "100ms"
 max_delay = "1s"

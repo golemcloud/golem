@@ -36,7 +36,7 @@ pub trait Cli {
 #[derive(Debug, Clone)]
 pub struct CliLive {
     pub config: CliConfig,
-    golem_template_port: u16,
+    golem_component_port: u16,
     golem_worker_port: u16,
     golem_cli_path: PathBuf,
     format: Format,
@@ -46,7 +46,7 @@ impl CliLive {
     pub fn with_short_args(&self) -> Self {
         CliLive {
             config: CliConfig { short_args: true },
-            golem_template_port: self.golem_template_port,
+            golem_component_port: self.golem_component_port,
             golem_worker_port: self.golem_worker_port,
             golem_cli_path: self.golem_cli_path.clone(),
             format: self.format,
@@ -56,7 +56,7 @@ impl CliLive {
     pub fn with_long_args(&self) -> Self {
         CliLive {
             config: CliConfig { short_args: false },
-            golem_template_port: self.golem_template_port,
+            golem_component_port: self.golem_component_port,
             golem_worker_port: self.golem_worker_port,
             golem_cli_path: self.golem_cli_path.clone(),
             format: self.format,
@@ -77,15 +77,15 @@ impl CliLive {
         let golem_cli_path = PathBuf::from("../target/debug/golem-cli");
 
         println!(
-            "CLI with template port {} and worker port {}",
-            deps.template_service().public_http_port(),
+            "CLI with component port {} and worker port {}",
+            deps.component_service().public_http_port(),
             deps.worker_service().public_http_port()
         );
 
         if golem_cli_path.exists() {
             Ok(CliLive {
                 config: CliConfig { short_args: false },
-                golem_template_port: deps.template_service().public_http_port(),
+                golem_component_port: deps.component_service().public_http_port(),
                 golem_worker_port: deps.worker_service().public_http_port(),
                 golem_cli_path,
                 format: Format::Json,
@@ -99,8 +99,8 @@ impl CliLive {
         }
     }
 
-    fn template_base_url(&self) -> String {
-        format!("http://localhost:{}", self.golem_template_port)
+    fn component_base_url(&self) -> String {
+        format!("http://localhost:{}", self.golem_component_port)
     }
 
     fn worker_base_url(&self) -> String {
@@ -114,7 +114,7 @@ impl CliLive {
         );
 
         let output = Command::new(&self.golem_cli_path)
-            .env("GOLEM_TEMPLATE_BASE_URL", self.template_base_url())
+            .env("GOLEM_COMPONENT_BASE_URL", self.component_base_url())
             .env("GOLEM_WORKER_BASE_URL", self.worker_base_url())
             .arg(self.config.arg('F', "format"))
             .arg(self.format.to_string())
@@ -169,7 +169,7 @@ impl Cli for CliLive {
         );
 
         let mut child = Command::new(&self.golem_cli_path)
-            .env("GOLEM_TEMPLATE_BASE_URL", self.template_base_url())
+            .env("GOLEM_COMPONENT_BASE_URL", self.component_base_url())
             .env("GOLEM_WORKER_BASE_URL", self.worker_base_url())
             .arg(self.config.arg('F', "format"))
             .arg(self.format.to_string())

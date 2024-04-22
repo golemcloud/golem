@@ -22,7 +22,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
+use crate::components::component_service::ComponentService;
 use crate::components::worker_service::WorkerService;
 use tracing::info;
 use tracing::Level;
@@ -35,7 +35,7 @@ pub struct SpawnedWorkerExecutor {
     executable: PathBuf,
     working_directory: PathBuf,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
-    template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     verbosity: Level,
@@ -50,7 +50,7 @@ impl SpawnedWorkerExecutor {
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
@@ -69,7 +69,7 @@ impl SpawnedWorkerExecutor {
             http_port,
             grpc_port,
             redis.clone(),
-            template_service.clone(),
+            component_service.clone(),
             shard_manager.clone(),
             worker_service.clone(),
             verbosity,
@@ -86,7 +86,7 @@ impl SpawnedWorkerExecutor {
             executable: executable.to_path_buf(),
             working_directory: working_directory.to_path_buf(),
             redis,
-            template_service,
+            component_service,
             shard_manager,
             worker_service,
             verbosity,
@@ -101,7 +101,7 @@ impl SpawnedWorkerExecutor {
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
@@ -113,7 +113,7 @@ impl SpawnedWorkerExecutor {
             .envs(env_vars(
                 http_port,
                 grpc_port,
-                template_service,
+                component_service,
                 shard_manager,
                 worker_service,
                 redis,
@@ -169,7 +169,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             self.http_port,
             self.grpc_port,
             self.redis.clone(),
-            self.template_service.clone(),
+            self.component_service.clone(),
             self.shard_manager.clone(),
             self.worker_service.clone(),
             self.verbosity,

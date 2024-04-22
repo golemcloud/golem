@@ -43,8 +43,8 @@ pub mod oplog;
 pub mod regions;
 
 newtype_uuid!(
-    TemplateId,
-    golem_api_grpc::proto::golem::template::TemplateId
+    ComponentId,
+    golem_api_grpc::proto::golem::component::ComponentId
 );
 
 newtype_uuid!(ProjectId, golem_api_grpc::proto::golem::common::ProjectId);
@@ -213,15 +213,13 @@ pub type ComponentVersion = u64;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct WorkerId {
-    #[serde(rename = "component_id")]
-    pub template_id: TemplateId,
-    #[serde(rename = "instance_name")]
+    pub component_id: ComponentId,
     pub worker_name: String,
 }
 
 impl WorkerId {
     pub fn slug(&self) -> String {
-        format!("{}/{}", self.template_id, self.worker_name)
+        format!("{}/{}", self.component_id, self.worker_name)
     }
 
     pub fn to_json_string(&self) -> String {
@@ -230,7 +228,7 @@ impl WorkerId {
     }
 
     pub fn to_redis_key(&self) -> String {
-        format!("{}:{}", self.template_id.0, self.worker_name)
+        format!("{}:{}", self.component_id.0, self.worker_name)
     }
 
     pub fn uri(&self) -> String {
@@ -244,17 +242,17 @@ impl FromStr for WorkerId {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() == 2 {
-            let template_id_uuid = Uuid::from_str(parts[0])
-                .map_err(|_| format!("invalid template id: {s} - expected uuid"))?;
-            let template_id = TemplateId(template_id_uuid);
+            let component_id_uuid = Uuid::from_str(parts[0])
+                .map_err(|_| format!("invalid component id: {s} - expected uuid"))?;
+            let component_id = ComponentId(component_id_uuid);
             let worker_name = parts[1].to_string();
             Ok(Self {
-                template_id,
+                component_id,
                 worker_name,
             })
         } else {
             Err(format!(
-                "invalid worker id: {s} - expected format: <template_id>:<worker_name>"
+                "invalid worker id: {s} - expected format: <component_id>:<worker_name>"
             ))
         }
     }
@@ -269,7 +267,7 @@ impl Display for WorkerId {
 impl From<WorkerId> for golem_api_grpc::proto::golem::worker::WorkerId {
     fn from(value: WorkerId) -> Self {
         Self {
-            template_id: Some(value.template_id.into()),
+            component_id: Some(value.component_id.into()),
             name: value.worker_name,
         }
     }
@@ -282,7 +280,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
         value: golem_api_grpc::proto::golem::worker::WorkerId,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            template_id: value.template_id.unwrap().try_into()?,
+            component_id: value.component_id.unwrap().try_into()?,
             worker_name: value.name,
         })
     }
@@ -383,13 +381,13 @@ impl ShardId {
 
     pub fn hash_worker_id(worker_id: &WorkerId) -> i64 {
         let (high_bits, low_bits) = (
-            (worker_id.template_id.0.as_u128() >> 64) as i64,
-            worker_id.template_id.0.as_u128() as i64,
+            (worker_id.component_id.0.as_u128() >> 64) as i64,
+            worker_id.component_id.0.as_u128() as i64,
         );
         let high = Self::hash_string(&high_bits.to_string());
         let worker_name = &worker_id.worker_name;
-        let template_worker_name = format!("{}{}", low_bits, worker_name);
-        let low = Self::hash_string(&template_worker_name);
+        let component_worker_name = format!("{}{}", low_bits, worker_name);
+        let low = Self::hash_string(&component_worker_name);
         ((high as i64) << 32) | ((low as i64) & 0xFFFFFFFF)
     }
 
@@ -1626,7 +1624,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use crate::model::{
-        parse_function_name, AccountId, FilterComparator, StringFilterComparator, TemplateId,
+        parse_function_name, AccountId, FilterComparator, StringFilterComparator, ComponentId,
         Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
 
@@ -1883,11 +1881,11 @@ mod tests {
 
     #[test]
     fn worker_filter_matches() {
-        let template_id = TemplateId::new_v4();
+        let component_id = ComponentId::new_v4();
         let worker_metadata = WorkerMetadata {
             worker_id: WorkerId {
                 worker_name: "worker-1".to_string(),
-                template_id,
+                component_id,
             },
             args: vec![],
             env: vec![

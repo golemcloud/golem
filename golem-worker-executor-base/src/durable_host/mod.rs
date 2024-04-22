@@ -50,7 +50,7 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, TemplateId, WorkerFilter, WorkerId,
+    AccountId, CallingConvention, InvocationKey, ComponentId, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -684,7 +684,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .await;
 
                         if !finished {
-                            break Err(GolemError::failed_to_resume_instance(worker_id.clone()));
+                            break Err(GolemError::failed_to_resume_worker(worker_id.clone()));
                         } else {
                             let result = store
                                 .as_context()
@@ -693,7 +693,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 .get_current_invocation_result();
                             if matches!(result, LookupResult::Complete(Err(_))) {
                                 // TODO: include the inner error in the failure?
-                                break Err(GolemError::failed_to_resume_instance(
+                                break Err(GolemError::failed_to_resume_worker(
                                     worker_id.clone(),
                                 ));
                             }
@@ -1123,14 +1123,14 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     pub async fn get_workers(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
         precise: bool,
     ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
         self.worker_enumeration_service
-            .get(template_id, filter, cursor, count, precise)
+            .get(component_id, filter, cursor, count, precise)
             .await
     }
 }

@@ -14,7 +14,7 @@ import public "golem/worker/worker_filter.proto";
 import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/log_event.proto";
 import public "golem/worker/worker_id.proto";
-import public "golem/template/template_id.proto";
+import public "golem/component/component_id.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
@@ -38,7 +38,7 @@ service WorkerService {
 }
 
 message LaunchNewWorkerRequest {
-  golem.template.TemplateId templateId = 1;
+  golem.component.ComponentId componentId = 1;
   string name = 2;
   repeated string args = 3;
   map<string, string> env = 4;
@@ -183,7 +183,7 @@ message InvokeAndAwaitResponseJson {
 }
 
 message GetWorkersMetadataRequest {
-  golem.template.TemplateId template_id = 1;
+  golem.component.ComponentId component_id = 1;
   golem.worker.WorkerFilter filter = 2;
   uint64 cursor = 3;
   uint64 count = 4;

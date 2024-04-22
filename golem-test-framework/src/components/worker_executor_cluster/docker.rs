@@ -14,7 +14,7 @@
 
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
+use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::docker::DockerWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
@@ -35,7 +35,7 @@ impl DockerWorkerExecutorCluster {
         base_http_port: u16,
         base_grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
@@ -52,7 +52,7 @@ impl DockerWorkerExecutorCluster {
                     http_port,
                     grpc_port,
                     redis.clone(),
-                    template_service.clone(),
+                    component_service.clone(),
                     shard_manager.clone(),
                     worker_service.clone(),
                     verbosity,

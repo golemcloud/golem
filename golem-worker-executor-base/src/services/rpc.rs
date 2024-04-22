@@ -16,10 +16,10 @@ use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, UriBackConversion};
 use crate::services::{
     active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, recovery,
-    scheduler, shard, shard_manager, template, worker, worker_enumeration, HasActiveWorkers,
+    scheduler, shard, shard_manager, component, worker, worker_enumeration, HasActiveWorkers,
     HasBlobStoreService, HasConfig, HasExtraDeps, HasInvocationKeyService, HasKeyValueService,
     HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardService, HasTemplateService,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardService, HasComponentService,
     HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
 };
 use crate::worker::{invoke, invoke_and_await, Worker};
@@ -329,7 +329,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
-    template_service: Arc<dyn template::TemplateService + Send + Sync>,
+    component_service: Arc<dyn component::ComponentService + Send + Sync>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
@@ -355,7 +355,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
-            template_service: self.template_service.clone(),
+            component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
             worker_service: self.worker_service.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
@@ -380,9 +380,9 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasTemplateService for DirectWorkerInvocationRpc<Ctx> {
-    fn template_service(&self) -> Arc<dyn template::TemplateService + Send + Sync> {
-        self.template_service.clone()
+impl<Ctx: WorkerCtx> HasComponentService for DirectWorkerInvocationRpc<Ctx> {
+    fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
+        self.component_service.clone()
     }
 }
 
@@ -502,7 +502,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        template_service: Arc<dyn template::TemplateService + Send + Sync>,
+        component_service: Arc<dyn component::ComponentService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -527,7 +527,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             engine,
             linker,
             runtime,
-            template_service,
+            component_service,
             shard_manager_service,
             worker_service,
             worker_enumeration_service,

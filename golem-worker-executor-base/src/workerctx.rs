@@ -69,7 +69,7 @@ pub trait WorkerCtx:
     /// Creates a new worker context
     ///
     /// Arguments:
-    /// - `worker_id`: The worker ID (consists of the template id and worker name)
+    /// - `worker_id`: The worker ID (consists of the component id and worker name)
     /// - `account_id`: The account that initiated the creation of the worker
     /// - `promise_service`: The service for managing promises
     /// - `invocation_key_service`: The service for managing invocation keys

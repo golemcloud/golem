@@ -33,7 +33,7 @@ use golem_api_grpc::proto::golem::worker::{
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
+use crate::components::component_service::ComponentService;
 use crate::components::wait_for_startup_grpc;
 
 pub mod docker;
@@ -188,7 +188,7 @@ fn env_vars(
     http_port: u16,
     grpc_port: u16,
     custom_request_port: u16,
-    template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -202,9 +202,9 @@ fn env_vars(
         ("GOLEM__REDIS__HOST"                         , &redis.private_host()),
         ("GOLEM__REDIS__PORT"                         , &redis.private_port().to_string()),
         ("GOLEM__REDIS__DATABASE"                     , "1"),
-        ("GOLEM__TEMPLATE_SERVICE__HOST"              , &template_service.private_host()),
-        ("GOLEM__TEMPLATE_SERVICE__PORT"              , &template_service.private_grpc_port().to_string()),
-        ("GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN"      , "5C832D93-FF85-4A8F-9803-513950FDFDB1"),
+        ("GOLEM__COMPONENT_SERVICE__HOST"             , &component_service.private_host()),
+        ("GOLEM__COMPONENT_SERVICE__PORT"             , &component_service.private_grpc_port().to_string()),
+        ("GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN"     , "5C832D93-FF85-4A8F-9803-513950FDFDB1"),
         ("ENVIRONMENT"                                , "local"),
         ("GOLEM__ENVIRONMENT"                         , "ittest"),
         ("GOLEM__ROUTING_TABLE__HOST"                 , &shard_manager.private_host()),

@@ -30,9 +30,9 @@ use crate::components::redis_monitor::RedisMonitor;
 use crate::components::shard_manager::docker::DockerShardManager;
 use crate::components::shard_manager::spawned::SpawnedShardManager;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::docker::DockerTemplateService;
-use crate::components::template_service::spawned::SpawnedTemplateService;
-use crate::components::template_service::TemplateService;
+use crate::components::component_service::docker::DockerComponentService;
+use crate::components::component_service::spawned::SpawnedComponentService;
+use crate::components::component_service::ComponentService;
 use crate::components::worker_executor_cluster::docker::DockerWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
@@ -46,7 +46,7 @@ pub struct EnvBasedTestDependencies {
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-    template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
 }
@@ -128,18 +128,18 @@ impl EnvBasedTestDependencies {
             };
             shard_manager
         };
-        let template_service = {
-            let template_service: Arc<dyn TemplateService + Send + Sync + 'static> =
+        let component_service = {
+            let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
                 if Self::use_docker() {
-                    Arc::new(DockerTemplateService::new(
+                    Arc::new(DockerComponentService::new(
                         rdb.clone(),
                         Self::default_verbosity(),
                     ))
                 } else {
                     Arc::new(
-                        SpawnedTemplateService::new(
-                            Path::new("../target/debug/golem-template-service"),
-                            Path::new("../golem-template-service"),
+                        SpawnedComponentService::new(
+                            Path::new("../target/debug/golem-component-service"),
+                            Path::new("../golem-component-service"),
                             8081,
                             9091,
                             rdb.clone(),
@@ -150,13 +150,13 @@ impl EnvBasedTestDependencies {
                         .await,
                     )
                 };
-            template_service
+            component_service
         };
         let worker_service = {
             let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
                 if Self::use_docker() {
                     Arc::new(DockerWorkerService::new(
-                        template_service.clone(),
+                        component_service.clone(),
                         shard_manager.clone(),
                         rdb.clone(),
                         redis.clone(),
@@ -170,7 +170,7 @@ impl EnvBasedTestDependencies {
                             8082,
                             9092,
                             9093,
-                            template_service.clone(),
+                            component_service.clone(),
                             shard_manager.clone(),
                             rdb.clone(),
                             redis.clone(),
@@ -191,7 +191,7 @@ impl EnvBasedTestDependencies {
                         9000,
                         9100,
                         redis.clone(),
-                        template_service.clone(),
+                        component_service.clone(),
                         shard_manager.clone(),
                         worker_service.clone(),
                         Self::default_verbosity(),
@@ -205,7 +205,7 @@ impl EnvBasedTestDependencies {
                             Path::new("../target/debug/worker-executor"),
                             Path::new("../golem-worker-executor"),
                             redis.clone(),
-                            template_service.clone(),
+                            component_service.clone(),
                             shard_manager.clone(),
                             worker_service.clone(),
                             Self::default_verbosity(),
@@ -223,7 +223,7 @@ impl EnvBasedTestDependencies {
             redis,
             redis_monitor,
             shard_manager,
-            template_service,
+            component_service,
             worker_service,
             worker_executor_cluster,
         }
@@ -286,8 +286,8 @@ impl EnvBasedTestDependencies {
         }
     }
 
-    fn golem_test_templates() -> Option<PathBuf> {
-        std::env::var("GOLEM_TEST_TEMPLATES")
+    fn golem_test_components() -> Option<PathBuf> {
+        std::env::var("GOLEM_TEST_COMPONENTS")
             .ok()
             .map(|s| Path::new(&s).to_path_buf())
     }
@@ -310,12 +310,12 @@ impl TestDependencies for EnvBasedTestDependencies {
         self.shard_manager.clone()
     }
 
-    fn template_directory(&self) -> PathBuf {
-        Self::golem_test_templates().unwrap_or(Path::new("../test-templates").to_path_buf())
+    fn component_directory(&self) -> PathBuf {
+        Self::golem_test_components().unwrap_or(Path::new("../test-components").to_path_buf())
     }
 
-    fn template_service(&self) -> Arc<dyn TemplateService + Send + Sync + 'static> {
-        self.template_service.clone()
+    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+        self.component_service.clone()
     }
 
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {

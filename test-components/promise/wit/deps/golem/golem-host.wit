@@ -1,0 +1,63 @@
+package golem:api@0.2.0;
+
+/// The Golem host API provides low level access to Golem specific features such as promises and control over
+/// the durability and transactional guarantees the executor provides.
+interface host {
+  use golem:rpc/types@0.1.0.{uri};
+
+  /// An index into the persistent log storing all performed operations of a worker
+  type oplog-index = u64;
+
+  /// A promise ID is a value that can be passed to an external Golem API to complete that promise
+  /// from an arbitrary external source, while Golem workers can await for this completion.
+  record promise-id {
+    worker-id: worker-id,
+    oplog-idx: oplog-index,
+  }
+
+  /// Represents a Golem worker
+  record worker-id {
+    component-id: component-id,
+    worker-name: string
+  }
+
+
+  /// Represents a Golem component
+  record component-id {
+    uuid: uuid,
+  }
+
+  /// UUID
+  record uuid {
+    high-bits: u64,
+    low-bits: u64
+  }
+
+  /// Create a new promise
+  golem-create-promise: func() -> promise-id;
+
+  /// Suspends execution until the given promise gets completed, and returns the payload passed to
+  /// the promise completion.
+  golem-await-promise: func(promise-id: promise-id) -> list<u8>;
+
+  /// Completes the given promise with the given payload. Returns true if the promise was completed, false
+  /// if the promise was already completed. The payload is passed to the worker that is awaiting the promise.
+  golem-complete-promise: func(promise-id: promise-id, data: list<u8>) -> bool;
+
+  /// Deletes the given promise
+  golem-delete-promise: func(promise-id: promise-id) -> ();
+
+  /// Returns a Golem worker URI that can be used to invoke a given function on the current worker
+  get-self-uri: func(function-name: string) -> uri;
+
+  /// Returns the current position in the persistent op log
+  get-oplog-index: func() -> oplog-index;
+
+  /// Makes the current worker travel back in time and continue execution from the given position in the persistent
+  /// op log.
+  set-oplog-index: func(oplog-idx: oplog-index) -> ();
+}
+
+world golem-host {
+  import host;
+}

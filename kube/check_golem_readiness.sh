@@ -32,7 +32,7 @@ timeout=4
 while true; do
   missing=false
   for substring in "${required_pod_substrings[@]}"; do
-    if ! kubectl get pods --namespace $NAMESPACE -o go-template='{{range $index, $element := .items}}{{range .status.containerStatuses}}{{if .ready}}{{$element.metadata.name}}{{"\n"}}{{end}}{{end}}{{end}}' | grep -q "$substring"; then
+    if ! kubectl get pods --namespace $NAMESPACE -o go-component='{{range $index, $element := .items}}{{range .status.containerStatuses}}{{if .ready}}{{$element.metadata.name}}{{"\n"}}{{end}}{{end}}{{end}}' | grep -q "$substring"; then
       echo "Required pod with substring '$substring' is missing."
       missing=true
       break

@@ -89,13 +89,13 @@ async fn jump() {
 
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let template_id = executor.store_template("runtime-service").await;
+    let component_id = executor.store_component("runtime-service").await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "runtime-service-jump", vec![], env)
+        .start_worker_with(&component_id, "runtime-service-jump", vec![], env)
         .await;
 
     let (rx, abort_capture) = executor.capture_output_forever(&worker_id).await;
@@ -140,10 +140,10 @@ async fn explicit_oplog_commit() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("runtime-service").await;
+    let component_id = executor.store_component("runtime-service").await;
 
     let worker_id = executor
-        .start_worker(&template_id, "runtime-service-explicit-oplog-commit")
+        .start_worker(&component_id, "runtime-service-explicit-oplog-commit")
         .await;
 
     executor.log_output(&worker_id).await;
@@ -167,9 +167,9 @@ async fn set_retry_policy() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("runtime-service").await;
+    let component_id = executor.store_component("runtime-service").await;
     let worker_id = executor
-        .start_worker(&template_id, "set-retry-policy-1")
+        .start_worker(&component_id, "set-retry-policy-1")
         .await;
 
     executor.log_output(&worker_id).await;
@@ -211,13 +211,13 @@ async fn atomic_region() {
     let host_http_port = context.host_http_port();
 
     let http_server = TestHttpServer::start(host_http_port, 2);
-    let template_id = executor.store_template("runtime-service").await;
+    let component_id = executor.store_component("runtime-service").await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "atomic-region", vec![], env)
+        .start_worker_with(&component_id, "atomic-region", vec![], env)
         .await;
 
     let _ = executor
@@ -243,13 +243,13 @@ async fn idempotence_on() {
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let template_id = executor.store_template("runtime-service").await;
+    let component_id = executor.store_component("runtime-service").await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "idempotence-flag", vec![], env)
+        .start_worker_with(&component_id, "idempotence-flag", vec![], env)
         .await;
 
     let _ = executor
@@ -279,13 +279,13 @@ async fn idempotence_off() {
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
 
-    let template_id = executor.store_template("runtime-service").await;
+    let component_id = executor.store_component("runtime-service").await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "idempotence-flag", vec![], env)
+        .start_worker_with(&component_id, "idempotence-flag", vec![], env)
         .await;
 
     let result = executor
@@ -316,13 +316,13 @@ async fn persist_nothing() {
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 2);
 
-    let template_id = executor.store_template("runtime-service").await;
+    let component_id = executor.store_component("runtime-service").await;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "persist-nothing", vec![], env)
+        .start_worker_with(&component_id, "persist-nothing", vec![], env)
         .await;
 
     let result = executor

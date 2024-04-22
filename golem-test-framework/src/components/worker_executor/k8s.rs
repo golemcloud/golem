@@ -18,7 +18,7 @@ use crate::components::k8s::{
 };
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
+use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::{env_vars, wait_for_startup, WorkerExecutor};
 use crate::components::worker_service::WorkerService;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
@@ -52,7 +52,7 @@ impl K8sWorkerExecutor {
         idx: usize,
         verbosity: Level,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     ) -> Self {
@@ -63,7 +63,7 @@ impl K8sWorkerExecutor {
         let env_vars = env_vars(
             Self::HTTP_PORT,
             Self::GRPC_PORT,
-            template_service,
+            component_service,
             shard_manager,
             worker_service,
             redis,

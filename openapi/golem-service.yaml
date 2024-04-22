@@ -3,14 +3,14 @@ info:
   title: Golem API
   version: '2.0'
 paths:
-  /v2/templates/{template_id}/workers:
+  /v2/components/{component_id}/workers:
     get:
       tags:
       - Worker
       operationId: get_workers_metadata
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -99,7 +99,7 @@ paths:
       operationId: launch_new_worker
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -156,14 +156,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/templates/{template_id}/workers/{worker_name}:
+  /v2/components/{component_id}/workers/{worker_name}:
     get:
       tags:
       - Worker
       operationId: get_worker_metadata
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -228,7 +228,7 @@ paths:
       operationId: delete_worker
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -287,14 +287,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/templates/{template_id}/workers/{worker_name}/key:
+  /v2/components/{component_id}/workers/{worker_name}/key:
     post:
       tags:
       - Worker
       operationId: get_invocation_key
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -353,14 +353,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/templates/{template_id}/workers/{worker_name}/invoke-and-await:
+  /v2/components/{component_id}/workers/{worker_name}/invoke-and-await:
     post:
       tags:
       - Worker
       operationId: invoke_and_await_function
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -448,14 +448,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/templates/{template_id}/workers/{worker_name}/invoke:
+  /v2/components/{component_id}/workers/{worker_name}/invoke:
     post:
       tags:
       - Worker
       operationId: invoke_function
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -528,14 +528,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/templates/{template_id}/workers/{worker_name}/complete:
+  /v2/components/{component_id}/workers/{worker_name}/complete:
     post:
       tags:
       - Worker
       operationId: complete_promise
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -600,14 +600,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/templates/{template_id}/workers/{worker_name}/interrupt:
+  /v2/components/{component_id}/workers/{worker_name}/interrupt:
     post:
       tags:
       - Worker
       operationId: interrupt_worker
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -673,14 +673,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/templates/{template_id}/workers/find:
+  /v2/components/{component_id}/workers/find:
     post:
       tags:
       - Worker
       operationId: find_workers_metadata
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -737,14 +737,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/templates/{template_id}/workers/{worker_name}/resume:
+  /v2/components/{component_id}/workers/{worker_name}/resume:
     post:
       tags:
       - Worker
       operationId: resume_worker
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -1355,14 +1355,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/VersionInfo'
-  /v2/templates:
+  /v2/components:
     get:
       tags:
-      - Template
-      operationId: get_templates
+      - Component
+      operationId: get_components
       parameters:
       - in: query
-        name: template-name
+        name: component-name
         deprecated: false
         schema:
           type: string
@@ -1376,7 +1376,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Template'
+                  $ref: '#/components/schemas/Component'
         '400':
           description: ''
           content:
@@ -1415,8 +1415,8 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
     post:
       tags:
-      - Template
-      operationId: create_template
+      - Component
+      operationId: create_component
       requestBody:
         content:
           multipart/form-data:
@@ -1425,12 +1425,12 @@ paths:
               properties:
                 name:
                   type: string
-                template:
+                component:
                   type: string
                   format: binary
               required:
               - name
-              - template
+              - component
         required: true
       responses:
         '200':
@@ -1438,7 +1438,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Template'
+                $ref: '#/components/schemas/Component'
         '400':
           description: ''
           content:
@@ -1475,14 +1475,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/templates/{template_id}/upload:
+  /v2/components/{component_id}/upload:
     put:
       tags:
-      - Template
-      operationId: update_template
+      - Component
+      operationId: update_component
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -1503,7 +1503,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Template'
+                $ref: '#/components/schemas/Component'
         '400':
           description: ''
           content:
@@ -1540,14 +1540,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/templates/{template_id}/download:
+  /v2/components/{component_id}/download:
     get:
       tags:
-      - Template
-      operationId: download_template
+      - Component
+      operationId: download_component
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -1607,14 +1607,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/templates/{template_id}:
+  /v2/components/{component_id}:
     get:
       tags:
-      - Template
-      operationId: get_template_metadata_all_versions
+      - Component
+      operationId: get_component_metadata_all_versions
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -1630,7 +1630,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Template'
+                  $ref: '#/components/schemas/Component'
         '400':
           description: ''
           content:
@@ -1667,14 +1667,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/templates/{template_id}/versions/{version}:
+  /v2/components/{component_id}/versions/{version}:
     get:
       tags:
-      - Template
-      operationId: get_template_metadata
+      - Component
+      operationId: get_component_metadata
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -1696,7 +1696,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Template'
+                $ref: '#/components/schemas/Component'
         '400':
           description: ''
           content:
@@ -1733,14 +1733,14 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/templates/{template_id}/latest:
+  /v2/components/{component_id}/latest:
     get:
       tags:
-      - Template
-      operationId: get_latest_template_metadata
+      - Component
+      operationId: get_latest_component_metadata
       parameters:
       - in: path
-        name: template_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -1754,7 +1754,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Template'
+                $ref: '#/components/schemas/Component'
         '400':
           description: ''
           content:
@@ -1876,9 +1876,9 @@ components:
           WorkerNotFound: '#/components/schemas/GolemError_GolemErrorWorkerNotFound'
           WorkerCreationFailed: '#/components/schemas/GolemError_GolemErrorWorkerCreationFailed'
           FailedToResumeWorker: '#/components/schemas/GolemError_GolemErrorFailedToResumeWorker'
-          TemplateDownloadFailed: '#/components/schemas/GolemError_GolemErrorTemplateDownloadFailed'
-          TemplateParseFailed: '#/components/schemas/GolemError_GolemErrorTemplateParseFailed'
-          GetLatestVersionOfTemplateFailed: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfTemplateFailed'
+          ComponentDownloadFailed: '#/components/schemas/GolemError_GolemErrorComponentDownloadFailed'
+          ComponentParseFailed: '#/components/schemas/GolemError_GolemErrorComponentParseFailed'
+          GetLatestVersionOfComponentFailed: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfComponentFailed'
           PromiseNotFound: '#/components/schemas/GolemError_GolemErrorPromiseNotFound'
           PromiseDropped: '#/components/schemas/GolemError_GolemErrorPromiseDropped'
           PromiseAlreadyCompleted: '#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted'
@@ -1900,9 +1900,9 @@ components:
       - $ref: '#/components/schemas/GolemError_GolemErrorWorkerNotFound'
       - $ref: '#/components/schemas/GolemError_GolemErrorWorkerCreationFailed'
       - $ref: '#/components/schemas/GolemError_GolemErrorFailedToResumeWorker'
-      - $ref: '#/components/schemas/GolemError_GolemErrorTemplateDownloadFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorTemplateParseFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfTemplateFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorComponentDownloadFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorComponentParseFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfComponentFailed'
       - $ref: '#/components/schemas/GolemError_GolemErrorPromiseNotFound'
       - $ref: '#/components/schemas/GolemError_GolemErrorPromiseDropped'
       - $ref: '#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted'
@@ -1924,6 +1924,26 @@ components:
           $ref: '#/components/schemas/GolemError'
       required:
       - golemError
+    GolemErrorComponentDownloadFailed:
+      type: object
+      properties:
+        componentId:
+          $ref: '#/components/schemas/VersionedComponentId'
+        reason:
+          type: string
+      required:
+      - componentId
+      - reason
+    GolemErrorComponentParseFailed:
+      type: object
+      properties:
+        componentId:
+          $ref: '#/components/schemas/VersionedComponentId'
+        reason:
+          type: string
+      required:
+      - componentId
+      - reason
     GolemErrorFailedToResumeWorker:
       type: object
       properties:
@@ -1931,16 +1951,16 @@ components:
           $ref: '#/components/schemas/WorkerId'
       required:
       - workerId
-    GolemErrorGetLatestVersionOfTemplateFailed:
+    GolemErrorGetLatestVersionOfComponentFailed:
       type: object
       properties:
-        templateId:
+        componentId:
           type: string
           format: uuid
         reason:
           type: string
       required:
-      - templateId
+      - componentId
       - reason
     GolemErrorInterrupted:
       type: object
@@ -2011,26 +2031,6 @@ components:
           type: string
       required:
       - details
-    GolemErrorTemplateDownloadFailed:
-      type: object
-      properties:
-        templateId:
-          $ref: '#/components/schemas/VersionedTemplateId'
-        reason:
-          type: string
-      required:
-      - templateId
-      - reason
-    GolemErrorTemplateParseFailed:
-      type: object
-      properties:
-        templateId:
-          $ref: '#/components/schemas/VersionedTemplateId'
-        reason:
-          type: string
-      required:
-      - templateId
-      - reason
     GolemErrorUnexpectedOplogEntry:
       type: object
       properties:
@@ -2079,6 +2079,26 @@ components:
           $ref: '#/components/schemas/WorkerId'
       required:
       - workerId
+    GolemError_GolemErrorComponentDownloadFailed:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentDownloadFailed
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/GolemErrorComponentDownloadFailed'
+    GolemError_GolemErrorComponentParseFailed:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentParseFailed
+            type: string
+        required:
+        - type
+      - $ref: '#/components/schemas/GolemErrorComponentParseFailed'
     GolemError_GolemErrorFailedToResumeWorker:
       allOf:
       - type: object
@@ -2089,16 +2109,16 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorFailedToResumeWorker'
-    GolemError_GolemErrorGetLatestVersionOfTemplateFailed:
+    GolemError_GolemErrorGetLatestVersionOfComponentFailed:
       allOf:
       - type: object
         properties:
           type:
-            example: GetLatestVersionOfTemplateFailed
+            example: GetLatestVersionOfComponentFailed
             type: string
         required:
         - type
-      - $ref: '#/components/schemas/GolemErrorGetLatestVersionOfTemplateFailed'
+      - $ref: '#/components/schemas/GolemErrorGetLatestVersionOfComponentFailed'
     GolemError_GolemErrorInterrupted:
       allOf:
       - type: object
@@ -2219,26 +2239,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorRuntimeError'
-    GolemError_GolemErrorTemplateDownloadFailed:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: TemplateDownloadFailed
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorTemplateDownloadFailed'
-    GolemError_GolemErrorTemplateParseFailed:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: TemplateParseFailed
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorTemplateParseFailed'
     GolemError_GolemErrorUnexpectedOplogEntry:
       allOf:
       - type: object
@@ -2302,7 +2302,7 @@ components:
     GolemWorkerBinding:
       type: object
       properties:
-        template:
+        component:
           type: string
           format: uuid
         workerId:
@@ -2316,7 +2316,7 @@ components:
         response:
           type: string
       required:
-      - template
+      - component
       - workerId
       - functionName
       - functionParams
@@ -2426,7 +2426,7 @@ components:
           $ref: '#/components/schemas/MethodPattern'
         path:
           type: string
-        template:
+        component:
           type: string
           format: uuid
         detail:
@@ -2434,7 +2434,7 @@ components:
       required:
       - method
       - path
-      - template
+      - component
       - detail
     ShardId:
       type: object
@@ -2521,17 +2521,17 @@ components:
           type: string
       required:
       - version
-    VersionedTemplateId:
+    VersionedComponentId:
       type: object
       properties:
-        templateId:
+        componentId:
           type: string
           format: uuid
         version:
           type: integer
           format: uint64
       required:
-      - templateId
+      - componentId
       - version
     WorkerAndFilter:
       type: object
@@ -2699,13 +2699,13 @@ components:
     WorkerId:
       type: object
       properties:
-        templateId:
+        componentId:
           type: string
           format: uuid
         workerName:
           type: string
       required:
-      - templateId
+      - componentId
       - workerName
     WorkerMetadata:
       type: object
@@ -2722,7 +2722,7 @@ components:
             type: string
         status:
           $ref: '#/components/schemas/WorkerStatus'
-        templateVersion:
+        componentVersion:
           type: integer
           format: uint64
         retryCount:
@@ -2745,7 +2745,7 @@ components:
       - args
       - env
       - status
-      - templateVersion
+      - componentVersion
       - retryCount
       - pendingInvocationCount
       - updates
@@ -2867,6 +2867,43 @@ components:
           format: uint64
       required:
       - workers
+    Component:
+      type: object
+      properties:
+        versionedComponentId:
+          $ref: '#/components/schemas/VersionedComponentId'
+        userComponentId:
+          $ref: '#/components/schemas/UserComponentId'
+        protectedComponentId:
+          $ref: '#/components/schemas/ProtectedComponentId'
+        componentName:
+          type: string
+        componentSize:
+          type: integer
+          format: uint64
+        metadata:
+          $ref: '#/components/schemas/ComponentMetadata'
+      required:
+      - versionedComponentId
+      - userComponentId
+      - protectedComponentId
+      - componentName
+      - componentSize
+      - metadata
+    ComponentMetadata:
+      type: object
+      properties:
+        exports:
+          type: array
+          items:
+            $ref: '#/components/schemas/Export'
+        producers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Producers'
+      required:
+      - exports
+      - producers
     Export:
       discriminator:
         propertyName: type
@@ -2985,55 +3022,18 @@ components:
             $ref: '#/components/schemas/ProducerField'
       required:
       - fields
-    ProtectedTemplateId:
+    ProtectedComponentId:
       type: object
       properties:
-        versionedTemplateId:
-          $ref: '#/components/schemas/VersionedTemplateId'
+        versionedComponentId:
+          $ref: '#/components/schemas/VersionedComponentId'
       required:
-      - versionedTemplateId
+      - versionedComponentId
     ResourceMode:
       type: string
       enum:
       - Borrowed
       - Owned
-    Template:
-      type: object
-      properties:
-        versionedTemplateId:
-          $ref: '#/components/schemas/VersionedTemplateId'
-        userTemplateId:
-          $ref: '#/components/schemas/UserTemplateId'
-        protectedTemplateId:
-          $ref: '#/components/schemas/ProtectedTemplateId'
-        templateName:
-          type: string
-        templateSize:
-          type: integer
-          format: int32
-        metadata:
-          $ref: '#/components/schemas/TemplateMetadata'
-      required:
-      - versionedTemplateId
-      - userTemplateId
-      - protectedTemplateId
-      - templateName
-      - templateSize
-      - metadata
-    TemplateMetadata:
-      type: object
-      properties:
-        exports:
-          type: array
-          items:
-            $ref: '#/components/schemas/Export'
-        producers:
-          type: array
-          items:
-            $ref: '#/components/schemas/Producers'
-      required:
-      - exports
-      - producers
     Type:
       discriminator:
         propertyName: type
@@ -3407,13 +3407,13 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/TypeVariant'
-    UserTemplateId:
+    UserComponentId:
       type: object
       properties:
-        versionedTemplateId:
-          $ref: '#/components/schemas/VersionedTemplateId'
+        versionedComponentId:
+          $ref: '#/components/schemas/VersionedComponentId'
       required:
-      - versionedTemplateId
+      - versionedComponentId
     VersionedName:
       type: object
       properties:
@@ -3427,6 +3427,6 @@ components:
 tags:
 - name: ApiDefinition
 - name: ApiDeployment
+- name: Component
 - name: HealthCheck
-- name: Template
 - name: Worker

@@ -331,18 +331,18 @@ mod tests {
     use crate::services::invocation_key::InvocationKeyServiceDefault;
     use crate::wasi_host::managed_stdio::ManagedStandardIo;
     use bytes::{BufMut, Bytes};
-    use golem_common::model::{InvocationKey, TemplateId, WorkerId};
+    use golem_common::model::{InvocationKey, ComponentId, WorkerId};
     use uuid::Uuid;
     use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, StreamError, Subscribe};
 
     #[tokio::test]
     async fn enqueue_first_and_read() {
-        let instance_id = WorkerId {
-            template_id: TemplateId(Uuid::new_v4()),
+        let worker_id = WorkerId {
+            component_id: ComponentId(Uuid::new_v4()),
             worker_name: "test".to_string(),
         };
         let invocation_key_service = Arc::new(InvocationKeyServiceDefault::default());
-        let stdio = ManagedStandardIo::new(instance_id, invocation_key_service);
+        let stdio = ManagedStandardIo::new(worker_id, invocation_key_service);
 
         let msg1 = Bytes::from("hello\n".to_string());
         let key1 = InvocationKey::new("key1".to_string());
@@ -374,12 +374,12 @@ mod tests {
 
     #[tokio::test]
     async fn enqueue_after_first_read() {
-        let instance_id = WorkerId {
-            template_id: TemplateId(Uuid::new_v4()),
+        let worker_id = WorkerId {
+            component_id: ComponentId(Uuid::new_v4()),
             worker_name: "test".to_string(),
         };
         let invocation_key_service = Arc::new(InvocationKeyServiceDefault::default());
-        let stdio = ManagedStandardIo::new(instance_id, invocation_key_service);
+        let stdio = ManagedStandardIo::new(worker_id, invocation_key_service);
 
         let msg1 = Bytes::from("hello\n".to_string());
         let key1 = InvocationKey::new("key1".to_string());

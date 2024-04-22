@@ -11,10 +11,10 @@ use assert2::check;
 use http_02::{Response, StatusCode};
 use redis::Commands;
 
-use golem_api_grpc::proto::golem::worker::{worker_execution_error, LogEvent, TemplateParseFailed};
+use golem_api_grpc::proto::golem::worker::{worker_execution_error, LogEvent, ComponentParseFailed};
 use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
 use golem_common::model::{
-    AccountId, FilterComparator, InvocationKey, PromiseId, StringFilterComparator, TemplateId,
+    AccountId, FilterComparator, InvocationKey, PromiseId, StringFilterComparator, ComponentId,
     WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use golem_wasm_rpc::Value;
@@ -36,8 +36,8 @@ async fn interruption() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("interruption").await;
-    let worker_id = executor.start_worker(&template_id, "interruption-1").await;
+    let component_id = executor.store_component("interruption").await;
+    let worker_id = executor.start_worker(&component_id, "interruption-1").await;
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
@@ -68,9 +68,9 @@ async fn simulated_crash() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("interruption").await;
+    let component_id = executor.store_component("interruption").await;
     let worker_id = executor
-        .start_worker(&template_id, "simulated-crash-1")
+        .start_worker(&component_id, "simulated-crash-1")
         .await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -111,8 +111,8 @@ async fn shopping_cart_example() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("shopping-cart").await;
-    let worker_id = executor.start_worker(&template_id, "shopping-cart-1").await;
+    let component_id = executor.store_component("shopping-cart").await;
+    let worker_id = executor.start_worker(&component_id, "shopping-cart-1").await;
 
     let _ = executor
         .invoke_and_await(
@@ -210,8 +210,8 @@ async fn stdio_cc() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("stdio-cc").await;
-    let worker_id = executor.start_worker(&template_id, "stdio-cc-1").await;
+    let component_id = executor.store_component("stdio-cc").await;
+    let worker_id = executor.start_worker(&component_id, "stdio-cc-1").await;
 
     let result = executor
         .invoke_and_await_stdio(&worker_id, "run", serde_json::Value::Number(1234.into()))
@@ -224,14 +224,14 @@ async fn stdio_cc() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn dynamic_instance_creation() {
+async fn dynamic_worker_creation() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("environment-service").await;
+    let component_id = executor.store_component("environment-service").await;
     let worker_id = WorkerId {
-        template_id: template_id.clone(),
-        worker_name: "dynamic-instance-creation-1".to_string(),
+        component_id: component_id.clone(),
+        worker_name: "dynamic-worker-creation-1".to_string(),
     };
 
     let args = executor
@@ -250,14 +250,14 @@ async fn dynamic_instance_creation() {
         env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
             Value::Tuple(vec![
                 Value::String("GOLEM_WORKER_NAME".to_string()),
-                Value::String("dynamic-instance-creation-1".to_string())
+                Value::String("dynamic-worker-creation-1".to_string())
             ]),
             Value::Tuple(vec![
-                Value::String("GOLEM_TEMPLATE_ID".to_string()),
-                Value::String(format!("{}", template_id))
+                Value::String("GOLEM_COMPONENT_ID".to_string()),
+                Value::String(format!("{}", component_id))
             ]),
             Value::Tuple(vec![
-                Value::String("GOLEM_TEMPLATE_VERSION".to_string()),
+                Value::String("GOLEM_COMPONENT_VERSION".to_string()),
                 Value::String("0".to_string())
             ]),
         ])))))]
@@ -270,8 +270,8 @@ async fn promise() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("promise").await;
-    let worker_id = executor.start_worker(&template_id, "promise-1").await;
+    let component_id = executor.store_component("promise").await;
+    let worker_id = executor.start_worker(&component_id, "promise-1").await;
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
@@ -313,9 +313,9 @@ async fn get_self_uri() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("runtime-service").await;
+    let component_id = executor.store_component("runtime-service").await;
     let worker_id = executor
-        .start_worker(&template_id, "runtime-service-1")
+        .start_worker(&component_id, "runtime-service-1")
         .await;
 
     let result = executor
@@ -332,7 +332,7 @@ async fn get_self_uri() {
     check!(
         result
             == vec![Value::String(format!(
-                "worker://{template_id}/runtime-service-1/function-name"
+                "worker://{component_id}/runtime-service-1/function-name"
             ))]
     );
 }
@@ -343,14 +343,14 @@ async fn get_workers_from_worker() {
     let context = TestContext::new();
     let mut executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("runtime-service").await;
+    let component_id = executor.store_component("runtime-service").await;
 
     let worker_id1 = executor
-        .start_worker(&template_id, "runtime-service-1")
+        .start_worker(&component_id, "runtime-service-1")
         .await;
 
     let worker_id2 = executor
-        .start_worker(&template_id, "runtime-service-2")
+        .start_worker(&component_id, "runtime-service-2")
         .await;
 
     async fn get_check(
@@ -359,8 +359,8 @@ async fn get_workers_from_worker() {
         expected_count: usize,
         executor: &mut TestWorkerExecutor,
     ) {
-        let template_id_val = {
-            let (high, low) = worker_id.template_id.0.as_u64_pair();
+        let component_id_val = {
+            let (high, low) = worker_id.component_id.0.as_u64_pair();
             Value::Record(vec![Value::Record(vec![Value::U64(high), Value::U64(low)])])
         };
 
@@ -381,7 +381,7 @@ async fn get_workers_from_worker() {
                 worker_id,
                 "golem:it/api/get-workers",
                 vec![
-                    template_id_val,
+                    component_id_val,
                     Value::Option(filter_val.map(Box::new)),
                     Value::Bool(true),
                 ],
@@ -419,8 +419,8 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("shopping-cart").await;
-    let worker_id = executor.start_worker(&template_id, "shopping-cart-2").await;
+    let component_id = executor.store_component("shopping-cart").await;
+    let worker_id = executor.start_worker(&component_id, "shopping-cart-2").await;
 
     let invocation_key = executor.get_invocation_key(&worker_id).await;
     let _result = executor
@@ -477,8 +477,8 @@ async fn invoking_with_invalid_invocation_key_is_failure() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("shopping-cart").await;
-    let worker_id = executor.start_worker(&template_id, "shopping-cart-3").await;
+    let component_id = executor.store_component("shopping-cart").await;
+    let worker_id = executor.start_worker(&component_id, "shopping-cart-3").await;
 
     let invocation_key = InvocationKey {
         value: "bad-invocation-key".to_string(),
@@ -508,8 +508,8 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("shopping-cart").await;
-    let worker_id = executor.start_worker(&template_id, "shopping-cart-4").await;
+    let component_id = executor.store_component("shopping-cart").await;
+    let worker_id = executor.start_worker(&component_id, "shopping-cart-4").await;
 
     let invocation_key = executor.get_invocation_key(&worker_id).await;
     let _result = executor
@@ -569,9 +569,9 @@ async fn optional_parameters() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("option-service").await;
+    let component_id = executor.store_component("option-service").await;
     let worker_id = executor
-        .start_worker(&template_id, "optional-service-1")
+        .start_worker(&component_id, "optional-service-1")
         .await;
 
     let echo_some = executor
@@ -633,8 +633,8 @@ async fn flags_parameters() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("flags-service").await;
-    let worker_id = executor.start_worker(&template_id, "flags-service-1").await;
+    let component_id = executor.store_component("flags-service").await;
+    let worker_id = executor.start_worker(&component_id, "flags-service-1").await;
 
     let create_task = executor
         .invoke_and_await(
@@ -683,9 +683,9 @@ async fn variants_with_no_payloads() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("variant-service").await;
+    let component_id = executor.store_component("variant-service").await;
     let worker_id = executor
-        .start_worker(&template_id, "variant-service-1")
+        .start_worker(&component_id, "variant-service-1")
         .await;
 
     let result = executor
@@ -699,13 +699,13 @@ async fn variants_with_no_payloads() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn delete_instance() {
+async fn delete_worker() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("option-service").await;
+    let component_id = executor.store_component("option-service").await;
     let worker_id = executor
-        .start_worker(&template_id, "delete-instance-1")
+        .start_worker(&component_id, "delete-worker-1")
         .await;
 
     let _ = executor
@@ -723,7 +723,7 @@ async fn delete_instance() {
 
     let (cursor1, values1) = executor
         .get_workers_metadata(
-            &worker_id.template_id,
+            &worker_id.component_id,
             Some(WorkerFilter::new_name(
                 StringFilterComparator::Equal,
                 worker_id.worker_name.clone(),
@@ -748,13 +748,13 @@ async fn delete_instance() {
 #[tracing::instrument]
 async fn get_workers() {
     async fn get_check(
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         expected_count: usize,
         executor: &mut TestWorkerExecutor,
     ) -> Vec<WorkerMetadata> {
         let (cursor, values) = executor
-            .get_workers_metadata(template_id, filter, 0, 20, true)
+            .get_workers_metadata(component_id, filter, 0, 20, true)
             .await;
 
         check!(values.len() == expected_count);
@@ -766,14 +766,14 @@ async fn get_workers() {
     let context = TestContext::new();
     let mut executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("option-service").await;
+    let component_id = executor.store_component("option-service").await;
 
     let workers_count = 10;
     let mut worker_ids = vec![];
 
     for i in 0..workers_count {
         let worker_id = executor
-            .start_worker(&template_id, &format!("test-instance-{}", i))
+            .start_worker(&component_id, &format!("test-worker-{}", i))
             .await;
 
         worker_ids.push(worker_id);
@@ -792,7 +792,7 @@ async fn get_workers() {
             .unwrap();
 
         get_check(
-            &template_id,
+            &component_id,
             Some(WorkerFilter::new_name(
                 StringFilterComparator::Equal,
                 worker_id.worker_name.clone(),
@@ -804,7 +804,7 @@ async fn get_workers() {
     }
 
     get_check(
-        &template_id,
+        &component_id,
         Some(WorkerFilter::new_name(
             StringFilterComparator::Like,
             "test".to_string(),
@@ -815,7 +815,7 @@ async fn get_workers() {
     .await;
 
     get_check(
-        &template_id,
+        &component_id,
         Some(
             WorkerFilter::new_name(StringFilterComparator::Like, "test".to_string())
                 .and(
@@ -831,17 +831,17 @@ async fn get_workers() {
     .await;
 
     get_check(
-        &template_id,
+        &component_id,
         Some(WorkerFilter::new_name(StringFilterComparator::Like, "test".to_string()).not()),
         0,
         &mut executor,
     )
     .await;
 
-    get_check(&template_id, None, workers_count, &mut executor).await;
+    get_check(&component_id, None, workers_count, &mut executor).await;
 
     let (cursor1, values1) = executor
-        .get_workers_metadata(&template_id, None, 0, (workers_count / 2) as u64, true)
+        .get_workers_metadata(&component_id, None, 0, (workers_count / 2) as u64, true)
         .await;
 
     check!(cursor1.is_some());
@@ -849,7 +849,7 @@ async fn get_workers() {
 
     let (cursor2, values2) = executor
         .get_workers_metadata(
-            &template_id,
+            &component_id,
             None,
             cursor1.unwrap(),
             (workers_count - values1.len()) as u64,
@@ -861,7 +861,7 @@ async fn get_workers() {
 
     if let Some(cursor2) = cursor2 {
         let (_, values3) = executor
-            .get_workers_metadata(&template_id, None, cursor2, workers_count as u64, true)
+            .get_workers_metadata(&component_id, None, cursor2, workers_count as u64, true)
             .await;
         check!(values3.len() == 0);
     }
@@ -870,7 +870,7 @@ async fn get_workers() {
         executor.delete_worker(&worker_id).await;
     }
 
-    get_check(&template_id, None, 0, &mut executor).await;
+    get_check(&component_id, None, 0, &mut executor).await;
 }
 
 #[tokio::test]
@@ -879,9 +879,9 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("option-service").await;
+    let component_id = executor.store_component("option-service").await;
     let worker_id = executor
-        .start_worker(&template_id, "fewer-than-expected-parameters-1")
+        .start_worker(&component_id, "fewer-than-expected-parameters-1")
         .await;
 
     let failure = executor
@@ -897,9 +897,9 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("option-service").await;
+    let component_id = executor.store_component("option-service").await;
     let worker_id = executor
-        .start_worker(&template_id, "more-than-expected-parameters-1")
+        .start_worker(&component_id, "more-than-expected-parameters-1")
         .await;
 
     let failure = executor
@@ -919,13 +919,13 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
 
 #[tokio::test]
 #[tracing::instrument]
-async fn get_instance_metadata() {
+async fn get_worker_metadata() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("clock-service").await;
+    let component_id = executor.store_component("clock-service").await;
     let worker_id = executor
-        .start_worker(&template_id, "get-instance-metadata-1")
+        .start_worker(&component_id, "get-worker-metadata-1")
         .await;
 
     let worker_id_clone = worker_id.clone();
@@ -968,9 +968,9 @@ async fn create_invoke_delete_create_invoke() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("shopping-cart").await;
+    let component_id = executor.store_component("shopping-cart").await;
     let worker_id = executor
-        .start_worker(&template_id, "create-invoke-delete-create-invoke-1")
+        .start_worker(&component_id, "create-invoke-delete-create-invoke-1")
         .await;
 
     let r1 = executor
@@ -989,7 +989,7 @@ async fn create_invoke_delete_create_invoke() {
     executor.delete_worker(&worker_id).await;
 
     let worker_id = executor
-        .start_worker(&template_id, "create-invoke-delete-create-invoke-1") // same name as before
+        .start_worker(&component_id, "create-invoke-delete-create-invoke-1") // same name as before
         .await;
 
     let r2 = executor
@@ -1013,15 +1013,15 @@ async fn create_invoke_delete_create_invoke() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn recovering_an_old_instance_after_updating_a_template() {
+async fn recovering_an_old_worker_after_updating_a_component() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("shopping-cart").await;
+    let component_id = executor.store_component("shopping-cart").await;
     let worker_id = executor
         .start_worker(
-            &template_id,
-            "recovering-an-old-instance-after-updating-a-template-1",
+            &component_id,
+            "recovering-an-old-worker-after-updating-a-component-1",
         )
         .await;
 
@@ -1039,16 +1039,16 @@ async fn recovering_an_old_instance_after_updating_a_template() {
         .await
         .unwrap();
 
-    // Updating the template with an incompatible new version
+    // Updating the component with an incompatible new version
     executor
-        .update_template(&template_id, "option-service")
+        .update_component(&component_id, "option-service")
         .await;
 
-    // Creating a new worker of the updated template and call it
+    // Creating a new worker of the updated component and call it
     let worker_id2 = executor
         .start_worker(
-            &template_id,
-            "recovering-an-old-instance-after-updating-a-template-2",
+            &component_id,
+            "recovering-an-old-worker-after-updating-a-component-2",
         )
         .await;
 
@@ -1093,15 +1093,15 @@ async fn recovering_an_old_instance_after_updating_a_template() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() {
+async fn recreating_a_worker_after_it_got_deleted_with_a_different_version() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("shopping-cart").await;
+    let component_id = executor.store_component("shopping-cart").await;
     let worker_id = executor
         .start_worker(
-            &template_id,
-            "recreating-an-instance-after-it-got-deleted-with-a-different-version-1",
+            &component_id,
+            "recreating-an-worker-after-it-got-deleted-with-a-different-version-1",
         )
         .await;
 
@@ -1119,9 +1119,9 @@ async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() 
         .await
         .unwrap();
 
-    // Updating the template with an incompatible new version
+    // Updating the component with an incompatible new version
     executor
-        .update_template(&template_id, "option-service")
+        .update_component(&component_id, "option-service")
         .await;
 
     // Deleting the first instance
@@ -1130,8 +1130,8 @@ async fn recreating_an_instance_after_it_got_deleted_with_a_different_version() 
     // Create a new instance with the same name and call it the first instance again to check if it is still working
     let worker_id = executor
         .start_worker(
-            &template_id,
-            "recovering-an-old-instance-after-updating-a-template-1",
+            &component_id,
+            "recovering-an-old-worker-after-updating-a-component-1",
         )
         .await;
 
@@ -1164,17 +1164,17 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message() {
 
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template_unverified("old-component").await;
+    let component_id = executor.store_component_unverified("old-component").await;
     let result = executor
-        .try_start_worker(&template_id, "old-component-1")
+        .try_start_worker(&component_id, "old-component-1")
         .await;
 
     check!(result.is_err());
     check!(is_worker_execution_error(
         &result.err().unwrap(),
-        &worker_execution_error::Error::TemplateParseFailed(TemplateParseFailed {
-            template_id: Some(template_id.into()),
-            template_version: 0,
+        &worker_execution_error::Error::ComponentParseFailed(ComponentParseFailed {
+            component_id: Some(component_id.into()),
+            component_version: 0,
             reason: "failed to parse WebAssembly module".to_string()
         })
     ));
@@ -1186,32 +1186,32 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let context = TestContext::new();
     // case: WASM can be parsed but wasmtime does not support it
     let executor = start(&context).await.unwrap();
-    let template_id = executor.store_template("write-stdout").await;
+    let component_id = executor.store_component("write-stdout").await;
 
     let cwd = env::current_dir().expect("Failed to get current directory");
     debug!("Current directory: {cwd:?}");
-    let target_dir = cwd.join(Path::new("data/templates"));
-    let template_path = target_dir.join(Path::new(&format!("{template_id}-0.wasm")));
+    let target_dir = cwd.join(Path::new("data/components"));
+    let component_path = target_dir.join(Path::new(&format!("{component_id}-0.wasm")));
 
     {
         let mut file = std::fs::File::options()
             .write(true)
             .truncate(false)
-            .open(&template_path)
-            .expect("Failed to open template file");
+            .open(&component_path)
+            .expect("Failed to open component file");
         file.write_at(&[1, 2, 3, 4], 0)
-            .expect("Failed to write to template file");
-        file.flush().expect("Failed to flush template file");
+            .expect("Failed to write to component file");
+        file.flush().expect("Failed to flush component file");
     }
 
-    let result = executor.try_start_worker(&template_id, "bad-wasm-1").await;
+    let result = executor.try_start_worker(&component_id, "bad-wasm-1").await;
 
     check!(result.is_err());
     check!(is_worker_execution_error(
         &result.err().unwrap(),
-        &worker_execution_error::Error::TemplateParseFailed(TemplateParseFailed {
-            template_id: Some(template_id.into()),
-            template_version: 0,
+        &worker_execution_error::Error::ComponentParseFailed(ComponentParseFailed {
+            component_id: Some(component_id.into()),
+            component_version: 0,
             reason: "failed to parse WebAssembly module".to_string()
         })
     ));
@@ -1223,10 +1223,10 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
-    let template_id = executor.store_template("write-stdout").await;
+    let component_id = executor.store_component("write-stdout").await;
 
     let worker_id = executor
-        .try_start_worker(&template_id, "bad-wasm-2")
+        .try_start_worker(&component_id, "bad-wasm-2")
         .await
         .unwrap();
 
@@ -1237,23 +1237,23 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     // corrupting the uploaded WASM
     let cwd = env::current_dir().expect("Failed to get current directory");
     debug!("Current directory: {cwd:?}");
-    let target_dir = cwd.join(Path::new("data/templates"));
-    let template_path = target_dir.join(Path::new(&format!("{template_id}-0.wasm")));
-    let compiled_template_path = target_dir.join(Path::new(&format!("{template_id}-0.cwasm")));
+    let target_dir = cwd.join(Path::new("data/components"));
+    let component_path = target_dir.join(Path::new(&format!("{component_id}-0.wasm")));
+    let compiled_component_path = target_dir.join(Path::new(&format!("{component_id}-0.cwasm")));
 
     {
-        debug!("Corrupting {:?}", template_path);
+        debug!("Corrupting {:?}", component_path);
         let mut file = std::fs::File::options()
             .write(true)
             .truncate(false)
-            .open(&template_path)
-            .expect("Failed to open template file");
+            .open(&component_path)
+            .expect("Failed to open component file");
         file.write_at(&[1, 2, 3, 4], 0)
-            .expect("Failed to write to template file");
-        file.flush().expect("Failed to flush template file");
+            .expect("Failed to write to component file");
+        file.flush().expect("Failed to flush component file");
 
-        debug!("Deleting {:?}", compiled_template_path);
-        std::fs::remove_file(&compiled_template_path).expect("Failed to delete compiled template");
+        debug!("Deleting {:?}", compiled_component_path);
+        std::fs::remove_file(&compiled_component_path).expect("Failed to delete compiled component");
     }
 
     // trying to invoke the previously created worker
@@ -1262,9 +1262,9 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     check!(result.is_err());
     check!(is_worker_execution_error(
         &result.err().unwrap(),
-        &worker_execution_error::Error::TemplateParseFailed(TemplateParseFailed {
-            template_id: Some(template_id.into()),
-            template_version: 0,
+        &worker_execution_error::Error::ComponentParseFailed(ComponentParseFailed {
+            component_id: Some(component_id.into()),
+            component_version: 0,
             reason: "failed to parse WebAssembly module".to_string()
         })
     ));
@@ -1298,12 +1298,12 @@ async fn long_running_poll_loop_works_as_expected() {
             .await;
     });
 
-    let template_id = executor.store_template("http-client-2").await;
+    let component_id = executor.store_component("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "poll-loop-template-0", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-0", vec![], env)
         .await;
 
     executor.log_output(&worker_id).await;
@@ -1364,11 +1364,11 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
             .await;
     });
 
-    let template_id = executor.store_template("http-client-2").await;
+    let component_id = executor.store_component("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_worker_with(&template_id, "poll-loop-template-1", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-1", vec![], env)
         .await;
 
     executor.log_output(&worker_id).await;
@@ -1386,7 +1386,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
     let status1 = executor.get_worker_metadata(&worker_id).await.unwrap();
     let values1 = executor
         .get_running_workers_metadata(
-            &worker_id.template_id,
+            &worker_id.component_id,
             Some(WorkerFilter::new_name(
                 StringFilterComparator::Equal,
                 worker_id.worker_name.clone(),
@@ -1401,7 +1401,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
     let status2 = executor.get_worker_metadata(&worker_id).await.unwrap();
     let values2 = executor
         .get_running_workers_metadata(
-            &worker_id.template_id,
+            &worker_id.component_id,
             Some(WorkerFilter::new_name(
                 StringFilterComparator::Equal,
                 worker_id.worker_name.clone(),
@@ -1488,11 +1488,11 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
             .await;
     });
 
-    let template_id = executor.store_template("http-client-2").await;
+    let component_id = executor.store_component("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_worker_with(&template_id, "poll-loop-template-2", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-2", vec![], env)
         .await;
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
@@ -1547,12 +1547,12 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
             .await;
     });
 
-    let template_id = executor.store_template("http-client-2").await;
+    let component_id = executor.store_component("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "poll-loop-template-3", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-3", vec![], env)
         .await;
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
@@ -1612,12 +1612,12 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
             .await;
     });
 
-    let template_id = executor.store_template("http-client-2").await;
+    let component_id = executor.store_component("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "poll-loop-template-4", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-4", vec![], env)
         .await;
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
@@ -1698,12 +1698,12 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
             .await;
     });
 
-    let template_id = executor.store_template("http-client-2").await;
+    let component_id = executor.store_component("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "poll-loop-template-5", vec![], env)
+        .start_worker_with(&component_id, "poll-loop-component-5", vec![], env)
         .await;
 
     let rx = executor.capture_output_with_termination(&worker_id).await;
@@ -1738,9 +1738,9 @@ async fn shopping_cart_resource_example() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("shopping-cart-resource").await;
+    let component_id = executor.store_component("shopping-cart-resource").await;
     let worker_id = executor
-        .start_worker(&template_id, "shopping-cart-resource-1")
+        .start_worker(&component_id, "shopping-cart-resource-1")
         .await;
 
     let cart = executor
@@ -1862,8 +1862,8 @@ async fn counter_resource_test_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("counters").await;
-    let worker_id = executor.start_worker(&template_id, "counters-1").await;
+    let component_id = executor.store_component("counters").await;
+    let worker_id = executor.start_worker(&component_id, "counters-1").await;
     executor.log_output(&worker_id).await;
 
     let counter1 = executor
@@ -1920,8 +1920,8 @@ async fn reconstruct_interrupted_state() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("interruption").await;
-    let worker_id = executor.start_worker(&template_id, "interruption-1").await;
+    let component_id = executor.store_component("interruption").await;
+    let worker_id = executor.start_worker(&component_id, "interruption-1").await;
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
@@ -1990,12 +1990,12 @@ async fn invocation_queue_is_persistent() {
             .await;
     });
 
-    let template_id = executor.store_template("http-client-2").await;
+    let component_id = executor.store_component("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "invocation-queue-is-persistent", vec![], env)
+        .start_worker_with(&component_id, "invocation-queue-is-persistent", vec![], env)
         .await;
 
     executor.log_output(&worker_id).await;

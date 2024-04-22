@@ -3,7 +3,7 @@ use std::result::Result;
 use poem_openapi::*;
 use serde::{Deserialize, Serialize};
 
-use golem_common::model::TemplateId;
+use golem_common::model::ComponentId;
 
 use crate::api_definition::http::MethodPattern;
 use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
@@ -43,7 +43,7 @@ pub struct Route {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GolemWorkerBinding {
-    pub template: TemplateId,
+    pub component: ComponentId,
     pub worker_id: String,
     pub function_name: String,
     pub function_params: Vec<String>,
@@ -149,7 +149,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
         }
 
         Ok(Self {
-            template: value.template,
+            component: value.component,
             worker_id,
             function_name: value.function_name,
             function_params,
@@ -179,7 +179,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
         }
 
         Ok(crate::worker_binding::GolemWorkerBinding {
-            template: self.template,
+            component: self.component,
             worker_id,
             function_name: self.function_name,
             function_params,
@@ -313,7 +313,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
             .collect::<Result<Vec<String>, String>>()?;
 
         let result = grpc_apidefinition::WorkerBinding {
-            template: Some(value.template.into()),
+            component: Some(value.component.into()),
             worker_id,
             function_name: value.function_name,
             function_params,
@@ -347,10 +347,10 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             .map(|p| p.parse().map_err(|e: ParseError| e.to_string()))
             .collect::<Result<_, String>>()?;
 
-        let template_id = value.template.ok_or("template is missing")?.try_into()?;
+        let component_id = value.component.ok_or("component is missing")?.try_into()?;
 
         let result = crate::worker_binding::GolemWorkerBinding {
-            template: template_id,
+            component: component_id,
             worker_id,
             function_name: value.function_name,
             function_params,

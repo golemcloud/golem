@@ -2,7 +2,7 @@ use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
 
-use golem_common::model::TemplateId;
+use golem_common::model::ComponentId;
 
 use crate::evaluator::{Evaluator, RawString};
 use crate::worker_binding::ResolvedWorkerBinding;
@@ -17,7 +17,7 @@ pub use worker_response::*;
 // along with the value of any variables that's associated with it.
 #[derive(PartialEq, Debug, Clone)]
 pub struct WorkerRequest {
-    pub template: TemplateId,
+    pub component: ComponentId,
     pub worker_id: String,
     pub function: String,
     pub function_params: Value,
@@ -79,9 +79,9 @@ impl WorkerRequest {
 
         Ok(WorkerRequest {
             worker_id,
-            template: resolved_route
+            component: resolved_route
                 .resolved_worker_binding_template
-                .template
+                .component
                 .clone(),
             function: function_name,
             function_params: Value::Array(function_params),

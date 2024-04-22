@@ -16,14 +16,14 @@ use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 
 use golem_common::model::{
-    AccountId, InvocationKey, TemplateId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, InvocationKey, ComponentId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
-    BlobStoreServiceConfig, BlobStoreServiceInMemoryConfig, CompiledTemplateServiceConfig,
-    CompiledTemplateServiceLocalConfig, GolemConfig, KeyValueServiceConfig, PromisesConfig,
-    ShardManagerServiceConfig, TemplateServiceConfig, TemplateServiceLocalConfig,
+    BlobStoreServiceConfig, BlobStoreServiceInMemoryConfig, CompiledComponentServiceConfig,
+    CompiledComponentServiceLocalConfig, GolemConfig, KeyValueServiceConfig, PromisesConfig,
+    ShardManagerServiceConfig, ComponentServiceConfig, ComponentServiceLocalConfig,
     WorkerServiceGrpcConfig, WorkersServiceConfig,
 };
 
@@ -45,7 +45,7 @@ use golem_worker_executor_base::services::recovery::{
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
 use golem_worker_executor_base::services::shard_manager::ShardManagerService;
-use golem_worker_executor_base::services::template::TemplateService;
+use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
@@ -102,16 +102,16 @@ impl TestWorkerExecutor {
 
     pub async fn get_running_workers_metadata(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
     ) -> Vec<WorkerMetadata> {
-        let template_id: golem_api_grpc::proto::golem::template::TemplateId =
-            template_id.clone().into();
+        let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+            component_id.clone().into();
         let response = self
             .client()
             .await
             .get_running_workers_metadata(GetRunningWorkersMetadataRequest {
-                template_id: Some(template_id),
+                component_id: Some(component_id),
                 filter: filter.map(|f| f.into()),
             })
             .await
@@ -132,19 +132,19 @@ impl TestWorkerExecutor {
 
     pub async fn get_workers_metadata(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
         precise: bool,
     ) -> (Option<u64>, Vec<WorkerMetadata>) {
-        let template_id: golem_api_grpc::proto::golem::template::TemplateId =
-            template_id.clone().into();
+        let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+            component_id.clone().into();
         let response = self
             .client()
             .await
             .get_workers_metadata(GetWorkersMetadataRequest {
-                template_id: Some(template_id),
+                component_id: Some(component_id),
                 filter: filter.map(|f| f.into()),
                 cursor,
                 count,
@@ -192,19 +192,19 @@ impl TestDependencies for TestWorkerExecutor {
         self.deps.shard_manager()
     }
 
-    fn template_directory(&self) -> PathBuf {
-        self.deps.template_directory()
+    fn component_directory(&self) -> PathBuf {
+        self.deps.component_directory()
     }
 
-    fn template_service(
+    fn component_service(
         &self,
     ) -> Arc<
-        dyn golem_test_framework::components::template_service::TemplateService
+        dyn golem_test_framework::components::component_service::ComponentService
             + Send
             + Sync
             + 'static,
     > {
-        self.deps.template_service()
+        self.deps.component_service()
     }
 
     fn worker_service(
@@ -269,12 +269,12 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
     let config = GolemConfig {
         port: context.grpc_port(),
         http_port: context.http_port(),
-        template_service: TemplateServiceConfig::Local(TemplateServiceLocalConfig {
-            root: Path::new("data/templates").to_path_buf(),
+        component_service: ComponentServiceConfig::Local(ComponentServiceLocalConfig {
+            root: Path::new("data/components").to_path_buf(),
         }),
-        compiled_template_service: CompiledTemplateServiceConfig::Local(
-            CompiledTemplateServiceLocalConfig {
-                root: Path::new("data/templates").to_path_buf(),
+        compiled_component_service: CompiledComponentServiceConfig::Local(
+            CompiledComponentServiceLocalConfig {
+                root: Path::new("data/components").to_path_buf(),
             },
         ),
         blob_store_service: BlobStoreServiceConfig::InMemory(BlobStoreServiceInMemoryConfig {}),
@@ -669,7 +669,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::bounded(
-            golem_config.limits.max_active_instances,
+            golem_config.limits.max_active_workers,
             golem_config.active_workers.drop_when_full,
             golem_config.active_workers.ttl,
         ))
@@ -681,7 +681,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<TestWorkerCtx>>,
         runtime: Handle,
-        template_service: Arc<dyn TemplateService + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -709,7 +709,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
-            template_service.clone(),
+            component_service.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -729,7 +729,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
-            template_service.clone(),
+            component_service.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -750,7 +750,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             engine,
             linker,
             runtime,
-            template_service,
+            component_service,
             shard_manager_service,
             worker_service,
             worker_enumeration_service,

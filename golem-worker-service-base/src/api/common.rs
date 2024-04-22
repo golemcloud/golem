@@ -107,7 +107,7 @@ mod conversion {
                     ApiRegistrationRepoError::Internal(_) => ApiEndpointError::internal(error),
                 },
                 ApiRegistrationError::ValidationError(e) => e.into(),
-                e @ ApiRegistrationError::TemplateNotFoundError(_) => {
+                e @ ApiRegistrationError::ComponentNotFoundError(_) => {
                     ApiEndpointError::bad_request(e)
                 }
             }
@@ -146,7 +146,7 @@ mod conversion {
                     .map(|e| RouteValidationError {
                         method: e.method,
                         path: e.path.to_string(),
-                        template: e.template,
+                        component: e.component,
                         detail: e.detail,
                     })
                     .collect(),
@@ -183,7 +183,7 @@ mod conversion {
                         .map(|r| apidefinition::RouteValidationError {
                             method: r.method.to_string(),
                             path: r.path.to_string(),
-                            template: Some(r.template.into()),
+                            component: Some(r.component.into()),
                             detail: r.detail,
                         })
                         .collect();
@@ -193,7 +193,7 @@ mod conversion {
                         )),
                     }
                 }
-                ApiRegistrationError::TemplateNotFoundError(_) => ApiDefinitionError {
+                ApiRegistrationError::ComponentNotFoundError(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
                         error: error.to_string(),
                     })),

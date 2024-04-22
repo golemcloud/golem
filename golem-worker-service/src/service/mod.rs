@@ -1,5 +1,5 @@
 pub mod api_definition_lookup_impl;
-pub mod template;
+pub mod component;
 pub mod worker;
 
 use crate::service::api_definition_lookup_impl::CustomRequestDefinitionLookupDefault;
@@ -22,7 +22,7 @@ use golem_worker_service_base::service::api_definition_validator::ApiDefinitionV
 use golem_worker_service_base::service::http::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
-use golem_worker_service_base::service::template::{RemoteTemplateService, TemplateServiceNoop};
+use golem_worker_service_base::service::component::{RemoteComponentService, ComponentServiceNoop};
 use golem_worker_service_base::service::worker::{
     WorkerRequestMetadata, WorkerServiceDefault, WorkerServiceNoOp,
 };
@@ -41,7 +41,7 @@ use tracing::error;
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: worker::WorkerService,
-    pub template_service: template::TemplateService,
+    pub component_service: component::ComponentService,
     pub definition_service: Arc<
         dyn ApiDefinitionService<
                 EmptyAuthCtx,
@@ -79,17 +79,17 @@ impl Services {
             ),
         );
 
-        let template_service: template::TemplateService = {
-            let config = &config.template_service;
+        let component_service: component::ComponentService = {
+            let config = &config.component_service;
             let uri = config.uri();
             let retry_config = config.retries.clone();
 
-            Arc::new(RemoteTemplateService::new(uri, retry_config))
+            Arc::new(RemoteComponentService::new(uri, retry_config))
         };
 
         let worker_service: worker::WorkerService = Arc::new(WorkerServiceDefault::new(
             worker_executor_grpc_clients.clone(),
-            template_service.clone(),
+            component_service.clone(),
             routing_table_service.clone(),
         ));
 
@@ -131,7 +131,7 @@ impl Services {
                 > + Sync
                 + Send,
         > = Arc::new(ApiDefinitionServiceDefault::new(
-            template_service.clone(),
+            component_service.clone(),
             definition_repo.clone(),
             api_definition_validator_service.clone(),
         ));
@@ -142,13 +142,13 @@ impl Services {
             deployment_service,
             http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
-            template_service,
+            component_service,
             api_definition_validator_service,
         })
     }
 
     pub fn noop() -> Services {
-        let template_service: template::TemplateService = Arc::new(TemplateServiceNoop {});
+        let component_service: component::ComponentService = Arc::new(ComponentServiceNoop {});
 
         let worker_service: worker::WorkerService = Arc::new(WorkerServiceNoOp {
             metadata: WorkerRequestMetadata {
@@ -184,7 +184,7 @@ impl Services {
         > = Arc::new(ApiDefinitionValidatorNoop {});
 
         let definition_service = Arc::new(ApiDefinitionServiceDefault::new(
-            template_service.clone(),
+            component_service.clone(),
             Arc::new(InMemoryRegistry::default()),
             api_definition_validator_service.clone(),
         ));
@@ -198,7 +198,7 @@ impl Services {
             deployment_service,
             http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
-            template_service,
+            component_service,
             api_definition_validator_service,
         }
     }

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use golem_common::model::TemplateId;
-use golem_service_base::model::Template;
+use golem_common::model::ComponentId;
+use golem_service_base::model::Component;
 
 use crate::api_definition::{
     ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion,
@@ -14,7 +14,7 @@ use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoErr
 use crate::repo::api_namespace::ApiNamespace;
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
-use super::template::TemplateService;
+use super::component::ComponentService;
 
 pub type ApiResult<T, E> = Result<T, ApiRegistrationError<E>>;
 
@@ -108,12 +108,12 @@ pub enum ApiRegistrationError<E> {
     RepoError(#[from] ApiRegistrationRepoError),
     #[error(transparent)]
     ValidationError(#[from] ValidationErrors<E>),
-    #[error("Unable to fetch templates not found: {0:?}")]
-    TemplateNotFoundError(Vec<TemplateId>),
+    #[error("Unable to fetch component: {0:?}")]
+    ComponentNotFoundError(Vec<ComponentId>),
 }
 
 pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace, ApiDefinition, ValidationError> {
-    pub template_service: Arc<dyn TemplateService<AuthCtx> + Send + Sync>,
+    pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     pub register_repo: Arc<dyn ApiDefinitionRepo<Namespace, ApiDefinition> + Sync + Send>,
     pub api_definition_validator:
         Arc<dyn ApiDefinitionValidatorService<ApiDefinition, ValidationError> + Sync + Send>,
@@ -126,56 +126,56 @@ where
     ApiDefinition: GolemApiDefinition + Sync,
 {
     pub fn new(
-        template_service: Arc<dyn TemplateService<AuthCtx> + Send + Sync>,
+        component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
         register_repo: Arc<dyn ApiDefinitionRepo<Namespace, ApiDefinition> + Sync + Send>,
         api_definition_validator: Arc<
             dyn ApiDefinitionValidatorService<ApiDefinition, ValidationError> + Sync + Send,
         >,
     ) -> Self {
         Self {
-            template_service,
+            component_service,
             register_repo,
             api_definition_validator,
         }
     }
 
-    async fn get_all_templates(
+    async fn get_all_components(
         &self,
         definition: &ApiDefinition,
         auth_ctx: &AuthCtx,
-    ) -> Result<Vec<Template>, ApiRegistrationError<ValidationError>> {
-        let get_templates = definition
+    ) -> Result<Vec<Component>, ApiRegistrationError<ValidationError>> {
+        let get_components = definition
             .get_golem_worker_bindings()
             .iter()
             .cloned()
             .map(|binding| async move {
-                let id = &binding.template;
-                self.template_service
+                let id = &binding.component;
+                self.component_service
                     .get_latest(id, auth_ctx)
                     .await
                     .map_err(|e| {
-                        tracing::error!("Error getting latest template: {:?}", e);
+                        tracing::error!("Error getting latest component: {:?}", e);
                         id.clone()
                     })
             })
             .collect::<Vec<_>>();
 
-        let templates: Vec<Template> = {
-            let results = futures::future::join_all(get_templates).await;
+        let components: Vec<Component> = {
+            let results = futures::future::join_all(get_components).await;
             let (successes, errors) = results
                 .into_iter()
                 .partition::<Vec<_>, _>(|result| result.is_ok());
 
-            // Ensure that all templates were retrieved.
+            // Ensure that all components were retrieved.
             if !errors.is_empty() {
-                let errors: Vec<TemplateId> = errors.into_iter().map(|r| r.unwrap_err()).collect();
-                return Err(ApiRegistrationError::TemplateNotFoundError(errors));
+                let errors: Vec<ComponentId> = errors.into_iter().map(|r| r.unwrap_err()).collect();
+                return Err(ApiRegistrationError::ComponentNotFoundError(errors));
             }
 
             successes.into_iter().map(|r| r.unwrap()).collect()
         };
 
-        Ok(templates)
+        Ok(components)
     }
 }
 
@@ -198,10 +198,10 @@ where
         namespace: Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        let templates = self.get_all_templates(definition, auth_ctx).await?;
+        let components = self.get_all_components(definition, auth_ctx).await?;
 
         self.api_definition_validator
-            .validate(definition, templates.as_slice())?;
+            .validate(definition, components.as_slice())?;
 
         let key = ApiDefinitionKey {
             namespace,
@@ -220,10 +220,10 @@ where
         namespace: Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        let templates = self.get_all_templates(definition, auth_ctx).await?;
+        let components = self.get_all_components(definition, auth_ctx).await?;
 
         self.api_definition_validator
-            .validate(definition, templates.as_slice())?;
+            .validate(definition, components.as_slice())?;
 
         let key = ApiDefinitionKey {
             namespace,
