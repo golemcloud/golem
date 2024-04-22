@@ -30,7 +30,7 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    InvocationKey, ComponentId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    ComponentId, InvocationKey, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerStatusRecord,
 };
 use golem_wasm_ast::analysis::AnalysisContext;

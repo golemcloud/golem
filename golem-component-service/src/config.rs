@@ -14,8 +14,8 @@
 
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
-use golem_service_base::config::ComponentStoreConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
+use golem_service_base::config::ComponentStoreConfig;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -114,7 +114,10 @@ mod tests {
         std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
 
         std::env::set_var("GOLEM__COMPONENT_STORE__TYPE", "Local");
-        std::env::set_var("GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH", "component_store");
+        std::env::set_var(
+            "GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH",
+            "component_store",
+        );
         std::env::set_var("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", "");
 
         std::env::set_var("GOLEM__COMPILATION__TYPE", "Enabled");

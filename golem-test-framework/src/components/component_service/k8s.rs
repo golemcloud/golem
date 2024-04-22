@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_service::{env_vars, wait_for_startup, ComponentService};
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
 use crate::components::rdb::Rdb;
-use crate::components::component_service::{env_vars, wait_for_startup, ComponentService};
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use k8s_openapi::api::core::v1::{Pod, Service};

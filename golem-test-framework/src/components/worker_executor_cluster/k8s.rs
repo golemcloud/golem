@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_service::ComponentService;
 use crate::components::k8s::{K8sNamespace, K8sRoutingType};
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::k8s::K8sWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;

@@ -14,18 +14,18 @@
 
 pub mod component;
 
-use golem_service_base::config::ComponentStoreConfig;
-use golem_service_base::service::component_object_store;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
 };
+use golem_service_base::config::ComponentStoreConfig;
+use golem_service_base::service::component_object_store;
 use std::sync::Arc;
 
-use crate::config::{DbConfig, ComponentServiceConfig};
+use crate::config::{ComponentServiceConfig, DbConfig};
 use crate::db;
-use crate::repo::component::{DbComponentRepo, ComponentRepo};
+use crate::repo::component::{ComponentRepo, DbComponentRepo};
 
 #[derive(Clone)]
 pub struct Services {
@@ -60,13 +60,15 @@ impl Services {
                 }
             };
 
-        let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
-            match config.compilation.clone() {
-                ComponentCompilationConfig::Enabled(config) => {
-                    Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
-                }
-                ComponentCompilationConfig::Disabled => Arc::new(ComponentCompilationServiceDisabled),
-            };
+        let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> = match config
+            .compilation
+            .clone()
+        {
+            ComponentCompilationConfig::Enabled(config) => {
+                Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
+            }
+            ComponentCompilationConfig::Disabled => Arc::new(ComponentCompilationServiceDisabled),
+        };
 
         let component_service: Arc<dyn component::ComponentService + Sync + Send> =
             Arc::new(component::ComponentServiceDefault::new(

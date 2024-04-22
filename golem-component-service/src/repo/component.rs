@@ -28,7 +28,7 @@ use golem_service_base::model::*;
 pub struct ComponentRecord {
     pub component_id: Uuid,
     pub name: String,
-    pub size: i64,
+    pub size: i32,
     pub version: i64,
     pub user_component: String,
     pub protected_component: String,
@@ -65,7 +65,7 @@ impl From<Component> for ComponentRecord {
         Self {
             component_id: value.versioned_component_id.component_id.0,
             name: value.component_name.0,
-            size: value.component_size as i64,
+            size: value.component_size as i32,
             version: value.versioned_component_id.version as i64,
             user_component: value.versioned_component_id.slug(),
             protected_component: value.protected_component_id.slug(),

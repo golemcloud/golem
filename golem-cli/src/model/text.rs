@@ -1,5 +1,5 @@
-use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::component::ComponentView;
+use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::{ExampleDescription, InvocationKey};
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use golem_client::model::{

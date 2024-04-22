@@ -43,8 +43,8 @@ use crate::services::oplog::Oplog;
 use crate::services::recovery::is_worker_error_retriable;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    HasAll, HasConfig, HasInvocationKeyService, HasInvocationQueue, HasOplogService,
-    HasComponentService, HasWorkerService,
+    HasAll, HasComponentService, HasConfig, HasInvocationKeyService, HasInvocationQueue,
+    HasOplogService, HasWorkerService,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 

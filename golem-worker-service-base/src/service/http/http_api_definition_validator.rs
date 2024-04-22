@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use golem_common::model::ComponentId;
 use golem_service_base::model::{
-    Export, ExportFunction, ExportInstance, Component, ComponentMetadata,
+    Component, ComponentMetadata, Export, ExportFunction, ExportInstance,
 };
 
 use crate::api_definition::http::{HttpApiDefinition, MethodPattern, Route};

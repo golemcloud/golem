@@ -215,7 +215,7 @@ impl ComponentObjectStore for FsComponentObjectStore {
 #[cfg(test)]
 mod tests {
     use crate::config::ComponentStoreLocalConfig;
-    use crate::service::component_object_store::{FsComponentObjectStore, ComponentObjectStore};
+    use crate::service::component_object_store::{ComponentObjectStore, FsComponentObjectStore};
     use futures::TryStreamExt;
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-use golem_common::model::{CallingConvention, InvocationKey, ComponentId, WorkerFilter};
+use golem_common::model::{CallingConvention, ComponentId, InvocationKey, WorkerFilter};
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use poem_openapi::param::{Path, Query};

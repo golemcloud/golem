@@ -701,7 +701,9 @@ async fn batch_get_keys_returns_multiple_keys() {
         .invoke_and_await(
             &worker_id,
             "golem:it/api/get-keys",
-            vec![Value::String(format!("{component_id}-{worker_name}-bucket"))],
+            vec![Value::String(format!(
+                "{component_id}-{worker_name}-bucket"
+            ))],
         )
         .await
         .unwrap();

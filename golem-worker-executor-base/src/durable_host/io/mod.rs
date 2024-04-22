@@ -331,7 +331,7 @@ mod tests {
     use crate::services::invocation_key::InvocationKeyServiceDefault;
     use crate::wasi_host::managed_stdio::ManagedStandardIo;
     use bytes::{BufMut, Bytes};
-    use golem_common::model::{InvocationKey, ComponentId, WorkerId};
+    use golem_common::model::{ComponentId, InvocationKey, WorkerId};
     use uuid::Uuid;
     use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, StreamError, Subscribe};
 

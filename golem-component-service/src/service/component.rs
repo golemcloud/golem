@@ -182,7 +182,9 @@ impl ComponentService for ComponentServiceDefault {
             protected_component_id,
         };
 
-        self.component_repo.upsert(&component.clone().into()).await?;
+        self.component_repo
+            .upsert(&component.clone().into())
+            .await?;
 
         self.component_compilation
             .enqueue_compilation(&component.versioned_component_id.component_id, 0)
@@ -229,7 +231,9 @@ impl ComponentService for ComponentServiceDefault {
             ..next_component
         };
 
-        self.component_repo.upsert(&component.clone().into()).await?;
+        self.component_repo
+            .upsert(&component.clone().into())
+            .await?;
 
         self.component_compilation
             .enqueue_compilation(component_id, component.versioned_component_id.version)
@@ -457,7 +461,10 @@ impl ComponentServiceDefault {
         protected_component_id: &ProtectedComponentId,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
-        info!("Uploading protected component: {:?}", protected_component_id);
+        info!(
+            "Uploading protected component: {:?}",
+            protected_component_id
+        );
 
         self.object_store
             .put(

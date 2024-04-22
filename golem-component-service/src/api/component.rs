@@ -219,7 +219,10 @@ impl ComponentApi {
         &self,
         #[oai(name = "component-name")] component_name: Query<Option<ComponentName>>,
     ) -> Result<Json<Vec<Component>>> {
-        let response = self.component_service.find_by_name(component_name.0).await?;
+        let response = self
+            .component_service
+            .find_by_name(component_name.0)
+            .await?;
 
         Ok(Json(response))
     }

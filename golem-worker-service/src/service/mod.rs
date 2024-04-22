@@ -19,10 +19,10 @@ use golem_worker_service_base::service::api_definition::{
 use golem_worker_service_base::service::api_definition_lookup::ApiDefinitionLookup;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
+use golem_worker_service_base::service::component::{ComponentServiceNoop, RemoteComponentService};
 use golem_worker_service_base::service::http::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
-use golem_worker_service_base::service::component::{RemoteComponentService, ComponentServiceNoop};
 use golem_worker_service_base::service::worker::{
     WorkerRequestMetadata, WorkerServiceDefault, WorkerServiceNoOp,
 };

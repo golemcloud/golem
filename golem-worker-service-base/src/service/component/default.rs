@@ -189,7 +189,7 @@ pub struct ComponentServiceNoop {}
 impl ComponentServiceNoop {
     pub fn test_component() -> Component {
         use golem_service_base::model::{
-            ProtectedComponentId, ComponentMetadata, ComponentName, UserComponentId,
+            ComponentMetadata, ComponentName, ProtectedComponentId, UserComponentId,
             VersionedComponentId,
         };
 

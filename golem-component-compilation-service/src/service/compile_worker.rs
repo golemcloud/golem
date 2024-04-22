@@ -2,10 +2,10 @@ use crate::config::CompileWorkerConfig;
 use crate::model::*;
 use crate::UriBackConversion;
 use futures_util::TryStreamExt;
-use golem_api_grpc::proto::golem::component::download_component_response;
 use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::DownloadComponentRequest;
+use golem_api_grpc::proto::golem::component::download_component_response;
 use golem_api_grpc::proto::golem::component::ComponentError;
+use golem_api_grpc::proto::golem::component::DownloadComponentRequest;
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::ComponentId;
@@ -90,7 +90,11 @@ impl CompileWorker {
         // Ensure that the component hasn't already been compiled.
         let result = self
             .compiled_component_service
-            .get(&component_with_version.id, component_with_version.version, &engine)
+            .get(
+                &component_with_version.id,
+                component_with_version.version,
+                &engine,
+            )
             .await;
 
         match result {

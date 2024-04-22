@@ -16,23 +16,26 @@ use crate::clients::component::ComponentClientLive;
 use async_trait::async_trait;
 use clap::builder::ValueParser;
 use clap::Subcommand;
-use golem_client::model::{Component, InvokeParameters, InvokeResult, StringFilterComparator, Type, WorkerFilter, WorkerMetadata, WorkerNameFilter, WorkersMetadataResponse};
+use golem_client::model::{
+    Component, InvokeParameters, InvokeResult, StringFilterComparator, Type, WorkerFilter,
+    WorkerMetadata, WorkerNameFilter, WorkersMetadataResponse,
+};
 use golem_client::Context;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 
 use crate::clients::worker::{WorkerClient, WorkerClientLive};
-use crate::model::invoke_result_view::InvokeResultView;
+use crate::component::{ComponentHandler, ComponentHandlerLive};
 use crate::model::component::function_params_types;
+use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::WorkerAddView;
 use crate::model::wave::type_to_analysed;
 use crate::model::{
-    Format, GolemError, GolemResult, InvocationKey, JsonValueParser, ComponentId, ComponentIdOrName,
-    WorkerName,
+    ComponentId, ComponentIdOrName, Format, GolemError, GolemResult, InvocationKey,
+    JsonValueParser, WorkerName,
 };
 use crate::parse_key_val;
-use crate::component::{ComponentHandler, ComponentHandlerLive};
 
 #[derive(Subcommand, Debug)]
 #[command()]
@@ -217,7 +220,7 @@ pub enum WorkerSubcommand {
         /// Position where to start listing, if not provided, starts from the beginning
         ///
         /// It is used to get the next page of results. To get next page, use the cursor returned in the response
-        #[arg(short, long)]
+        #[arg(short = 'P', long)]
         cursor: Option<u64>,
 
         /// Count of listed values, if count is not provided, returns all values
@@ -360,7 +363,8 @@ async fn resolve_parameters<C: WorkerClient + Send + Sync, R: ComponentHandler +
     if let Some(parameters) = parameters {
         Ok((parameters, None))
     } else if let Some(component) =
-        resolve_worker_component_version(client, components, component_id, worker_name.clone()).await?
+        resolve_worker_component_version(client, components, component_id, worker_name.clone())
+            .await?
     {
         let json = wave_parameters_to_json(&wave, &component, function)?;
 

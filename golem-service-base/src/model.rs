@@ -16,7 +16,7 @@ use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
 use golem_common::model::{
-    parse_function_name, ComponentVersion, ShardId, ComponentId, Timestamp, WorkerFilter,
+    parse_function_name, ComponentId, ComponentVersion, ShardId, Timestamp, WorkerFilter,
     WorkerStatus,
 };
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
@@ -57,14 +57,19 @@ impl VersionedComponentId {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId> for VersionedComponentId {
+impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId>
+    for VersionedComponentId
+{
     type Error = String;
 
     fn try_from(
         value: golem_api_grpc::proto::golem::component::VersionedComponentId,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            component_id: value.component_id.ok_or("Missing component_id")?.try_into()?,
+            component_id: value
+                .component_id
+                .ok_or("Missing component_id")?
+                .try_into()?,
             version: value.version,
         })
     }
@@ -134,7 +139,9 @@ impl ProtectedComponentId {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::ProtectedComponentId> for ProtectedComponentId {
+impl TryFrom<golem_api_grpc::proto::golem::component::ProtectedComponentId>
+    for ProtectedComponentId
+{
     type Error = String;
 
     fn try_from(
@@ -1880,7 +1887,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
         let worker_name: Id = value.name.try_into().map_err(String::from)?;
 
         Ok(Self {
-            component_id: value.component_id.ok_or("Missing component_id")?.try_into()?,
+            component_id: value
+                .component_id
+                .ok_or("Missing component_id")?
+                .try_into()?,
             worker_name,
         })
     }

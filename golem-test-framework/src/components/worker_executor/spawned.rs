@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use crate::components::shard_manager::ShardManager;
 use crate::components::component_service::ComponentService;
+use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::WorkerService;
 use tracing::info;
 use tracing::Level;

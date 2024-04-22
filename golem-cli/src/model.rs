@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod invoke_result_view;
 pub mod component;
+pub mod invoke_result_view;
 pub mod text;
 pub mod wave;
 
@@ -184,7 +184,7 @@ impl clap::Args for ComponentIdOrName {
 
 #[derive(clap::Args, Debug, Clone)]
 struct ComponentIdOrNameArgs {
-    #[arg(short = 'T', long, conflicts_with = "component_name", required = true)]
+    #[arg(short = 'C', long, conflicts_with = "component_name", required = true)]
     component_id: Option<Uuid>,
 
     #[arg(short, long, conflicts_with = "component_id", required = true)]

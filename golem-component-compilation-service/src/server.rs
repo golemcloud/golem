@@ -49,7 +49,8 @@ fn main() {
 }
 
 async fn run(config: ServerConfig, prometheus: Registry) {
-    let compiled_component = compiled_component::configured(&config.compiled_component_service).await;
+    let compiled_component =
+        compiled_component::configured(&config.compiled_component_service).await;
     let engine = wasmtime::Engine::new(&create_wasmtime_config()).expect("Failed to create engine");
 
     // Start metrics and healthcheck server.

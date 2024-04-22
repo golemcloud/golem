@@ -20,7 +20,7 @@ use golem_client::model::Component;
 use tokio::fs::File;
 use tracing::info;
 
-use crate::model::{GolemError, PathBufOrStdin, ComponentId, ComponentName};
+use crate::model::{ComponentId, ComponentName, GolemError, PathBufOrStdin};
 
 #[async_trait]
 pub trait ComponentClient {
@@ -29,9 +29,13 @@ pub trait ComponentClient {
         component_id: &ComponentId,
         version: u64,
     ) -> Result<Component, GolemError>;
-    async fn get_latest_metadata(&self, component_id: &ComponentId) -> Result<Component, GolemError>;
+    async fn get_latest_metadata(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Component, GolemError>;
     async fn find(&self, name: Option<ComponentName>) -> Result<Vec<Component>, GolemError>;
-    async fn add(&self, name: ComponentName, file: PathBufOrStdin) -> Result<Component, GolemError>;
+    async fn add(&self, name: ComponentName, file: PathBufOrStdin)
+        -> Result<Component, GolemError>;
     async fn update(&self, id: ComponentId, file: PathBufOrStdin) -> Result<Component, GolemError>;
 }
 
@@ -41,7 +45,9 @@ pub struct ComponentClientLive<C: golem_client::api::ComponentClient + Sync + Se
 }
 
 #[async_trait]
-impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient for ComponentClientLive<C> {
+impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
+    for ComponentClientLive<C>
+{
     async fn get_metadata(
         &self,
         component_id: &ComponentId,
@@ -55,7 +61,10 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient for Co
             .await?)
     }
 
-    async fn get_latest_metadata(&self, component_id: &ComponentId) -> Result<Component, GolemError> {
+    async fn get_latest_metadata(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Component, GolemError> {
         info!("Getting latest component version");
 
         Ok(self
@@ -72,7 +81,11 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient for Co
         Ok(self.client.get_components(name.as_deref()).await?)
     }
 
-    async fn add(&self, name: ComponentName, path: PathBufOrStdin) -> Result<Component, GolemError> {
+    async fn add(
+        &self,
+        name: ComponentName,
+        path: PathBufOrStdin,
+    ) -> Result<Component, GolemError> {
         info!("Adding component {name:?} from {path:?}");
 
         let component = match path {

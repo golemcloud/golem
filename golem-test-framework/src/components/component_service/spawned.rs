@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::rdb::Rdb;
 use crate::components::component_service::{env_vars, wait_for_startup, ComponentService};
+use crate::components::rdb::Rdb;
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 

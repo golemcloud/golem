@@ -503,7 +503,7 @@ mod tests {
     };
     use crate::error::GolemError;
     use crate::model::InterruptKind;
-    use golem_common::model::{PromiseId, ShardId, ComponentId, WorkerId};
+    use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
     use proptest::collection::vec;
     use proptest::prelude::*;
     use proptest::strategy::LazyJust;
@@ -590,7 +590,7 @@ mod tests {
         (any::<u64>(), any::<u64>()).prop_map(|(a, b)| Uuid::from_u64_pair(a, b))
     }
 
-    fn componentid_strat() -> impl Strategy<Value =ComponentId> {
+    fn componentid_strat() -> impl Strategy<Value = ComponentId> {
         uuid_strat().prop_map(ComponentId)
     }
 

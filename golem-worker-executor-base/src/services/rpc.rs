@@ -15,12 +15,12 @@
 use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, UriBackConversion};
 use crate::services::{
-    active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, recovery,
-    scheduler, shard, shard_manager, component, worker, worker_enumeration, HasActiveWorkers,
-    HasBlobStoreService, HasConfig, HasExtraDeps, HasInvocationKeyService, HasKeyValueService,
-    HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardService, HasComponentService,
-    HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
+    active_workers, blob_store, component, golem_config, invocation_key, key_value, oplog, promise,
+    recovery, scheduler, shard, shard_manager, worker, worker_enumeration, HasActiveWorkers,
+    HasBlobStoreService, HasComponentService, HasConfig, HasExtraDeps, HasInvocationKeyService,
+    HasKeyValueService, HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardService, HasWasmtimeEngine,
+    HasWorkerEnumerationService, HasWorkerService,
 };
 use crate::worker::{invoke, invoke_and_await, Worker};
 use crate::workerctx::WorkerCtx;

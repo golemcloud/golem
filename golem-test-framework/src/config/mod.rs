@@ -18,11 +18,11 @@ use std::sync::Arc;
 pub use cli::{CliParams, CliTestDependencies};
 pub use env::EnvBasedTestDependencies;
 
+use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::RedisMonitor;
 use crate::components::shard_manager::ShardManager;
-use crate::components::component_service::ComponentService;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 

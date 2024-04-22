@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_service::docker::DockerComponentService;
+use crate::components::component_service::k8s::K8sComponentService;
+use crate::components::component_service::provided::ProvidedComponentService;
+use crate::components::component_service::spawned::SpawnedComponentService;
+use crate::components::component_service::ComponentService;
 use crate::components::k8s::{K8sNamespace, K8sRoutingType};
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::k8s_postgres::K8sPostgresRdb;
@@ -29,11 +34,6 @@ use crate::components::shard_manager::k8s::K8sShardManager;
 use crate::components::shard_manager::provided::ProvidedShardManager;
 use crate::components::shard_manager::spawned::SpawnedShardManager;
 use crate::components::shard_manager::ShardManager;
-use crate::components::component_service::docker::DockerComponentService;
-use crate::components::component_service::k8s::K8sComponentService;
-use crate::components::component_service::provided::ProvidedComponentService;
-use crate::components::component_service::spawned::SpawnedComponentService;
-use crate::components::component_service::ComponentService;
 use crate::components::worker_executor_cluster::docker::DockerWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::k8s::K8sWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::provided::ProvidedWorkerExecutorCluster;
@@ -233,7 +233,7 @@ impl CliTestDependencies {
                 shard_manager_http_port,
                 shard_manager_grpc_port,
                 component_service_host,
-                component_service_http_port ,
+                component_service_http_port,
                 component_service_grpc_port,
                 worker_service_host,
                 worker_service_http_port,

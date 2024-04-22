@@ -39,7 +39,11 @@ impl UploadWorker {
 
         let upload_result = self
             .compiled_component_service
-            .put(&component_and_version.id, component_and_version.version, &component)
+            .put(
+                &component_and_version.id,
+                component_and_version.version,
+                &component,
+            )
             .await
             .map_err(|err| CompilationError::ComponentUploadFailed(err.to_string()));
 

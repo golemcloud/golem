@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_component_service::api::make_open_api_service;
-use golem_component_service::config::{DbConfig, ComponentServiceConfig};
+use golem_component_service::config::{ComponentServiceConfig, DbConfig};
 use golem_component_service::service::Services;
 use golem_component_service::{api, db, grpcapi, metrics};
 use opentelemetry::global;

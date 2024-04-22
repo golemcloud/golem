@@ -35,7 +35,7 @@ use crate::preview2::golem::api::host::{
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{PromiseId, ComponentId, WorkerId};
+use golem_common::model::{ComponentId, PromiseId, WorkerId};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {

@@ -29,7 +29,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
 use tracing::{debug, info};
 
-use crate::model::{GolemError, InvocationKey, ComponentId, WorkerName};
+use crate::model::{ComponentId, GolemError, InvocationKey, WorkerName};
 
 #[async_trait]
 pub trait WorkerClient {
@@ -64,7 +64,11 @@ pub trait WorkerClient {
         parameters: InvokeParameters,
     ) -> Result<(), GolemError>;
 
-    async fn interrupt(&self, name: WorkerName, component_id: ComponentId) -> Result<(), GolemError>;
+    async fn interrupt(
+        &self,
+        name: WorkerName,
+        component_id: ComponentId,
+    ) -> Result<(), GolemError>;
     async fn simulated_crash(
         &self,
         name: WorkerName,
@@ -182,7 +186,10 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         function: String,
         parameters: InvokeParameters,
     ) -> Result<(), GolemError> {
-        info!("Invoke function {function} in {}/{}", component_id.0, name.0);
+        info!(
+            "Invoke function {function} in {}/{}",
+            component_id.0, name.0
+        );
 
         let _ = self
             .client
@@ -191,7 +198,11 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         Ok(())
     }
 
-    async fn interrupt(&self, name: WorkerName, component_id: ComponentId) -> Result<(), GolemError> {
+    async fn interrupt(
+        &self,
+        name: WorkerName,
+        component_id: ComponentId,
+    ) -> Result<(), GolemError> {
         info!("Interrupting {}/{}", component_id.0, name.0);
 
         let _ = self

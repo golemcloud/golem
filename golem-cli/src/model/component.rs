@@ -1,7 +1,7 @@
 use crate::model::GolemError;
 use golem_client::model::{
-    Export, ExportFunction, ExportInstance, FunctionResult, NameOptionTypePair, NameTypePair,
-    ResourceMode, Component, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
+    Component, Export, ExportFunction, ExportInstance, FunctionResult, NameOptionTypePair,
+    NameTypePair, ResourceMode, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
 use golem_wasm_ast::wave::DisplayNamedFunc;
 use serde::{Deserialize, Serialize};

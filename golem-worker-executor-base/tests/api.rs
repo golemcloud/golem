@@ -11,10 +11,12 @@ use assert2::check;
 use http_02::{Response, StatusCode};
 use redis::Commands;
 
-use golem_api_grpc::proto::golem::worker::{worker_execution_error, LogEvent, ComponentParseFailed};
+use golem_api_grpc::proto::golem::worker::{
+    worker_execution_error, ComponentParseFailed, LogEvent,
+};
 use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
 use golem_common::model::{
-    AccountId, FilterComparator, InvocationKey, PromiseId, StringFilterComparator, ComponentId,
+    AccountId, ComponentId, FilterComparator, InvocationKey, PromiseId, StringFilterComparator,
     WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use golem_wasm_rpc::Value;
@@ -112,7 +114,9 @@ async fn shopping_cart_example() {
     let executor = start(&context).await.unwrap();
 
     let component_id = executor.store_component("shopping-cart").await;
-    let worker_id = executor.start_worker(&component_id, "shopping-cart-1").await;
+    let worker_id = executor
+        .start_worker(&component_id, "shopping-cart-1")
+        .await;
 
     let _ = executor
         .invoke_and_await(
@@ -420,7 +424,9 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
     let executor = start(&context).await.unwrap();
 
     let component_id = executor.store_component("shopping-cart").await;
-    let worker_id = executor.start_worker(&component_id, "shopping-cart-2").await;
+    let worker_id = executor
+        .start_worker(&component_id, "shopping-cart-2")
+        .await;
 
     let invocation_key = executor.get_invocation_key(&worker_id).await;
     let _result = executor
@@ -478,7 +484,9 @@ async fn invoking_with_invalid_invocation_key_is_failure() {
     let executor = start(&context).await.unwrap();
 
     let component_id = executor.store_component("shopping-cart").await;
-    let worker_id = executor.start_worker(&component_id, "shopping-cart-3").await;
+    let worker_id = executor
+        .start_worker(&component_id, "shopping-cart-3")
+        .await;
 
     let invocation_key = InvocationKey {
         value: "bad-invocation-key".to_string(),
@@ -509,7 +517,9 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
     let executor = start(&context).await.unwrap();
 
     let component_id = executor.store_component("shopping-cart").await;
-    let worker_id = executor.start_worker(&component_id, "shopping-cart-4").await;
+    let worker_id = executor
+        .start_worker(&component_id, "shopping-cart-4")
+        .await;
 
     let invocation_key = executor.get_invocation_key(&worker_id).await;
     let _result = executor
@@ -634,7 +644,9 @@ async fn flags_parameters() {
     let executor = start(&context).await.unwrap();
 
     let component_id = executor.store_component("flags-service").await;
-    let worker_id = executor.start_worker(&component_id, "flags-service-1").await;
+    let worker_id = executor
+        .start_worker(&component_id, "flags-service-1")
+        .await;
 
     let create_task = executor
         .invoke_and_await(
@@ -1253,7 +1265,8 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         file.flush().expect("Failed to flush component file");
 
         debug!("Deleting {:?}", compiled_component_path);
-        std::fs::remove_file(&compiled_component_path).expect("Failed to delete compiled component");
+        std::fs::remove_file(&compiled_component_path)
+            .expect("Failed to delete compiled component");
     }
 
     // trying to invoke the previously created worker

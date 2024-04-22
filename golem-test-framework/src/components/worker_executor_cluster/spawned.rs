@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::spawned::SpawnedWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;

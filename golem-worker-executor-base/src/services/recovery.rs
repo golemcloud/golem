@@ -19,11 +19,12 @@ use std::time::Duration;
 use crate::model::{InterruptKind, LastError, TrapType};
 use crate::services::rpc::Rpc;
 use crate::services::{
-    active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, scheduler,
-    component, worker, worker_enumeration, HasActiveWorkers, HasAll, HasBlobStoreService, HasConfig,
-    HasExtraDeps, HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
-    HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasComponentService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
+    active_workers, blob_store, component, golem_config, invocation_key, key_value, oplog, promise,
+    scheduler, worker, worker_enumeration, HasActiveWorkers, HasAll, HasBlobStoreService,
+    HasComponentService, HasConfig, HasExtraDeps, HasInvocationKeyService, HasKeyValueService,
+    HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasWasmtimeEngine,
+    HasWorkerEnumerationService, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -588,10 +589,10 @@ mod tests {
     use crate::services::worker::WorkerService;
     use crate::services::worker_event::WorkerEventService;
     use crate::services::{
-        worker_enumeration, All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
-        HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasOplog,
-        HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasComponentService,
-        HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
+        worker_enumeration, All, HasAll, HasBlobStoreService, HasComponentService, HasConfig,
+        HasExtraDeps, HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasOplog,
+        HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasWasmtimeEngine,
+        HasWorkerEnumerationService, HasWorkerService,
     };
     use crate::workerctx::{
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
@@ -603,7 +604,7 @@ mod tests {
     use golem_common::config::RetryConfig;
     use golem_common::model::oplog::WorkerError;
     use golem_common::model::{
-        AccountId, CallingConvention, InvocationKey, ComponentId, WorkerId, WorkerMetadata,
+        AccountId, CallingConvention, ComponentId, InvocationKey, WorkerId, WorkerMetadata,
         WorkerStatus, WorkerStatusRecord,
     };
     use golem_wasm_rpc::wasmtime::ResourceStore;

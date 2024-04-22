@@ -50,7 +50,7 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, ComponentId, WorkerFilter, WorkerId,
+    AccountId, CallingConvention, ComponentId, InvocationKey, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -693,9 +693,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 .get_current_invocation_result();
                             if matches!(result, LookupResult::Complete(Err(_))) {
                                 // TODO: include the inner error in the failure?
-                                break Err(GolemError::failed_to_resume_worker(
-                                    worker_id.clone(),
-                                ));
+                                break Err(GolemError::failed_to_resume_worker(worker_id.clone()));
                             }
                         }
 

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::rdb::Rdb;
 use crate::components::component_service::{env_vars, ComponentService};
+use crate::components::rdb::Rdb;
 use crate::components::{DOCKER, NETWORK};
 use async_trait::async_trait;
 

@@ -63,7 +63,7 @@ fn component_add_and_find_all(
     let component: ComponentView = cli.run(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &component_name,
         env_service.to_str().unwrap(),
     ])?;
@@ -86,21 +86,21 @@ fn component_add_and_find_by_name(
     let _: ComponentView = cli.run(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &component_name_other,
         env_service.to_str().unwrap(),
     ])?;
     let component: ComponentView = cli.run(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &component_name,
         env_service.to_str().unwrap(),
     ])?;
     let res: Vec<ComponentView> = cli.run(&[
         "component",
         "list",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &component_name,
     ])?;
     assert!(res.contains(&component), "{res:?}.contains({component:?})");
@@ -121,14 +121,14 @@ fn component_update(
     let component: ComponentView = cli.run(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &component_name,
         env_service.to_str().unwrap(),
     ])?;
     let _: ComponentView = cli.run(&[
         "component",
         "update",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component.component_id,
         env_service.to_str().unwrap(),
     ])?;

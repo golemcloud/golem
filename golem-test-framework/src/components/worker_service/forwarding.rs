@@ -65,7 +65,10 @@ impl WorkerService for ForwardingWorkerService {
             component_id: request.component_id,
             name: request.name,
         };
-        let latest_component_version = self.component_service.get_latest_version(&component_id).await;
+        let latest_component_version = self
+            .component_service
+            .get_latest_version(&component_id)
+            .await;
         let response = self
             .worker_executor
             .client()

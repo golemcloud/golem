@@ -565,7 +565,9 @@ async fn sleep() {
     let executor = start(&context).await.unwrap();
 
     let component_id = executor.store_component("clock-service").await;
-    let worker_id = executor.start_worker(&component_id, "clock-service-1").await;
+    let worker_id = executor
+        .start_worker(&component_id, "clock-service-1")
+        .await;
 
     let _ = executor
         .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![Value::U64(10)])
@@ -592,7 +594,9 @@ async fn resuming_sleep() {
     let executor = start(&context).await.unwrap();
 
     let component_id = executor.store_component("clock-service").await;
-    let worker_id = executor.start_worker(&component_id, "clock-service-2").await;
+    let worker_id = executor
+        .start_worker(&component_id, "clock-service-2")
+        .await;
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
@@ -1186,7 +1190,9 @@ async fn filesystem_remove_file_replay_restores_file_times() {
     let executor = start(&context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
-    let worker_id = executor.start_worker(&component_id, "file-service-10").await;
+    let worker_id = executor
+        .start_worker(&component_id, "file-service-10")
+        .await;
 
     let _ = executor
         .invoke_and_await(

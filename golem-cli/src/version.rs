@@ -98,7 +98,10 @@ mod tests {
         format!("Warning: golem-cli 0.0.0 is older than the targeted Golem servers ({})\nInstall the matching version with:\ncargo install golem-cli@{}\n", server_version, server_version).to_string()
     }
 
-    async fn check_version(component_version: &'static str, worker_version: &'static str) -> String {
+    async fn check_version(
+        component_version: &'static str,
+        worker_version: &'static str,
+    ) -> String {
         let update_srv = VersionHandlerLive {
             component_client: client(component_version),
             worker_client: client(worker_version),

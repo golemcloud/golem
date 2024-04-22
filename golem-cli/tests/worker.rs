@@ -103,7 +103,7 @@ pub fn make_component_from_file(
     cli.run(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &component_name,
         env_service.to_str().unwrap(),
     ])
@@ -133,7 +133,7 @@ fn worker_new_instance(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
 
@@ -158,13 +158,13 @@ fn worker_get_invocation_key(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
     let _: InvocationKey = cli.run(&[
         "worker",
         "invocation-key",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -188,7 +188,7 @@ fn worker_invoke_and_await(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('e', "env"),
         "TEST_ENV=test-value",
@@ -197,7 +197,7 @@ fn worker_invoke_and_await(
     let args_key: InvocationKey = cli.run(&[
         "worker",
         "invocation-key",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -205,7 +205,7 @@ fn worker_invoke_and_await(
     let args = cli.run_json(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -224,7 +224,7 @@ fn worker_invoke_and_await(
     let env_key: InvocationKey = cli.run(&[
         "worker",
         "invocation-key",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -233,7 +233,7 @@ fn worker_invoke_and_await(
     let env = cli.run_json(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -278,13 +278,13 @@ fn worker_invoke_and_await_wave_params(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
     let res_set = cli.with_format(Format::Text).run_string(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -302,7 +302,7 @@ fn worker_invoke_and_await_wave_params(
     let res_get = cli.with_format(Format::Text).run_string(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -343,13 +343,13 @@ fn worker_invoke_no_params(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
     cli.run_unit(&[
         "worker",
         "invoke",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -376,13 +376,13 @@ fn worker_invoke_json_params(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
     cli.run_unit(&[
         "worker",
         "invoke",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -416,13 +416,13 @@ fn worker_invoke_wave_params(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
     cli.run_unit(&[
         "worker",
         "invoke",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -452,7 +452,7 @@ fn worker_connect(
     let component: ComponentView = cli.run(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &format!("{name} worker_connect"),
         stdout_service.to_str().unwrap(),
     ])?;
@@ -463,14 +463,14 @@ fn worker_connect(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
 
     let mut child = cli.run_stdout(&[
         "worker",
         "connect",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -493,7 +493,7 @@ fn worker_connect(
     let _ = cli.run_json(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -525,7 +525,7 @@ fn worker_connect_failed(
     let component: ComponentView = cli.run(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &format!("{name} worker_connect_failed"),
         stdout_service.to_str().unwrap(),
     ])?;
@@ -535,7 +535,7 @@ fn worker_connect_failed(
     let mut child = cli.run_stdout(&[
         "worker",
         "connect",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -561,7 +561,7 @@ fn worker_interrupt(
     let component: ComponentView = cli.run(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &format!("{name} worker_interrupt"),
         interruption_service.to_str().unwrap(),
     ])?;
@@ -572,7 +572,7 @@ fn worker_interrupt(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
     cli.run_unit(&[
@@ -580,7 +580,7 @@ fn worker_interrupt(
         "interrupt",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
 
@@ -600,7 +600,7 @@ fn worker_simulated_crash(
     let component: ComponentView = cli.run(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &format!("{name} worker_simulated_crash"),
         interruption_service.to_str().unwrap(),
     ])?;
@@ -611,7 +611,7 @@ fn worker_simulated_crash(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
     cli.run_unit(&[
@@ -619,7 +619,7 @@ fn worker_simulated_crash(
         "simulated-crash",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
 
@@ -646,7 +646,7 @@ fn worker_list(
             "add",
             &cfg.arg('w', "worker-name"),
             &worker_name,
-            &cfg.arg('T', "component-id"),
+            &cfg.arg('C', "component-id"),
             &component_id,
         ])?;
 
@@ -657,7 +657,7 @@ fn worker_list(
         let result: WorkersMetadataResponse = cli.run(&[
             "worker",
             "list",
-            &cfg.arg('T', "component-id"),
+            &cfg.arg('C', "component-id"),
             &component_id,
             &cfg.arg('f', "filter"),
             format!("name = {}", worker_id.worker_name).as_str(),
@@ -674,7 +674,7 @@ fn worker_list(
     let result: WorkersMetadataResponse = cli.run(&[
         "worker",
         "list",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('f', "filter"),
         "version >= 0",
@@ -690,7 +690,7 @@ fn worker_list(
     let result2: WorkersMetadataResponse = cli.run(&[
         "worker",
         "list",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('f', "filter"),
         "version >= 0",
@@ -698,7 +698,7 @@ fn worker_list(
         format!("name like {}_worker", name).as_str(),
         &cfg.arg('n', "count"),
         (workers_count - result.workers.len()).to_string().as_str(),
-        &cfg.arg('c', "cursor"),
+        &cfg.arg('P', "cursor"),
         result.cursor.unwrap().to_string().as_str(),
     ])?;
 
@@ -708,7 +708,7 @@ fn worker_list(
         let result3: WorkersMetadataResponse = cli.run(&[
             "worker",
             "list",
-            &cfg.arg('T', "component-id"),
+            &cfg.arg('C', "component-id"),
             &component_id,
             &cfg.arg('f', "filter"),
             "version >= 0",
@@ -716,7 +716,7 @@ fn worker_list(
             format!("name like {}_worker", name).as_str(),
             &cfg.arg('n', "count"),
             workers_count.to_string().as_str(),
-            &cfg.arg('c', "cursor"),
+            &cfg.arg('P', "cursor"),
             cursor2.to_string().as_str(),
         ])?;
         assert_eq!(result3.workers.len(), 0);

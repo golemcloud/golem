@@ -21,7 +21,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 };
 
 use golem_common::model::{
-    AccountId, CallingConvention, FilterComparator, InvocationKey, ComponentId, Timestamp,
+    AccountId, CallingConvention, ComponentId, FilterComparator, InvocationKey, Timestamp,
     WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
@@ -29,7 +29,7 @@ use golem_service_base::model::{
 };
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
-    model::{GolemError, GolemErrorInvalidShardId, GolemErrorRuntimeError, Component},
+    model::{Component, GolemError, GolemErrorInvalidShardId, GolemErrorRuntimeError},
     routing_table::{RoutingTableError, RoutingTableService},
     worker_executor_clients::WorkerExecutorClients,
 };

@@ -16,14 +16,14 @@ use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 
 use golem_common::model::{
-    AccountId, InvocationKey, ComponentId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, ComponentId, InvocationKey, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
     BlobStoreServiceConfig, BlobStoreServiceInMemoryConfig, CompiledComponentServiceConfig,
-    CompiledComponentServiceLocalConfig, GolemConfig, KeyValueServiceConfig, PromisesConfig,
-    ShardManagerServiceConfig, ComponentServiceConfig, ComponentServiceLocalConfig,
+    CompiledComponentServiceLocalConfig, ComponentServiceConfig, ComponentServiceLocalConfig,
+    GolemConfig, KeyValueServiceConfig, PromisesConfig, ShardManagerServiceConfig,
     WorkerServiceGrpcConfig, WorkersServiceConfig,
 };
 
@@ -35,6 +35,7 @@ use golem_worker_executor_base::model::{
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
+use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
@@ -45,7 +46,6 @@ use golem_worker_executor_base::services::recovery::{
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
 use golem_worker_executor_base::services::shard_manager::ShardManagerService;
-use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;

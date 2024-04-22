@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_client::api::{ApiDefinitionError, HealthCheckError, ComponentError, WorkerError};
+use golem_client::api::{ApiDefinitionError, ComponentError, HealthCheckError, WorkerError};
 use golem_client::model::{
-    GolemError, GolemErrorFailedToResumeWorker, GolemErrorGetLatestVersionOfComponentFailed,
+    GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed,
+    GolemErrorFailedToResumeWorker, GolemErrorGetLatestVersionOfComponentFailed,
     GolemErrorInterrupted, GolemErrorInvalidRequest, GolemErrorInvalidShardId,
     GolemErrorPromiseAlreadyCompleted, GolemErrorPromiseDropped, GolemErrorPromiseNotFound,
-    GolemErrorRuntimeError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed,
-    GolemErrorUnexpectedOplogEntry, GolemErrorUnknown, GolemErrorValueMismatch,
-    GolemErrorWorkerAlreadyExists, GolemErrorWorkerCreationFailed, GolemErrorWorkerNotFound,
-    PromiseId, WorkerId, WorkerServiceErrorsBody,
+    GolemErrorRuntimeError, GolemErrorUnexpectedOplogEntry, GolemErrorUnknown,
+    GolemErrorValueMismatch, GolemErrorWorkerAlreadyExists, GolemErrorWorkerCreationFailed,
+    GolemErrorWorkerNotFound, PromiseId, WorkerId, WorkerServiceErrorsBody,
 };
 use itertools::Itertools;
 

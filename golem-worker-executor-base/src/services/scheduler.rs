@@ -277,7 +277,7 @@ mod tests {
     use fred::error::RedisError;
     use fred::mocks::{MockCommand, Mocks};
     use fred::prelude::RedisValue;
-    use golem_common::model::{PromiseId, ComponentId, WorkerId};
+    use golem_common::model::{ComponentId, PromiseId, WorkerId};
     use golem_common::redis::RedisPool;
     use uuid::Uuid;
 
@@ -474,9 +474,9 @@ mod tests {
         let cmds = buffer.take();
         let uuid = c1.0.to_string();
         assert_eq!(cmds, vec![
-            MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 300000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":101}}")))] },
-            MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469329".as_bytes().into(), 3540000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":123}}")))] },
-            MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 301000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst2\"}},\"oplog_idx\":1000}}")))] },
+            MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 300000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}")))] },
+            MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469329".as_bytes().into(), 3540000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}")))] },
+            MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 301000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}")))] },
         ]);
 
         let result = buffer.result();
@@ -485,10 +485,10 @@ mod tests {
             HashMap::from(
                 [
                     ("instance:schedule:469329".to_string(), vec![
-                        (3540000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":123}}").to_string())))]),
+                        (3540000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}").to_string())))]),
                     ("instance:schedule:469330".to_string(), vec![
-                        (300000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":101}}").to_string()))),
-                        (301000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst2\"}},\"oplog_idx\":1000}}").to_string())))])
+                        (300000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}").to_string()))),
+                        (301000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}").to_string())))])
                 ]
             )
         );
@@ -568,7 +568,7 @@ mod tests {
                     args: vec![
                         "instance:schedule:469330".as_bytes().into(),
                         300000.0.into(),
-                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":101}}")))],
+                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}")))],
                 },
                 MockCommand {
                     cmd: "ZADD".into(),
@@ -576,7 +576,7 @@ mod tests {
                     args: vec![
                         "instance:schedule:469329".as_bytes().into(),
                         3540000.0.into(),
-                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":123}}"))),
+                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}"))),
                     ],
                 },
                 MockCommand {
@@ -585,7 +585,7 @@ mod tests {
                     args: vec![
                         "instance:schedule:469330".as_bytes().into(),
                         301000.0.into(),
-                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst2\"}},\"oplog_idx\":1000}}"))),
+                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}"))),
                     ],
                 },
                 MockCommand {
@@ -593,7 +593,7 @@ mod tests {
                     subcommand: None,
                     args: vec![
                         "instance:schedule:469329".as_bytes().into(),
-                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":123}}"))),
+                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}"))),
                     ],
                 },
                 MockCommand {
@@ -601,7 +601,7 @@ mod tests {
                     subcommand: None,
                     args: vec![
                         "instance:schedule:469330".as_bytes().into(),
-                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst2\"}},\"oplog_idx\":1000}}"))),
+                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}"))),
                     ],
                 },
             ]
@@ -613,7 +613,7 @@ mod tests {
             HashMap::from(
                 [
                     ("instance:schedule:469329".to_string(), vec![]),
-                    ("instance:schedule:469330".to_string(), vec![(300000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":101}}").to_string())))])
+                    ("instance:schedule:469330".to_string(), vec![(300000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}").to_string())))])
                 ]
             )
         );
@@ -687,13 +687,13 @@ mod tests {
         assert_eq!(
             cmds,
             vec![
-                MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 300000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":101}}")))] },
-                MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 3540000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":123}}")))] },
-                MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 661000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst2\"}},\"oplog_idx\":1000}}")))] },
+                MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 300000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}")))] },
+                MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 3540000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}")))] },
+                MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 661000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}")))] },
                 MockCommand { cmd: "ZRANGE".into(), subcommand: None, args: vec!["instance:schedule:469329".as_bytes().into(), 0.into(), (-1).into()] },
                 MockCommand { cmd: "ZRANGEBYSCORE".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 0.0.into(), 900000.0.into()] },
-                MockCommand { cmd: "ZREM".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":101}}")))] },
-                MockCommand { cmd: "ZREM".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst2\"}},\"oplog_idx\":1000}}")))] },
+                MockCommand { cmd: "ZREM".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}")))] },
+                MockCommand { cmd: "ZREM".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}")))] },
             ]
         );
 
@@ -703,7 +703,7 @@ mod tests {
             result,
             HashMap::from(
                 [
-                    ("instance:schedule:469330".to_string(), vec![(3540000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"instance_name\":\"inst1\"}},\"oplog_idx\":123}}").to_string())))])
+                    ("instance:schedule:469330".to_string(), vec![(3540000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}").to_string())))])
                 ]
             )
         );

@@ -40,6 +40,7 @@ use crate::grpc::WorkerExecutorImpl;
 use crate::http_server::HttpServerImpl;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
+use crate::services::component::ComponentService;
 use crate::services::golem_config::{GolemConfig, WorkersServiceConfig};
 use crate::services::invocation_key::{InvocationKeyService, InvocationKeyServiceDefault};
 use crate::services::key_value::KeyValueService;
@@ -48,14 +49,13 @@ use crate::services::promise::PromiseService;
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::shard_manager::ShardManagerService;
-use crate::services::component::ComponentService;
 use crate::services::worker::{WorkerService, WorkerServiceInMemory, WorkerServiceRedis};
 use crate::services::worker_activator::{LazyWorkerActivator, WorkerActivator};
 use crate::services::worker_enumeration::{
     RunningWorkerEnumerationService, RunningWorkerEnumerationServiceDefault,
     WorkerEnumerationService, WorkerEnumerationServiceInMemory, WorkerEnumerationServiceRedis,
 };
-use crate::services::{blob_store, key_value, promise, shard_manager, component, All};
+use crate::services::{blob_store, component, key_value, promise, shard_manager, All};
 use crate::workerctx::WorkerCtx;
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization

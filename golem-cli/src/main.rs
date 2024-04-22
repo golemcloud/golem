@@ -28,11 +28,11 @@ use golem_cli::api_definition::{
     ApiDefinitionHandler, ApiDefinitionHandlerLive, ApiDefinitionSubcommand,
 };
 use golem_cli::clients::api_definition::ApiDefinitionClientLive;
-use golem_cli::clients::health_check::HealthCheckClientLive;
 use golem_cli::clients::component::ComponentClientLive;
+use golem_cli::clients::health_check::HealthCheckClientLive;
 use golem_cli::clients::worker::WorkerClientLive;
-use golem_cli::examples;
 use golem_cli::component::{ComponentHandler, ComponentHandlerLive, ComponentSubCommand};
+use golem_cli::examples;
 use golem_cli::version::{VersionHandler, VersionHandlerLive};
 use golem_cli::worker::{WorkerHandler, WorkerHandlerLive, WorkerSubcommand};
 

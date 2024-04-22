@@ -22,8 +22,8 @@ use std::sync::Arc;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
 
-use crate::components::shard_manager::ShardManager;
 use crate::components::component_service::ComponentService;
+use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::WorkerService;
 use tracing::{info, Level};
 

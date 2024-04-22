@@ -125,7 +125,7 @@ impl ComponentServiceGrpc {
             component_cache: create_component_cache(max_capacity, time_to_idle),
             access_token,
             retry_config,
-            compiled_component_service: compiled_component_service,
+            compiled_component_service,
             max_component_size,
         }
     }
@@ -443,7 +443,7 @@ impl ComponentServiceLocalFileSystem {
     ) -> Result<Component, GolemError> {
         let key = ComponentKey {
             component_id: component_id.clone(),
-            component_version: component_version,
+            component_version,
         };
         let component_id = component_id.clone();
         let engine = engine.clone();
@@ -475,7 +475,7 @@ impl ComponentServiceLocalFileSystem {
                                 Component::from_binary(&engine, &bytes).map_err(|e| {
                                     GolemError::ComponentParseFailed {
                                         component_id: component_id.clone(),
-                                        component_version: component_version,
+                                        component_version,
                                         reason: format!("{}", e),
                                     }
                                 })?;

@@ -45,7 +45,8 @@ impl ComponentService for FileSystemComponentService {
         let target_dir = &self.root;
         debug!("Local component store: {target_dir:?}");
         if !target_dir.exists() {
-            std::fs::create_dir_all(target_dir).expect("Failed to create component store directory");
+            std::fs::create_dir_all(target_dir)
+                .expect("Failed to create component store directory");
         }
 
         if !local_path.exists() {
@@ -63,7 +64,8 @@ impl ComponentService for FileSystemComponentService {
 
         debug!("Local component store: {target_dir:?}");
         if !target_dir.exists() {
-            std::fs::create_dir_all(target_dir).expect("Failed to create component store directory");
+            std::fs::create_dir_all(target_dir)
+                .expect("Failed to create component store directory");
         }
 
         if !local_path.exists() {

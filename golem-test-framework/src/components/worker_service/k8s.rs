@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_service::ComponentService;
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
@@ -19,7 +20,6 @@ use crate::components::k8s::{
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::component_service::ComponentService;
 use crate::components::worker_service::{env_vars, wait_for_startup, WorkerService};
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;

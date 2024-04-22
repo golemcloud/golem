@@ -126,7 +126,7 @@ fn text_component_add(
     let component_res = cli.with_format(Format::Text).run_string(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &component_name,
         env_service.to_str().unwrap(),
     ])?;
@@ -168,7 +168,7 @@ fn text_component_update(
     let component: ComponentView = cli.run(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &component_name,
         env_service.to_str().unwrap(),
     ])?;
@@ -176,7 +176,7 @@ fn text_component_update(
     let update_res = cli.with_format(Format::Text).run_string(&[
         "component",
         "update",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component.component_id,
         env_service.to_str().unwrap(),
     ])?;
@@ -186,7 +186,7 @@ fn text_component_update(
     assert_eq!(
         *lines.first().unwrap(),
         format!(
-            "Updated component with ID {}. New version: 1. Component size is 72305 bytes.",
+            "Updated component with ID {}. New version: 1. Component size is 72309 bytes.",
             component.component_id
         )
     );
@@ -220,7 +220,7 @@ fn text_component_list(
     let component: ComponentView = cli.run(&[
         "component",
         "add",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &component_name,
         env_service.to_str().unwrap(),
     ])?;
@@ -228,17 +228,17 @@ fn text_component_list(
     let list_res = cli.with_format(Format::Text).run_string(&[
         "component",
         "list",
-        &cfg.arg('t', "component-name"),
+        &cfg.arg('c', "component-name"),
         &component_name,
     ])?;
 
     let expected = formatdoc!(
         "
-        +--------------------------------------+------------------------------+---------+-------+---------------+
-        | ID                                   | Name                         | Version | Size  | Exports count |
-        +--------------------------------------+------------------------------+---------+-------+---------------+
-        | {} | {} |       0 | 72305 |             2 |
-        +--------------------------------------+------------------------------+---------+-------+---------------+
+        +--------------------------------------+-------------------------------+---------+-------+---------------+
+        | ID                                   | Name                          | Version | Size  | Exports count |
+        +--------------------------------------+-------------------------------+---------+-------+---------------+
+        | {} | {} |       0 | 72309 |             2 |
+        +--------------------------------------+-------------------------------+---------+-------+---------------+
         ",
         component.component_id,
         component_name,
@@ -264,7 +264,7 @@ fn text_worker_add(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
 
@@ -303,13 +303,13 @@ fn text_worker_get_invocation_key(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
     let res = cli.with_format(Format::Text).run_string(&[
         "worker",
         "invocation-key",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -346,7 +346,7 @@ fn text_worker_invoke_and_await(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('e', "env"),
         "TEST_ENV=test-value",
@@ -355,7 +355,7 @@ fn text_worker_invoke_and_await(
     let res = cli.with_format(Format::Text).run_string(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
@@ -389,7 +389,7 @@ fn text_worker_get(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
 
@@ -398,7 +398,7 @@ fn text_worker_get(
         "get",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
 
@@ -424,7 +424,8 @@ fn text_worker_list(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let component_id = make_component(deps, &format!("{name} text worker list"), &cli)?.component_id;
+    let component_id =
+        make_component(deps, &format!("{name} text worker list"), &cli)?.component_id;
     let worker_name = format!("{name:_<9}_worker_list");
     let cfg = &cli.config;
     let _: WorkerId = cli.run(&[
@@ -432,14 +433,14 @@ fn text_worker_list(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
 
     let res = cli.with_format(Format::Text).run_string(&[
         "worker",
         "list",
-        &cfg.arg('T', "component-id"),
+        &cfg.arg('C', "component-id"),
         &component_id,
         &cfg.arg('f', "filter"),
         &format!("name = {worker_name}"),
@@ -453,7 +454,7 @@ fn text_worker_list(
             +--------------------------------------+-----------------------+--------+-------------------+
             | Component                            | Name                  | Status | Component version |
             +--------------------------------------+-----------------------+--------+-------------------+
-            | {component_id}                       | {worker_name}         | Idle   |                 0 |
+            | {component_id} | {worker_name} |   Idle |                 0 |
             +--------------------------------------+-----------------------+--------+-------------------+
             "
         );
@@ -523,8 +524,8 @@ fn text_api_definition_import(
             +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             | Method | Path                         | Component | Worker                         | Function                       |
             +--------+------------------------------+-----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             "
         );
 
@@ -558,11 +559,11 @@ fn text_api_definition_add(
             "
             API Definition created with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             | Method | Path                         | Component | Worker                         | Function                       |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             "
         );
 
@@ -597,11 +598,11 @@ fn text_api_definition_update(
             "
             API Definition updated with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             | Method | Path                         | Component | Worker                         | Function                       |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             "
         );
 
@@ -679,11 +680,11 @@ fn text_api_definition_get(
             "
             API Definition with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             | Method | Path                         | Component | Worker                         | Function                       |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             "
         );
 

@@ -9,9 +9,9 @@ target/
 ./golem-worker-executor-base/golem-wit/
 zig-cache/
 dump.rdb
-./test-templates/*.wat
-./test-templates/**/*.wat
-./test-templates/**/*.wasm
+./test-components/*.wat
+./test-components/**/*.wat
+./test-components/**/*.wasm
 test-components/c-1/c_api*
 test-components/csharp-1/bin/
 test-components/csharp-1/obj/

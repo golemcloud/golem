@@ -1624,7 +1624,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use crate::model::{
-        parse_function_name, AccountId, FilterComparator, StringFilterComparator, ComponentId,
+        parse_function_name, AccountId, ComponentId, FilterComparator, StringFilterComparator,
         Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
 

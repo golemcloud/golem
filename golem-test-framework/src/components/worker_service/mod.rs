@@ -30,10 +30,10 @@ use golem_api_grpc::proto::golem::worker::{
     ResumeWorkerResponse,
 };
 
+use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::component_service::ComponentService;
 use crate::components::wait_for_startup_grpc;
 
 pub mod docker;

@@ -22,7 +22,7 @@ use golem_api_grpc::proto::golem::component::{
     create_component_request, create_component_response, get_component_metadata_response,
     get_components_response, update_component_request, update_component_response,
     CreateComponentRequest, CreateComponentRequestChunk, CreateComponentRequestHeader,
-    GetLatestComponentRequest, GetComponentsRequest, UpdateComponentRequest,
+    GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
     UpdateComponentRequestChunk, UpdateComponentRequestHeader,
 };
 use tonic::transport::Channel;

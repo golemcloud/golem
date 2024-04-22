@@ -17,7 +17,7 @@ path = "wit/deps/wasm-rpc"
 path = "wit/deps/rpc_counters"
 
 [dependencies.golem-wasm-rpc]
-path = "../../../wasm-rpc/wasm-rpc"
+path = "../../../../wasm-rpc/wasm-rpc"
 features = ["stub"]
 default-features = false
 

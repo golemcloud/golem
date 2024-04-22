@@ -9,6 +9,8 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
+use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
+use golem_test_framework::components::component_service::ComponentService;
 use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::provided::ProvidedRedis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
@@ -16,8 +18,6 @@ use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::shard_manager::ShardManager;
-use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
-use golem_test_framework::components::component_service::ComponentService;
 use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
@@ -99,8 +99,9 @@ impl WorkerExecutorTestDependencies {
             SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
         );
         let component_directory = Path::new("../test-components").to_path_buf();
-        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
-            Arc::new(FileSystemComponentService::new(Path::new("data/components")));
+        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+            FileSystemComponentService::new(Path::new("data/components")),
+        );
         Self {
             redis,
             redis_monitor,

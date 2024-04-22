@@ -97,8 +97,8 @@ mod tests {
     use crate::model::invoke_result_view::InvokeResultView;
     use crate::model::wave::type_to_analysed;
     use golem_client::model::{
-        Export, ExportFunction, FunctionResult, InvokeResult, ProtectedComponentId, ResourceMode,
-        Component, ComponentMetadata, Type, TypeBool, TypeHandle, UserComponentId,
+        Component, ComponentMetadata, Export, ExportFunction, FunctionResult, InvokeResult,
+        ProtectedComponentId, ResourceMode, Type, TypeBool, TypeHandle, UserComponentId,
         VersionedComponentId,
     };
     use golem_wasm_ast::analysis::AnalysedFunctionResult;

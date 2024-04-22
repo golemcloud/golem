@@ -17,7 +17,7 @@ path = "wit/deps/auction_auction"
 path = "wit/deps/wasm-rpc"
 
 [dependencies.golem-wasm-rpc]
-path = "../../../wasm-rpc/wasm-rpc"
+path = "../../../../wasm-rpc/wasm-rpc"
 features = ["stub"]
 default-features = false
 

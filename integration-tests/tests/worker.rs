@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use golem_common::model::{
-    FilterComparator, StringFilterComparator, ComponentId, WorkerFilter, WorkerId, WorkerMetadata,
+    ComponentId, FilterComparator, StringFilterComparator, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerStatus,
 };
 use rand::seq::IteratorRandom;
@@ -294,7 +294,7 @@ async fn get_running_workers() {
                 if let (Some(component_id), Some(worker_name)) = (component_id, worker_name) {
                     let component_id: ComponentId = component_id.as_str().try_into().unwrap();
                     let worker_id = WorkerId {
-                        component_id: component_id,
+                        component_id,
                         worker_name: worker_name.clone(),
                     };
                     let mut ids = pooling_worker_ids_clone.lock().unwrap();

@@ -19,19 +19,18 @@ use futures_util::StreamExt;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::component_service_server::ComponentService;
+use golem_api_grpc::proto::golem::component::{component_error, Component, ComponentError};
 use golem_api_grpc::proto::golem::component::{
     create_component_request, create_component_response, download_component_response,
     get_component_metadata_all_versions_response, get_component_metadata_response,
     get_components_response, update_component_request, update_component_response,
     CreateComponentRequest, CreateComponentRequestHeader, CreateComponentResponse,
-    DownloadComponentRequest, DownloadComponentResponse, GetLatestComponentRequest,
-    GetComponentMetadataAllVersionsResponse, GetComponentMetadataResponse,
-    GetComponentMetadataSuccessResponse, GetComponentRequest, GetComponentSuccessResponse,
-    GetComponentsRequest, GetComponentsResponse, GetComponentsSuccessResponse,
-    GetVersionedComponentRequest, UpdateComponentRequest, UpdateComponentRequestHeader,
-    UpdateComponentResponse,
+    DownloadComponentRequest, DownloadComponentResponse, GetComponentMetadataAllVersionsResponse,
+    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetComponentRequest,
+    GetComponentSuccessResponse, GetComponentsRequest, GetComponentsResponse,
+    GetComponentsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
+    UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse,
 };
-use golem_api_grpc::proto::golem::component::{component_error, Component, ComponentError};
 use golem_common::model::ComponentId;
 use golem_service_base::stream::ByteStream;
 use tonic::{Request, Response, Status, Streaming};
@@ -120,7 +119,10 @@ impl ComponentGrpcApi {
         Ok(result.map(|p| p.into()))
     }
 
-    async fn get_all(&self, request: GetComponentsRequest) -> Result<Vec<Component>, ComponentError> {
+    async fn get_all(
+        &self,
+        request: GetComponentsRequest,
+    ) -> Result<Vec<Component>, ComponentError> {
         let name: Option<golem_service_base::model::ComponentName> = request
             .component_name
             .map(golem_service_base::model::ComponentName);
@@ -255,7 +257,9 @@ impl ComponentService for ComponentGrpcApi {
                 let stream = response.map(|content| {
                     let res = match content {
                         Ok(content) => DownloadComponentResponse {
-                            result: Some(download_component_response::Result::SuccessChunk(content)),
+                            result: Some(download_component_response::Result::SuccessChunk(
+                                content,
+                            )),
                         },
                         Err(_) => DownloadComponentResponse {
                             result: Some(download_component_response::Result::Error(
