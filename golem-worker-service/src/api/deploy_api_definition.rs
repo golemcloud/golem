@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use golem_worker_service_base::api::ApiEndpointError;
-use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSite};
+use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSiteString};
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -48,7 +48,7 @@ impl ApiDeploymentApi {
 
         self.deployment_service.deploy(&api_deployment).await?;
 
-        let data = self.deployment_service.get_by_host(&payload.site).await?;
+        let data = self.deployment_service.get_by_host(&ApiSiteString::from(&payload.site)).await?;
 
         let deployment = data.ok_or(ApiEndpointError::internal(
             "Failed to verify the deployment",
@@ -82,7 +82,7 @@ impl ApiDeploymentApi {
         let site = site_query.0;
 
         self.deployment_service
-            .delete(&CommonNamespace::default(), &ApiSite(site))
+            .delete(&CommonNamespace::default(), &ApiSiteString(site))
             .await?;
 
         Ok(Json("API deployment deleted".to_string()))
