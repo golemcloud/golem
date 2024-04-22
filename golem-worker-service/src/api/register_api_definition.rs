@@ -55,7 +55,7 @@ impl RegisterApiDefinitionApi {
         Ok(Json(definition))
     }
 
-    #[oai(path = "/", method = "post", operation_id = "create")]
+    #[oai(path = "/", method = "post", operation_id = "create_definition")]
     async fn create(
         &self,
         payload: Json<HttpApiDefinition>,
@@ -74,7 +74,11 @@ impl RegisterApiDefinitionApi {
 
         Ok(Json(definition))
     }
-    #[oai(path = "/:id/:version", method = "put", operation_id = "update")]
+    #[oai(
+        path = "/:id/:version",
+        method = "put",
+        operation_id = "update_definition"
+    )]
     async fn update(
         &self,
         id: Path<ApiDefinitionId>,
@@ -112,7 +116,11 @@ impl RegisterApiDefinitionApi {
         Ok(Json(definition))
     }
 
-    #[oai(path = "/:id/:version", method = "get", operation_id = "get")]
+    #[oai(
+        path = "/:id/:version",
+        method = "get",
+        operation_id = "get_definition"
+    )]
     async fn get(
         &self,
         id: Path<ApiDefinitionId>,
@@ -146,7 +154,11 @@ impl RegisterApiDefinitionApi {
         Ok(Json(value))
     }
 
-    #[oai(path = "/:id/:version", method = "delete", operation_id = "delete")]
+    #[oai(
+        path = "/:id/:version",
+        method = "delete",
+        operation_id = "delete_definition"
+    )]
     async fn delete(
         &self,
         id: Path<ApiDefinitionId>,
@@ -174,7 +186,7 @@ impl RegisterApiDefinitionApi {
         }
     }
 
-    #[oai(path = "/", method = "get", operation_id = "list")]
+    #[oai(path = "/", method = "get", operation_id = "list_definitions")]
     async fn list(
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,

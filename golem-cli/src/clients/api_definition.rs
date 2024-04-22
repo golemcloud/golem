@@ -104,13 +104,15 @@ async fn create_or_update_api_definition<
             let value: HttpApiDefinition = serde_json::from_str(definition_str.as_str())
                 .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
 
-            Ok(client.create(&value).await?)
+            Ok(client.create_definition(&value).await?)
         }
         Action::Update => {
             let value: HttpApiDefinition = serde_json::from_str(definition_str.as_str())
                 .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
 
-            Ok(client.update(&value.id, &value.version, &value).await?)
+            Ok(client
+                .update_definition(&value.id, &value.version, &value)
+                .await?)
         }
     }
 }
@@ -125,7 +127,10 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
     ) -> Result<Vec<HttpApiDefinition>, GolemError> {
         info!("Getting api definitions");
 
-        Ok(self.client.list(id.map(|id| id.0.as_str())).await?)
+        Ok(self
+            .client
+            .list_definitions(id.map(|id| id.0.as_str()))
+            .await?)
     }
 
     async fn get(
@@ -135,7 +140,10 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
     ) -> Result<HttpApiDefinition, GolemError> {
         info!("Getting api definition for {}/{}", id.0, version.0);
 
-        Ok(self.client.get(id.0.as_str(), version.0.as_str()).await?)
+        Ok(self
+            .client
+            .get_definition(id.0.as_str(), version.0.as_str())
+            .await?)
     }
 
     async fn create(&self, path: PathBufOrStdin) -> Result<HttpApiDefinition, GolemError> {
@@ -158,7 +166,7 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
         info!("Deleting api definition for {}/{}", id.0, version.0);
         Ok(self
             .client
-            .delete(id.0.as_str(), version.0.as_str())
+            .delete_definition(id.0.as_str(), version.0.as_str())
             .await?)
     }
 }

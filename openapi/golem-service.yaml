@@ -860,7 +860,7 @@ paths:
     get:
       tags:
       - ApiDefinition
-      operationId: list
+      operationId: list_definitions
       parameters:
       - in: query
         name: api-definition-id
@@ -917,7 +917,7 @@ paths:
     post:
       tags:
       - ApiDefinition
-      operationId: create
+      operationId: create_definition
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -971,7 +971,7 @@ paths:
     get:
       tags:
       - ApiDefinition
-      operationId: get
+      operationId: get_definition
       parameters:
       - in: path
         name: id
@@ -1035,7 +1035,7 @@ paths:
     put:
       tags:
       - ApiDefinition
-      operationId: update
+      operationId: update_definition
       parameters:
       - in: path
         name: id
@@ -1105,7 +1105,7 @@ paths:
     delete:
       tags:
       - ApiDefinition
-      operationId: delete
+      operationId: delete_definition
       parameters:
       - in: path
         name: id
@@ -1166,10 +1166,65 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/api/deployments/deploy:
+    post:
+      tags:
+      - ApiDeployment
+      operationId: deploy
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ApiDeployment'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ApiDeployment'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/api/deployments:
     get:
       tags:
       - ApiDeployment
+      operationId: list_deployments
       parameters:
       - in: query
         name: api-definition-id
@@ -1224,15 +1279,20 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-    put:
+  /v1/api/deployments/{site}:
+    get:
       tags:
       - ApiDeployment
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/ApiDeployment'
+      operationId: get_deployment
+      parameters:
+      - in: path
+        name: site
         required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -1279,15 +1339,16 @@ paths:
     delete:
       tags:
       - ApiDeployment
+      operationId: delete_deployment
       parameters:
-      - in: query
+      - in: path
         name: site
         required: true
         deprecated: false
         schema:
           type: string
         explode: true
-        style: form
+        style: simple
       responses:
         '200':
           description: ''

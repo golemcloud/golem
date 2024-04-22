@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_client::api::{ApiDefinitionError, ComponentError, HealthCheckError, WorkerError};
+use golem_client::api::{
+    ApiDefinitionError, ApiDeploymentError, ComponentError, HealthCheckError, WorkerError,
+};
 use golem_client::model::{
     GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed,
     GolemErrorFailedToResumeWorker, GolemErrorGetLatestVersionOfComponentFailed,
@@ -69,6 +71,19 @@ impl ResponseContentErrorMapper for ApiDefinitionError {
             ApiDefinitionError::Error404(error) => error.error,
             ApiDefinitionError::Error409(error) => error.to_string(),
             ApiDefinitionError::Error500(error) => error.error,
+        }
+    }
+}
+
+impl ResponseContentErrorMapper for ApiDeploymentError {
+    fn map(self) -> String {
+        match self {
+            ApiDeploymentError::Error400(error) => display_worker_service_errors_body(error),
+            ApiDeploymentError::Error401(error) => error.error,
+            ApiDeploymentError::Error403(error) => error.error,
+            ApiDeploymentError::Error404(error) => error.error,
+            ApiDeploymentError::Error409(error) => error.to_string(),
+            ApiDeploymentError::Error500(error) => error.error,
         }
     }
 }
