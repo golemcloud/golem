@@ -48,7 +48,10 @@ impl ApiDeploymentApi {
 
         self.deployment_service.deploy(&api_deployment).await?;
 
-        let data = self.deployment_service.get_by_host(&ApiSiteString::from(&payload.site)).await?;
+        let data = self
+            .deployment_service
+            .get_by_host(&ApiSiteString::from(&payload.site))
+            .await?;
 
         let deployment = data.ok_or(ApiEndpointError::internal(
             "Failed to verify the deployment",
