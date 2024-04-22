@@ -352,9 +352,28 @@ fn generate_function_stub_source(
     } else {
         quote! {}
     };
+    let blocking = {
+        let function_name = if function.results.is_empty() {
+            Ident::new(&to_rust_ident("blocking-foo"), Span::call_site())
+        } else {
+            function_name.clone()
+        };
+        quote! {
+            fn #function_name(#(#params),*) -> #result_type {
+                #init
+                let result = #rpc.invoke_and_await(
+                    #remote_function_name,
+                    &[
+                        #(#input_values),*
+                    ],
+                ).expect(&format!("Failed to invoke-and-await remote {}", #remote_function_name));
+                (#(#output_values),*)
+            }
+        }
+    };
 
-    if function.results.is_empty() && !function.name.starts_with("blocking-") {
-        Ok(quote! {
+    let non_blocking = if function.results.is_empty() {
+        quote! {
             fn #function_name(#(#params),*) -> #result_type {
                 #init
                 let result = #rpc.invoke(
@@ -365,21 +384,15 @@ fn generate_function_stub_source(
                 ).expect(&format!("Failed to invoke remote {}", #remote_function_name));
                 (#(#output_values),*)
             }
-        })
+        }
     } else {
-        Ok(quote! {
-            fn #function_name(#(#params),*) -> #result_type {
-                #init
-                let result = #rpc.invoke_and_await(
-                    #remote_function_name,
-                    &[
-                        #(#input_values),*
-                    ],
-                ).expect(&format!("Failed to invoke remote {}", #remote_function_name));
-                (#(#output_values),*)
-            }
-        })
-    }
+        quote! {}
+    };
+
+    Ok(quote! {
+        #blocking
+        #non_blocking
+    })
 }
 
 fn get_remote_function_name(
