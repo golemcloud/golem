@@ -204,7 +204,7 @@ impl WorkerApi {
         template_id: Path<TemplateId>,
         request: Json<WorkerCreationRequest>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<VersionedWorkerId>> {
+    ) -> Result<Json<WorkerCreationResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
 
         let template_id = template_id.0;
@@ -221,7 +221,7 @@ impl WorkerApi {
 
         let worker_id = make_worker_id(template_id, name)?;
 
-        let worker = self
+        let _worker = self
             .worker_service
             .create(
                 &worker_id,
@@ -232,7 +232,10 @@ impl WorkerApi {
             )
             .await?;
 
-        Ok(Json(worker))
+        Ok(Json(WorkerCreationResponse {
+            worker_id,
+            component_version: latest_template.versioned_template_id.version,
+        }))
     }
 
     /// Delete a worker

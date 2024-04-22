@@ -4,7 +4,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::InvokeResult as ProtoInvokeResult;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, ProjectId, TemplateId, WorkerFilter, WorkerStatus,
+    AccountId, CallingConvention, InvocationKey, ProjectId, TemplateId, Timestamp, WorkerFilter,
+    WorkerStatus,
 };
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_worker_service_base::service::worker::{
@@ -51,7 +52,7 @@ pub trait WorkerService {
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         auth: &AccountAuthorisation,
-    ) -> Result<VersionedWorkerId, WorkerError>;
+    ) -> Result<WorkerId, WorkerError>;
 
     async fn connect(
         &self,
@@ -232,7 +233,7 @@ impl WorkerService for WorkerServiceDefault {
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         auth: &AccountAuthorisation,
-    ) -> Result<VersionedWorkerId, WorkerError> {
+    ) -> Result<WorkerId, WorkerError> {
         let namespace = self
             .authorize(&worker_id.template_id, &ProjectAction::CreateWorker, auth)
             .await?;
@@ -523,6 +524,10 @@ fn convert_metadata(
         status: metadata.status,
         template_version: metadata.template_version,
         retry_count: metadata.retry_count,
+        pending_invocation_count: metadata.pending_invocation_count,
+        updates: metadata.updates,
+        created_at: metadata.created_at,
+        last_error: metadata.last_error,
     }
 }
 
@@ -706,11 +711,8 @@ impl WorkerService for WorkerServiceNoOp {
         _arguments: Vec<String>,
         _environment_variables: HashMap<String, String>,
         _auth: &AccountAuthorisation,
-    ) -> Result<VersionedWorkerId, WorkerError> {
-        Ok(VersionedWorkerId {
-            worker_id: worker_id.clone(),
-            template_version_used: 0,
-        })
+    ) -> Result<WorkerId, WorkerError> {
+        Ok(worker_id.clone())
     }
 
     async fn connect(
@@ -817,6 +819,10 @@ impl WorkerService for WorkerServiceNoOp {
             status: WorkerStatus::Running,
             template_version: 0,
             retry_count: 0,
+            created_at: Timestamp::now_utc(),
+            pending_invocation_count: 0,
+            updates: vec![],
+            last_error: None,
         })
     }
 

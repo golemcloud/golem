@@ -6,7 +6,7 @@ use chrono::{TimeZone, Utc};
 use cloud_common::model::*;
 use cloud_common::model::{PlanId, ProjectPolicyId, TokenId};
 use golem_api_grpc::proto::golem::worker::Level;
-use golem_common::model::{AccountId, ProjectId, WorkerStatus};
+use golem_common::model::{AccountId, ComponentVersion, ProjectId, Timestamp, WorkerStatus};
 use golem_service_base::model::*;
 use poem_openapi::{Enum, Object};
 use serde_with::{serde_as, DurationSeconds};
@@ -628,8 +628,12 @@ pub struct WorkerMetadata {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
-    pub template_version: u64,
+    pub template_version: ComponentVersion,
     pub retry_count: u64,
+    pub pending_invocation_count: u64,
+    pub updates: Vec<UpdateRecord>,
+    pub created_at: Timestamp,
+    pub last_error: Option<String>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -646,6 +650,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             status: value.status.try_into()?,
             template_version: value.template_version,
             retry_count: value.retry_count,
+            pending_invocation_count: value.pending_invocation_count,
+            updates: value
+                .updates
+                .into_iter()
+                .map(|update| update.try_into())
+                .collect::<Result<Vec<UpdateRecord>, String>>()?,
+            created_at: value.created_at.ok_or("Missing created_at")?.into(),
+            last_error: value.last_error,
         })
     }
 }
@@ -660,6 +672,10 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             status: value.status.into(),
             template_version: value.template_version,
             retry_count: value.retry_count,
+            pending_invocation_count: value.pending_invocation_count,
+            updates: value.updates.iter().cloned().map(|u| u.into()).collect(),
+            created_at: Some(value.created_at.into()),
+            last_error: value.last_error,
         }
     }
 }

@@ -15,10 +15,11 @@ use golem_api_grpc::proto::golem::worker::{
     InterruptWorkerResponse, InvocationKey, InvokeAndAwaitRequest, InvokeAndAwaitRequestJson,
     InvokeAndAwaitResponse, InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson,
     InvokeResponse, InvokeResult, InvokeResultJson, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse, UnknownError,
-    VersionedWorkerId, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
+    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ResumeWorkerRequest,
+    ResumeWorkerResponse, UnknownError, WorkerError as GrpcWorkerError, WorkerExecutionError,
+    WorkerMetadata,
 };
-use golem_common::model::WorkerFilter;
+use golem_common::model::{ComponentVersion, WorkerFilter, WorkerId};
 use golem_worker_service_base::service::worker::WorkerServiceError;
 use tap::TapFallible;
 use tonic::metadata::MetadataMap;
@@ -42,7 +43,12 @@ impl GrpcWorkerService for WorkerGrpcApi {
     ) -> Result<Response<LaunchNewWorkerResponse>, Status> {
         let (m, _, r) = request.into_parts();
         let response = match self.launch_new_worker(r, m).await {
-            Ok(worker_id) => launch_new_worker_response::Result::Success(worker_id),
+            Ok(worker_id) => {
+                launch_new_worker_response::Result::Success(LaunchNewWorkerSuccessResponse {
+                    worker_id: Some(worker_id.0.into()),
+                    component_version: worker_id.1,
+                })
+            }
             Err(error) => launch_new_worker_response::Result::Error(error),
         };
 
@@ -285,7 +291,7 @@ impl WorkerGrpcApi {
         &self,
         request: LaunchNewWorkerRequest,
         metadata: MetadataMap,
-    ) -> Result<VersionedWorkerId, GrpcWorkerError> {
+    ) -> Result<(WorkerId, ComponentVersion), GrpcWorkerError> {
         let auth = self.auth(metadata).await?;
         let template_id: golem_common::model::TemplateId = request
             .template_id
@@ -316,7 +322,7 @@ impl WorkerGrpcApi {
             )
             .await?;
 
-        Ok(worker.into())
+        Ok((worker.into(), latest_template.versioned_template_id.version))
     }
 
     async fn delete_worker(
