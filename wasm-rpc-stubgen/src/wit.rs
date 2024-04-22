@@ -57,11 +57,10 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
             }
         }
         for function in &interface.functions {
-            write!(out, "    {}: func(", function.name)?;
-            write_param_list(&mut out, def, &function.params)?;
-            write!(out, ")")?;
-
             if !function.results.is_empty() {
+                write!(out, "    {}: func(", function.name)?;
+                write_param_list(&mut out, def, &function.params)?;
+                write!(out, ")")?;
                 write!(out, " -> ")?;
                 match &function.results {
                     FunctionResultStub::Single(typ) => {
