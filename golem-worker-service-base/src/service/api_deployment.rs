@@ -1,4 +1,4 @@
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion};
+use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSiteString, ApiVersion};
 use crate::repo::api_definition_repo::ApiDefinitionRepo;
 use crate::repo::api_deployment_repo::ApiDeploymentRepo;
 use crate::repo::api_namespace::ApiNamespace;
@@ -94,16 +94,13 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
             ));
         }
 
-        let existing_deployment =
-            self.deployment_repo
-                .get(&ApiSiteString::from(&deployment.site))
-                .await
-                .map_err(|err| {
-                    ApiDeploymentError::InternalError(format!(
-                        "Error getting api deployment: {}",
-                        err
-                    ))
-                })?;
+        let existing_deployment = self
+            .deployment_repo
+            .get(&ApiSiteString::from(&deployment.site))
+            .await
+            .map_err(|err| {
+                ApiDeploymentError::InternalError(format!("Error getting api deployment: {}", err))
+            })?;
 
         match existing_deployment {
             Some(existing_deployment)
@@ -115,9 +112,9 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
                         &deployment.api_definition_id.namespace,
                         &deployment.site,
                 );
-                Err(ApiDeploymentError::DeploymentConflict(
-                    ApiSiteString::from(&existing_deployment.site),
-                ))
+                Err(ApiDeploymentError::DeploymentConflict(ApiSiteString::from(
+                    &existing_deployment.site,
+                )))
             }
             _ => self
                 .deployment_repo
@@ -197,7 +194,9 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
                         namespace,
                         &host,
                 );
-                Err(ApiDeploymentError::DeploymentConflict(ApiSiteString::from(&deployment.site)))
+                Err(ApiDeploymentError::DeploymentConflict(ApiSiteString::from(
+                    &deployment.site,
+                )))
             }
             Some(_) => self.deployment_repo.delete(host).await.map_err(|err| {
                 ApiDeploymentError::InternalError(format!("Error deleting api deployment: {}", err))

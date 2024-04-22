@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::api_definition::{ApiSite, ApiSiteString};
+use crate::api_definition::ApiSiteString;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Mutex;
 
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString};
+use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSiteString};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
@@ -18,8 +18,10 @@ const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 pub trait ApiDeploymentRepo<Namespace: ApiNamespace> {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>>;
 
-    async fn get(&self, host: &ApiSiteString)
-        -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
+    async fn get(
+        &self,
+        host: &ApiSiteString,
+    ) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
 
     async fn delete(&self, host: &ApiSiteString) -> Result<bool, Box<dyn Error>>;
 
@@ -115,7 +117,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>> {
         debug!(
             "Deploy API site: {}, id: {}",
-           &deployment.site, &deployment.api_definition_id
+            &deployment.site, &deployment.api_definition_id
         );
 
         let key = redis_keys::api_deployment_redis_key(&ApiSiteString::from(&deployment.site));
@@ -268,7 +270,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
 }
 
 mod redis_keys {
-    use crate::api_definition::{ApiDefinitionId, ApiSite, ApiSiteString};
+    use crate::api_definition::{ApiDefinitionId, ApiSiteString};
     use crate::repo::api_deployment_repo::API_DEFINITION_REDIS_NAMESPACE;
     use crate::repo::api_namespace::ApiNamespace;
 
@@ -289,7 +291,9 @@ mod redis_keys {
 
 #[cfg(test)]
 mod tests {
-    use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion};
+    use crate::api_definition::{
+        ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion,
+    };
 
     use crate::auth::CommonNamespace;
     use crate::repo::api_deployment_repo::redis_keys::{
