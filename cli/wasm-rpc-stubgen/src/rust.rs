@@ -352,9 +352,13 @@ fn generate_function_stub_source(
     } else {
         quote! {}
     };
+
     let blocking = {
         let function_name = if function.results.is_empty() {
-            Ident::new(&to_rust_ident("blocking-foo"), Span::call_site())
+            Ident::new(
+                &to_rust_ident(&format!("blocking-{}", function.name)),
+                Span::call_site(),
+            )
         } else {
             function_name.clone()
         };
