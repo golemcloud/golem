@@ -329,7 +329,7 @@ mod tests {
 
         let _ = registry.deploy(&deployment).await;
 
-        let result = registry.get(&site).await.unwrap_or(None);
+        let result = registry.get(&site_str).await.unwrap_or(None);
 
         let result1 = registry
             .get_by_id(
@@ -341,7 +341,7 @@ mod tests {
 
         let delete = registry.delete(&site_str).await.unwrap_or(false);
 
-        let result2 = registry.get(&site).await.unwrap_or(None);
+        let result2 = registry.get(&site_str).await.unwrap_or(None);
 
         assert!(result.is_some());
         assert_eq!(result.unwrap(), deployment);
