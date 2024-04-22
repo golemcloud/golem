@@ -25,7 +25,7 @@ fi
 
 echo "Checking golem readiness in namespace: $NAMESPACE"
 
-required_pod_substrings=("shard-manager" "worker-executor" "worker-service" "template-service")
+required_pod_substrings=("shard-manager" "worker-executor" "worker-service" "component-service")
 counter=0
 timeout=4
 

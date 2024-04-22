@@ -71,43 +71,43 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: service-template-service-{{.Values.env}}
+  name: service-component-service-{{.Values.env}}
   labels:
-    app: template-service-app-{{.Values.env}}
+    app: component-service-app-{{.Values.env}}
     env: {{.Values.env}}
 spec:
-  type: {{ .Values.templateService.service.type }}
+  type: {{ .Values.componentService.service.type }}
   selector:
-    app: template-service-app-{{.Values.env}}
+    app: component-service-app-{{.Values.env}}
   ports:
     - protocol: TCP
       name: http
-      port: {{ .Values.templateService.ports.http }}
-      targetPort: {{ .Values.templateService.ports.http }}
+      port: {{ .Values.componentService.ports.http }}
+      targetPort: {{ .Values.componentService.ports.http }}
     - protocol: TCP
       name: grpc
-      port: {{ .Values.templateService.ports.grpc }}
-      targetPort: {{ .Values.templateService.ports.grpc }}
+      port: {{ .Values.componentService.ports.grpc }}
+      targetPort: {{ .Values.componentService.ports.grpc }}
 
 ---
 
 apiVersion: v1
 kind: Service
 metadata:
-  name: service-template-compilation-service-{{.Values.env}}
+  name: service-component-compilation-service-{{.Values.env}}
   labels:
-    app: template-compilation-service-app-{{.Values.env}}
+    app: component-compilation-service-app-{{.Values.env}}
     env: {{.Values.env}}
 spec:
-  type: {{ .Values.templateCompilationService.service.type }}
+  type: {{ .Values.componentCompilationService.service.type }}
   selector:
-    app: template-compilation-service-app-{{.Values.env}}
+    app: component-compilation-service-app-{{.Values.env}}
   ports:
     - protocol: TCP
       name: http
-      port: {{ .Values.templateCompilationService.ports.http }}
-      targetPort: {{ .Values.templateCompilationService.ports.http }}
+      port: {{ .Values.componentCompilationService.ports.http }}
+      targetPort: {{ .Values.componentCompilationService.ports.http }}
     - protocol: TCP
       name: grpc
-      port: {{ .Values.templateCompilationService.ports.grpc }}
-      targetPort: {{ .Values.templateCompilationService.ports.grpc }}
+      port: {{ .Values.componentCompilationService.ports.grpc }}
+      targetPort: {{ .Values.componentCompilationService.ports.grpc }}
