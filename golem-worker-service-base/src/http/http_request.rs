@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::api_definition::ApiSite;
+use crate::api_definition::ApiSiteString;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
@@ -24,11 +24,11 @@ pub struct InputHttpRequest {
 }
 
 impl InputHttpRequest {
-    pub fn get_host(&self) -> Option<ApiSite> {
+    pub fn get_host(&self) -> Option<ApiSiteString> {
         self.headers
             .get("host")
             .and_then(|host| host.to_str().ok())
-            .map(ApiSite::from)
+            .map(|host_str| ApiSiteString(host_str.to_string()))
     }
 
     // Converts all request details to type-annotated-value
