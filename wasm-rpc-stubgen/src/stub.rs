@@ -332,47 +332,37 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
 fn collect_stub_functions<'a>(
     functions: impl Iterator<Item = &'a Function>,
 ) -> anyhow::Result<Vec<FunctionStub>> {
-    let mut function_stubs = vec![];
-
-    for f in functions {
-        let mut params = Vec::new();
-        for (name, typ) in &f.params {
-            params.push(FunctionParamStub {
-                name: name.clone(),
-                typ: *typ,
-            });
-        }
-
-        let results = match &f.results {
-            Results::Named(params) => {
-                let mut param_stubs = Vec::new();
-                for (name, typ) in params {
-                    param_stubs.push(FunctionParamStub {
-                        name: name.clone(),
-                        typ: *typ,
-                    });
-                }
-                FunctionResultStub::Multi(param_stubs)
+    Ok(functions
+        .map(|f| {
+            let mut params = Vec::new();
+            for (name, typ) in &f.params {
+                params.push(FunctionParamStub {
+                    name: name.clone(),
+                    typ: *typ,
+                });
             }
-            Results::Anon(single) => FunctionResultStub::Single(*single),
-        };
 
-        if results.is_empty() {
-            function_stubs.push(FunctionStub {
-                name: format!("blocking-{}", f.name),
-                params: params.clone(),
-                results: results.clone(),
-            })
-        }
+            let results = match &f.results {
+                Results::Named(params) => {
+                    let mut param_stubs = Vec::new();
+                    for (name, typ) in params {
+                        param_stubs.push(FunctionParamStub {
+                            name: name.clone(),
+                            typ: *typ,
+                        });
+                    }
+                    FunctionResultStub::Multi(param_stubs)
+                }
+                Results::Anon(single) => FunctionResultStub::Single(*single),
+            };
 
-        function_stubs.push(FunctionStub {
-            name: f.name.clone(),
-            params,
-            results,
-        });
-    }
-
-    Ok(function_stubs)
+            FunctionStub {
+                name: f.name.clone(),
+                params,
+                results,
+            }
+        })
+        .collect())
 }
 
 fn collect_stub_resources<'a>(
