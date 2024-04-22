@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use futures_util::stream::BoxStream;
+use futures_util::StreamExt;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::template::template_service_server::TemplateService;
@@ -19,6 +20,7 @@ use golem_api_grpc::proto::golem::template::{template_error, TemplateError};
 use golem_api_grpc::proto::golem::template::{GetVersionedTemplateRequest, Template};
 use golem_common::model::ProjectId;
 use golem_common::model::TemplateId;
+use golem_service_base::stream::ByteStream;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -81,6 +83,14 @@ fn bad_request_error(error: &str) -> TemplateError {
     TemplateError {
         error: Some(template_error::Error::BadRequest(ErrorsBody {
             errors: vec![error.to_string()],
+        })),
+    }
+}
+
+fn internal_error(error: &str) -> TemplateError {
+    TemplateError {
+        error: Some(template_error::Error::InternalError(ErrorBody {
+            error: error.to_string(),
         })),
     }
 }
@@ -188,14 +198,17 @@ impl TemplateGrpcApi {
         &self,
         request: DownloadTemplateRequest,
         metadata: MetadataMap,
-    ) -> Result<Vec<u8>, TemplateError> {
+    ) -> Result<ByteStream, TemplateError> {
         let auth = self.auth(metadata).await?;
         let id: TemplateId = request
             .template_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing template id"))?;
         let version = request.version;
-        let result = self.template_service.download(&id, version, &auth).await?;
+        let result = self
+            .template_service
+            .download_stream(&id, version, &auth)
+            .await?;
         Ok(result)
     }
 
@@ -299,17 +312,33 @@ impl TemplateService for TemplateGrpcApi {
         request: Request<DownloadTemplateRequest>,
     ) -> Result<Response<Self::DownloadTemplateStream>, Status> {
         let (m, _, r) = request.into_parts();
-        let res = match self.download(r, m).await {
-            Ok(content) => DownloadTemplateResponse {
-                result: Some(download_template_response::Result::SuccessChunk(content)),
-            },
-            Err(err) => DownloadTemplateResponse {
-                result: Some(download_template_response::Result::Error(err)),
-            },
-        };
+        match self.download(r, m).await {
+            Ok(response) => {
+                let stream = response.map(|content| {
+                    let res = match content {
+                        Ok(content) => DownloadTemplateResponse {
+                            result: Some(download_template_response::Result::SuccessChunk(content)),
+                        },
+                        Err(_) => DownloadTemplateResponse {
+                            result: Some(download_template_response::Result::Error(
+                                internal_error("Internal error"),
+                            )),
+                        },
+                    };
+                    Ok(res)
+                });
+                let stream: Self::DownloadTemplateStream = Box::pin(stream);
+                Ok(Response::new(stream))
+            }
+            Err(err) => {
+                let res = DownloadTemplateResponse {
+                    result: Some(download_template_response::Result::Error(err)),
+                };
 
-        let stream: Self::DownloadTemplateStream = Box::pin(tokio_stream::iter([Ok(res)]));
-        Ok(Response::new(stream))
+                let stream: Self::DownloadTemplateStream = Box::pin(tokio_stream::iter([Ok(res)]));
+                Ok(Response::new(stream))
+            }
+        }
     }
 
     async fn get_template_metadata_all_versions(

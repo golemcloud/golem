@@ -1,3 +1,4 @@
+use futures_util::TryStreamExt;
 use std::sync::Arc;
 
 use cloud_common::auth::GolemSecurityScheme;
@@ -190,9 +191,11 @@ impl TemplateApi {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let bytes = self
             .template_service
-            .download(&template_id.0, version.0, &auth)
+            .download_stream(&template_id.0, version.0, &auth)
             .await?;
-        Ok(Binary(Body::from(bytes)))
+        Ok(Binary(Body::from_bytes_stream(bytes.map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        }))))
     }
 
     /// Get the latest version of a given template
