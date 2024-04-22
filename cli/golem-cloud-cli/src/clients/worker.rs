@@ -17,7 +17,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_cloud_client::model::{
-    CallingConvention, InvokeParameters, InvokeResult, VersionedWorkerId, WorkerCreationRequest,
+    CallingConvention, InvokeParameters, InvokeResult, WorkerCreationRequest, WorkerId,
     WorkerMetadata, WorkersMetadataResponse,
 };
 use golem_cloud_client::Context;
@@ -40,7 +40,7 @@ pub trait WorkerClient {
         template_id: RawTemplateId,
         args: Vec<String>,
         env: Vec<(String, String)>,
-    ) -> Result<VersionedWorkerId, GolemError>;
+    ) -> Result<WorkerId, GolemError>;
     async fn get_invocation_key(
         &self,
         name: &WorkerName,
@@ -108,7 +108,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
         template_id: RawTemplateId,
         args: Vec<String>,
         env: Vec<(String, String)>,
-    ) -> Result<VersionedWorkerId, GolemError> {
+    ) -> Result<WorkerId, GolemError> {
         info!("Creating worker {name} of {}", template_id.0);
 
         Ok(self
@@ -121,7 +121,8 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
                     env: env.into_iter().collect(),
                 },
             )
-            .await?)
+            .await?
+            .worker_id)
     }
 
     async fn get_invocation_key(
