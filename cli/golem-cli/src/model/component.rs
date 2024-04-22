@@ -1,7 +1,7 @@
 use crate::model::GolemError;
 use golem_client::model::{
-    Export, ExportFunction, ExportInstance, FunctionResult, NameOptionTypePair, NameTypePair,
-    ResourceMode, Template, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
+    Component, Export, ExportFunction, ExportInstance, FunctionResult, NameOptionTypePair,
+    NameTypePair, ResourceMode, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
 use golem_wasm_ast::wave::DisplayNamedFunc;
 use serde::{Deserialize, Serialize};
@@ -11,27 +11,27 @@ use crate::model::wave::{func_to_analysed, function_wave_compatible};
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TemplateView {
-    pub template_id: String,
-    pub template_version: u64,
-    pub template_name: String,
-    pub template_size: i32,
+pub struct ComponentView {
+    pub component_id: String,
+    pub component_version: u64,
+    pub component_name: String,
+    pub component_size: u64,
     pub exports: Vec<String>,
 }
 
-impl From<Template> for TemplateView {
-    fn from(value: Template) -> Self {
+impl From<Component> for ComponentView {
+    fn from(value: Component) -> Self {
         (&value).into()
     }
 }
 
-impl From<&Template> for TemplateView {
-    fn from(value: &Template) -> Self {
-        TemplateView {
-            template_id: value.versioned_template_id.template_id.to_string(),
-            template_version: value.versioned_template_id.version,
-            template_name: value.template_name.to_string(),
-            template_size: value.template_size,
+impl From<&Component> for ComponentView {
+    fn from(value: &Component) -> Self {
+        ComponentView {
+            component_id: value.versioned_component_id.component_id.to_string(),
+            component_version: value.versioned_component_id.version,
+            component_name: value.component_name.to_string(),
+            component_size: value.component_size,
             exports: value
                 .metadata
                 .exports
@@ -159,10 +159,10 @@ fn custom_show_exported_function(prefix: &str, f: &ExportFunction) -> String {
 }
 
 fn resolve_function<'t>(
-    template: &'t Template,
+    component: &'t Component,
     function: &str,
 ) -> Result<&'t ExportFunction, GolemError> {
-    let functions = template
+    let functions = component
         .metadata
         .exports
         .iter()
@@ -180,26 +180,26 @@ fn resolve_function<'t>(
     } else if let Some(func) = functions.first() {
         Ok(func)
     } else {
-        info!("No function '{function}' declared for template");
+        info!("No function '{function}' declared for component");
 
-        Err(GolemError("Can't find function in template".to_string()))
+        Err(GolemError("Can't find function in component".to_string()))
     }
 }
 
 pub fn function_result_types<'t>(
-    template: &'t Template,
+    component: &'t Component,
     function: &str,
 ) -> Result<Vec<&'t Type>, GolemError> {
-    let func = resolve_function(template, function)?;
+    let func = resolve_function(component, function)?;
 
     Ok(func.results.iter().map(|r| &r.typ).collect())
 }
 
 pub fn function_params_types<'t>(
-    template: &'t Template,
+    component: &'t Component,
     function: &str,
 ) -> Result<Vec<&'t Type>, GolemError> {
-    let func = resolve_function(template, function)?;
+    let func = resolve_function(component, function)?;
 
     Ok(func.parameters.iter().map(|r| &r.typ).collect())
 }
@@ -220,7 +220,7 @@ fn export_to_functions(export: &Export) -> Vec<(String, &ExportFunction)> {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::template::show_exported_function;
+    use crate::model::component::show_exported_function;
     use golem_client::model::{
         ExportFunction, FunctionParameter, FunctionResult, NameOptionTypePair, NameTypePair,
         ResourceMode, Type, TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle,

@@ -1,7 +1,7 @@
-use crate::model::template::function_result_types;
+use crate::model::component::function_result_types;
 use crate::model::wave::{type_to_analysed, type_wave_compatible};
 use crate::model::GolemError;
-use golem_client::model::{InvokeResult, Template, Type};
+use golem_client::model::{Component, InvokeResult, Type};
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value;
@@ -18,15 +18,15 @@ pub enum InvokeResultView {
 impl InvokeResultView {
     pub fn try_parse_or_json(
         res: InvokeResult,
-        template: &Template,
+        component: &Component,
         function: &str,
     ) -> InvokeResultView {
-        Self::try_parse(&res, template, function).unwrap_or(InvokeResultView::Json(res.result))
+        Self::try_parse(&res, component, function).unwrap_or(InvokeResultView::Json(res.result))
     }
 
     fn try_parse(
         res: &InvokeResult,
-        template: &Template,
+        component: &Component,
         function: &str,
     ) -> Result<InvokeResultView, GolemError> {
         let results = match res.result.as_array() {
@@ -40,7 +40,7 @@ impl InvokeResultView {
             Some(results) => results,
         };
 
-        let result_types = function_result_types(template, function)?;
+        let result_types = function_result_types(component, function)?;
 
         if results.len() != result_types.len() {
             info!("Unexpected number of results.");
@@ -97,9 +97,9 @@ mod tests {
     use crate::model::invoke_result_view::InvokeResultView;
     use crate::model::wave::type_to_analysed;
     use golem_client::model::{
-        Export, ExportFunction, FunctionResult, InvokeResult, ProtectedTemplateId, ResourceMode,
-        Template, TemplateMetadata, Type, TypeBool, TypeHandle, UserTemplateId,
-        VersionedTemplateId,
+        Component, ComponentMetadata, Export, ExportFunction, FunctionResult, InvokeResult,
+        ProtectedComponentId, ResourceMode, Type, TypeBool, TypeHandle, UserComponentId,
+        VersionedComponentId,
     };
     use golem_wasm_ast::analysis::AnalysedFunctionResult;
     use golem_wasm_rpc::Uri;
@@ -120,26 +120,26 @@ mod tests {
             .map(|typ| FunctionResult { name: None, typ })
             .collect::<Vec<_>>();
 
-        let template = Template {
-            versioned_template_id: VersionedTemplateId {
-                template_id: Uuid::max(),
+        let component = Component {
+            versioned_component_id: VersionedComponentId {
+                component_id: Uuid::max(),
                 version: 0,
             },
-            user_template_id: UserTemplateId {
-                versioned_template_id: VersionedTemplateId {
-                    template_id: Uuid::max(),
+            user_component_id: UserComponentId {
+                versioned_component_id: VersionedComponentId {
+                    component_id: Uuid::max(),
                     version: 0,
                 },
             },
-            protected_template_id: ProtectedTemplateId {
-                versioned_template_id: VersionedTemplateId {
-                    template_id: Uuid::max(),
+            protected_component_id: ProtectedComponentId {
+                versioned_component_id: VersionedComponentId {
+                    component_id: Uuid::max(),
                     version: 0,
                 },
             },
-            template_name: String::new(),
-            template_size: 0,
-            metadata: TemplateMetadata {
+            component_name: String::new(),
+            component_size: 0,
+            metadata: ComponentMetadata {
                 producers: Vec::new(),
                 exports: vec![Export::Function(ExportFunction {
                     name: "func_name".to_string(),
@@ -149,7 +149,7 @@ mod tests {
             },
         };
 
-        InvokeResultView::try_parse_or_json(InvokeResult { result: json }, &template, "func_name")
+        InvokeResultView::try_parse_or_json(InvokeResult { result: json }, &component, "func_name")
     }
 
     #[test]
