@@ -37,3 +37,7 @@ path = "tests/sharding.rs"
 [[bin]]
 name = "benchmark_simple_worker_echo"
 path = "src/benchmarks/simple_worker_echo.rs"
+
+[[bin]]
+name = "benchmark_suspend_worker"
+path = "src/benchmarks/suspend_worker.rs"
