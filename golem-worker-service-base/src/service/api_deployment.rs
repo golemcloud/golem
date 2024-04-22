@@ -1,4 +1,4 @@
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiVersion};
+use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion};
 use crate::repo::api_definition_repo::ApiDefinitionRepo;
 use crate::repo::api_deployment_repo::ApiDeploymentRepo;
 use crate::repo::api_namespace::ApiNamespace;
@@ -25,7 +25,7 @@ pub trait ApiDeploymentService<Namespace> {
 
     async fn get_by_host(
         &self,
-        host: &ApiSite,
+        host: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
     // Example: A version of API definition can only be utmost 1 deployment
@@ -39,15 +39,15 @@ pub trait ApiDeploymentService<Namespace> {
     async fn delete(
         &self,
         namespace: &Namespace,
-        host: &ApiSite,
+        host: &ApiSiteString,
     ) -> Result<bool, ApiDeploymentError<Namespace>>;
 }
 
 pub enum ApiDeploymentError<Namespace> {
     ApiDefinitionNotFound(Namespace, ApiDefinitionId),
-    ApiDeploymentNotFound(Namespace, ApiSite),
+    ApiDeploymentNotFound(Namespace, ApiSiteString),
     InternalError(String),
-    DeploymentConflict(ApiSite),
+    DeploymentConflict(ApiSiteString),
 }
 
 pub struct ApiDeploymentServiceDefault<Namespace, ApiDefinition> {
@@ -96,7 +96,7 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
 
         let existing_deployment =
             self.deployment_repo
-                .get(&deployment.site)
+                .get(&ApiSiteString::from(&deployment.site))
                 .await
                 .map_err(|err| {
                     ApiDeploymentError::InternalError(format!(
@@ -116,7 +116,7 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
                         &deployment.site,
                 );
                 Err(ApiDeploymentError::DeploymentConflict(
-                    existing_deployment.site,
+                    ApiSiteString::from(&existing_deployment.site),
                 ))
             }
             _ => self
@@ -150,7 +150,7 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
 
     async fn get_by_host(
         &self,
-        host: &ApiSite,
+        host: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
         self.deployment_repo.get(host).await.map_err(|err| {
             ApiDeploymentError::InternalError(format!("Error getting api deployment: {}", err))
@@ -184,7 +184,7 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
     async fn delete(
         &self,
         namespace: &Namespace,
-        host: &ApiSite,
+        host: &ApiSiteString,
     ) -> Result<bool, ApiDeploymentError<Namespace>> {
         let deployment = self.deployment_repo.get(host).await.map_err(|err| {
             ApiDeploymentError::InternalError(format!("Error getting api deployment: {}", err))
@@ -197,7 +197,7 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
                         namespace,
                         &host,
                 );
-                Err(ApiDeploymentError::DeploymentConflict(deployment.site))
+                Err(ApiDeploymentError::DeploymentConflict(ApiSiteString::from(&deployment.site)))
             }
             Some(_) => self.deployment_repo.delete(host).await.map_err(|err| {
                 ApiDeploymentError::InternalError(format!("Error deleting api deployment: {}", err))

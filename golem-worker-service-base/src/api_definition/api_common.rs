@@ -7,6 +7,8 @@ use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
 
 use crate::worker_binding::GolemWorkerBinding;
+use poem_openapi::{Object};
+
 
 // Common to API definitions regardless of different protocols
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
@@ -48,28 +50,35 @@ pub struct ApiDeployment<Namespace> {
     pub site: ApiSite,
 }
 
-#[derive(
-    Eq,
-    Hash,
-    PartialEq,
-    Clone,
-    Debug,
-    serde::Serialize,
-    serde::Deserialize,
-    bincode::Encode,
-    bincode::Decode,
-    NewType,
-)]
-pub struct ApiSite(pub String);
+#[derive(Debug, Eq, Clone, Hash, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
+pub struct ApiSite {
+    pub host: String,
+    pub subdomain: String,
+}
 
 impl Display for ApiSite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        // Need to see how to remove the need of subdomain for localhost , as subdomains are not allowed for localhost
+        let host = &self.host;
+        if host.contains("localhost") || host.contains("127.0.0.1") {
+            write!(f, "{}", self.host)
+        } else {
+            write!(f, "{}.{}", self.subdomain, self.host)
+        }
     }
 }
 
-impl From<&str> for ApiSite {
-    fn from(site: &str) -> Self {
-        ApiSite(site.to_string())
+#[derive(PartialEq, Eq, Clone, Debug, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
+pub struct ApiSiteString(pub String);
+
+impl From<&ApiSite> for ApiSiteString {
+    fn from(value: &ApiSite) -> Self {
+        ApiSiteString(value.to_string())
+    }
+}
+
+impl Display for ApiSiteString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
