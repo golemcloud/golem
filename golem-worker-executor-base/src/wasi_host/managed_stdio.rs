@@ -31,7 +31,7 @@ use crate::services::invocation_key::InvocationKeyService;
 #[derive(Clone)]
 pub struct ManagedStandardIo {
     current: Arc<Mutex<Option<State>>>,
-    instance_id: WorkerId,
+    worker_id: WorkerId,
     invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
     current_enqueue: Arc<Mutex<Option<mpsc::Sender<Event>>>>,
     enqueue_capacity: usize,
@@ -77,12 +77,12 @@ const DEFAULT_ENQUEUE_CAPACITY: usize = 128;
 
 impl ManagedStandardIo {
     pub fn new(
-        instance_id: WorkerId,
+        worker_id: WorkerId,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
     ) -> Self {
         Self {
             current: Arc::new(Mutex::new(Some(State::Live))),
-            instance_id,
+            worker_id,
             invocation_key_service,
             current_enqueue: Arc::new(Mutex::new(None)),
             enqueue_capacity: DEFAULT_ENQUEUE_CAPACITY,
@@ -358,7 +358,7 @@ impl ManagedStandardIo {
                                                 .to_string(),
                                         });
                                     self.invocation_key_service.confirm_key(
-                                        &self.instance_id,
+                                        &self.worker_id,
                                         &invocation_key,
                                         result,
                                     );

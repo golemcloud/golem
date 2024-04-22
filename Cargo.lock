@@ -3226,6 +3226,89 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-component-compilation-service"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "console-subscriber",
+ "figment",
+ "futures",
+ "futures-util",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-worker-executor-base",
+ "http 0.2.12",
+ "http 1.1.0",
+ "lazy_static",
+ "prometheus",
+ "serde",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wasmtime 17.0.0",
+]
+
+[[package]]
+name = "golem-component-service"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "console-subscriber",
+ "figment",
+ "futures-util",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-component-service-base",
+ "golem-service-base",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "http 0.2.12",
+ "humantime-serde",
+ "lazy_static",
+ "mappable-rc",
+ "opentelemetry",
+ "opentelemetry-prometheus",
+ "opentelemetry_sdk",
+ "poem",
+ "poem-openapi",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tap",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "golem-component-service-base"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "golem-wasm-ast",
+ "http 0.2.12",
+ "serde",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "golem-examples"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3265,7 +3348,7 @@ dependencies = [
 
 [[package]]
 name = "golem-service-base"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3325,89 +3408,6 @@ dependencies = [
  "tracing-test",
  "url",
  "warp",
-]
-
-[[package]]
-name = "golem-template-compilation-service"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "console-subscriber",
- "figment",
- "futures",
- "futures-util",
- "golem-api-grpc",
- "golem-common",
- "golem-worker-executor-base",
- "http 0.2.12",
- "http 1.1.0",
- "lazy_static",
- "prometheus",
- "serde",
- "thiserror",
- "tokio",
- "tonic",
- "tonic-health",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "wasmtime 17.0.0",
-]
-
-[[package]]
-name = "golem-template-service"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "console-subscriber",
- "figment",
- "futures-util",
- "golem-api-grpc",
- "golem-common",
- "golem-service-base",
- "golem-template-service-base",
- "golem-wasm-ast",
- "golem-wasm-rpc",
- "http 0.2.12",
- "humantime-serde",
- "lazy_static",
- "mappable-rc",
- "opentelemetry",
- "opentelemetry-prometheus",
- "opentelemetry_sdk",
- "poem",
- "poem-openapi",
- "prometheus",
- "serde",
- "serde_json",
- "sqlx",
- "tap",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tonic-health",
- "tonic-reflection",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "golem-template-service-base"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "golem-api-grpc",
- "golem-common",
- "golem-service-base",
- "golem-wasm-ast",
- "http 0.2.12",
- "serde",
- "thiserror",
- "tracing",
 ]
 
 [[package]]
@@ -3511,9 +3511,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5fa0995d66b8264fd4f5074ab297760df06e8ae92f192f4d158e784af7d230e"
+checksum = "1e3c4726ba84c67f21b6636d6b93f4f75ee2aedba42883da66e4c7aa913079e9"
 
 [[package]]
 name = "golem-worker-executor"

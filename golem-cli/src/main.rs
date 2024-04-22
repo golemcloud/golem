@@ -28,22 +28,22 @@ use golem_cli::api_definition::{
     ApiDefinitionHandler, ApiDefinitionHandlerLive, ApiDefinitionSubcommand,
 };
 use golem_cli::clients::api_definition::ApiDefinitionClientLive;
+use golem_cli::clients::component::ComponentClientLive;
 use golem_cli::clients::health_check::HealthCheckClientLive;
-use golem_cli::clients::template::TemplateClientLive;
 use golem_cli::clients::worker::WorkerClientLive;
+use golem_cli::component::{ComponentHandler, ComponentHandlerLive, ComponentSubCommand};
 use golem_cli::examples;
-use golem_cli::template::{TemplateHandler, TemplateHandlerLive, TemplateSubcommand};
 use golem_cli::version::{VersionHandler, VersionHandlerLive};
 use golem_cli::worker::{WorkerHandler, WorkerHandlerLive, WorkerSubcommand};
 
 #[derive(Subcommand, Debug)]
 #[command()]
 enum Command {
-    /// Upload and manage Golem templates
+    /// Upload and manage Golem components
     #[command()]
-    Template {
+    Component {
         #[command(subcommand)]
-        subcommand: TemplateSubcommand,
+        subcommand: ComponentSubCommand,
     },
 
     /// Manage Golem workers
@@ -53,23 +53,23 @@ enum Command {
         subcommand: WorkerSubcommand,
     },
 
-    /// Create a new Golem template from built-in examples
+    /// Create a new Golem component from built-in examples
     #[command()]
     New {
         /// Name of the example to use
         #[arg(short, long)]
         example: ExampleName,
 
-        /// The new template's name
+        /// The new component's name
         #[arg(short, long)]
-        template_name: golem_examples::model::TemplateName,
+        component_name: golem_examples::model::TemplateName,
 
-        /// The package name of the generated template (in namespace:name format)
+        /// The package name of the generated component (in namespace:name format)
         #[arg(short, long)]
         package_name: Option<PackageName>,
     },
 
-    /// Lists the built-in examples available for creating new templates
+    /// Lists the built-in examples available for creating new components
     #[command()]
     ListExamples {
         /// The minimum language tier to include in the list
@@ -112,7 +112,7 @@ struct GolemCommand {
     /// Golem base url. Default: GOLEM_BASE_URL environment variable or http://localhost:9881.
     ///
     /// You can also specify different URLs for different services
-    /// via GOLEM_TEMPLATE_BASE_URL and GOLEM_WORKER_BASE_URL
+    /// via GOLEM_COMPONENT_BASE_URL and GOLEM_WORKER_BASE_URL
     /// environment variables.
     golem_url: Option<String>,
 
@@ -153,13 +153,13 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         .golem_url
         .or_else(|| std::env::var("GOLEM_BASE_URL").ok())
         .unwrap_or("http://localhost:9881".to_string());
-    let template_url_str = std::env::var("GOLEM_TEMPLATE_BASE_URL")
+    let component_url_str = std::env::var("GOLEM_COMPONENT_BASE_URL")
         .ok()
         .unwrap_or(url_str.to_string());
     let worker_url_str = std::env::var("GOLEM_WORKER_BASE_URL")
         .ok()
         .unwrap_or(url_str);
-    let template_url = Url::parse(&template_url_str).unwrap();
+    let component_url = Url::parse(&component_url_str).unwrap();
     let worker_url = Url::parse(&worker_url_str).unwrap();
     let allow_insecure_str = std::env::var("GOLEM_ALLOW_INSECURE").unwrap_or("false".to_string());
     let allow_insecure = allow_insecure_str != "false";
@@ -170,8 +170,8 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     }
     let client = builder.connection_verbose(true).build()?;
 
-    let template_context = Context {
-        base_url: template_url.clone(),
+    let component_context = Context {
+        base_url: component_url.clone(),
         client: client.clone(),
     };
 
@@ -180,13 +180,13 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         client: client.clone(),
     };
 
-    let template_client = TemplateClientLive {
-        client: golem_client::api::TemplateClientLive {
-            context: template_context.clone(),
+    let component_client = ComponentClientLive {
+        client: golem_client::api::ComponentClientLive {
+            context: component_context.clone(),
         },
     };
-    let template_srv = TemplateHandlerLive {
-        client: template_client,
+    let component_srv = ComponentHandlerLive {
+        client: component_client,
     };
     let worker_client = WorkerClientLive {
         client: golem_client::api::WorkerClientLive {
@@ -197,9 +197,9 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     };
     let worker_srv = WorkerHandlerLive {
         client: worker_client,
-        templates: &template_srv,
+        components: &component_srv,
         worker_context: worker_context.clone(),
-        template_context: template_context.clone(),
+        component_context: component_context.clone(),
         allow_insecure,
     };
 
@@ -213,9 +213,9 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         client: api_definition_client,
     };
 
-    let health_check_client_for_template = HealthCheckClientLive {
+    let health_check_client_for_component = HealthCheckClientLive {
         client: golem_client::api::HealthCheckClientLive {
-            context: template_context.clone(),
+            context: component_context.clone(),
         },
     };
 
@@ -226,7 +226,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     };
 
     let update_srv = VersionHandlerLive {
-        template_client: health_check_client_for_template,
+        component_client: health_check_client_for_component,
         worker_client: health_check_client_for_worker,
     };
 
@@ -240,13 +240,13 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     }
 
     let res = match cmd.command {
-        Command::Template { subcommand } => template_srv.handle(subcommand).await,
+        Command::Component { subcommand } => component_srv.handle(subcommand).await,
         Command::Worker { subcommand } => worker_srv.handle(cmd.format, subcommand).await,
         Command::New {
             example,
             package_name,
-            template_name,
-        } => examples::process_new(example, template_name, package_name),
+            component_name,
+        } => examples::process_new(example, component_name, package_name),
         Command::ListExamples { min_tier, language } => {
             examples::process_list_examples(min_tier, language)
         }

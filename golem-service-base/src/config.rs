@@ -16,14 +16,14 @@ use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
-pub enum TemplateStoreConfig {
-    S3(TemplateStoreS3Config),
-    Local(TemplateStoreLocalConfig),
+pub enum ComponentStoreConfig {
+    S3(ComponentStoreS3Config),
+    Local(ComponentStoreLocalConfig),
 }
 
-impl Default for TemplateStoreConfig {
+impl Default for ComponentStoreConfig {
     fn default() -> Self {
-        TemplateStoreConfig::Local(TemplateStoreLocalConfig {
+        ComponentStoreConfig::Local(ComponentStoreLocalConfig {
             root_path: "/tmp".to_string(),
             object_prefix: "".to_string(),
         })
@@ -31,13 +31,13 @@ impl Default for TemplateStoreConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct TemplateStoreS3Config {
+pub struct ComponentStoreS3Config {
     pub bucket_name: String,
     pub object_prefix: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct TemplateStoreLocalConfig {
+pub struct ComponentStoreLocalConfig {
     pub root_path: String,
     pub object_prefix: String,
 }

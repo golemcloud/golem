@@ -49,14 +49,14 @@ impl Benchmark for SuspendWorkerLatency {
         // Initialize infrastructure
         let deps = CliTestDependencies::new(self.config.clone()).await;
 
-        // Upload test template
-        let template_id = deps.store_template("clocks").await;
+        // Upload test component
+        let component_id = deps.store_component("clocks").await;
         let mut worker_ids = Vec::new();
 
         // Create 'size' workers
         for i in 0..self.config.benchmark_config.size {
             let worker_id = deps
-                .start_worker(&template_id, &format!("worker-{i}"))
+                .start_worker(&component_id, &format!("worker-{i}"))
                 .await;
             worker_ids.push(worker_id);
         }

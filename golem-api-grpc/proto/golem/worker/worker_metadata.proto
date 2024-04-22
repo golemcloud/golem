@@ -13,7 +13,7 @@ message WorkerMetadata {
   repeated string args = 3;
   map<string, string> env = 4;
   WorkerStatus status = 5;
-  uint64 template_version = 6;
+  uint64 component_version = 6;
   uint64 retry_count = 7;
   uint64 pending_invocation_count = 8;
   repeated UpdateRecord updates = 9;

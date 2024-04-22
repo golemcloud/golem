@@ -75,9 +75,9 @@ args = [
     "build",
     "-p", "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
     "-p", "golem-worker-executor",
-    "-p", "golem-template-service",
+    "-p", "golem-component-service",
     "-p", "golem-worker-service",
-    "-p", "golem-template-compilation-service",
+    "-p", "golem-component-compilation-service",
     "--release",
     "--target",
     "aarch64-unknown-linux-gnu",
@@ -178,7 +178,7 @@ args = ["test", "--package", "golem-cli", "--test", "integration", "--", "--noca
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
 dependencies = [
     "generate-worker-service-openapi",
-    "generate-template-service-openapi",
+    "generate-component-service-openapi",
     "merge-openapi",
     "diff-openapi"
 ]
@@ -202,7 +202,7 @@ script = '''
 description = "Generates openapi spec from the code and saves it to the openapi directory"
 dependencies = [
     "generate-worker-service-openapi",
-    "generate-template-service-openapi",
+    "generate-component-service-openapi",
     "merge-openapi",
     "store-openapi"
 ]
@@ -212,16 +212,16 @@ description = "Generates openapi spec for worker service"
 dependencies = ["build"]
 script = "./target/debug/golem-worker-service --dump-openapi-yaml > ./target/golem-worker-service.yaml"
 
-[tasks.generate-template-service-openapi]
-description = "Generates openapi spec for template service"
+[tasks.generate-component-service-openapi]
+description = "Generates openapi spec for component service"
 dependencies = ["build"]
-script = "./target/debug/golem-template-service --dump-openapi-yaml > ./target/golem-template-service.yaml"
+script = "./target/debug/golem-component-service --dump-openapi-yaml > ./target/golem-component-service.yaml"
 
 [tasks.merge-openapi]
 install_crate = { crate_name = "golem-openapi-client-generator", version = "0.0.5" }
-dependencies = ["generate-worker-service-openapi", "generate-template-service-openapi"]
+dependencies = ["generate-worker-service-openapi", "generate-component-service-openapi"]
 command = "golem-openapi-client-generator"
-args = ["merge", "--spec-yaml", "./target/golem-template-service.yaml", "./target/golem-worker-service.yaml", "--output-yaml", "./target/golem-service.yaml"]
+args = ["merge", "--spec-yaml", "./target/golem-component-service.yaml", "./target/golem-worker-service.yaml", "--output-yaml", "./target/golem-service.yaml"]
 
 [tasks.store-openapi]
 description = "Stores the generated openapi spec in the openapi directory"
@@ -306,9 +306,9 @@ args = [
     "${PLATFORM_TARGET}.tar",
     "${PLATFORM_TARGET}/release/golem-shard-manager",
     "${PLATFORM_TARGET}/release/worker-executor",
-    "${PLATFORM_TARGET}/release/golem-template-service",
+    "${PLATFORM_TARGET}/release/golem-component-service",
     "${PLATFORM_TARGET}/release/golem-worker-service",
-    "${PLATFORM_TARGET}/release/golem-template-compilation-service"
+    "${PLATFORM_TARGET}/release/golem-component-compilation-service"
 ]
 
 

@@ -17,13 +17,13 @@ Once you have Golem running locally, you can use `golem-cli` to interact with Go
 
 cargo install golem-cli
 
-# template is your compiled code written in Rust, C, etc
-# https://learn.golem.cloud/docs/building-templates helps you write some code and create a template - as an example
-golem-cli template add <location-to-template-file> 
+# component is your compiled code written in Rust, C, etc
+# https://learn.golem.cloud/docs/building-templates helps you write some code and create a component - as an example
+golem-cli component add <location-to-component-file> 
 
-# Now we need a worker corresponding from template, that can execute one of the functions in template
-# If worker doesn't exist, it is created on the fly whey you invoke a function in template
-golem-cli worker invoke-and-await  --template-id <template-id> --worker-name my-worker --function golem:it/api/add-item --parameters '[{"product-id" : "foo", "name" : "foo" , "price" : 10, "quantity" : 1}]'
+# Now we need a worker corresponding from component, that can execute one of the functions in component
+# If worker doesn't exist, it is created on the fly whey you invoke a function in component
+golem-cli worker invoke-and-await  --component-id <component-id> --worker-name my-worker --function golem:it/api/add-item --parameters '[{"product-id" : "foo", "name" : "foo" , "price" : 10, "quantity" : 1}]'
 
 ```
 

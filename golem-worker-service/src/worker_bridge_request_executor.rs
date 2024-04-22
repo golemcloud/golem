@@ -45,13 +45,13 @@ mod internal {
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
         let worker_name = worker_request_params.worker_id;
 
-        let template_id = worker_request_params.template;
+        let component_id = worker_request_params.component;
 
-        let worker_id = WorkerId::new(template_id.clone(), worker_name.clone())?;
+        let worker_id = WorkerId::new(component_id.clone(), worker_name.clone())?;
 
         info!(
-            "Executing request for template: {}, worker: {}, function: {}",
-            template_id,
+            "Executing request for component: {}, worker: {}, function: {}",
+            component_id,
             worker_name.clone(),
             worker_request_params.function
         );
@@ -65,8 +65,8 @@ mod internal {
         let invoke_parameters = worker_request_params.function_params;
 
         info!(
-            "Executing request for template: {}, worker: {}, invocation key: {}, invocation params: {:?}",
-            template_id, worker_name.clone(), invocation_key, invoke_parameters
+            "Executing request for component: {}, worker: {}, invocation key: {}, invocation params: {:?}",
+            component_id, worker_name.clone(), invocation_key, invoke_parameters
         );
 
         let invoke_result = default_executor

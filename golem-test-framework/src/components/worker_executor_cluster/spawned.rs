@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
 use crate::components::worker_executor::spawned::SpawnedWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
@@ -38,7 +38,7 @@ impl SpawnedWorkerExecutorCluster {
         executable: &Path,
         working_directory: &Path,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
@@ -59,7 +59,7 @@ impl SpawnedWorkerExecutorCluster {
                     http_port,
                     grpc_port,
                     redis.clone(),
-                    template_service.clone(),
+                    component_service.clone(),
                     shard_manager.clone(),
                     worker_service.clone(),
                     verbosity,

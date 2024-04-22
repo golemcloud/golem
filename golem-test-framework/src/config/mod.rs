@@ -18,11 +18,11 @@ use std::sync::Arc;
 pub use cli::{CliParams, CliTestDependencies};
 pub use env::EnvBasedTestDependencies;
 
+use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::RedisMonitor;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 
@@ -34,15 +34,15 @@ pub trait TestDependencies {
     fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static>;
     fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static>;
     fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static>;
-    fn template_directory(&self) -> PathBuf;
-    fn template_service(&self) -> Arc<dyn TemplateService + Send + Sync + 'static>;
+    fn component_directory(&self) -> PathBuf;
+    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static>;
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static>;
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
 
     fn kill_all(&self) {
         self.worker_executor_cluster().kill_all();
         self.worker_service().kill();
-        self.template_service().kill();
+        self.component_service().kill();
         self.shard_manager().kill();
         self.rdb().kill();
         self.redis_monitor().kill();

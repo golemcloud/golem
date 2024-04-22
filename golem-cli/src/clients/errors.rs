@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_client::api::{ApiDefinitionError, HealthCheckError, TemplateError, WorkerError};
+use golem_client::api::{ApiDefinitionError, ComponentError, HealthCheckError, WorkerError};
 use golem_client::model::{
-    GolemError, GolemErrorFailedToResumeWorker, GolemErrorGetLatestVersionOfTemplateFailed,
+    GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed,
+    GolemErrorFailedToResumeWorker, GolemErrorGetLatestVersionOfComponentFailed,
     GolemErrorInterrupted, GolemErrorInvalidRequest, GolemErrorInvalidShardId,
     GolemErrorPromiseAlreadyCompleted, GolemErrorPromiseDropped, GolemErrorPromiseNotFound,
-    GolemErrorRuntimeError, GolemErrorTemplateDownloadFailed, GolemErrorTemplateParseFailed,
-    GolemErrorUnexpectedOplogEntry, GolemErrorUnknown, GolemErrorValueMismatch,
-    GolemErrorWorkerAlreadyExists, GolemErrorWorkerCreationFailed, GolemErrorWorkerNotFound,
-    PromiseId, WorkerId, WorkerServiceErrorsBody,
+    GolemErrorRuntimeError, GolemErrorUnexpectedOplogEntry, GolemErrorUnknown,
+    GolemErrorValueMismatch, GolemErrorWorkerAlreadyExists, GolemErrorWorkerCreationFailed,
+    GolemErrorWorkerNotFound, PromiseId, WorkerId, WorkerServiceErrorsBody,
 };
 use itertools::Itertools;
 
@@ -28,15 +28,15 @@ pub trait ResponseContentErrorMapper {
     fn map(self) -> String;
 }
 
-impl ResponseContentErrorMapper for TemplateError {
+impl ResponseContentErrorMapper for ComponentError {
     fn map(self) -> String {
         match self {
-            TemplateError::Error400(errors) => errors.errors.iter().join(", "),
-            TemplateError::Error401(error) => error.error,
-            TemplateError::Error403(error) => error.error,
-            TemplateError::Error404(error) => error.error,
-            TemplateError::Error409(error) => error.error,
-            TemplateError::Error500(error) => error.error,
+            ComponentError::Error400(errors) => errors.errors.iter().join(", "),
+            ComponentError::Error401(error) => error.error,
+            ComponentError::Error403(error) => error.error,
+            ComponentError::Error404(error) => error.error,
+            ComponentError::Error409(error) => error.error,
+            ComponentError::Error500(error) => error.error,
         }
     }
 }
@@ -94,33 +94,33 @@ fn display_golem_error(error: golem_client::model::GolemError) -> String {
         GolemError::FailedToResumeWorker(GolemErrorFailedToResumeWorker { worker_id }) => {
             format!("Failed to resume worker: {}", display_worker_id(worker_id))
         }
-        GolemError::TemplateDownloadFailed(GolemErrorTemplateDownloadFailed {
-            template_id,
+        GolemError::ComponentDownloadFailed(GolemErrorComponentDownloadFailed {
+            component_id,
             reason,
         }) => {
             format!(
-                "Failed to download template {}#{}: {}",
-                template_id.template_id, template_id.version, reason
+                "Failed to download component {}#{}: {}",
+                component_id.component_id, component_id.version, reason
             )
         }
-        GolemError::TemplateParseFailed(GolemErrorTemplateParseFailed {
-            template_id,
+        GolemError::ComponentParseFailed(GolemErrorComponentParseFailed {
+            component_id,
             reason,
         }) => {
             format!(
-                "Failed to parse template {}#{}: {}",
-                template_id.template_id, template_id.version, reason
+                "Failed to parse component {}#{}: {}",
+                component_id.component_id, component_id.version, reason
             )
         }
-        GolemError::GetLatestVersionOfTemplateFailed(
-            GolemErrorGetLatestVersionOfTemplateFailed {
-                template_id,
+        GolemError::GetLatestVersionOfComponentFailed(
+            GolemErrorGetLatestVersionOfComponentFailed {
+                component_id,
                 reason,
             },
         ) => {
             format!(
-                "Failed to get latest version of template {}: {}",
-                template_id, reason
+                "Failed to get latest version of component {}: {}",
+                component_id, reason
             )
         }
         GolemError::PromiseNotFound(GolemErrorPromiseNotFound { promise_id }) => {
@@ -179,7 +179,7 @@ fn display_golem_error(error: golem_client::model::GolemError) -> String {
 }
 
 fn display_worker_id(worker_id: WorkerId) -> String {
-    format!("{}/{}", worker_id.template_id, worker_id.worker_name)
+    format!("{}/{}", worker_id.component_id, worker_id.worker_name)
 }
 
 fn display_promise_id(promise_id: PromiseId) -> String {
@@ -201,7 +201,7 @@ fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String 
                     "{}/{}/{}/{}",
                     e.method.to_string(),
                     e.path,
-                    e.template,
+                    e.component,
                     e.detail
                 )
             })
@@ -277,13 +277,13 @@ mod tests {
                     RouteValidationError {
                         method: MethodPattern::Get,
                         path: "path".to_string(),
-                        template: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708208").unwrap(),
+                        component: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708208").unwrap(),
                         detail: "Duplicate route".to_string(),
                     },
                     RouteValidationError {
                         method: MethodPattern::Post,
                         path: "path2".to_string(),
-                        template: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708209").unwrap(),
+                        component: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708209").unwrap(),
                         detail: "Other route".to_string(),
                     },
                 ],

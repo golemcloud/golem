@@ -38,7 +38,7 @@ spec:
             pathType: ImplementationSpecific
             backend:
               service:
-                name: service-template-service-{{.Values.env}}
+                name: service-component-service-{{.Values.env}}
                 port:
                   number: {{ .Values.templateService.ports.http }}
 {{- end }}
@@ -90,7 +90,7 @@ spec:
             pathType: ImplementationSpecific
             backend:
               service:
-                name: service-template-service-{{.Values.env}}
+                name: service-component-service-{{.Values.env}}
                 port:
                   number: {{ .Values.templateService.ports.http }}
 {{- end }}

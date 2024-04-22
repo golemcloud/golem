@@ -19,11 +19,12 @@ use std::time::Duration;
 use crate::model::{InterruptKind, LastError, TrapType};
 use crate::services::rpc::Rpc;
 use crate::services::{
-    active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, scheduler,
-    template, worker, worker_enumeration, HasActiveWorkers, HasAll, HasBlobStoreService, HasConfig,
-    HasExtraDeps, HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
-    HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasTemplateService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
+    active_workers, blob_store, component, golem_config, invocation_key, key_value, oplog, promise,
+    scheduler, worker, worker_enumeration, HasActiveWorkers, HasAll, HasBlobStoreService,
+    HasComponentService, HasConfig, HasExtraDeps, HasInvocationKeyService, HasKeyValueService,
+    HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasWasmtimeEngine,
+    HasWorkerEnumerationService, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -74,7 +75,7 @@ pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
-    template_service: Arc<dyn template::TemplateService + Send + Sync>,
+    component_service: Arc<dyn component::ComponentService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     running_worker_enumeration_service:
@@ -99,7 +100,7 @@ impl<Ctx: WorkerCtx> Clone for RecoveryManagementDefault<Ctx> {
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
-            template_service: self.template_service.clone(),
+            component_service: self.component_service.clone(),
             worker_service: self.worker_service.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
             running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
@@ -123,9 +124,9 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for RecoveryManagementDefault<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasTemplateService for RecoveryManagementDefault<Ctx> {
-    fn template_service(&self) -> Arc<dyn template::TemplateService + Send + Sync> {
-        self.template_service.clone()
+impl<Ctx: WorkerCtx> HasComponentService for RecoveryManagementDefault<Ctx> {
+    fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
+        self.component_service.clone()
     }
 }
 
@@ -233,7 +234,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        template_service: Arc<dyn template::TemplateService + Send + Sync>,
+        component_service: Arc<dyn component::ComponentService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -257,7 +258,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             engine,
             linker,
             runtime,
-            template_service,
+            component_service,
             worker_service,
             worker_enumeration_service,
             running_worker_enumeration_service,
@@ -280,7 +281,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        template_service: Arc<dyn template::TemplateService + Send + Sync>,
+        component_service: Arc<dyn component::ComponentService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -308,7 +309,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             engine,
             linker,
             runtime,
-            template_service,
+            component_service,
             worker_service,
             worker_enumeration_service,
             running_worker_enumeration_service,
@@ -588,10 +589,10 @@ mod tests {
     use crate::services::worker::WorkerService;
     use crate::services::worker_event::WorkerEventService;
     use crate::services::{
-        worker_enumeration, All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
-        HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasOplog,
-        HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasTemplateService,
-        HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
+        worker_enumeration, All, HasAll, HasBlobStoreService, HasComponentService, HasConfig,
+        HasExtraDeps, HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasOplog,
+        HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasWasmtimeEngine,
+        HasWorkerEnumerationService, HasWorkerService,
     };
     use crate::workerctx::{
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
@@ -603,7 +604,7 @@ mod tests {
     use golem_common::config::RetryConfig;
     use golem_common::model::oplog::WorkerError;
     use golem_common::model::{
-        AccountId, CallingConvention, InvocationKey, TemplateId, WorkerId, WorkerMetadata,
+        AccountId, CallingConvention, ComponentId, InvocationKey, WorkerId, WorkerMetadata,
         WorkerStatus, WorkerStatusRecord,
     };
     use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -943,7 +944,7 @@ mod tests {
             deps.engine(),
             linker,
             runtime,
-            deps.template_service(),
+            deps.component_service(),
             deps.worker_service(),
             deps.worker_enumeration_service(),
             deps.running_worker_enumeration_service(),
@@ -964,7 +965,7 @@ mod tests {
         let uuid = uuid::Uuid::parse_str("14e55083-2ff5-44ec-a414-595a748b19a0").unwrap();
 
         WorkerId {
-            template_id: TemplateId(uuid),
+            component_id: ComponentId(uuid),
             worker_name: "test-worker".to_string(),
         }
     }

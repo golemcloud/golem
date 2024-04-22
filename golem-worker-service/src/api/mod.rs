@@ -36,7 +36,7 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
         .nest("/specs", spec)
         .nest("/metrics", metrics)
         .at(
-            "/v2/templates/:template_id/workers/:worker_name/connect",
+            "/v2/components/:component_id/workers/:worker_name/connect",
             get(worker_connect::ws.data(connect_services)),
         )
 }
@@ -54,7 +54,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
     OpenApiService::new(
         (
             worker::WorkerApi {
-                template_service: services.template_service.clone(),
+                component_service: services.component_service.clone(),
                 worker_service: services.worker_service.clone(),
             },
             register_api_definition::RegisterApiDefinitionApi::new(

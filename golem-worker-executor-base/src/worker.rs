@@ -43,8 +43,8 @@ use crate::services::oplog::Oplog;
 use crate::services::recovery::is_worker_error_retriable;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    HasAll, HasConfig, HasInvocationKeyService, HasInvocationQueue, HasOplogService,
-    HasTemplateService, HasWorkerService,
+    HasAll, HasComponentService, HasConfig, HasInvocationKeyService, HasInvocationQueue,
+    HasOplogService, HasWorkerService,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
@@ -72,14 +72,14 @@ pub struct Worker<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Creates a new worker.
     ///
-    /// This involves downloading the template (WASM), creating the worker context and the wasmtime instance.
+    /// This involves downloading the component (WASM), creating the worker context and the wasmtime instance.
     ///
     /// Arguments:
     /// - `this` - the caller object having reference to all services
-    /// - `worker_id` - the worker id (consisting of a template id and a worker name)
+    /// - `worker_id` - the worker id (consisting of a component id and a worker name)
     /// - `worker_args` - the command line arguments to be associated with the worker
     /// - `worker_env` - the environment variables to be associated with the worker
-    /// - `template_version` - the version of the template to be used (if None, the latest version is used)
+    /// - `component_version` - the version of the component to be used (if None, the latest version is used)
     /// - `account_id` - the account id of the user who initiated the creation of the worker
     /// - `pending_worker` - the pending worker object which is already published during the worker initializes. This allows clients
     ///                      to connect to the worker's event stream during it initializes.
@@ -96,13 +96,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         let start = Instant::now();
         let result = {
-            let template_id = worker_id.template_id.clone();
+            let component_id = worker_id.component_id.clone();
 
             let component = this
-                .template_service()
+                .component_service()
                 .get(
                     &this.engine(),
-                    &template_id,
+                    &component_id,
                     worker_metadata.last_known_status.component_version,
                 )
                 .await?;
@@ -231,7 +231,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_id: &WorkerId,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
-        template_version: Option<u64>,
+        component_version: Option<u64>,
         account_id: AccountId,
     ) where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
@@ -244,7 +244,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 &worker_id_clone,
                 worker_args,
                 worker_env,
-                template_version,
+                component_version,
                 account_id,
             )
             .await;
@@ -259,7 +259,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_id: &WorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
-        template_version: Option<u64>,
+        component_version: Option<u64>,
         account_id: AccountId,
     ) -> Result<Arc<Self>, GolemError>
     where
@@ -278,7 +278,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_id,
             worker_args,
             worker_env,
-            template_version,
+            component_version,
             account_id,
         )
         .await
@@ -289,7 +289,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_id: &WorkerId,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
-        template_version: Option<u64>,
+        component_version: Option<u64>,
         account_id: AccountId,
     ) -> Result<Arc<Self>, GolemError>
     where
@@ -305,7 +305,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let worker_metadata = Self::get_or_create_worker_metadata(
             this,
             worker_id,
-            template_version,
+            component_version,
             worker_args.clone(),
             worker_env.clone(),
             account_id,
@@ -357,7 +357,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_details.metadata.clone(),
             worker_args,
             worker_env,
-            template_version,
+            component_version,
         )?;
         Ok(worker_details)
     }
@@ -372,7 +372,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_id: &WorkerId,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
-        template_version: Option<u64>,
+        component_version: Option<u64>,
         account_id: AccountId,
     ) -> Result<PendingOrFinal<PendingWorker<Ctx>, Arc<Self>>, GolemError>
     where
@@ -388,7 +388,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let worker_metadata = Self::get_or_create_worker_metadata(
             this,
             worker_id,
-            template_version,
+            component_version,
             worker_args.clone(),
             worker_env.clone(),
             account_id,
@@ -450,7 +450,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_id: &WorkerId,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
-        template_version: Option<u64>,
+        component_version: Option<u64>,
         account_id: AccountId,
     ) -> Result<(PendingWorker<Ctx>, tokio::sync::oneshot::Sender<()>), GolemError>
     where
@@ -466,7 +466,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let worker_metadata = Self::get_or_create_worker_metadata(
             this,
             worker_id,
-            template_version,
+            component_version,
             worker_args.clone(),
             worker_env.clone(),
             account_id,
@@ -590,22 +590,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn get_or_create_worker_metadata<
-        T: HasWorkerService + HasTemplateService + HasConfig + HasOplogService,
+        T: HasWorkerService + HasComponentService + HasConfig + HasOplogService,
     >(
         this: &T,
         worker_id: &WorkerId,
-        template_version: Option<u64>,
+        component_version: Option<u64>,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
         account_id: AccountId,
     ) -> Result<WorkerMetadata, GolemError> {
-        let template_id = worker_id.template_id.clone();
+        let component_id = worker_id.component_id.clone();
 
-        let component_version = match template_version {
+        let component_version = match component_version {
             Some(component_version) => component_version,
             None => {
-                this.template_service()
-                    .get_latest_version(&template_id)
+                this.component_service()
+                    .get_latest_version(&component_id)
                     .await?
             }
         };
@@ -702,7 +702,7 @@ fn validate_worker(
     worker_metadata: WorkerMetadata,
     worker_args: Vec<String>,
     worker_env: Vec<(String, String)>,
-    template_version: Option<u64>,
+    component_version: Option<u64>,
 ) -> Result<(), GolemError> {
     let mut errors: Vec<String> = Vec::new();
     if worker_metadata.args != worker_args {
@@ -719,10 +719,10 @@ fn validate_worker(
         );
         errors.push(error)
     }
-    if let Some(version) = template_version {
+    if let Some(version) = component_version {
         if worker_metadata.last_known_status.component_version != version {
             let error = format!(
-                "Worker is already running with different template version: {:?} != {:?}",
+                "Worker is already running with different component version: {:?} != {:?}",
                 worker_metadata.last_known_status.component_version, version
             );
             errors.push(error)

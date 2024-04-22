@@ -20,7 +20,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::oplog::WrappedFunctionType;
-use golem_common::model::{TemplateId, WorkerId};
+use golem_common::model::{ComponentId, WorkerId};
 use golem_wasm_rpc::golem::rpc::types::Uri;
 use golem_wasm_rpc::{HostWasmRpc, WasmRpcEntry, WitValue};
 use std::str::FromStr;
@@ -44,7 +44,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 Ok(entry)
             }
             _ => Err(anyhow!(
-                "Invalid URI: {}. Must be worker://template-id/worker-name",
+                "Invalid URI: {}. Must be worker://component-id/worker-name",
                 location.value
             )),
         }
@@ -175,23 +175,23 @@ impl UriExtensions for Uri {
             let parts = self.value[9..].split('/').collect::<Vec<_>>();
             match parts.len() {
                 2 => {
-                    let template_id = TemplateId::from_str(parts[0]).ok()?;
+                    let component_id = ComponentId::from_str(parts[0]).ok()?;
                     let worker_name = parts[1].to_string();
                     Some((
                         WorkerId {
-                            template_id,
+                            component_id,
                             worker_name,
                         },
                         None,
                     ))
                 }
                 3 => {
-                    let template_id = TemplateId::from_str(parts[0]).ok()?;
+                    let component_id = ComponentId::from_str(parts[0]).ok()?;
                     let worker_name = parts[1].to_string();
                     let function_name = parts[2].to_string();
                     Some((
                         WorkerId {
-                            template_id,
+                            component_id,
                             worker_name,
                         },
                         Some(function_name),

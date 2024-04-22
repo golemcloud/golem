@@ -21,7 +21,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 };
 
 use golem_common::model::{
-    AccountId, CallingConvention, FilterComparator, InvocationKey, TemplateId, Timestamp,
+    AccountId, CallingConvention, ComponentId, FilterComparator, InvocationKey, Timestamp,
     WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
@@ -29,12 +29,12 @@ use golem_service_base::model::{
 };
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
-    model::{GolemError, GolemErrorInvalidShardId, GolemErrorRuntimeError, Template},
+    model::{Component, GolemError, GolemErrorInvalidShardId, GolemErrorRuntimeError},
     routing_table::{RoutingTableError, RoutingTableService},
     worker_executor_clients::WorkerExecutorClients,
 };
 
-use crate::service::template::TemplateService;
+use crate::service::component::ComponentService;
 
 use super::{ConnectWorkerStream, WorkerServiceError};
 
@@ -45,7 +45,7 @@ pub trait WorkerService<AuthCtx> {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        template_version: u64,
+        component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         metadata: WorkerRequestMetadata,
@@ -141,7 +141,7 @@ pub trait WorkerService<AuthCtx> {
 
     async fn find_metadata(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
@@ -161,19 +161,19 @@ pub struct WorkerRequestMetadata {
 #[derive(Clone)]
 pub struct WorkerServiceDefault<AuthCtx> {
     worker_executor_clients: Arc<dyn WorkerExecutorClients + Send + Sync>,
-    template_service: Arc<dyn TemplateService<AuthCtx> + Send + Sync>,
+    component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
 }
 
 impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
     pub fn new(
         worker_executor_clients: Arc<dyn WorkerExecutorClients + Send + Sync>,
-        template_service: Arc<dyn TemplateService<AuthCtx> + Send + Sync>,
+        component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
         routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
     ) -> Self {
         Self {
             worker_executor_clients,
-            template_service,
+            component_service,
             routing_table_service,
         }
     }
@@ -187,7 +187,7 @@ where
     async fn create(
         &self,
         worker_id: &WorkerId,
-        template_version: u64,
+        component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         metadata: WorkerRequestMetadata,
@@ -195,14 +195,14 @@ where
     ) -> WorkerResult<WorkerId> {
         self.retry_on_invalid_shard_id(
             &worker_id.clone(),
-            &(worker_id.clone(), template_version, arguments, environment_variables, metadata),
-            |worker_executor_client, (worker_id, template_version, args, env, metadata)| {
+            &(worker_id.clone(), component_version, arguments, environment_variables, metadata),
+            |worker_executor_client, (worker_id, component_version, args, env, metadata)| {
                 Box::pin(async move {
                     let response: tonic::Response<workerexecutor::CreateWorkerResponse> = worker_executor_client
                         .create_worker(
                             CreateWorkerRequest {
                                 worker_id: Some(worker_id.clone().into()),
-                                template_version: *template_version,
+                                component_version: *component_version,
                                 args: args.clone(),
                                 env: env.clone(),
                                 account_id: metadata.account_id.clone().map(|id| id.into()),
@@ -396,11 +396,11 @@ where
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<TypeAnnotatedValue> {
-        let template_details = self
-            .try_get_template_for_worker(worker_id, auth_ctx)
+        let component_details = self
+            .try_get_component_for_worker(worker_id, auth_ctx)
             .await?;
 
-        let function_type = template_details
+        let function_type = component_details
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
@@ -451,10 +451,10 @@ where
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult> {
-        let template_details = self
-            .try_get_template_for_worker(worker_id, auth_ctx)
+        let component_details = self
+            .try_get_component_for_worker(worker_id, auth_ctx)
             .await?;
-        let function_type = template_details
+        let function_type = component_details
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
@@ -525,10 +525,10 @@ where
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
-        let template_details = self
-            .try_get_template_for_worker(worker_id, auth_ctx)
+        let component_details = self
+            .try_get_component_for_worker(worker_id, auth_ctx)
             .await?;
-        let function_type = template_details
+        let function_type = component_details
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
@@ -564,10 +564,10 @@ where
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
-        let template_details = self
-            .try_get_template_for_worker(worker_id, auth_ctx)
+        let component_details = self
+            .try_get_component_for_worker(worker_id, auth_ctx)
             .await?;
-        let function_type = template_details
+        let function_type = component_details
             .metadata
             .function_by_name(&function_name)
             .ok_or_else(|| {
@@ -767,7 +767,7 @@ where
 
     async fn find_metadata(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
@@ -776,12 +776,12 @@ where
     ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
         if filter.clone().is_some_and(is_filter_with_running_status) {
             let result = self
-                .find_running_metadata_internal(template_id, filter, auth_ctx)
+                .find_running_metadata_internal(component_id, filter, auth_ctx)
                 .await?;
 
             Ok((None, result.into_iter().take(count as usize).collect()))
         } else {
-            self.find_metadata_internal(template_id, filter, cursor, count, precise, auth_ctx)
+            self.find_metadata_internal(component_id, filter, cursor, count, precise, auth_ctx)
                 .await
         }
     }
@@ -827,28 +827,28 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx>
 where
     AuthCtx: Send + Sync,
 {
-    async fn try_get_template_for_worker(
+    async fn try_get_component_for_worker(
         &self,
         worker_id: &WorkerId,
         auth_ctx: &AuthCtx,
-    ) -> Result<Template, WorkerServiceError> {
+    ) -> Result<Component, WorkerServiceError> {
         match self.get_metadata(worker_id, auth_ctx).await {
             Ok(metadata) => {
-                let template_version = metadata.template_version;
-                let template_details = self
-                    .template_service
-                    .get_by_version(&worker_id.template_id, template_version, auth_ctx)
+                let component_version = metadata.component_version;
+                let component_details = self
+                    .component_service
+                    .get_by_version(&worker_id.component_id, component_version, auth_ctx)
                     .await?;
 
-                Ok(template_details)
+                Ok(component_details)
             }
             Err(WorkerServiceError::WorkerNotFound(_)) => Ok(self
-                .template_service
-                .get_latest(&worker_id.template_id, auth_ctx)
+                .component_service
+                .get_latest(&worker_id.component_id, auth_ctx)
                 .await?),
             Err(WorkerServiceError::Golem(GolemError::WorkerNotFound(_))) => Ok(self
-                .template_service
-                .get_latest(&worker_id.template_id, auth_ctx)
+                .component_service
+                .get_latest(&worker_id.component_id, auth_ctx)
                 .await?),
             Err(other) => Err(other),
         }
@@ -1140,19 +1140,19 @@ where
 
     async fn find_running_metadata_internal(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Vec<WorkerMetadata>> {
         let result = self.execute_with_all_clients(
-            &(template_id.clone(), filter.clone()),
-            |worker_executor_client, (template_id, filter)| {
+            &(component_id.clone(), filter.clone()),
+            |worker_executor_client, (component_id, filter)| {
                 Box::pin(async move {
-                    let template_id: golem_api_grpc::proto::golem::template::TemplateId =
-                        template_id.clone().into();
+                    let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+                        component_id.clone().into();
                     let response = worker_executor_client.get_running_workers_metadata(
                         golem_api_grpc::proto::golem::workerexecutor::GetRunningWorkersMetadataRequest {
-                            template_id: Some(template_id),
+                            component_id: Some(component_id),
                             filter: filter.clone().map(|f| f.into())
                         }
                     ).await.map_err(|err| {
@@ -1191,7 +1191,7 @@ where
 
     async fn find_metadata_internal(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
@@ -1199,14 +1199,14 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
         let result = self.execute_with_random_client(
-            &(template_id.clone(), filter.clone(), cursor, count, precise),
-            |worker_executor_client, (template_id, filter, cursor, count, precise)| {
+            &(component_id.clone(), filter.clone(), cursor, count, precise),
+            |worker_executor_client, (component_id, filter, cursor, count, precise)| {
                 Box::pin(async move {
-                    let template_id: golem_api_grpc::proto::golem::template::TemplateId =
-                        template_id.clone().into();
+                    let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+                        component_id.clone().into();
                     let response = worker_executor_client.get_workers_metadata(
                         golem_api_grpc::proto::golem::workerexecutor::GetWorkersMetadataRequest {
-                            template_id: Some(template_id),
+                            component_id: Some(component_id),
                             filter: filter.clone().map(|f| f.into()),
                             cursor: *cursor,
                             count: *count,
@@ -1291,13 +1291,13 @@ where
     async fn create(
         &self,
         _worker_id: &WorkerId,
-        _template_version: u64,
+        _component_version: u64,
         _arguments: Vec<String>,
         _environment_variables: HashMap<String, String>,
         _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerId> {
-        Ok(WorkerId::new(TemplateId::new_v4(), "no-op".to_string()).unwrap())
+        Ok(WorkerId::new(ComponentId::new_v4(), "no-op".to_string()).unwrap())
     }
 
     async fn connect(
@@ -1416,7 +1416,7 @@ where
             args: vec![],
             env: Default::default(),
             status: golem_common::model::WorkerStatus::Running,
-            template_version: 0,
+            component_version: 0,
             retry_count: 0,
             pending_invocation_count: 0,
             updates: vec![],
@@ -1427,7 +1427,7 @@ where
 
     async fn find_metadata(
         &self,
-        _template_id: &TemplateId,
+        _component_id: &ComponentId,
         _filter: Option<WorkerFilter>,
         _cursor: u64,
         _count: u64,

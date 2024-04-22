@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package golem.component;
+
+import "wasm/rpc/type.proto";
+
+message FunctionResult {
+  optional string name = 1;
+  wasm.rpc.Type tpe = 2;
+}

@@ -1,9 +1,9 @@
 use crate::api_definition::{
-    golem_def, make_golem_file, make_open_api_file, make_shopping_cart_template,
+    golem_def, make_golem_file, make_open_api_file, make_shopping_cart_component,
 };
 use crate::cli::{Cli, CliLive};
-use crate::worker::make_template;
-use golem_cli::model::template::TemplateView;
+use crate::worker::make_component;
+use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
 use golem_client::model::{HttpApiDefinition, WorkerId};
 use golem_test_framework::config::TestDependencies;
@@ -21,19 +21,19 @@ fn make(
     let ctx = (deps, name.to_string(), cli);
     vec![
         Trial::test_in_context(
-            format!("text_template_add{suffix}"),
+            format!("text_component_add{suffix}"),
             ctx.clone(),
-            text_template_add,
+            text_component_add,
         ),
         Trial::test_in_context(
-            format!("text_template_update{suffix}"),
+            format!("text_component_update{suffix}"),
             ctx.clone(),
-            text_template_update,
+            text_component_update,
         ),
         Trial::test_in_context(
-            format!("text_template_list{suffix}"),
+            format!("text_component_list{suffix}"),
             ctx.clone(),
-            text_template_list,
+            text_component_list,
         ),
         Trial::test_in_context(
             format!("text_worker_add{suffix}"),
@@ -113,34 +113,34 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
     short_args
 }
 
-fn text_template_add(
+fn text_component_add(
     (deps, name, cli): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_name = format!("{name} text template add");
-    let env_service = deps.template_directory().join("environment-service.wasm");
+    let component_name = format!("{name} text component add");
+    let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let template_res = cli.with_format(Format::Text).run_string(&[
-        "template",
+    let component_res = cli.with_format(Format::Text).run_string(&[
+        "component",
         "add",
-        &cfg.arg('t', "template-name"),
-        &template_name,
+        &cfg.arg('c', "component-name"),
+        &component_name,
         env_service.to_str().unwrap(),
     ])?;
 
-    let lines = template_res.lines().collect::<Vec<_>>();
+    let lines = component_res.lines().collect::<Vec<_>>();
 
     let regex_header =
-        Regex::new("New template created with ID ([^ ]+), version 0, and size of ([0-9]+) bytes.")
+        Regex::new("New component created with ID ([^ ]+), version 0, and size of ([0-9]+) bytes.")
             .unwrap();
     assert!(regex_header.is_match(lines.first().unwrap()));
 
     assert_eq!(
         *lines.get(1).unwrap(),
-        format!("Template name: {template_name}.")
+        format!("Component name: {component_name}.")
     );
     assert_eq!(*lines.get(2).unwrap(), "Exports:");
     assert_eq!(
@@ -155,29 +155,29 @@ fn text_template_add(
     Ok(())
 }
 
-fn text_template_update(
+fn text_component_update(
     (deps, name, cli): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_name = format!("{name} text template update");
-    let env_service = deps.template_directory().join("environment-service.wasm");
+    let component_name = format!("{name} text component update");
+    let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let template: TemplateView = cli.run(&[
-        "template",
+    let component: ComponentView = cli.run(&[
+        "component",
         "add",
-        &cfg.arg('t', "template-name"),
-        &template_name,
+        &cfg.arg('c', "component-name"),
+        &component_name,
         env_service.to_str().unwrap(),
     ])?;
 
     let update_res = cli.with_format(Format::Text).run_string(&[
-        "template",
+        "component",
         "update",
-        &cfg.arg('T', "template-id"),
-        &template.template_id,
+        &cfg.arg('C', "component-id"),
+        &component.component_id,
         env_service.to_str().unwrap(),
     ])?;
 
@@ -186,13 +186,13 @@ fn text_template_update(
     assert_eq!(
         *lines.first().unwrap(),
         format!(
-            "Updated template with ID {}. New version: 1. Template size is 72305 bytes.",
-            template.template_id
+            "Updated component with ID {}. New version: 1. Component size is 72309 bytes.",
+            component.component_id
         )
     );
     assert_eq!(
         *lines.get(1).unwrap(),
-        format!("Template name: {template_name}.")
+        format!("Component name: {component_name}.")
     );
     assert_eq!(*lines.get(2).unwrap(), "Exports:");
     assert_eq!(
@@ -207,41 +207,41 @@ fn text_template_update(
     Ok(())
 }
 
-fn text_template_list(
+fn text_component_list(
     (deps, name, cli): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_name = format!("{name: <9} text template list");
-    let env_service = deps.template_directory().join("environment-service.wasm");
+    let component_name = format!("{name: <9} text component list");
+    let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let template: TemplateView = cli.run(&[
-        "template",
+    let component: ComponentView = cli.run(&[
+        "component",
         "add",
-        &cfg.arg('t', "template-name"),
-        &template_name,
+        &cfg.arg('c', "component-name"),
+        &component_name,
         env_service.to_str().unwrap(),
     ])?;
 
     let list_res = cli.with_format(Format::Text).run_string(&[
-        "template",
+        "component",
         "list",
-        &cfg.arg('t', "template-name"),
-        &template_name,
+        &cfg.arg('c', "component-name"),
+        &component_name,
     ])?;
 
     let expected = formatdoc!(
         "
-        +--------------------------------------+------------------------------+---------+-------+---------------+
-        | ID                                   | Name                         | Version | Size  | Exports count |
-        +--------------------------------------+------------------------------+---------+-------+---------------+
-        | {} | {} |       0 | 72305 |             2 |
-        +--------------------------------------+------------------------------+---------+-------+---------------+
+        +--------------------------------------+-------------------------------+---------+-------+---------------+
+        | ID                                   | Name                          | Version | Size  | Exports count |
+        +--------------------------------------+-------------------------------+---------+-------+---------------+
+        | {} | {} |       0 | 72309 |             2 |
+        +--------------------------------------+-------------------------------+---------+-------+---------------+
         ",
-        template.template_id,
-        template_name,
+        component.component_id,
+        component_name,
     );
 
     assert_eq!(strip_ansi_escapes::strip_str(list_res), expected);
@@ -256,7 +256,7 @@ fn text_worker_add(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id = make_template(deps, &format!("{name} text worker add"), &cli)?.template_id;
+    let component_id = make_component(deps, &format!("{name} text worker add"), &cli)?.component_id;
     let worker_name = format!("{name}_worker_add");
     let cfg = &cli.config;
     let res = cli.with_format(Format::Text).run_string(&[
@@ -264,12 +264,12 @@ fn text_worker_add(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
 
     let regex_res =
-        Regex::new("New worker created for template ([^ ]+), with name ([^ ]+).\n").unwrap();
+        Regex::new("New worker created for component ([^ ]+), with name ([^ ]+).\n").unwrap();
 
     let matched = regex_res.captures(&res);
 
@@ -277,7 +277,7 @@ fn text_worker_add(
 
     assert_eq!(
         matched.as_ref().unwrap().get(1).unwrap().as_str(),
-        template_id
+        component_id
     );
     assert_eq!(
         matched.as_ref().unwrap().get(2).unwrap().as_str(),
@@ -294,8 +294,8 @@ fn text_worker_get_invocation_key(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id =
-        make_template(deps, &format!("{name} text worker invocation key"), &cli)?.template_id;
+    let component_id =
+        make_component(deps, &format!("{name} text worker invocation key"), &cli)?.component_id;
     let worker_name = format!("{name}_worker_invocation_key");
     let cfg = &cli.config;
     let _: WorkerId = cli.run(&[
@@ -303,14 +303,14 @@ fn text_worker_get_invocation_key(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
     let res = cli.with_format(Format::Text).run_string(&[
         "worker",
         "invocation-key",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
     ])?;
@@ -337,8 +337,8 @@ fn text_worker_invoke_and_await(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id =
-        make_template(deps, &format!("{name} text worker_invoke_and_await"), &cli)?.template_id;
+    let component_id =
+        make_component(deps, &format!("{name} text worker_invoke_and_await"), &cli)?.component_id;
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
     let _: WorkerId = cli.run(&[
@@ -346,8 +346,8 @@ fn text_worker_invoke_and_await(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('e', "env"),
         "TEST_ENV=test-value",
         "test-arg",
@@ -355,8 +355,8 @@ fn text_worker_invoke_and_await(
     let res = cli.with_format(Format::Text).run_string(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
@@ -381,7 +381,7 @@ fn text_worker_get(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id = make_template(deps, &format!("{name} text worker get"), &cli)?.template_id;
+    let component_id = make_component(deps, &format!("{name} text worker get"), &cli)?.component_id;
     let worker_name = format!("{name}_worker_get");
     let cfg = &cli.config;
     let _: WorkerId = cli.run(&[
@@ -389,8 +389,8 @@ fn text_worker_get(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
 
     let res = cli.with_format(Format::Text).run_string(&[
@@ -398,13 +398,13 @@ fn text_worker_get(
         "get",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
 
     let expected = formatdoc!(
         r#"
-            Worker "{worker_name}" of template {template_id} with template version 0.
+            Worker "{worker_name}" of component {component_id} with component version 0.
             Status: Idle.
             Startup arguments: .
             Environment variables: .
@@ -424,7 +424,8 @@ fn text_worker_list(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id = make_template(deps, &format!("{name} text worker list"), &cli)?.template_id;
+    let component_id =
+        make_component(deps, &format!("{name} text worker list"), &cli)?.component_id;
     let worker_name = format!("{name:_<9}_worker_list");
     let cfg = &cli.config;
     let _: WorkerId = cli.run(&[
@@ -432,15 +433,15 @@ fn text_worker_list(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
 
     let res = cli.with_format(Format::Text).run_string(&[
         "worker",
         "list",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('f', "filter"),
         &format!("name = {worker_name}"),
         &cfg.arg('p', "precise"),
@@ -450,11 +451,11 @@ fn text_worker_list(
     let expected =
         formatdoc!(
             "
-            +--------------------------------------+-----------------------+--------+------------------+
-            | Template                             | Name                  | Status | Template version |
-            +--------------------------------------+-----------------------+--------+------------------+
-            | {template_id} | {worker_name} |   Idle |                0 |
-            +--------------------------------------+-----------------------+--------+------------------+
+            +--------------------------------------+-----------------------+--------+-------------------+
+            | Component                            | Name                  | Status | Component version |
+            +--------------------------------------+-----------------------+--------+-------------------+
+            | {component_id} | {worker_name} |   Idle |                 0 |
+            +--------------------------------------+-----------------------+--------+-------------------+
             "
         );
 
@@ -503,9 +504,9 @@ fn text_api_definition_import(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_name = format!("text_api_definition_import{name}");
-    let template = make_shopping_cart_template(deps, &template_name, &cli)?;
-    let path = make_open_api_file(&template_name, &template.template_id)?;
+    let component_name = format!("text_api_definition_import{name}");
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let path = make_open_api_file(&component_name, &component.component_id)?;
 
     let res = cli.with_format(Format::Text).run_string(&[
         "api-definition",
@@ -513,18 +514,18 @@ fn text_api_definition_import(
         path.to_str().unwrap(),
     ])?;
 
-    let template_end = &template.template_id[template.template_id.len() - 7..];
+    let component_end = &component.component_id[component.component_id.len() - 7..];
 
     let expected =
         formatdoc!(
             "
-            API Definition imported with ID {template_name} and version 0.1.0.
+            API Definition imported with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
-            | Method | Path                         | Template | Worker                         | Function                       |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{template_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            | Method | Path                         | Component | Worker                         | Function                       |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             "
         );
 
@@ -540,9 +541,9 @@ fn text_api_definition_add(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_name = format!("text_api_definition_add{name}");
-    let template = make_shopping_cart_template(deps, &template_name, &cli)?;
-    let def = golem_def(&template_name, &template.template_id);
+    let component_name = format!("text_api_definition_add{name}");
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let def = golem_def(&component_name, &component.component_id);
     let path = make_golem_file(&def)?;
 
     let res = cli.with_format(Format::Text).run_string(&[
@@ -551,18 +552,18 @@ fn text_api_definition_add(
         path.to_str().unwrap(),
     ])?;
 
-    let template_end = &template.template_id[template.template_id.len() - 7..];
+    let component_end = &component.component_id[component.component_id.len() - 7..];
 
     let expected =
         formatdoc!(
             "
-            API Definition created with ID {template_name} and version 0.1.0.
+            API Definition created with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
-            | Method | Path                         | Template | Worker                         | Function                       |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{template_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            | Method | Path                         | Component | Worker                         | Function                       |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             "
         );
 
@@ -578,9 +579,9 @@ fn text_api_definition_update(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_name = format!("text_api_definition_update{name}");
-    let template = make_shopping_cart_template(deps, &template_name, &cli)?;
-    let def = golem_def(&template_name, &template.template_id);
+    let component_name = format!("text_api_definition_update{name}");
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let def = golem_def(&component_name, &component.component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -590,18 +591,18 @@ fn text_api_definition_update(
         path.to_str().unwrap(),
     ])?;
 
-    let template_end = &template.template_id[template.template_id.len() - 7..];
+    let component_end = &component.component_id[component.component_id.len() - 7..];
 
     let expected =
         formatdoc!(
             "
-            API Definition updated with ID {template_name} and version 0.1.0.
+            API Definition updated with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
-            | Method | Path                         | Template | Worker                         | Function                       |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{template_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            | Method | Path                         | Component | Worker                         | Function                       |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             "
         );
 
@@ -617,9 +618,9 @@ fn text_api_definition_list(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_name = format!("text_api_definition_list{name:_>9}");
-    let template = make_shopping_cart_template(deps, &template_name, &cli)?;
-    let def = golem_def(&template_name, &template.template_id);
+    let component_name = format!("text_api_definition_list{name:_>9}");
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let def = golem_def(&component_name, &component.component_id);
     let path = make_golem_file(&def)?;
     let cfg = &cli.config;
 
@@ -629,7 +630,7 @@ fn text_api_definition_list(
         "api-definition",
         "list",
         &cfg.arg('i', "id"),
-        &template_name,
+        &component_name,
     ])?;
 
     let expected = formatdoc!(
@@ -637,7 +638,7 @@ fn text_api_definition_list(
             +-----------------------------------+---------+--------------+
             | ID                                | Version | Routes count |
             +-----------------------------------+---------+--------------+
-            | {template_name} | 0.1.0   |            1 |
+            | {component_name} | 0.1.0   |            1 |
             +-----------------------------------+---------+--------------+
             "
     );
@@ -654,9 +655,9 @@ fn text_api_definition_get(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_name = format!("text_api_definition_get{name:_>9}");
-    let template = make_shopping_cart_template(deps, &template_name, &cli)?;
-    let def = golem_def(&template_name, &template.template_id);
+    let component_name = format!("text_api_definition_get{name:_>9}");
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let def = golem_def(&component_name, &component.component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -667,23 +668,23 @@ fn text_api_definition_get(
         "api-definition",
         "get",
         &cfg.arg('i', "id"),
-        &template_name,
+        &component_name,
         &cfg.arg('V', "version"),
         "0.1.0",
     ])?;
 
-    let template_end = &template.template_id[template.template_id.len() - 7..];
+    let component_end = &component.component_id[component.component_id.len() - 7..];
 
     let expected =
         formatdoc!(
             "
-            API Definition with ID {template_name} and version 0.1.0.
+            API Definition with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
-            | Method | Path                         | Template | Worker                         | Function                       |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{template_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            | Method | Path                         | Component | Worker                         | Function                       |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
+            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             "
         );
 

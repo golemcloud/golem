@@ -236,7 +236,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
 
 #[cfg(test)]
 mod tests {
-    use golem_common::model::{TemplateId, WorkerId};
+    use golem_common::model::{ComponentId, WorkerId};
     use golem_wasm_rpc::Value;
 
     use crate::services::invocation_key::{
@@ -250,7 +250,7 @@ mod tests {
         let uuid = uuid::Uuid::parse_str("14e55083-2ff5-44ec-a414-595a748b19a0").unwrap();
 
         let worker_id = WorkerId {
-            template_id: TemplateId(uuid),
+            component_id: ComponentId(uuid),
             worker_name: "1".to_string(),
         };
 

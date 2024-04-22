@@ -503,7 +503,7 @@ mod tests {
     };
     use crate::error::GolemError;
     use crate::model::InterruptKind;
-    use golem_common::model::{PromiseId, ShardId, TemplateId, WorkerId};
+    use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
     use proptest::collection::vec;
     use proptest::prelude::*;
     use proptest::strategy::LazyJust;
@@ -590,13 +590,13 @@ mod tests {
         (any::<u64>(), any::<u64>()).prop_map(|(a, b)| Uuid::from_u64_pair(a, b))
     }
 
-    fn templateid_strat() -> impl Strategy<Value = TemplateId> {
-        uuid_strat().prop_map(TemplateId)
+    fn componentid_strat() -> impl Strategy<Value = ComponentId> {
+        uuid_strat().prop_map(ComponentId)
     }
 
     fn workerid_strat() -> impl Strategy<Value = WorkerId> {
-        (templateid_strat(), ".+").prop_map(|(template_id, worker_name)| WorkerId {
-            template_id,
+        (componentid_strat(), ".+").prop_map(|(component_id, worker_name)| WorkerId {
+            component_id,
             worker_name,
         })
     }
@@ -627,9 +627,9 @@ mod tests {
             workerid_strat().prop_map(|worker_id| GolemError::WorkerNotFound { worker_id }),
             (workerid_strat(), ".*").prop_map(|(worker_id, details)| GolemError::WorkerCreationFailed { worker_id, details }),
             workerid_strat().prop_map(|worker_id| GolemError::FailedToResumeWorker { worker_id }),
-            (templateid_strat(), any::<u64>(), ".*").prop_map(|(template_id, template_version, reason)| GolemError::TemplateDownloadFailed { template_id, template_version, reason }),
-            (templateid_strat(), any::<u64>(), ".*").prop_map(|(template_id, template_version, reason)| GolemError::TemplateParseFailed { template_id, template_version, reason }),
-            (templateid_strat(), ".*").prop_map(|(template_id, reason)| GolemError::GetLatestVersionOfTemplateFailed { template_id, reason }),
+            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| GolemError::ComponentDownloadFailed { component_id, component_version, reason }),
+            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| GolemError::ComponentParseFailed { component_id, component_version, reason }),
+            (componentid_strat(), ".*").prop_map(|(component_id, reason)| GolemError::GetLatestVersionOfComponentFailed { component_id, reason }),
             promiseid_strat().prop_map(|promise_id| GolemError::PromiseNotFound { promise_id }),
             promiseid_strat().prop_map(|promise_id| GolemError::PromiseDropped { promise_id }),
             promiseid_strat().prop_map(|promise_id| GolemError::PromiseAlreadyCompleted { promise_id }),

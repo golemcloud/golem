@@ -117,7 +117,7 @@ spec:
             - name: REDIS_HOST
               value: {{ .Values.workerExecutor.redis.host }}
             - name: GOLEM__TEMPLATE_SERVICE__CONFIG__HOST
-              value: service-template-service-{{.Values.env}}
+              value: service-component-service-{{.Values.env}}
             - name: GOLEM__TEMPLATE_SERVICE__CONFIG__PORT
               value: "{{ .Values.templateService.ports.grpc }}"
             - name: GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN
@@ -179,7 +179,7 @@ spec:
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
               value: "Local"
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT
-              value: "/golem/template/compiled"
+              value: "/golem/component/compiled"
 {{- end }}
 {{- if eq .Values.templateCompiledStore.type "s3" }}
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
@@ -228,8 +228,8 @@ spec:
           volumeMounts:
 {{- end }}
 {{- if eq .Values.templateCompiledStore.type "pvc" }}
-            - name: golem-template-compiled-store-{{.Values.env}}
-              mountPath: /golem/template/compiled
+            - name: golem-component-compiled-store-{{.Values.env}}
+              mountPath: /golem/component/compiled
 {{- end }}
 {{- if eq .Values.workerBlobStore.type "pvc" }}
             - name: golem-worker-blob-store-{{.Values.env}}
@@ -239,9 +239,9 @@ spec:
       volumes:
 {{- end }}
 {{- if eq .Values.templateCompiledStore.type "pvc" }}
-        - name: golem-template-compiled-store-{{.Values.env}}
+        - name: golem-component-compiled-store-{{.Values.env}}
           persistentVolumeClaim:
-            claimName: golem-template-compiled-store-{{.Values.env}}
+            claimName: golem-component-compiled-store-{{.Values.env}}
 {{- end }}
 {{- if eq .Values.workerBlobStore.type "pvc" }}
         - name: golem-worker-blob-store-{{.Values.env}}
@@ -291,7 +291,7 @@ spec:
             - name: GOLEM__ROUTING_TABLE__PORT
               value: "{{ .Values.shardManager.ports.grpc }}"
             - name: GOLEM__TEMPLATE_SERVICE__HOST
-              value: service-template-service-{{.Values.env}}
+              value: service-component-service-{{.Values.env}}
             - name: GOLEM__TEMPLATE_SERVICE__PORT
               value: "{{ .Values.templateService.ports.grpc }}"
             - name: GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN
@@ -379,7 +379,7 @@ spec:
       nodeSelector: {{- .Values.templateService.nodeSelector | toYaml | nindent 8 }}
 {{- end }}
       containers:
-        - name: template-service-app-{{.Values.env}}
+        - name: component-service-app-{{.Values.env}}
           image: "{{ .Values.templateService.image }}"
           imagePullPolicy: {{.Values.templateService.imagePullPolicy}}
           env:
@@ -408,7 +408,7 @@ spec:
             - name: GOLEM__COMPILATION__TYPE
               value: "Enabled"
             - name: GOLEM__COMPILATION__CONFIG__HOST
-              value: service-template-compilation-service-{{.Values.env}}
+              value: service-component-compilation-service-{{.Values.env}}
             - name: GOLEM__COMPILATION__CONFIG__PORT
               value: "{{.Values.templateCompilationService.ports.grpc}}"
 
@@ -431,7 +431,7 @@ spec:
             - name: GOLEM__TEMPLATE_STORE__TYPE
               value: "Local"
             - name: GOLEM__TEMPLATE_STORE__CONFIG__ROOT_PATH
-              value: "/golem/template"
+              value: "/golem/component"
             - name: GOLEM__TEMPLATE_STORE__CONFIG__OBJECT_PREFIX
               value: ""
 {{- end }}
@@ -466,14 +466,14 @@ spec:
             initialDelaySeconds: 20
 {{- if eq .Values.templateStore.type "pvc" }}
           volumeMounts:
-            - name: golem-template-store-{{.Values.env}}
-              mountPath: /golem/template
+            - name: golem-component-store-{{.Values.env}}
+              mountPath: /golem/component
 {{- end }}
 {{- if eq .Values.templateStore.type "pvc" }}
       volumes:
-        - name: golem-template-store-{{.Values.env}}
+        - name: golem-component-store-{{.Values.env}}
           persistentVolumeClaim:
-            claimName: golem-template-store-{{.Values.env}}
+            claimName: golem-component-store-{{.Values.env}}
 {{- end }}
 
 ---
@@ -502,14 +502,14 @@ spec:
       nodeSelector: {{- .Values.templateCompilationService.nodeSelector | toYaml | nindent 8 }}
 {{- end }}
       containers:
-        - name: template-compilation-service-app-{{.Values.env}}
+        - name: component-compilation-service-app-{{.Values.env}}
           image: "{{ .Values.templateCompilationService.image }}"
           imagePullPolicy: {{.Values.templateCompilationService.imagePullPolicy}}
           env:
             - name: ENVIRONMENT
               value: {{.Values.env}}
             - name: GOLEM__TEMPLATE_SERVICE__HOST
-              value: service-template-service-{{.Values.env}}
+              value: service-component-service-{{.Values.env}}
             - name: GOLEM__TEMPLATE_SERVICE__PORT
               value: "{{ .Values.templateService.ports.grpc }}"
             - name: GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN
@@ -528,7 +528,7 @@ spec:
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
               value: "Local"
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT
-              value: "/golem/template/compiled"
+              value: "/golem/component/compiled"
 {{- end }}
 {{- if eq .Values.templateCompiledStore.type "s3" }}
             - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
@@ -555,12 +555,12 @@ spec:
             timeoutSeconds: 2
 {{- if eq .Values.templateCompiledStore.type "pvc" }}
           volumeMounts:
-            - name: golem-template-compiled-store-{{.Values.env}}
-              mountPath: /golem/template/compiled
+            - name: golem-component-compiled-store-{{.Values.env}}
+              mountPath: /golem/component/compiled
 {{- end }}
 {{- if eq .Values.templateCompiledStore.type "pvc" }}
       volumes:
-        - name: golem-template-compiled-store-{{.Values.env}}
+        - name: golem-component-compiled-store-{{.Values.env}}
           persistentVolumeClaim:
-            claimName: golem-template-compiled-store-{{.Values.env}}
+            claimName: golem-component-compiled-store-{{.Values.env}}
 {{- end }}

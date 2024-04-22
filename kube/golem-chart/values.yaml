@@ -64,7 +64,7 @@ workerService:
 #  nodeSelector:
 
 templateService:
-  image: golemservices/golem-template-service:latest
+  image: golemservices/golem-component-service:latest
   imagePullPolicy: Always
   replica: 1
   ports:
@@ -86,7 +86,7 @@ templateService:
 #  nodeSelector:
 
 templateCompilationService:
-  image: golemservices/golem-template-compilation-service:latest
+  image: golemservices/golem-component-compilation-service:latest
   imagePullPolicy: Always
   replica: 1
   ports:

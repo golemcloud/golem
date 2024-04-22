@@ -21,9 +21,9 @@ use tracing::Level;
 
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 
+use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
 use crate::components::wait_for_startup_grpc;
 use crate::components::worker_service::WorkerService;
 
@@ -71,7 +71,7 @@ async fn wait_for_startup(host: &str, grpc_port: u16) {
 fn env_vars(
     http_port: u16,
     grpc_port: u16,
-    template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -90,10 +90,10 @@ fn env_vars(
         ("GOLEM__PUBLIC_WORKER_API__HOST"                , &worker_service.private_host()),
         ("GOLEM__PUBLIC_WORKER_API__PORT"                , &worker_service.private_grpc_port().to_string()),
         ("GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN"        , "2A354594-7A63-4091-A46B-CC58D379F677"),
-        ("GOLEM__TEMPLATE_SERVICE__CONFIG__HOST"         , &template_service.private_host()),
-        ("GOLEM__TEMPLATE_SERVICE__CONFIG__PORT"         , &template_service.private_grpc_port().to_string()),
-        ("GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN" , "2A354594-7A63-4091-A46B-CC58D379F677"),
-        ("GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE"        , "Disabled"),
+        ("GOLEM__COMPONENT_SERVICE__CONFIG__HOST"        , &component_service.private_host()),
+        ("GOLEM__COMPONENT_SERVICE__CONFIG__PORT"        , &component_service.private_grpc_port().to_string()),
+        ("GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN", "2A354594-7A63-4091-A46B-CC58D379F677"),
+        ("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE"       , "Disabled"),
         ("GOLEM__BLOB_STORE_SERVICE__TYPE"               , "InMemory"),
         ("GOLEM__SHARD_MANAGER_SERVICE__TYPE"            , "Grpc"),
         ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST"    , &shard_manager.private_host()),

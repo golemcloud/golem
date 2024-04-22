@@ -18,7 +18,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: golem-template-compiled-store-{{.Values.env}}
+  name: golem-component-compiled-store-{{.Values.env}}
 spec:
   storageClassName: {{ .Values.templateCompiledStore.pvc.storageClassName }}
   accessModes:

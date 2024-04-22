@@ -29,9 +29,9 @@ use url::Url;
 pub struct GolemConfig {
     pub limits: Limits,
     pub retry: RetryConfig,
-    pub template_cache: TemplateCacheConfig,
-    pub template_service: TemplateServiceConfig,
-    pub compiled_template_service: CompiledTemplateServiceConfig,
+    pub component_cache: ComponentCacheConfig,
+    pub component_service: ComponentServiceConfig,
+    pub compiled_component_service: CompiledComponentServiceConfig,
     pub blob_store_service: BlobStoreServiceConfig,
     pub key_value_service: KeyValueServiceConfig,
     pub promises: PromisesConfig,
@@ -54,7 +54,7 @@ pub struct GolemConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Limits {
-    pub max_active_instances: usize,
+    pub max_active_workers: usize,
     pub concurrency_limit_per_connection: usize,
     pub max_concurrent_streams: u32,
     pub event_broadcast_capacity: usize,
@@ -66,7 +66,7 @@ pub struct Limits {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct TemplateCacheConfig {
+pub struct ComponentCacheConfig {
     pub max_capacity: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
@@ -74,35 +74,35 @@ pub struct TemplateCacheConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
-pub enum TemplateServiceConfig {
-    Grpc(TemplateServiceGrpcConfig),
-    Local(TemplateServiceLocalConfig),
+pub enum ComponentServiceConfig {
+    Grpc(ComponentServiceGrpcConfig),
+    Local(ComponentServiceLocalConfig),
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct TemplateServiceGrpcConfig {
+pub struct ComponentServiceGrpcConfig {
     pub host: String,
     pub port: u16,
     pub access_token: String,
     pub retries: RetryConfig,
-    pub max_template_size: usize,
+    pub max_component_size: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct TemplateServiceLocalConfig {
+pub struct ComponentServiceLocalConfig {
     pub root: PathBuf,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
-pub enum CompiledTemplateServiceConfig {
-    S3(CompiledTemplateServiceS3Config),
-    Local(CompiledTemplateServiceLocalConfig),
-    Disabled(CompiledTemplateServiceDisabledConfig),
+pub enum CompiledComponentServiceConfig {
+    S3(CompiledComponentServiceS3Config),
+    Local(CompiledComponentServiceLocalConfig),
+    Disabled(CompiledComponentServiceDisabledConfig),
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct CompiledTemplateServiceS3Config {
+pub struct CompiledComponentServiceS3Config {
     pub retries: RetryConfig,
     pub region: String,
     pub bucket: String,
@@ -111,12 +111,12 @@ pub struct CompiledTemplateServiceS3Config {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct CompiledTemplateServiceLocalConfig {
+pub struct CompiledComponentServiceLocalConfig {
     pub root: PathBuf,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct CompiledTemplateServiceDisabledConfig {}
+pub struct CompiledComponentServiceDisabledConfig {}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
@@ -215,10 +215,10 @@ impl GolemConfig {
     }
 }
 
-impl TemplateServiceGrpcConfig {
+impl ComponentServiceGrpcConfig {
     pub fn url(&self) -> Url {
         Url::parse(&format!("http://{}:{}", self.host, self.port))
-            .expect("Failed to parse template service URL")
+            .expect("Failed to parse component service URL")
     }
 
     pub fn uri(&self) -> Uri {
@@ -227,7 +227,7 @@ impl TemplateServiceGrpcConfig {
             .authority(format!("{}:{}", self.host, self.port).as_str())
             .path_and_query("/")
             .build()
-            .expect("Failed to build template service URI")
+            .expect("Failed to build component service URI")
     }
 }
 
@@ -292,9 +292,9 @@ impl Default for GolemConfig {
         Self {
             limits: Limits::default(),
             retry: RetryConfig::default(),
-            template_cache: TemplateCacheConfig::default(),
-            template_service: TemplateServiceConfig::default(),
-            compiled_template_service: CompiledTemplateServiceConfig::default(),
+            component_cache: ComponentCacheConfig::default(),
+            component_service: ComponentServiceConfig::default(),
+            compiled_component_service: CompiledComponentServiceConfig::default(),
             blob_store_service: BlobStoreServiceConfig::default(),
             key_value_service: KeyValueServiceConfig::default(),
             promises: PromisesConfig::default(),
@@ -320,7 +320,7 @@ impl Default for GolemConfig {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            max_active_instances: 1024,
+            max_active_workers: 1024,
             concurrency_limit_per_connection: 1024,
             max_concurrent_streams: 1024,
             event_broadcast_capacity: 16,
@@ -332,7 +332,7 @@ impl Default for Limits {
     }
 }
 
-impl Default for TemplateCacheConfig {
+impl Default for ComponentCacheConfig {
     fn default() -> Self {
         Self {
             max_capacity: 32,
@@ -341,31 +341,31 @@ impl Default for TemplateCacheConfig {
     }
 }
 
-impl Default for TemplateServiceConfig {
+impl Default for ComponentServiceConfig {
     fn default() -> Self {
-        Self::Grpc(TemplateServiceGrpcConfig::default())
+        Self::Grpc(ComponentServiceGrpcConfig::default())
     }
 }
 
-impl Default for TemplateServiceGrpcConfig {
+impl Default for ComponentServiceGrpcConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
             port: 9090,
             access_token: "access_token".to_string(),
             retries: RetryConfig::default(),
-            max_template_size: 50 * 1024 * 1024,
+            max_component_size: 50 * 1024 * 1024,
         }
     }
 }
 
-impl Default for CompiledTemplateServiceConfig {
+impl Default for CompiledComponentServiceConfig {
     fn default() -> Self {
-        Self::S3(CompiledTemplateServiceS3Config::default())
+        Self::S3(CompiledComponentServiceS3Config::default())
     }
 }
 
-impl Default for CompiledTemplateServiceS3Config {
+impl Default for CompiledComponentServiceS3Config {
     fn default() -> Self {
         Self {
             retries: RetryConfig::default(),

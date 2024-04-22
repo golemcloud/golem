@@ -1,5 +1,5 @@
+use crate::model::component::ComponentView;
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::template::TemplateView;
 use crate::model::{ExampleDescription, InvocationKey};
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use golem_client::model::{
@@ -66,8 +66,8 @@ struct RouteView {
     pub method: String,
     #[table(title = "Path")]
     pub path: String,
-    #[table(title = "Template", justify = "Justify::Right")]
-    pub template: String,
+    #[table(title = "Component", justify = "Justify::Right")]
+    pub component: String,
     #[table(title = "Worker")]
     pub worker_id: String,
     #[table(title = "Function")]
@@ -76,12 +76,12 @@ struct RouteView {
 
 impl From<&Route> for RouteView {
     fn from(value: &Route) -> Self {
-        let template_str = value.binding.template.to_string();
-        let template_end = &template_str[template_str.len() - 7..];
+        let component_str = value.binding.component.to_string();
+        let component_end = &component_str[component_str.len() - 7..];
         RouteView {
             method: value.method.to_string(),
             path: value.path.to_string(),
-            template: format!("*{template_end}"),
+            component: format!("*{component_end}"),
             worker_id: value.binding.worker_id.to_string(),
             function_name: value.binding.function_name.to_string(),
         }
@@ -168,20 +168,20 @@ impl TextFormat for Vec<ExampleDescription> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TemplateAddView(pub TemplateView);
+pub struct ComponentAddView(pub ComponentView);
 
-impl TextFormat for TemplateAddView {
+impl TextFormat for ComponentAddView {
     fn print(&self) {
         printdoc!(
             "
-            New template created with ID {}, version {}, and size of {} bytes.
-            Template name: {}.
+            New component created with ID {}, version {}, and size of {} bytes.
+            Component name: {}.
             Exports:
             ",
-            self.0.template_id,
-            self.0.template_version,
-            self.0.template_size,
-            self.0.template_name
+            self.0.component_id,
+            self.0.component_version,
+            self.0.component_size,
+            self.0.component_name
         );
 
         for export in &self.0.exports {
@@ -191,20 +191,20 @@ impl TextFormat for TemplateAddView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TemplateUpdateView(pub TemplateView);
+pub struct ComponentUpdateView(pub ComponentView);
 
-impl TextFormat for TemplateUpdateView {
+impl TextFormat for ComponentUpdateView {
     fn print(&self) {
         printdoc!(
             "
-            Updated template with ID {}. New version: {}. Template size is {} bytes.
-            Template name: {}.
+            Updated component with ID {}. New version: {}. Component size is {} bytes.
+            Component name: {}.
             Exports:
             ",
-            self.0.template_id,
-            self.0.template_version,
-            self.0.template_size,
-            self.0.template_name
+            self.0.component_id,
+            self.0.component_version,
+            self.0.component_size,
+            self.0.component_name
         );
 
         for export in &self.0.exports {
@@ -214,36 +214,36 @@ impl TextFormat for TemplateUpdateView {
 }
 
 #[derive(Table)]
-struct TemplateListView {
+struct ComponentListView {
     #[table(title = "ID")]
-    pub template_id: String,
+    pub component_id: String,
     #[table(title = "Name")]
-    pub template_name: String,
+    pub component_name: String,
     #[table(title = "Version", justify = "Justify::Right")]
-    pub template_version: u64,
+    pub component_version: u64,
     #[table(title = "Size", justify = "Justify::Right")]
-    pub template_size: i32,
+    pub component_size: u64,
     #[table(title = "Exports count", justify = "Justify::Right")]
     pub n_exports: usize,
 }
 
-impl From<&TemplateView> for TemplateListView {
-    fn from(value: &TemplateView) -> Self {
+impl From<&ComponentView> for ComponentListView {
+    fn from(value: &ComponentView) -> Self {
         Self {
-            template_id: value.template_id.to_string(),
-            template_name: value.template_name.to_string(),
-            template_version: value.template_version,
-            template_size: value.template_size,
+            component_id: value.component_id.to_string(),
+            component_name: value.component_name.to_string(),
+            component_version: value.component_version,
+            component_size: value.component_size,
             n_exports: value.exports.len(),
         }
     }
 }
 
-impl TextFormat for Vec<TemplateView> {
+impl TextFormat for Vec<ComponentView> {
     fn print(&self) {
         print_stdout(
             self.iter()
-                .map(TemplateListView::from)
+                .map(ComponentListView::from)
                 .collect::<Vec<_>>()
                 .with_title(),
         )
@@ -258,9 +258,9 @@ impl TextFormat for WorkerAddView {
     fn print(&self) {
         printdoc!(
             "
-            New worker created for template {}, with name {}.
+            New worker created for component {}, with name {}.
             ",
-            self.0.template_id,
+            self.0.component_id,
             self.0.worker_name,
         )
     }
@@ -312,15 +312,15 @@ impl TextFormat for WorkerMetadata {
     fn print(&self) {
         printdoc!(
             r#"
-            Worker "{}" of template {} with template version {}.
+            Worker "{}" of component {} with component version {}.
             Status: {}.
             Startup arguments: {}.
             Environment variables: {}.
             Retry count: {}.
             "#,
             self.worker_id.worker_name,
-            self.worker_id.template_id,
-            self.template_version,
+            self.worker_id.component_id,
+            self.component_version,
             self.status.to_string(),
             self.args.join(", "),
             self.env.iter().map(|(k, v)| format!("{k}={v}")).join(", "),
@@ -331,23 +331,23 @@ impl TextFormat for WorkerMetadata {
 
 #[derive(Table)]
 struct WorkerMetadataView {
-    #[table(title = "Template")]
-    pub template_id: Uuid,
+    #[table(title = "Component")]
+    pub component_id: Uuid,
     #[table(title = "Name")]
     pub worker_name: String,
     #[table(title = "Status", justify = "Justify::Right")]
     pub status: String,
-    #[table(title = "Template version", justify = "Justify::Right")]
-    pub template_version: u64,
+    #[table(title = "Component version", justify = "Justify::Right")]
+    pub component_version: u64,
 }
 
 impl From<&WorkerMetadata> for WorkerMetadataView {
     fn from(value: &WorkerMetadata) -> Self {
         Self {
-            template_id: value.worker_id.template_id,
+            component_id: value.worker_id.component_id,
             worker_name: value.worker_id.worker_name.to_string(),
             status: value.status.to_string(),
-            template_version: value.template_version,
+            component_version: value.component_version,
         }
     }
 }

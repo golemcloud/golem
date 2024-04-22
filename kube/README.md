@@ -86,7 +86,7 @@ helm upgrade --install golem-default golem-chart -n golem
 
 show kube files
 ```shell
-helm template golem-chart
+helm component golem-chart
 ```
 
 delete
