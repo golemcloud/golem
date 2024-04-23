@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::InvokeResult as ProtoInvokeResult;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, ProjectId, TemplateId, Timestamp, WorkerFilter,
+    AccountId, CallingConvention, ComponentId, InvocationKey, ProjectId, Timestamp, WorkerFilter,
     WorkerStatus,
 };
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
@@ -20,11 +20,11 @@ use crate::repo::account_connections::AccountConnectionsRepo;
 use crate::repo::account_workers::AccountWorkersRepo;
 use golem_service_base::model::*;
 
+mod component;
 mod connect;
-mod template;
 
+pub use component::*;
 pub use connect::*;
-pub use template::*;
 
 use super::{
     plan_limit::{CheckLimitResult, LimitResult, PlanLimitError, PlanLimitService},
@@ -48,7 +48,7 @@ pub trait WorkerService {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        template_version: u64,
+        component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         auth: &AccountAuthorisation,
@@ -131,7 +131,7 @@ pub trait WorkerService {
 
     async fn find_metadata(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
@@ -229,20 +229,20 @@ impl WorkerService for WorkerServiceDefault {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        template_version: u64,
+        component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         auth: &AccountAuthorisation,
     ) -> Result<WorkerId, WorkerError> {
         let namespace = self
-            .authorize(&worker_id.template_id, &ProjectAction::CreateWorker, auth)
+            .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
         let value = self
             .base_worker_service
             .create(
                 worker_id,
-                template_version,
+                component_version,
                 arguments,
                 environment_variables,
                 namespace.as_worker_request_metadata(),
@@ -262,7 +262,7 @@ impl WorkerService for WorkerServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<ConnectWorkerStream, WorkerError> {
         let namespace = self
-            .authorize(&worker_id.template_id, &ProjectAction::CreateWorker, auth)
+            .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
         let value = self
@@ -286,7 +286,7 @@ impl WorkerService for WorkerServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<(), WorkerError> {
         let namespace = self
-            .authorize(&worker_id.template_id, &ProjectAction::DeleteWorker, auth)
+            .authorize(&worker_id.component_id, &ProjectAction::DeleteWorker, auth)
             .await?;
 
         self.base_worker_service.delete(worker_id, auth).await?;
@@ -303,7 +303,7 @@ impl WorkerService for WorkerServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<InvocationKey, WorkerError> {
         let _ = self
-            .authorize(&worker_id.template_id, &ProjectAction::CreateWorker, auth)
+            .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
         let value = self
@@ -324,7 +324,7 @@ impl WorkerService for WorkerServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<Value, WorkerError> {
         let namespace = self
-            .authorize(&worker_id.template_id, &ProjectAction::CreateWorker, auth)
+            .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
         let value = self
@@ -353,7 +353,7 @@ impl WorkerService for WorkerServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<ProtoInvokeResult, WorkerError> {
         let namespace = self
-            .authorize(&worker_id.template_id, &ProjectAction::CreateWorker, auth)
+            .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
         let value = self
@@ -380,7 +380,7 @@ impl WorkerService for WorkerServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<(), WorkerError> {
         let namespace = self
-            .authorize(&worker_id.template_id, &ProjectAction::CreateWorker, auth)
+            .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
         let _ = self
             .base_worker_service
@@ -404,7 +404,7 @@ impl WorkerService for WorkerServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<(), WorkerError> {
         let namespace = self
-            .authorize(&worker_id.template_id, &ProjectAction::CreateWorker, auth)
+            .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
         let _ = self
             .base_worker_service
@@ -428,7 +428,7 @@ impl WorkerService for WorkerServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<bool, WorkerError> {
         let _ = self
-            .authorize(&worker_id.template_id, &ProjectAction::UpdateWorker, auth)
+            .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
             .await?;
 
         let value = self
@@ -446,7 +446,7 @@ impl WorkerService for WorkerServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<(), WorkerError> {
         let _ = self
-            .authorize(&worker_id.template_id, &ProjectAction::UpdateWorker, auth)
+            .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
             .await?;
 
         self.base_worker_service
@@ -462,7 +462,7 @@ impl WorkerService for WorkerServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<crate::model::WorkerMetadata, WorkerError> {
         let namespace = self
-            .authorize(&worker_id.template_id, &ProjectAction::ViewWorker, auth)
+            .authorize(&worker_id.component_id, &ProjectAction::ViewWorker, auth)
             .await?;
 
         let metadata = self
@@ -477,7 +477,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn find_metadata(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
@@ -485,12 +485,12 @@ impl WorkerService for WorkerServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<(Option<u64>, Vec<crate::model::WorkerMetadata>), WorkerError> {
         let namespace = self
-            .authorize(template_id, &ProjectAction::ViewWorker, auth)
+            .authorize(component_id, &ProjectAction::ViewWorker, auth)
             .await?;
 
         let (pagination, metadata) = self
             .base_worker_service
-            .find_metadata(template_id, filter, cursor, count, precise, auth)
+            .find_metadata(component_id, filter, cursor, count, precise, auth)
             .await?;
 
         let metadata = metadata
@@ -522,7 +522,7 @@ fn convert_metadata(
         args: metadata.args,
         env: metadata.env,
         status: metadata.status,
-        template_version: metadata.template_version,
+        component_version: metadata.component_version,
         retry_count: metadata.retry_count,
         pending_invocation_count: metadata.pending_invocation_count,
         updates: metadata.updates,
@@ -534,7 +534,7 @@ fn convert_metadata(
 #[derive(Clone)]
 pub struct WorkerNamespace {
     pub account_id: AccountId,
-    pub template_limits: LimitResult,
+    pub component_limits: LimitResult,
     pub resource_limits: golem_service_base::model::ResourceLimits,
     pub worker_limit_result: CheckLimitResult,
 }
@@ -551,23 +551,23 @@ impl WorkerNamespace {
 impl WorkerServiceDefault {
     async fn authorize(
         &self,
-        template: &TemplateId,
+        component: &ComponentId,
         action: &ProjectAction,
         auth: &AccountAuthorisation,
     ) -> Result<WorkerNamespace, WorkerError> {
-        let (_, template_limits, worker_limit_result) = tokio::try_join!(
-            self.check_authorization(template, action, auth),
-            self.get_template_limits(template),
-            self.check_worker_limit(template)
+        let (_, component_limits, worker_limit_result) = tokio::try_join!(
+            self.check_authorization(component, action, auth),
+            self.get_component_limits(component),
+            self.check_worker_limit(component)
         )?;
 
         let resource_limits = self
-            .get_resource_limits(&template_limits.account_id, auth)
+            .get_resource_limits(&component_limits.account_id, auth)
             .await?;
 
         Ok(WorkerNamespace {
             account_id: worker_limit_result.account_id.clone(),
-            template_limits,
+            component_limits,
             resource_limits,
             worker_limit_result,
         })
@@ -575,7 +575,7 @@ impl WorkerServiceDefault {
 
     async fn check_authorization(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         required_action: &ProjectAction,
         auth: &AccountAuthorisation,
     ) -> Result<(), WorkerError> {
@@ -584,30 +584,30 @@ impl WorkerServiceDefault {
         } else {
             let project_actions = self
                 .project_authorisation_service
-                .get_by_template(template_id, auth)
+                .get_by_component(component_id, auth)
                 .await?;
             if project_actions.actions.contains(required_action) {
                 Ok(())
             } else {
                 Err(WorkerError::Forbidden(format!(
                     "Account don't have access to {} project action {:?}, for worker",
-                    template_id, required_action
+                    component_id, required_action
                 )))
             }
         }
     }
 
-    async fn get_template_limits(
+    async fn get_component_limits(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
     ) -> Result<LimitResult, WorkerError> {
         match self
             .plan_limit_service
-            .get_template_limits(template_id)
+            .get_component_limits(component_id)
             .await
         {
             Err(err) => {
-                tracing::error!("Get plan worker limit of template {template_id} failed {err:?}",);
+                tracing::error!("Get plan worker limit of component {component_id} failed {err:?}",);
                 Err(err.into())
             }
             Ok(limit_result) => Ok(limit_result),
@@ -643,15 +643,15 @@ impl WorkerServiceDefault {
 
     async fn check_worker_limit(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
     ) -> Result<CheckLimitResult, WorkerError> {
         match self
             .plan_limit_service
-            .check_worker_limit(template_id)
+            .check_worker_limit(component_id)
             .await
         {
             Err(err) => {
-                tracing::error!("Get plan worker limit of template {template_id} failed {err:?}",);
+                tracing::error!("Get plan worker limit of component {component_id} failed {err:?}",);
                 Err(err.into())
             }
             Ok(check_limit_result) => {
@@ -688,8 +688,8 @@ impl From<PlanLimitError> for WorkerError {
             PlanLimitError::ProjectIdNotFound(project_id) => {
                 WorkerError::ProjectNotFound(project_id)
             }
-            PlanLimitError::TemplateIdNotFound(template_id) => {
-                WorkerError::Base(BaseWorkerServiceError::TemplateNotFound(template_id))
+            PlanLimitError::ComponentIdNotFound(component_id) => {
+                WorkerError::Base(BaseWorkerServiceError::ComponentNotFound(component_id))
             }
             PlanLimitError::Unauthorized(string) => WorkerError::Unauthorized(string),
             PlanLimitError::Internal(e) => {
@@ -707,7 +707,7 @@ impl WorkerService for WorkerServiceNoOp {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        _template_version: u64,
+        _component_version: u64,
         _arguments: Vec<String>,
         _environment_variables: HashMap<String, String>,
         _auth: &AccountAuthorisation,
@@ -817,7 +817,7 @@ impl WorkerService for WorkerServiceNoOp {
             args: vec![],
             env: Default::default(),
             status: WorkerStatus::Running,
-            template_version: 0,
+            component_version: 0,
             retry_count: 0,
             created_at: Timestamp::now_utc(),
             pending_invocation_count: 0,
@@ -828,7 +828,7 @@ impl WorkerService for WorkerServiceNoOp {
 
     async fn find_metadata(
         &self,
-        _template_id: &TemplateId,
+        _component_id: &ComponentId,
         _filter: Option<WorkerFilter>,
         _cursor: u64,
         _count: u64,

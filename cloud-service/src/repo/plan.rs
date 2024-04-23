@@ -14,7 +14,7 @@ use crate::repo::RepoError;
 pub struct PlanRecord {
     pub plan_id: Uuid,
     pub project_limit: i32,
-    pub template_limit: i32,
+    pub component_limit: i32,
     pub worker_limit: i32,
     pub storage_limit: i32,
     pub monthly_gas_limit: i64,
@@ -27,7 +27,7 @@ impl From<PlanRecord> for Plan {
             plan_id: PlanId(value.plan_id),
             plan_data: PlanData {
                 project_limit: value.project_limit,
-                template_limit: value.template_limit,
+                component_limit: value.component_limit,
                 worker_limit: value.worker_limit,
                 storage_limit: value.storage_limit,
                 monthly_gas_limit: value.monthly_gas_limit,
@@ -42,7 +42,7 @@ impl From<Plan> for PlanRecord {
         Self {
             plan_id: value.plan_id.0,
             project_limit: value.plan_data.project_limit,
-            template_limit: value.plan_data.template_limit,
+            component_limit: value.plan_data.component_limit,
             worker_limit: value.plan_data.worker_limit,
             storage_limit: value.plan_data.storage_limit,
             monthly_gas_limit: value.plan_data.monthly_gas_limit,
@@ -79,13 +79,13 @@ impl PlanRepo for DbPlanRepo<sqlx::Postgres> {
     async fn create(&self, plan: &PlanRecord) -> Result<(), RepoError> {
         sqlx::query(r#"
               INSERT INTO plans
-                (plan_id, project_limit, template_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
+                (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
               VALUES
                 ($1, $2, $3, $4, $5, $6, $7)
             "#)
             .bind(plan.plan_id)
             .bind(plan.project_limit)
-            .bind(plan.template_limit)
+            .bind(plan.component_limit)
             .bind(plan.worker_limit)
             .bind(plan.storage_limit)
             .bind(plan.monthly_gas_limit)
@@ -99,12 +99,12 @@ impl PlanRepo for DbPlanRepo<sqlx::Postgres> {
     async fn update(&self, plan: &PlanRecord) -> Result<(), RepoError> {
         sqlx::query(r#"
               INSERT INTO plans
-                (plan_id, project_limit, template_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
+                (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
               VALUES
                 ($1, $2, $3, $4, $5, $6, $7)
               ON CONFLICT (plan_id) DO UPDATE
               SET project_limit = $2,
-                  template_limit = $3,
+                  component_limit = $3,
                   worker_limit = $4,
                   storage_limit = $5,
                   monthly_gas_limit = $6,
@@ -112,7 +112,7 @@ impl PlanRepo for DbPlanRepo<sqlx::Postgres> {
             "#)
             .bind(plan.plan_id)
             .bind(plan.project_limit)
-            .bind(plan.template_limit)
+            .bind(plan.component_limit)
             .bind(plan.worker_limit)
             .bind(plan.storage_limit)
             .bind(plan.monthly_gas_limit)
@@ -152,13 +152,13 @@ impl PlanRepo for DbPlanRepo<sqlx::Sqlite> {
     async fn create(&self, plan: &PlanRecord) -> Result<(), RepoError> {
         sqlx::query(r#"
               INSERT INTO plans
-                (plan_id, project_limit, template_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
+                (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
               VALUES
                 ($1, $2, $3, $4, $5, $6, $7)
             "#)
             .bind(plan.plan_id)
             .bind(plan.project_limit)
-            .bind(plan.template_limit)
+            .bind(plan.component_limit)
             .bind(plan.worker_limit)
             .bind(plan.storage_limit)
             .bind(plan.monthly_gas_limit)
@@ -172,12 +172,12 @@ impl PlanRepo for DbPlanRepo<sqlx::Sqlite> {
     async fn update(&self, plan: &PlanRecord) -> Result<(), RepoError> {
         sqlx::query(r#"
               INSERT INTO plans
-                (plan_id, project_limit, template_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
+                (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
               VALUES
                 ($1, $2, $3, $4, $5, $6, $7)
               ON CONFLICT (plan_id) DO UPDATE
               SET project_limit = $2,
-                  template_limit = $3,
+                  component_limit = $3,
                   worker_limit = $4,
                   storage_limit = $5,
                   monthly_gas_limit = $6,
@@ -185,7 +185,7 @@ impl PlanRepo for DbPlanRepo<sqlx::Sqlite> {
             "#)
             .bind(plan.plan_id)
             .bind(plan.project_limit)
-            .bind(plan.template_limit)
+            .bind(plan.component_limit)
             .bind(plan.worker_limit)
             .bind(plan.storage_limit)
             .bind(plan.monthly_gas_limit)

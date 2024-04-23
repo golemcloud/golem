@@ -87,19 +87,19 @@ mod tests {
         std::env::set_var("GOLEM__REDIS__HOST", "localhost");
         std::env::set_var("GOLEM__REDIS__PORT", "1234");
         std::env::set_var("GOLEM__REDIS__DATABASE", "1");
-        std::env::set_var("GOLEM__TEMPLATE_SERVICE__CONFIG__HOST", "localhost");
-        std::env::set_var("GOLEM__TEMPLATE_SERVICE__CONFIG__PORT", "1234");
-        std::env::set_var("GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN", "token");
+        std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__HOST", "localhost");
+        std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__PORT", "1234");
+        std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN", "token");
         std::env::set_var(
-            "GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION",
+            "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__REGION",
             "us-east-1",
         );
         std::env::set_var(
-            "GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__BUCKET",
+            "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__BUCKET",
             "golem-compiled-components",
         );
         std::env::set_var(
-            "GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX",
+            "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__OBJECT_PREFIX",
             "",
         );
         std::env::set_var("GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION", "us-east-1");

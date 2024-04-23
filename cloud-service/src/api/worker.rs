@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use cloud_common::auth::GolemSecurityScheme;
-use golem_common::model::{CallingConvention, InvocationKey, TemplateId, WorkerFilter};
-use golem_worker_service_base::service::template::TemplateServiceError;
+use golem_common::model::{CallingConvention, ComponentId, InvocationKey, WorkerFilter};
+use golem_worker_service_base::service::component::ComponentServiceError;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -11,7 +11,7 @@ use tonic::Status;
 
 use crate::api::ApiTags;
 use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::template::{TemplateError, TemplateService};
+use crate::service::component::{ComponentError, ComponentService};
 use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
 use golem_service_base::model::*;
 
@@ -26,7 +26,7 @@ pub enum WorkerError {
     /// Maximum number of workers exceeded
     #[oai(status = 403)]
     LimitExceeded(Json<ErrorBody>),
-    /// Template / Worker / Promise not found
+    /// Component / Worker / Promise not found
     #[oai(status = 404)]
     NotFound(Json<ErrorBody>),
     /// Worker already exists
@@ -67,29 +67,29 @@ impl From<Status> for WorkerError {
     }
 }
 
-impl From<TemplateServiceError> for WorkerError {
-    fn from(value: TemplateServiceError) -> Self {
+impl From<ComponentServiceError> for WorkerError {
+    fn from(value: ComponentServiceError) -> Self {
         match value {
-            TemplateServiceError::BadRequest(errors) => {
+            ComponentServiceError::BadRequest(errors) => {
                 WorkerError::BadRequest(Json(ErrorsBody { errors }))
             }
-            TemplateServiceError::AlreadyExists(error) => {
+            ComponentServiceError::AlreadyExists(error) => {
                 WorkerError::AlreadyExists(Json(ErrorBody { error }))
             }
-            TemplateServiceError::Internal(error) => {
+            ComponentServiceError::Internal(error) => {
                 WorkerError::InternalError(Json(GolemErrorBody {
                     golem_error: GolemError::Unknown(GolemErrorUnknown {
                         details: error.to_string(),
                     }),
                 }))
             }
-            TemplateServiceError::Unauthorized(error) => {
+            ComponentServiceError::Unauthorized(error) => {
                 WorkerError::Unauthorized(Json(ErrorBody { error }))
             }
-            TemplateServiceError::Forbidden(error) => {
+            ComponentServiceError::Forbidden(error) => {
                 WorkerError::LimitExceeded(Json(ErrorBody { error }))
             }
-            TemplateServiceError::NotFound(error) => {
+            ComponentServiceError::NotFound(error) => {
                 WorkerError::NotFound(Json(ErrorBody { error }))
             }
         }
@@ -111,14 +111,14 @@ impl From<WorkerServiceError> for WorkerError {
                 error: value.to_string(),
             })),
             WorkerServiceError::Base(error) => match error {
-                BaseServiceError::VersionedTemplateIdNotFound(_)
-                | BaseServiceError::TemplateNotFound(_)
+                BaseServiceError::VersionedComponentIdNotFound(_)
+                | BaseServiceError::ComponentNotFound(_)
                 | BaseServiceError::AccountIdNotFound(_)
                 | BaseServiceError::WorkerNotFound(_) => WorkerError::NotFound(Json(ErrorBody {
                     error: error.to_string(),
                 })),
                 BaseServiceError::TypeChecker(error) => WorkerError::bad_request(error),
-                BaseServiceError::Template(error) => error.into(),
+                BaseServiceError::Component(error) => error.into(),
                 BaseServiceError::Internal(error) => {
                     WorkerError::InternalError(Json(GolemErrorBody {
                         golem_error: GolemError::Unknown(GolemErrorUnknown {
@@ -149,27 +149,27 @@ impl From<AuthServiceError> for WorkerError {
     }
 }
 
-impl From<TemplateError> for WorkerError {
-    fn from(error: TemplateError) -> Self {
+impl From<ComponentError> for WorkerError {
+    fn from(error: ComponentError) -> Self {
         match error {
-            TemplateError::AlreadyExists(_) => WorkerError::AlreadyExists(Json(ErrorBody {
+            ComponentError::AlreadyExists(_) => WorkerError::AlreadyExists(Json(ErrorBody {
                 error: error.to_string(),
             })),
-            TemplateError::UnknownTemplateId(_)
-            | TemplateError::UnknownVersionedTemplateId(_)
-            | TemplateError::UnknownProjectId(_) => WorkerError::NotFound(Json(ErrorBody {
+            ComponentError::UnknownComponentId(_)
+            | ComponentError::UnknownVersionedComponentId(_)
+            | ComponentError::UnknownProjectId(_) => WorkerError::NotFound(Json(ErrorBody {
                 error: error.to_string(),
             })),
-            TemplateError::Unauthorized(error) => {
+            ComponentError::Unauthorized(error) => {
                 WorkerError::Unauthorized(Json(ErrorBody { error }))
             }
-            TemplateError::LimitExceeded(error) => {
+            ComponentError::LimitExceeded(error) => {
                 WorkerError::LimitExceeded(Json(ErrorBody { error }))
             }
-            TemplateError::TemplateProcessing(_) => WorkerError::BadRequest(Json(ErrorsBody {
+            ComponentError::ComponentProcessing(_) => WorkerError::BadRequest(Json(ErrorsBody {
                 errors: vec![error.to_string()],
             })),
-            TemplateError::Internal(_) => WorkerError::InternalError(Json(GolemErrorBody {
+            ComponentError::Internal(_) => WorkerError::InternalError(Json(GolemErrorBody {
                 golem_error: GolemError::Unknown(GolemErrorUnknown {
                     details: error.to_string(),
                 }),
@@ -179,53 +179,55 @@ impl From<TemplateError> for WorkerError {
 }
 
 pub struct WorkerApi {
-    pub template_service: Arc<dyn TemplateService + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService + Sync + Send>,
     pub worker_service: Arc<dyn WorkerService + Sync + Send>,
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/templates", tag = ApiTags::Worker)]
+#[OpenApi(prefix_path = "/v2/components", tag = ApiTags::Worker)]
 impl WorkerApi {
     /// Launch a new worker.
     ///
     /// Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
     ///
     /// The parameters in the request are the following:
-    /// - `name` is the name of the created worker. This has to be unique, but only for a given template
+    /// - `name` is the name of the created worker. This has to be unique, but only for a given component
     /// - `args` is a list of strings which appear as command line arguments for the worker
     /// - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
     #[oai(
-        path = "/:template_id/workers",
+        path = "/:component_id/workers",
         method = "post",
         operation_id = "launch_new_worker"
     )]
     async fn launch_new_worker(
         &self,
-        template_id: Path<TemplateId>,
+        component_id: Path<ComponentId>,
         request: Json<WorkerCreationRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<WorkerCreationResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
 
-        let template_id = template_id.0;
-        let latest_template = self
-            .template_service
-            .get_latest_version(&template_id, &auth)
+        let component_id = component_id.0;
+        let latest_component = self
+            .component_service
+            .get_latest_version(&component_id, &auth)
             .await
-            .tap_err(|error| tracing::error!("Error getting latest template version: {:?}", error))?
+            .tap_err(|error| {
+                tracing::error!("Error getting latest component version: {:?}", error)
+            })?
             .ok_or(WorkerError::NotFound(Json(ErrorBody {
-                error: format!("Template not found: {}", &template_id),
+                error: format!("Component not found: {}", &component_id),
             })))?;
 
         let WorkerCreationRequest { name, args, env } = request.0;
 
-        let worker_id = make_worker_id(template_id, name)?;
+        let worker_id = make_worker_id(component_id, name)?;
 
         let _worker = self
             .worker_service
             .create(
                 &worker_id,
-                latest_template.versioned_template_id.version,
+                latest_component.versioned_component_id.version,
                 args,
                 env,
                 &auth,
@@ -234,7 +236,7 @@ impl WorkerApi {
 
         Ok(Json(WorkerCreationResponse {
             worker_id,
-            component_version: latest_template.versioned_template_id.version,
+            component_version: latest_component.versioned_component_id.version,
         }))
     }
 
@@ -242,18 +244,18 @@ impl WorkerApi {
     ///
     /// Interrupts and deletes an existing worker.
     #[oai(
-        path = "/:template_id/workers/:worker_name",
+        path = "/:component_id/workers/:worker_name",
         method = "delete",
         operation_id = "delete_worker"
     )]
     async fn delete_worker(
         &self,
-        template_id: Path<TemplateId>,
+        component_id: Path<ComponentId>,
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeleteWorkerResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let worker_id = make_worker_id(template_id.0, worker_name.0)?;
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service.delete(&worker_id, &auth).await?;
 
@@ -265,18 +267,18 @@ impl WorkerApi {
     /// Creates an invocation key for a given worker.
     /// An invocation key is passed to the below defined invoke APIs to guarantee that retrying those invocations only performs the operation on the worker once.
     #[oai(
-        path = "/:template_id/workers/:worker_name/key",
+        path = "/:component_id/workers/:worker_name/key",
         method = "post",
         operation_id = "get_invocation_key"
     )]
     async fn get_invocation_key(
         &self,
-        template_id: Path<TemplateId>,
+        component_id: Path<ComponentId>,
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvocationKey>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let worker_id = make_worker_id(template_id.0, worker_name.0)?;
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         let invocation_key = self
             .worker_service
@@ -290,13 +292,13 @@ impl WorkerApi {
     ///
     /// Supply the parameters in the request body as JSON.
     #[oai(
-        path = "/:template_id/workers/:worker_name/invoke-and-await",
+        path = "/:component_id/workers/:worker_name/invoke-and-await",
         method = "post",
         operation_id = "invoke_and_await_function"
     )]
     async fn invoke_and_await_function(
         &self,
-        template_id: Path<TemplateId>,
+        component_id: Path<ComponentId>,
         worker_name: Path<String>,
         /// must be created with the create invokation key endpoint
         #[oai(name = "invocation-key")]
@@ -310,7 +312,7 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResult>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let worker_id = make_worker_id(template_id.0, worker_name.0)?;
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         let calling_convention = calling_convention.0.unwrap_or(CallingConvention::Component);
 
@@ -334,15 +336,15 @@ impl WorkerApi {
     /// Invoke a function
     ///
     /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns. Custom calling convention and invocation key is not supported.
-    /// To understand how to get the function name and how to encode the function parameters check Template interface
+    /// To understand how to get the function name and how to encode the function parameters check Component interface
     #[oai(
-        path = "/:template_id/workers/:worker_name/invoke",
+        path = "/:component_id/workers/:worker_name/invoke",
         method = "post",
         operation_id = "invoke_function"
     )]
     async fn invoke_function(
         &self,
-        template_id: Path<TemplateId>,
+        component_id: Path<ComponentId>,
         worker_name: Path<String>,
         /// name of the exported function to be invoked
         function: Query<String>,
@@ -350,7 +352,7 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let worker_id = make_worker_id(template_id.0, worker_name.0)?;
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service
             .invoke_function(&worker_id, function.0, params.0.params, &auth)
@@ -365,19 +367,19 @@ impl WorkerApi {
     /// The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
     /// The data field is sent back to the worker and it has no predefined meaning.
     #[oai(
-        path = "/:template_id/workers/:worker_name/complete",
+        path = "/:component_id/workers/:worker_name/complete",
         method = "post",
         operation_id = "complete_promise"
     )]
     async fn complete_promise(
         &self,
-        template_id: Path<TemplateId>,
+        component_id: Path<ComponentId>,
         worker_name: Path<String>,
         params: Json<CompleteParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<bool>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let worker_id = make_worker_id(template_id.0, worker_name.0)?;
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
         let CompleteParameters { oplog_idx, data } = params.0;
 
         let result = self
@@ -395,13 +397,13 @@ impl WorkerApi {
     /// An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
     /// For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
     #[oai(
-        path = "/:template_id/workers/:worker_name/interrupt",
+        path = "/:component_id/workers/:worker_name/interrupt",
         method = "post",
         operation_id = "interrupt_worker"
     )]
     async fn interrupt_worker(
         &self,
-        template_id: Path<TemplateId>,
+        component_id: Path<ComponentId>,
         worker_name: Path<String>,
         /// if true will simulate a worker recovery. Defaults to false.
         #[oai(name = "recovery-immediately")]
@@ -409,7 +411,7 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<InterruptResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let worker_id = make_worker_id(template_id.0, worker_name.0)?;
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service
             .interrupt(&worker_id, recover_immediately.0.unwrap_or(false), &auth)
@@ -421,11 +423,11 @@ impl WorkerApi {
     /// Get metadata of a worker
     ///
     /// Returns metadata about an existing worker:
-    /// - `workerId` is a combination of the used template and the worker's user specified name
+    /// - `workerId` is a combination of the used component and the worker's user specified name
     /// - `accountId` the account the worker is created by
     /// - `args` is the provided command line arguments passed to the worker
     /// - `env` is the provided map of environment variables passed to the worker
-    /// - `templateVersion` is the version of the template used by the worker
+    /// - `componentVersion` is the version of the component used by the worker
     /// - `retryCount` is the number of retries the worker did in case of a failure
     /// - `status` is the worker's current status, one of the following:
     ///     - `Running` if the worker is currently executing
@@ -436,18 +438,18 @@ impl WorkerApi {
     ///     - `Failed` if the worker failed and there are no more retries scheduled for it
     ///     - `Exited` if the worker explicitly exited using the exit WASI function
     #[oai(
-        path = "/:template_id/workers/:worker_name",
+        path = "/:component_id/workers/:worker_name",
         method = "get",
         operation_id = "get_worker_metadata"
     )]
     async fn get_worker_metadata(
         &self,
-        template_id: Path<TemplateId>,
+        component_id: Path<ComponentId>,
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkerMetadata>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let worker_id = make_worker_id(template_id.0, worker_name.0)?;
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
         let result = self.worker_service.get_metadata(&worker_id, &auth).await?;
 
         Ok(Json(result))
@@ -471,17 +473,17 @@ impl WorkerApi {
     /// - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
     /// - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
     ///
-    /// Returns metadata about an existing template workers:
+    /// Returns metadata about an existing component workers:
     /// - `workers` list of workers metadata
     /// - `cursor` cursor for next request, if cursor is empty/null, there are no other values
     #[oai(
-        path = "/:template_id/workers",
+        path = "/:component_id/workers",
         method = "get",
         operation_id = "get_workers_metadata"
     )]
     async fn get_workers_metadata(
         &self,
-        template_id: Path<TemplateId>,
+        component_id: Path<ComponentId>,
         /// Filter for worker metadata in form of `property op value`. Can be used multiple times (AND condition is applied between them)
         filter: Query<Option<Vec<String>>>,
         /// Count of listed values, default: 50
@@ -505,7 +507,7 @@ impl WorkerApi {
         let (cursor, workers) = self
             .worker_service
             .find_metadata(
-                &template_id.0,
+                &component_id.0,
                 filter,
                 cursor.0.unwrap_or(0),
                 count.0.unwrap_or(50),
@@ -538,17 +540,17 @@ impl WorkerApi {
     /// - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
     /// - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
     ///
-    /// Returns metadata about an existing template workers:
+    /// Returns metadata about an existing component workers:
     /// - `workers` list of workers metadata
     /// - `cursor` cursor for next request, if cursor is empty/null, there are no other values
     #[oai(
-        path = "/:template_id/workers/find",
+        path = "/:component_id/workers/find",
         method = "post",
         operation_id = "find_workers_metadata"
     )]
     async fn find_workers_metadata(
         &self,
-        template_id: Path<TemplateId>,
+        component_id: Path<ComponentId>,
         params: Json<WorkersMetadataRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
@@ -557,7 +559,7 @@ impl WorkerApi {
         let (cursor, workers) = self
             .worker_service
             .find_metadata(
-                &template_id.0,
+                &component_id.0,
                 params.filter.clone(),
                 params.cursor.unwrap_or(0),
                 params.count.unwrap_or(50),
@@ -574,18 +576,18 @@ impl WorkerApi {
 
     /// Resume a worker
     #[oai(
-        path = "/:template_id/workers/:worker_name/resume",
+        path = "/:component_id/workers/:worker_name/resume",
         method = "post",
         operation_id = "resume_worker"
     )]
     async fn resume_worker(
         &self,
-        template_id: Path<TemplateId>,
+        component_id: Path<ComponentId>,
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ResumeResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let worker_id = make_worker_id(template_id.0, worker_name.0)?;
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service.resume(&worker_id, &auth).await?;
 
@@ -594,9 +596,9 @@ impl WorkerApi {
 }
 
 fn make_worker_id(
-    template_id: TemplateId,
+    component_id: ComponentId,
     worker_name: String,
 ) -> std::result::Result<WorkerId, WorkerError> {
-    WorkerId::new(template_id, worker_name)
+    WorkerId::new(component_id, worker_name)
         .map_err(|error| WorkerError::bad_request(format!("Invalid worker name: {error}")))
 }

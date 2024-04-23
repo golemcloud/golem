@@ -5,12 +5,12 @@ use crate::repo::account_grant::{AccountGrantRepo, DbAccountGrantRepo};
 use crate::repo::account_summary::{AccountSummaryRepo, DbAccountSummaryRepo};
 use crate::repo::account_uploads::{AccountUploadsRepo, DbAccountUploadsRepo};
 use crate::repo::account_workers::{AccountWorkersRepo, DbAccountWorkerRepo};
+use crate::repo::component::{ComponentRepo, DbComponentRepo};
 use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
 use crate::repo::plan::{DbPlanRepo, PlanRepo};
 use crate::repo::project::{DbProjectRepo, ProjectRepo};
 use crate::repo::project_grant::{DbProjectGrantRepo, ProjectGrantRepo};
 use crate::repo::project_policy::{DbProjectPolicyRepo, ProjectPolicyRepo};
-use crate::repo::template::{DbTemplateRepo, TemplateRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
 use sqlx::{Pool, Postgres, Sqlite};
 use std::fmt::Display;
@@ -23,12 +23,12 @@ pub mod account_grant;
 pub mod account_summary;
 pub mod account_uploads;
 pub mod account_workers;
+pub mod component;
 pub mod oauth2_token;
 pub mod plan;
 pub mod project;
 pub mod project_grant;
 pub mod project_policy;
-pub mod template;
 pub mod token;
 
 #[derive(Debug)]
@@ -64,7 +64,7 @@ pub struct Repositories {
     pub project_policy_repo: Arc<dyn ProjectPolicyRepo + Sync + Send>,
     pub project_grant_repo: Arc<dyn ProjectGrantRepo + Sync + Send>,
     pub project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-    pub template_repo: Arc<dyn TemplateRepo + Sync + Send>,
+    pub component_repo: Arc<dyn ComponentRepo + Sync + Send>,
     pub token_repo: Arc<dyn TokenRepo + Sync + Send>,
 }
 
@@ -105,8 +105,8 @@ impl Repositories {
         let project_repo: Arc<dyn ProjectRepo + Sync + Send> =
             Arc::new(DbProjectRepo::new(db_pool.clone()));
 
-        let template_repo: Arc<dyn TemplateRepo + Sync + Send> =
-            Arc::new(DbTemplateRepo::new(db_pool.clone()));
+        let component_repo: Arc<dyn ComponentRepo + Sync + Send> =
+            Arc::new(DbComponentRepo::new(db_pool.clone()));
 
         let token_repo: Arc<dyn TokenRepo + Sync + Send> =
             Arc::new(DbTokenRepo::new(db_pool.clone()));
@@ -124,7 +124,7 @@ impl Repositories {
             project_policy_repo,
             project_grant_repo,
             project_repo,
-            template_repo,
+            component_repo,
             token_repo,
         }
     }
@@ -165,8 +165,8 @@ impl Repositories {
         let project_repo: Arc<dyn ProjectRepo + Sync + Send> =
             Arc::new(DbProjectRepo::new(db_pool.clone()));
 
-        let template_repo: Arc<dyn TemplateRepo + Sync + Send> =
-            Arc::new(DbTemplateRepo::new(db_pool.clone()));
+        let component_repo: Arc<dyn ComponentRepo + Sync + Send> =
+            Arc::new(DbComponentRepo::new(db_pool.clone()));
 
         let token_repo: Arc<dyn TokenRepo + Sync + Send> =
             Arc::new(DbTokenRepo::new(db_pool.clone()));
@@ -184,7 +184,7 @@ impl Repositories {
             project_policy_repo,
             project_grant_repo,
             project_repo,
-            template_repo,
+            component_repo,
             token_repo,
         }
     }

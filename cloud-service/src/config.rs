@@ -4,9 +4,9 @@ use std::time::Duration;
 use cloud_common::model::PlanId;
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
-use golem_service_base::config::{TemplateStoreConfig, TemplateStoreLocalConfig};
+use golem_component_service_base::config::ComponentCompilationConfig;
+use golem_service_base::config::{ComponentStoreConfig, ComponentStoreLocalConfig};
 use golem_service_base::routing_table::RoutingTableConfig;
-use golem_template_service_base::config::TemplateCompilationConfig;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -22,7 +22,7 @@ pub struct CloudServiceConfig {
     pub grpc_port: u16,
     pub db: DbConfig,
     pub plans: PlansConfig,
-    pub templates: TemplatesConfig,
+    pub components: ComponentsConfig,
     pub routing_table: RoutingTableConfig,
     pub ed_dsa: EdDsaConfig,
     pub accounts: AccountsConfig,
@@ -51,7 +51,7 @@ impl Default for CloudServiceConfig {
             grpc_port: 8081,
             db: DbConfig::default(),
             plans: PlansConfig::default(),
-            templates: TemplatesConfig::default(),
+            components: ComponentsConfig::default(),
             routing_table: RoutingTableConfig::default(),
             ed_dsa: EdDsaConfig::default(),
             accounts: AccountsConfig::default(),
@@ -77,19 +77,19 @@ impl Default for EdDsaConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct TemplatesConfig {
-    pub store: TemplateStoreConfig,
-    pub compilation: TemplateCompilationConfig,
+pub struct ComponentsConfig {
+    pub store: ComponentStoreConfig,
+    pub compilation: ComponentCompilationConfig,
 }
 
-impl Default for TemplatesConfig {
+impl Default for ComponentsConfig {
     fn default() -> Self {
-        TemplatesConfig {
-            store: TemplateStoreConfig::Local(TemplateStoreLocalConfig {
-                root_path: "templates".to_string(),
+        ComponentsConfig {
+            store: ComponentStoreConfig::Local(ComponentStoreLocalConfig {
+                root_path: "components".to_string(),
                 object_prefix: "".to_string(),
             }),
-            compilation: TemplateCompilationConfig::default(),
+            compilation: ComponentCompilationConfig::default(),
         }
     }
 }
@@ -137,7 +137,7 @@ impl Default for PlansConfig {
             default: PlanConfig {
                 plan_id: Uuid::nil(),
                 project_limit: 100,
-                template_limit: 100,
+                component_limit: 100,
                 worker_limit: 10000,
                 storage_limit: 500000000,
                 monthly_gas_limit: 1000000000000,
@@ -151,7 +151,7 @@ impl Default for PlansConfig {
 pub struct PlanConfig {
     pub plan_id: Uuid,
     pub project_limit: i32,
-    pub template_limit: i32,
+    pub component_limit: i32,
     pub worker_limit: i32,
     pub storage_limit: i32,
     pub monthly_gas_limit: i64,
@@ -164,7 +164,7 @@ impl From<PlanConfig> for Plan {
             plan_id: PlanId(config.plan_id),
             plan_data: PlanData {
                 project_limit: config.project_limit,
-                template_limit: config.template_limit,
+                component_limit: config.component_limit,
                 worker_limit: config.worker_limit,
                 storage_limit: config.storage_limit,
                 monthly_gas_limit: config.monthly_gas_limit,
@@ -241,8 +241,8 @@ mod tests {
         );
         std::env::set_var("GOLEM__ED_DSA__PRIVATE_KEY", "x1234");
         std::env::set_var("GOLEM__ED_DSA__PUBLIC_KEY", "x1234");
-        std::env::set_var("GOLEM__TEMPLATES__STORE__TYPE", "S3");
-        std::env::set_var("GOLEM__TEMPLATES__STORE__CONFIG__BUCKET_NAME", "bucket");
+        std::env::set_var("GOLEM__COMPONENTS__STORE__TYPE", "S3");
+        std::env::set_var("GOLEM__COMPONENTS__STORE__CONFIG__BUCKET_NAME", "bucket");
 
         // The rest can be loaded from the toml
         let _ = super::CloudServiceConfig::new();

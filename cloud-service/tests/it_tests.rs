@@ -63,10 +63,10 @@ mod tests {
             "GOLEM__ED_DSA__PUBLIC_KEY",
             "MCowBQYDK2VwAyEAtKkMHoxrjJ52D/OEJ9Gww9hBl22m2YLU3qkWwTka02w=",
         );
-        std::env::set_var("GOLEM__TEMPLATES__STORE__TYPE", "Local");
+        std::env::set_var("GOLEM__COMPONENTS__STORE__TYPE", "Local");
         std::env::set_var(
-            "GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH",
-            "/tmp/golem/templates",
+            "GOLEM__COMPONENTS__STORE__CONFIG__ROOT_PATH",
+            "/tmp/golem/components",
         );
 
         println!("{:?}", std::env::vars());
@@ -520,10 +520,10 @@ mod tests {
             "GOLEM__ED_DSA__PUBLIC_KEY",
             "MCowBQYDK2VwAyEAtKkMHoxrjJ52D/OEJ9Gww9hBl22m2YLU3qkWwTka02w=",
         );
-        std::env::set_var("GOLEM__TEMPLATES__STORE__TYPE", "Local");
+        std::env::set_var("GOLEM__COMPONENTS__STORE__TYPE", "Local");
         std::env::set_var(
-            "GOLEM__TEMPLATES__STORE__CONFIG__ROOT_PATH",
-            "/tmp/golem/templates",
+            "GOLEM__COMPONENTS__STORE__CONFIG__ROOT_PATH",
+            "/tmp/golem/components",
         );
 
         println!("{:?}", std::env::vars());

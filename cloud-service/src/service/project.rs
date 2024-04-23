@@ -8,8 +8,8 @@ use tracing::info;
 
 use crate::auth::AccountAuthorisation;
 use crate::model::{Project, ProjectActions, ProjectData, ProjectType, Role};
+use crate::repo::component::ComponentRepo;
 use crate::repo::project::{ProjectRecord, ProjectRepo};
-use crate::repo::template::TemplateRepo;
 use crate::repo::RepoError;
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisationService};
@@ -60,8 +60,8 @@ impl From<PlanLimitError> for ProjectError {
             PlanLimitError::ProjectIdNotFound(_) => {
                 ProjectError::Internal("Project not found".to_string())
             }
-            PlanLimitError::TemplateIdNotFound(_) => {
-                ProjectError::Internal("Template not found".to_string())
+            PlanLimitError::ComponentIdNotFound(_) => {
+                ProjectError::Internal("Component not found".to_string())
             }
         }
     }
@@ -112,7 +112,7 @@ pub struct ProjectServiceDefault {
     project_repo: Arc<dyn ProjectRepo + Sync + Send>,
     project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
     plan_limit_service: Arc<dyn PlanLimitService + Sync + Send>,
-    template_repo: Arc<dyn TemplateRepo + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
 }
 
 impl ProjectServiceDefault {
@@ -120,13 +120,13 @@ impl ProjectServiceDefault {
         project_repo: Arc<dyn ProjectRepo + Sync + Send>,
         project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
         plan_limit_service: Arc<dyn PlanLimitService + Sync + Send>,
-        template_repo: Arc<dyn TemplateRepo + Sync + Send>,
+        component_repo: Arc<dyn ComponentRepo + Sync + Send>,
     ) -> Self {
         ProjectServiceDefault {
             project_repo,
             project_auth_service,
             plan_limit_service,
-            template_repo,
+            component_repo,
         }
     }
 }
@@ -172,8 +172,8 @@ impl ProjectService for ProjectServiceDefault {
         let project = self.project_repo.get(&project_id.0).await?;
 
         if let Some(project) = project {
-            let template_count = self
-                .template_repo
+            let component_count = self
+                .component_repo
                 .get_count_by_projects(vec![project_id.0])
                 .await?;
 
@@ -181,7 +181,7 @@ impl ProjectService for ProjectServiceDefault {
                 &AccountId::from(project.owner_account_id.as_str()),
                 &Role::Admin,
             ) && !project.is_default
-                && template_count == 0
+                && component_count == 0
             {
                 self.project_repo.delete(&project_id.0).await?;
             } else {

@@ -8,19 +8,19 @@ use crate::repo::account::AccountRepo;
 use crate::repo::account_fuel::AccountFuelRepo;
 use crate::repo::account_uploads::AccountUploadsRepo;
 use crate::repo::account_workers::AccountWorkersRepo;
+use crate::repo::component::ComponentRepo;
 use crate::repo::plan::PlanRepo;
 use crate::repo::project::ProjectRepo;
-use crate::repo::template::TemplateRepo;
 use crate::repo::RepoError;
 use async_trait::async_trait;
-use golem_common::model::ProjectId;
-use golem_common::model::{AccountId, TemplateId};
+use golem_common::model::AccountId;
+use golem_common::model::{ComponentId, ProjectId};
 
 #[derive(Debug, Clone)]
 pub enum PlanLimitError {
     AccountIdNotFound(AccountId),
     ProjectIdNotFound(ProjectId),
-    TemplateIdNotFound(TemplateId),
+    ComponentIdNotFound(ComponentId),
     Internal(String),
     Unauthorized(String),
 }
@@ -86,9 +86,9 @@ pub trait PlanLimitService {
         project_id: &ProjectId,
     ) -> Result<LimitResult, PlanLimitError>;
 
-    async fn get_template_limits(
+    async fn get_component_limits(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
     ) -> Result<LimitResult, PlanLimitError>;
 
     /// Check Limits.
@@ -98,14 +98,14 @@ pub trait PlanLimitService {
         account_id: &AccountId,
     ) -> Result<CheckLimitResult, PlanLimitError>;
 
-    async fn check_template_limit(
+    async fn check_component_limit(
         &self,
         project_id: &ProjectId,
     ) -> Result<CheckLimitResult, PlanLimitError>;
 
     async fn check_worker_limit(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
     ) -> Result<CheckLimitResult, PlanLimitError>;
 
     async fn check_storage_limit(
@@ -139,7 +139,7 @@ pub struct PlanLimitServiceDefault {
     account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send>,
     account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send>,
     project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-    template_repo: Arc<dyn TemplateRepo + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
     account_fuel_repo: Arc<dyn AccountFuelRepo + Sync + Send>,
 }
 
@@ -165,11 +165,11 @@ impl PlanLimitService for PlanLimitServiceDefault {
         Ok(result)
     }
 
-    async fn get_template_limits(
+    async fn get_component_limits(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
     ) -> Result<LimitResult, PlanLimitError> {
-        let project_id = self.get_project_id(template_id).await?;
+        let project_id = self.get_project_id(component_id).await?;
         let account_id = self.get_account_id(&project_id).await?;
         let result = self.get_account_limits(&account_id).await?;
         Ok(result)
@@ -192,7 +192,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
         })
     }
 
-    async fn check_template_limit(
+    async fn check_component_limit(
         &self,
         project_id: &ProjectId,
     ) -> Result<CheckLimitResult, PlanLimitError> {
@@ -200,27 +200,27 @@ impl PlanLimitService for PlanLimitServiceDefault {
         let limits = self.get_account_limits(&account_id).await?;
         let projects = self.project_repo.get_own(&account_id.value).await?;
         let project_ids = projects.into_iter().map(|p| p.project_id).collect();
-        let num_templates = self
-            .template_repo
+        let num_components = self
+            .component_repo
             .get_count_by_projects(project_ids)
             .await?;
 
-        let count = num_templates
+        let count = num_components
             .try_into()
-            .map_err(|_| PlanLimitError::internal("Failed to convert templates count"))?;
+            .map_err(|_| PlanLimitError::internal("Failed to convert component count"))?;
 
         Ok(CheckLimitResult {
             account_id,
             count,
-            limit: limits.plan.plan_data.template_limit.into(),
+            limit: limits.plan.plan_data.component_limit.into(),
         })
     }
 
     async fn check_worker_limit(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
     ) -> Result<CheckLimitResult, PlanLimitError> {
-        let project_id = self.get_project_id(template_id).await?;
+        let project_id = self.get_project_id(component_id).await?;
         let account_id = self.get_account_id(&project_id).await?;
         let plan = self.get_plan(&account_id).await?;
         let num_workers = self.account_workers_repo.get(&account_id).await?;
@@ -239,7 +239,10 @@ impl PlanLimitService for PlanLimitServiceDefault {
         let plan = self.get_plan(account_id).await?;
         let projects = self.project_repo.get_own(&account_id.value).await?;
         let project_ids = projects.into_iter().map(|p| p.project_id).collect();
-        let count = self.template_repo.get_size_by_projects(project_ids).await?;
+        let count = self
+            .component_repo
+            .get_size_by_projects(project_ids)
+            .await?;
 
         let count = count
             .try_into()
@@ -304,7 +307,7 @@ impl PlanLimitServiceDefault {
         account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send>,
         account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send>,
         project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-        template_repo: Arc<dyn TemplateRepo + Sync + Send>,
+        component_repo: Arc<dyn ComponentRepo + Sync + Send>,
         account_fuel_repo: Arc<dyn AccountFuelRepo + Sync + Send>,
     ) -> Self {
         PlanLimitServiceDefault {
@@ -313,7 +316,7 @@ impl PlanLimitServiceDefault {
             account_workers_repo,
             account_uploads_repo,
             project_repo,
-            template_repo,
+            component_repo,
             account_fuel_repo,
         }
     }
@@ -340,15 +343,18 @@ impl PlanLimitServiceDefault {
         }
     }
 
-    async fn get_project_id(&self, template_id: &TemplateId) -> Result<ProjectId, PlanLimitError> {
-        if let Some(template) = self
-            .template_repo
-            .get_latest_version(&template_id.0)
+    async fn get_project_id(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<ProjectId, PlanLimitError> {
+        if let Some(component) = self
+            .component_repo
+            .get_latest_version(&component_id.0)
             .await?
         {
-            Ok(ProjectId(template.project_id))
+            Ok(ProjectId(component.project_id))
         } else {
-            Err(PlanLimitError::TemplateIdNotFound(template_id.clone()))
+            Err(PlanLimitError::ComponentIdNotFound(component_id.clone()))
         }
     }
 
@@ -392,9 +398,9 @@ impl PlanLimitService for PlanLimitServiceNoOp {
         })
     }
 
-    async fn get_template_limits(
+    async fn get_component_limits(
         &self,
-        _template_id: &TemplateId,
+        _component_id: &ComponentId,
     ) -> Result<LimitResult, PlanLimitError> {
         Ok(LimitResult {
             account_id: AccountId::from(""),
@@ -413,7 +419,7 @@ impl PlanLimitService for PlanLimitServiceNoOp {
         })
     }
 
-    async fn check_template_limit(
+    async fn check_component_limit(
         &self,
         _project_id: &ProjectId,
     ) -> Result<CheckLimitResult, PlanLimitError> {
@@ -426,7 +432,7 @@ impl PlanLimitService for PlanLimitServiceNoOp {
 
     async fn check_worker_limit(
         &self,
-        _template_id: &TemplateId,
+        _component_id: &ComponentId,
     ) -> Result<CheckLimitResult, PlanLimitError> {
         Ok(CheckLimitResult {
             account_id: AccountId::from(""),

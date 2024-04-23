@@ -6,6 +6,7 @@ use golem_worker_executor_base::durable_host::DurableWorkerCtx;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
+use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
 use golem_worker_executor_base::services::key_value::KeyValueService;
@@ -16,7 +17,6 @@ use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, Remot
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
 use golem_worker_executor_base::services::shard_manager::ShardManagerService;
-use golem_worker_executor_base::services::template::TemplateService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_enumeration::{
@@ -47,7 +47,7 @@ struct ServerBootstrap {
 impl Bootstrap<Context> for ServerBootstrap {
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Context>> {
         Arc::new(ActiveWorkers::<Context>::bounded(
-            golem_config.limits.max_active_instances,
+            golem_config.limits.max_active_workers,
             golem_config.active_workers.drop_when_full,
             golem_config.active_workers.ttl,
         ))
@@ -59,7 +59,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<Context>>,
         runtime: Handle,
-        template_service: Arc<dyn TemplateService + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -93,7 +93,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
-            template_service.clone(),
+            component_service.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -113,7 +113,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
-            template_service.clone(),
+            component_service.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -134,7 +134,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             engine,
             linker,
             runtime.clone(),
-            template_service,
+            component_service,
             shard_manager_service,
             worker_service,
             worker_enumeration_service,

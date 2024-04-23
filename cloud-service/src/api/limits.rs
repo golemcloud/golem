@@ -35,8 +35,8 @@ impl From<PlanLimitError> for LimitsError {
             PlanLimitError::AccountIdNotFound(_) => LimitsError::BadRequest(Json(ErrorsBody {
                 errors: vec!["Account not found".to_string()],
             })),
-            PlanLimitError::TemplateIdNotFound(_) => LimitsError::BadRequest(Json(ErrorsBody {
-                errors: vec!["Template not found".to_string()],
+            PlanLimitError::ComponentIdNotFound(_) => LimitsError::BadRequest(Json(ErrorsBody {
+                errors: vec!["Component not found".to_string()],
             })),
             PlanLimitError::ProjectIdNotFound(_) => LimitsError::BadRequest(Json(ErrorsBody {
                 errors: vec!["Project not found".to_string()],

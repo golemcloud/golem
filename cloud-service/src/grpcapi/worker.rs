@@ -26,11 +26,11 @@ use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 
 use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::template::{TemplateError, TemplateService};
+use crate::service::component::{ComponentError, ComponentService};
 use crate::service::worker::{self, ConnectWorkerStream, WorkerService};
 
 pub struct WorkerGrpcApi {
-    pub template_service: Arc<dyn TemplateService + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService + Sync + Send>,
     pub worker_service: Arc<dyn WorkerService + Sync + Send>,
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
 }
@@ -293,36 +293,41 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<(WorkerId, ComponentVersion), GrpcWorkerError> {
         let auth = self.auth(metadata).await?;
-        let template_id: golem_common::model::TemplateId = request
-            .template_id
+        let component_id: golem_common::model::ComponentId = request
+            .component_id
             .and_then(|id| id.try_into().ok())
-            .ok_or_else(|| bad_request_error("Missing template id"))?;
+            .ok_or_else(|| bad_request_error("Missing component id"))?;
 
-        let latest_template = self
-            .template_service
-            .get_latest_version(&template_id, &auth)
+        let latest_component = self
+            .component_service
+            .get_latest_version(&component_id, &auth)
             .await
-            .tap_err(|error| tracing::error!("Error getting latest template version: {:?}", error))?
+            .tap_err(|error| {
+                tracing::error!("Error getting latest component version: {:?}", error)
+            })?
             .ok_or(GrpcWorkerError {
                 error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Template not found: {}", &template_id),
+                    error: format!("Component not found: {}", &component_id),
                 })),
             })?;
 
-        let worker_id = make_worker_id(template_id, request.name)?;
+        let worker_id = make_worker_id(component_id, request.name)?;
 
         let worker = self
             .worker_service
             .create(
                 &worker_id,
-                latest_template.versioned_template_id.version,
+                latest_component.versioned_component_id.version,
                 request.args,
                 request.env,
                 &auth,
             )
             .await?;
 
-        Ok((worker.into(), latest_template.versioned_template_id.version))
+        Ok((
+            worker.into(),
+            latest_component.versioned_component_id.version,
+        ))
     }
 
     async fn delete_worker(
@@ -378,11 +383,11 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GrpcWorkerError> {
         let auth = self.auth(metadata).await?;
-        let template_id: golem_common::model::TemplateId = request
-            .template_id
-            .ok_or_else(|| bad_request_error("Missing template id"))?
+        let component_id: golem_common::model::ComponentId = request
+            .component_id
+            .ok_or_else(|| bad_request_error("Missing component id"))?
             .try_into()
-            .map_err(|_| bad_request_error("Invalid template id"))?;
+            .map_err(|_| bad_request_error("Invalid component id"))?;
 
         let filter: Option<WorkerFilter> =
             match request.filter {
@@ -395,7 +400,7 @@ impl WorkerGrpcApi {
         let (new_cursor, workers) = self
             .worker_service
             .find_metadata(
-                &template_id,
+                &component_id,
                 filter,
                 request.cursor,
                 request.count,
@@ -588,14 +593,14 @@ impl From<crate::service::worker::WorkerError> for worker_error::Error {
     fn from(value: crate::service::worker::WorkerError) -> Self {
         match value {
             worker::WorkerError::Base(error) => match error {
-                WorkerServiceError::Template(error) => error.into(),
+                WorkerServiceError::Component(error) => error.into(),
                 WorkerServiceError::TypeChecker(error) => {
                     worker_error::Error::BadRequest(ErrorsBody {
                         errors: vec![error],
                     })
                 }
-                WorkerServiceError::VersionedTemplateIdNotFound(_)
-                | WorkerServiceError::TemplateNotFound(_)
+                WorkerServiceError::VersionedComponentIdNotFound(_)
+                | WorkerServiceError::ComponentNotFound(_)
                 | WorkerServiceError::AccountIdNotFound(_)
                 | WorkerServiceError::WorkerNotFound(_) => {
                     worker_error::Error::NotFound(ErrorBody {
@@ -626,39 +631,39 @@ impl From<crate::service::worker::WorkerError> for worker_error::Error {
     }
 }
 
-impl From<TemplateError> for GrpcWorkerError {
-    fn from(error: TemplateError) -> Self {
+impl From<ComponentError> for GrpcWorkerError {
+    fn from(error: ComponentError) -> Self {
         GrpcWorkerError {
             error: Some(error.into()),
         }
     }
 }
 
-impl From<TemplateError> for worker_error::Error {
-    fn from(value: TemplateError) -> Self {
+impl From<ComponentError> for worker_error::Error {
+    fn from(value: ComponentError) -> Self {
         match value {
-            TemplateError::Internal(error) => {
+            ComponentError::Internal(error) => {
                 worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
                         details: error.to_string(),
                     })),
                 })
             }
-            TemplateError::Unauthorized(error) => {
+            ComponentError::Unauthorized(error) => {
                 worker_error::Error::Unauthorized(ErrorBody { error })
             }
-            TemplateError::LimitExceeded(error) => {
+            ComponentError::LimitExceeded(error) => {
                 worker_error::Error::LimitExceeded(ErrorBody { error })
             }
-            TemplateError::AlreadyExists(_) => worker_error::Error::BadRequest(ErrorsBody {
+            ComponentError::AlreadyExists(_) => worker_error::Error::BadRequest(ErrorsBody {
                 errors: vec![value.to_string()],
             }),
-            TemplateError::UnknownTemplateId(_)
-            | TemplateError::UnknownVersionedTemplateId(_)
-            | TemplateError::UnknownProjectId(_) => worker_error::Error::NotFound(ErrorBody {
+            ComponentError::UnknownComponentId(_)
+            | ComponentError::UnknownVersionedComponentId(_)
+            | ComponentError::UnknownProjectId(_) => worker_error::Error::NotFound(ErrorBody {
                 error: value.to_string(),
             }),
-            TemplateError::TemplateProcessing(error) => {
+            ComponentError::ComponentProcessing(error) => {
                 worker_error::Error::BadRequest(ErrorsBody {
                     errors: vec![error.to_string()],
                 })
@@ -668,10 +673,10 @@ impl From<TemplateError> for worker_error::Error {
 }
 
 fn make_worker_id(
-    template_id: golem_common::model::TemplateId,
+    component_id: golem_common::model::ComponentId,
     worker_name: String,
 ) -> std::result::Result<golem_service_base::model::WorkerId, GrpcWorkerError> {
-    golem_service_base::model::WorkerId::new(template_id, worker_name)
+    golem_service_base::model::WorkerId::new(component_id, worker_name)
         .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))
 }
 
@@ -746,17 +751,17 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
                 worker_execution_error::Error::FailedToResumeWorker(err) => {
                     format!("Failed To Resume Worker: Worker ID = {:?}", err.worker_id)
                 }
-                worker_execution_error::Error::TemplateDownloadFailed(err) => format!(
-                    "Template Download Failed: Template ID = {:?}, Version: {}, Reason: {}",
-                    err.template_id, err.template_version, err.reason
+                worker_execution_error::Error::ComponentDownloadFailed(err) => format!(
+                    "Component Download Failed: Component ID = {:?}, Version: {}, Reason: {}",
+                    err.component_id, err.component_version, err.reason
                 ),
-                worker_execution_error::Error::TemplateParseFailed(err) => format!(
-                    "Template Parse Failed: Template ID = {:?}, Version: {}, Reason: {}",
-                    err.template_id, err.template_version, err.reason
+                worker_execution_error::Error::ComponentParseFailed(err) => format!(
+                    "Component Parse Failed: Component ID = {:?}, Version: {}, Reason: {}",
+                    err.component_id, err.component_version, err.reason
                 ),
-                worker_execution_error::Error::GetLatestVersionOfTemplateFailed(err) => format!(
-                    "Get Latest Version Of Template Failed: Template ID = {:?}, Reason: {}",
-                    err.template_id, err.reason
+                worker_execution_error::Error::GetLatestVersionOfComponentFailed(err) => format!(
+                    "Get Latest Version Of Component Failed: Component ID = {:?}, Reason: {}",
+                    err.component_id, err.reason
                 ),
                 worker_execution_error::Error::PromiseNotFound(err) => {
                     format!("Promise Not Found: Promise ID = {:?}", err.promise_id)

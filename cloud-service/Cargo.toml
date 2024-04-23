@@ -10,8 +10,9 @@ path = "src/server.rs"
 [lib]
 
 [dependencies]
-golem-common = { workspace = true }
 golem-api-grpc = { workspace = true }
+golem-common = { workspace = true }
+golem-component-service-base = { workspace = true }
 golem-service-base = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 golem-worker-service-base = { workspace = true }
@@ -63,7 +64,6 @@ num-traits = { workspace = true }
 anyhow = { workspace = true }
 futures = { workspace = true }
 thiserror.workspace = true
-golem-template-service-base.workspace = true
 
 [dev-dependencies]
 futures.workspace = true

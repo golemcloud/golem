@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use golem_common::model::TemplateId;
+use golem_common::model::ComponentId;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::service::worker::proxy_worker_connection;
 use http::StatusCode;
@@ -28,12 +28,12 @@ impl ConnectService {
 
 #[handler]
 pub async fn ws(
-    Path((template_id, worker_name)): Path<(TemplateId, String)>,
+    Path((component_id, worker_name)): Path<(ComponentId, String)>,
     websocket: WebSocket,
     Data(service): Data<&ConnectService>,
     auth: AuthData,
 ) -> Response {
-    get_worker_stream(service, template_id, worker_name, auth.auth)
+    get_worker_stream(service, component_id, worker_name, auth.auth)
         .await
         .map(|(worker_id, worker_stream)| {
             websocket
@@ -58,11 +58,11 @@ pub async fn ws(
 
 async fn get_worker_stream(
     service: &ConnectService,
-    template_id: TemplateId,
+    component_id: ComponentId,
     worker_name: String,
     auth: AccountAuthorisation,
 ) -> Result<(WorkerId, ConnectWorkerStream), Response> {
-    let worker_id = WorkerId::new(template_id, worker_name)
+    let worker_id = WorkerId::new(component_id, worker_name)
         .map_err(|e| single_error(StatusCode::BAD_REQUEST, format!("Invalid worker id: {e}")))?;
 
     let worker_stream = service
@@ -104,34 +104,34 @@ fn many_errors(status: StatusCode, errors: Vec<String>) -> Response {
 
 impl IntoResponse for crate::service::worker::WorkerError {
     fn into_response(self) -> Response {
-        use golem_worker_service_base::service::template::TemplateServiceError;
+        use golem_worker_service_base::service::component::ComponentServiceError;
         use golem_worker_service_base::service::worker::WorkerServiceError;
 
         match self {
             crate::service::worker::WorkerError::Base(error) => match error {
-                WorkerServiceError::Template(error) => match error {
-                    TemplateServiceError::BadRequest(errors) => {
+                WorkerServiceError::Component(error) => match error {
+                    ComponentServiceError::BadRequest(errors) => {
                         many_errors(StatusCode::BAD_REQUEST, errors)
                     }
-                    TemplateServiceError::AlreadyExists(_) => {
+                    ComponentServiceError::AlreadyExists(_) => {
                         single_error(StatusCode::CONFLICT, error)
                     }
-                    TemplateServiceError::Internal(_) => {
+                    ComponentServiceError::Internal(_) => {
                         single_error(StatusCode::INTERNAL_SERVER_ERROR, error)
                     }
-                    TemplateServiceError::Unauthorized(error) => {
+                    ComponentServiceError::Unauthorized(error) => {
                         single_error(StatusCode::UNAUTHORIZED, error)
                     }
-                    TemplateServiceError::Forbidden(error) => {
+                    ComponentServiceError::Forbidden(error) => {
                         single_error(StatusCode::FORBIDDEN, error)
                     }
-                    TemplateServiceError::NotFound(error) => {
+                    ComponentServiceError::NotFound(error) => {
                         single_error(StatusCode::NOT_FOUND, error)
                     }
                 },
                 WorkerServiceError::TypeChecker(_) => single_error(StatusCode::BAD_REQUEST, error),
-                WorkerServiceError::VersionedTemplateIdNotFound(_)
-                | WorkerServiceError::TemplateNotFound(_)
+                WorkerServiceError::VersionedComponentIdNotFound(_)
+                | WorkerServiceError::ComponentNotFound(_)
                 | WorkerServiceError::AccountIdNotFound(_)
                 | WorkerServiceError::WorkerNotFound(_) => {
                     single_error(StatusCode::NOT_FOUND, error)

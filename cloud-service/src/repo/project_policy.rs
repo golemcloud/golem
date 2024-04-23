@@ -15,10 +15,10 @@ use crate::repo::RepoError;
 pub struct ProjectPolicyRecord {
     pub project_policy_id: Uuid,
     pub name: String,
-    pub view_template: bool,
-    pub create_template: bool,
-    pub update_template: bool,
-    pub delete_template: bool,
+    pub view_component: bool,
+    pub create_component: bool,
+    pub update_component: bool,
+    pub delete_component: bool,
     pub view_worker: bool,
     pub create_worker: bool,
     pub update_worker: bool,
@@ -36,17 +36,17 @@ impl From<ProjectPolicyRecord> for ProjectPolicy {
     fn from(value: ProjectPolicyRecord) -> Self {
         let mut project_actions: HashSet<ProjectAction> = HashSet::new();
 
-        if value.view_template {
-            project_actions.insert(ProjectAction::ViewTemplate);
+        if value.view_component {
+            project_actions.insert(ProjectAction::ViewComponent);
         }
-        if value.create_template {
-            project_actions.insert(ProjectAction::CreateTemplate);
+        if value.create_component {
+            project_actions.insert(ProjectAction::CreateComponent);
         }
-        if value.update_template {
-            project_actions.insert(ProjectAction::UpdateTemplate);
+        if value.update_component {
+            project_actions.insert(ProjectAction::UpdateComponent);
         }
-        if value.delete_template {
-            project_actions.insert(ProjectAction::DeleteTemplate);
+        if value.delete_component {
+            project_actions.insert(ProjectAction::DeleteComponent);
         }
         if value.view_worker {
             project_actions.insert(ProjectAction::ViewWorker);
@@ -97,22 +97,22 @@ impl From<ProjectPolicy> for ProjectPolicyRecord {
         Self {
             project_policy_id: value.id.0,
             name: value.name,
-            view_template: value
+            view_component: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::ViewTemplate),
-            create_template: value
+                .contains(&ProjectAction::ViewComponent),
+            create_component: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::CreateTemplate),
-            update_template: value
+                .contains(&ProjectAction::CreateComponent),
+            update_component: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::UpdateTemplate),
-            delete_template: value
+                .contains(&ProjectAction::UpdateComponent),
+            delete_component: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::DeleteTemplate),
+                .contains(&ProjectAction::DeleteComponent),
             view_worker: value
                 .project_actions
                 .actions
@@ -196,7 +196,7 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<sqlx::Postgres> {
               INSERT INTO project_policies
                 (
                 project_policy_id, name,
-                view_template, create_template, update_template, delete_template,
+                view_component, create_component, update_component, delete_component,
                 view_worker, create_worker, update_worker, delete_worker,
                 view_project_grants, create_project_grants, delete_project_grants,
                 view_api_definition, create_api_definition, update_api_definition, delete_api_definition
@@ -213,10 +213,10 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<sqlx::Postgres> {
              )
             .bind(project_policy.project_policy_id)
             .bind(project_policy.name.clone())
-            .bind(project_policy.view_template)
-            .bind(project_policy.create_template)
-            .bind(project_policy.update_template)
-            .bind(project_policy.delete_template)
+            .bind(project_policy.view_component)
+            .bind(project_policy.create_component)
+            .bind(project_policy.update_component)
+            .bind(project_policy.delete_component)
             .bind(project_policy.view_worker)
             .bind(project_policy.create_worker)
             .bind(project_policy.update_worker)
@@ -300,7 +300,7 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<sqlx::Sqlite> {
               INSERT INTO project_policies
                 (
                 project_policy_id, name,
-                view_template, create_template, update_template, delete_template,
+                view_component, create_component, update_component, delete_component,
                 view_worker, create_worker, update_worker, delete_worker,
                 view_project_grants, create_project_grants, delete_project_grants,
                 view_api_definition, create_api_definition, update_api_definition, delete_api_definition
@@ -317,10 +317,10 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<sqlx::Sqlite> {
         )
             .bind(project_policy.project_policy_id)
             .bind(project_policy.name.clone())
-            .bind(project_policy.view_template)
-            .bind(project_policy.create_template)
-            .bind(project_policy.update_template)
-            .bind(project_policy.delete_template)
+            .bind(project_policy.view_component)
+            .bind(project_policy.create_component)
+            .bind(project_policy.update_component)
+            .bind(project_policy.delete_component)
             .bind(project_policy.view_worker)
             .bind(project_policy.create_worker)
             .bind(project_policy.update_worker)

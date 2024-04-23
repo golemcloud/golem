@@ -4,10 +4,10 @@ package golem.cloud.projectpolicy;
 
 
 enum ProjectAction {
-  VIEW_TEMPLATE = 0;
-  CREATE_TEMPLATE = 1;
-  UPDATE_TEMPLATE = 2;
-  DELETE_TEMPLATE = 3;
+  VIEW_COMPONENT = 0;
+  CREATE_COMPONENT = 1;
+  UPDATE_COMPONENT = 2;
+  DELETE_COMPONENT = 3;
   VIEW_WORKER = 4;
   CREATE_WORKER = 5;
   UPDATE_WORKER = 6;

@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloud_common::model::ProjectPolicyId;
+use golem_common::model::ComponentId;
 use golem_common::model::ProjectId;
-use golem_common::model::TemplateId;
 use tracing::info;
 
 use crate::auth::AccountAuthorisation;
 use crate::model::{ProjectAction, ProjectActions};
+use crate::repo::component::ComponentRepo;
 use crate::repo::project::ProjectRepo;
-use crate::repo::template::TemplateRepo;
 use crate::repo::RepoError;
 use crate::service::project_grant::{ProjectGrantError, ProjectGrantService};
 use crate::service::project_policy::{ProjectPolicyError, ProjectPolicyService};
@@ -64,9 +64,9 @@ pub trait ProjectAuthorisationService {
         auth: &AccountAuthorisation,
     ) -> Result<ProjectActions, ProjectAuthorisationError>;
 
-    async fn get_by_template(
+    async fn get_by_component(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         auth: &AccountAuthorisation,
     ) -> Result<ProjectActions, ProjectAuthorisationError>;
 
@@ -80,7 +80,7 @@ pub struct ProjectAuthorisationServiceDefault {
     project_repo: Arc<dyn ProjectRepo + Sync + Send>,
     project_grant_service: Arc<dyn ProjectGrantService + Sync + Send>,
     project_policy_service: Arc<dyn ProjectPolicyService + Sync + Send>,
-    template_repo: Arc<dyn TemplateRepo + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
 }
 
 impl ProjectAuthorisationServiceDefault {
@@ -88,13 +88,13 @@ impl ProjectAuthorisationServiceDefault {
         project_repo: Arc<dyn ProjectRepo + Sync + Send>,
         project_grant_service: Arc<dyn ProjectGrantService + Sync + Send>,
         project_policy_service: Arc<dyn ProjectPolicyService + Sync + Send>,
-        template_repo: Arc<dyn TemplateRepo + Sync + Send>,
+        component_repo: Arc<dyn ComponentRepo + Sync + Send>,
     ) -> Self {
         ProjectAuthorisationServiceDefault {
             project_repo,
             project_grant_service,
             project_policy_service,
-            template_repo,
+            component_repo,
         }
     }
 }
@@ -142,19 +142,19 @@ impl ProjectAuthorisationService for ProjectAuthorisationServiceDefault {
         }
     }
 
-    async fn get_by_template(
+    async fn get_by_component(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         auth: &AccountAuthorisation,
     ) -> Result<ProjectActions, ProjectAuthorisationError> {
-        info!("Get project authorisations for template: {}", template_id);
-        let template = self
-            .template_repo
-            .get_latest_version(&template_id.0)
+        info!("Get project authorisations for component: {}", component_id);
+        let component = self
+            .component_repo
+            .get_latest_version(&component_id.0)
             .await?;
 
-        if let Some(template) = template {
-            let project_id = ProjectId(template.project_id);
+        if let Some(component) = component {
+            let project_id = ProjectId(component.project_id);
             self.get_by_project(&project_id, auth).await
         } else {
             Ok(ProjectActions::all())
@@ -220,9 +220,9 @@ impl ProjectAuthorisationService for ProjectAuthorisationServiceNoOp {
         Ok(ProjectActions::empty())
     }
 
-    async fn get_by_template(
+    async fn get_by_component(
         &self,
-        _template_id: &TemplateId,
+        _component_id: &ComponentId,
         _auth: &AccountAuthorisation,
     ) -> Result<ProjectActions, ProjectAuthorisationError> {
         Ok(ProjectActions::empty())

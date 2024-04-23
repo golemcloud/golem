@@ -34,8 +34,8 @@ impl From<AuthServiceError> for LimitsError {
 impl From<PlanLimitError> for LimitsError {
     fn from(value: PlanLimitError) -> Self {
         let error = match value {
-            PlanLimitError::TemplateIdNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
-                errors: vec!["Template not found".to_string()],
+            PlanLimitError::ComponentIdNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
+                errors: vec!["Component not found".to_string()],
             }),
             PlanLimitError::ProjectIdNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
                 errors: vec!["Project not found".to_string()],

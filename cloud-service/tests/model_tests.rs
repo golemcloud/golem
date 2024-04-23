@@ -1,17 +1,17 @@
 #[cfg(test)]
 mod tests {
-    use golem_service_base::model::TemplateMetadata;
+    use golem_service_base::model::ComponentMetadata;
 
     // This tests that serializers are consistent across PRs.
     // If this tests fails, then we have made a backwards incompatible change to the serialization spec.
-    // Metadata JSON gets written to DB as serialized string in template repo.
+    // Metadata JSON gets written to DB as serialized string in component repo.
     #[test]
     fn test_metadata_spec_serde() {
         fn test_serde(json: &str) {
-            let result: TemplateMetadata = serde_json::from_str(json).unwrap();
+            let result: ComponentMetadata = serde_json::from_str(json).unwrap();
             let json2 = serde_json::to_value(result.clone()).unwrap();
             // println!("{}", json2);
-            let result2: TemplateMetadata = serde_json::from_value(json2.clone()).unwrap();
+            let result2: ComponentMetadata = serde_json::from_value(json2.clone()).unwrap();
 
             assert_eq!(result, result2);
         }

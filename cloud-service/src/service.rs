@@ -1,8 +1,8 @@
-use golem_service_base::config::TemplateStoreConfig;
-use golem_service_base::service::template_object_store;
-use golem_template_service_base::service::template_compilation::{
-    TemplateCompilationService, TemplateCompilationServiceDisabled,
+use golem_component_service_base::service::component_compilation::{
+    ComponentCompilationService, ComponentCompilationServiceDisabled,
 };
+use golem_service_base::config::ComponentStoreConfig;
+use golem_service_base::service::component_object_store;
 use std::sync::Arc;
 
 use crate::auth::AccountAuthorisation;
@@ -14,6 +14,7 @@ pub mod account;
 pub mod account_grant;
 pub mod account_summary;
 pub mod auth;
+pub mod component;
 pub mod login;
 pub mod oauth2;
 pub mod oauth2_github_client;
@@ -26,7 +27,6 @@ pub mod project;
 pub mod project_auth;
 pub mod project_grant;
 pub mod project_policy;
-pub mod template;
 pub mod token;
 pub mod worker;
 
@@ -43,7 +43,7 @@ pub struct Services {
     pub oauth2_service: Arc<dyn oauth2::OAuth2Service + Sync + Send>,
     pub token_service: Arc<dyn token::TokenService + Sync + Send>,
     pub login_service: Arc<dyn login::LoginService + Sync + Send>,
-    pub template_service: Arc<dyn template::TemplateService + Sync + Send>,
+    pub component_service: Arc<dyn component::ComponentService + Sync + Send>,
     pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
     pub project_auth_service: Arc<dyn project_auth::ProjectAuthorisationService + Sync + Send>,
     pub project_service: Arc<dyn project::ProjectService + Sync + Send>,
@@ -79,7 +79,7 @@ impl Services {
                 repositories.account_workers_repo.clone(),
                 repositories.account_uploads_repo.clone(),
                 repositories.project_repo.clone(),
-                repositories.template_repo.clone(),
+                repositories.component_repo.clone(),
                 repositories.account_fuel_repo.clone(),
             ));
 
@@ -153,13 +153,13 @@ impl Services {
                 repositories.project_policy_repo.clone(),
             ));
 
-        let object_store: Arc<dyn template_object_store::TemplateObjectStore + Sync + Send> =
-            match config.templates.store.clone() {
-                TemplateStoreConfig::S3(c) => {
-                    Arc::new(template_object_store::AwsS3TemplateObjectStore::new(&c).await)
+        let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
+            match config.components.store.clone() {
+                ComponentStoreConfig::S3(c) => {
+                    Arc::new(component_object_store::AwsS3ComponentObjectStore::new(&c).await)
                 }
-                TemplateStoreConfig::Local(c) => {
-                    Arc::new(template_object_store::FsTemplateObjectStore::new(&c)?)
+                ComponentStoreConfig::Local(c) => {
+                    Arc::new(component_object_store::FsComponentObjectStore::new(&c)?)
                 }
             };
 
@@ -168,7 +168,7 @@ impl Services {
                 repositories.project_repo.clone(),
                 project_grant_service.clone(),
                 project_policy_service.clone(),
-                repositories.template_repo.clone(),
+                repositories.component_repo.clone(),
             ));
 
         let project_service: Arc<dyn project::ProjectService + Sync + Send> =
@@ -176,17 +176,17 @@ impl Services {
                 repositories.project_repo.clone(),
                 project_auth_service.clone(),
                 plan_limit_service.clone(),
-                repositories.template_repo.clone(),
+                repositories.component_repo.clone(),
             ));
 
         // TODO: Load from config.
-        let compilation_service: Arc<dyn TemplateCompilationService + Sync + Send> =
-            Arc::new(TemplateCompilationServiceDisabled);
+        let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
+            Arc::new(ComponentCompilationServiceDisabled);
 
-        let template_service: Arc<dyn template::TemplateService + Sync + Send> =
-            Arc::new(template::TemplateServiceDefault::new(
+        let component_service: Arc<dyn component::ComponentService + Sync + Send> =
+            Arc::new(component::ComponentServiceDefault::new(
                 repositories.account_uploads_repo.clone(),
-                repositories.template_repo.clone(),
+                repositories.component_repo.clone(),
                 plan_limit_service.clone(),
                 object_store.clone(),
                 project_service.clone(),
@@ -212,18 +212,18 @@ impl Services {
         );
 
         let worker_service: Arc<dyn worker::WorkerService + Sync + Send> = {
-            use golem_worker_service_base::service::template::TemplateService as BaseTemplateService;
+            use golem_worker_service_base::service::component::ComponentService as BaseComponentService;
             use golem_worker_service_base::service::worker::WorkerServiceDefault;
 
-            let wrapped_template_service: Arc<
-                dyn BaseTemplateService<AccountAuthorisation> + Send + Sync,
-            > = Arc::new(worker::TemplateServiceWrapper::new(
-                template_service.clone(),
+            let wrapped_component_service: Arc<
+                dyn BaseComponentService<AccountAuthorisation> + Send + Sync,
+            > = Arc::new(worker::ComponentServiceWrapper::new(
+                component_service.clone(),
             ));
 
             let base = WorkerServiceDefault::new(
                 worker_executor_clients.clone(),
-                wrapped_template_service,
+                wrapped_component_service,
                 routing_table_service.clone(),
             );
 
@@ -252,7 +252,7 @@ impl Services {
             project_service,
             token_service,
             login_service,
-            template_service,
+            component_service,
             worker_service,
         })
     }
@@ -297,8 +297,8 @@ impl Services {
         let project_grant_service: Arc<dyn project_grant::ProjectGrantService + Sync + Send> =
             Arc::new(project_grant::ProjectGrantServiceNoOp::default());
 
-        let template_service: Arc<dyn template::TemplateService + Sync + Send> =
-            Arc::new(template::TemplateServiceNoOp::default());
+        let component_service: Arc<dyn component::ComponentService + Sync + Send> =
+            Arc::new(component::ComponentServiceNoOp::default());
 
         let project_auth_service: Arc<dyn project_auth::ProjectAuthorisationService + Sync + Send> =
             Arc::new(project_auth::ProjectAuthorisationServiceNoOp::default());
@@ -325,7 +325,7 @@ impl Services {
             project_service,
             login_service,
             token_service,
-            template_service,
+            component_service,
             worker_service,
         }
     }

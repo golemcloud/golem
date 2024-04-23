@@ -35,10 +35,10 @@ pub struct VersionInfo {
     EnumIter,
 )]
 pub enum ProjectAction {
-    ViewTemplate,
-    CreateTemplate,
-    UpdateTemplate,
-    DeleteTemplate,
+    ViewComponent,
+    CreateComponent,
+    UpdateComponent,
+    DeleteComponent,
     ViewWorker,
     CreateWorker,
     UpdateWorker,
@@ -55,10 +55,10 @@ pub enum ProjectAction {
 impl From<ProjectAction> for i32 {
     fn from(value: ProjectAction) -> Self {
         match value {
-            ProjectAction::ViewTemplate => 0,
-            ProjectAction::CreateTemplate => 1,
-            ProjectAction::UpdateTemplate => 2,
-            ProjectAction::DeleteTemplate => 3,
+            ProjectAction::ViewComponent => 0,
+            ProjectAction::CreateComponent => 1,
+            ProjectAction::UpdateComponent => 2,
+            ProjectAction::DeleteComponent => 3,
             ProjectAction::ViewWorker => 4,
             ProjectAction::CreateWorker => 5,
             ProjectAction::UpdateWorker => 6,
@@ -78,10 +78,10 @@ impl TryFrom<i32> for ProjectAction {
     type Error = String;
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(ProjectAction::ViewTemplate),
-            1 => Ok(ProjectAction::CreateTemplate),
-            2 => Ok(ProjectAction::UpdateTemplate),
-            3 => Ok(ProjectAction::DeleteTemplate),
+            0 => Ok(ProjectAction::ViewComponent),
+            1 => Ok(ProjectAction::CreateComponent),
+            2 => Ok(ProjectAction::UpdateComponent),
+            3 => Ok(ProjectAction::DeleteComponent),
             4 => Ok(ProjectAction::ViewWorker),
             5 => Ok(ProjectAction::CreateWorker),
             6 => Ok(ProjectAction::UpdateWorker),
@@ -101,10 +101,10 @@ impl TryFrom<i32> for ProjectAction {
 impl std::fmt::Display for ProjectAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
-            ProjectAction::ViewTemplate => write!(f, "ViewTemplate"),
-            ProjectAction::CreateTemplate => write!(f, "CreateTemplate"),
-            ProjectAction::UpdateTemplate => write!(f, "UpdateTemplate"),
-            ProjectAction::DeleteTemplate => write!(f, "DeleteTemplate"),
+            ProjectAction::ViewComponent => write!(f, "ViewComponent"),
+            ProjectAction::CreateComponent => write!(f, "CreateComponent"),
+            ProjectAction::UpdateComponent => write!(f, "UpdateComponent"),
+            ProjectAction::DeleteComponent => write!(f, "DeleteComponent"),
             ProjectAction::ViewWorker => write!(f, "ViewWorker"),
             ProjectAction::CreateWorker => write!(f, "CreateWorker"),
             ProjectAction::UpdateWorker => write!(f, "UpdateWorker"),
@@ -220,9 +220,9 @@ pub struct ProjectPolicyData {
 )]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct TemplateQuery {
+pub struct ComponentQuery {
     pub project_id: Option<ProjectId>,
-    pub template_name: TemplateName,
+    pub component_name: ComponentName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
@@ -271,70 +271,70 @@ impl From<BatchUpdateResourceLimits>
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct Template {
-    pub versioned_template_id: VersionedTemplateId,
-    pub user_template_id: UserTemplateId,
-    pub protected_template_id: ProtectedTemplateId,
-    pub template_name: TemplateName,
-    pub template_size: i32,
-    pub metadata: TemplateMetadata,
+pub struct Component {
+    pub versioned_component_id: VersionedComponentId,
+    pub user_component_id: UserComponentId,
+    pub protected_component_id: ProtectedComponentId,
+    pub component_name: ComponentName,
+    pub component_size: u64,
+    pub metadata: ComponentMetadata,
     pub project_id: ProjectId,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::Template> for Template {
+impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::template::Template,
+        value: golem_api_grpc::proto::golem::component::Component,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            versioned_template_id: value
-                .versioned_template_id
-                .ok_or("Missing versioned_template_id")?
+            versioned_component_id: value
+                .versioned_component_id
+                .ok_or("Missing versioned_component_id")?
                 .try_into()?,
-            user_template_id: value
-                .user_template_id
-                .ok_or("Missing user_template_id")?
+            user_component_id: value
+                .user_component_id
+                .ok_or("Missing user_component_id")?
                 .try_into()?,
-            protected_template_id: value
-                .protected_template_id
-                .ok_or("Missing protected_template_id")?
+            protected_component_id: value
+                .protected_component_id
+                .ok_or("Missing protected_component_id")?
                 .try_into()?,
-            template_name: TemplateName(value.template_name),
-            template_size: value.template_size,
+            component_name: ComponentName(value.component_name),
+            component_size: value.component_size,
             metadata: value.metadata.ok_or("Missing metadata")?.try_into()?,
             project_id: value.project_id.ok_or("Missing project_id")?.try_into()?,
         })
     }
 }
 
-impl From<Template> for golem_api_grpc::proto::golem::template::Template {
-    fn from(value: Template) -> Self {
+impl From<Component> for golem_api_grpc::proto::golem::component::Component {
+    fn from(value: Component) -> Self {
         Self {
-            versioned_template_id: Some(value.versioned_template_id.into()),
-            user_template_id: Some(value.user_template_id.into()),
-            protected_template_id: Some(value.protected_template_id.into()),
-            template_name: value.template_name.0,
-            template_size: value.template_size,
+            versioned_component_id: Some(value.versioned_component_id.into()),
+            user_component_id: Some(value.user_component_id.into()),
+            protected_component_id: Some(value.protected_component_id.into()),
+            component_name: value.component_name.0,
+            component_size: value.component_size,
             metadata: Some(value.metadata.into()),
             project_id: Some(value.project_id.into()),
         }
     }
 }
 
-impl Template {
+impl Component {
     pub fn next_version(self) -> Self {
-        let new_version = VersionedTemplateId {
-            template_id: self.versioned_template_id.template_id,
-            version: self.versioned_template_id.version + 1,
+        let new_version = VersionedComponentId {
+            component_id: self.versioned_component_id.component_id,
+            version: self.versioned_component_id.version + 1,
         };
         Self {
-            versioned_template_id: new_version.clone(),
-            user_template_id: UserTemplateId {
-                versioned_template_id: new_version.clone(),
+            versioned_component_id: new_version.clone(),
+            user_component_id: UserComponentId {
+                versioned_component_id: new_version.clone(),
             },
-            protected_template_id: ProtectedTemplateId {
-                versioned_template_id: new_version,
+            protected_component_id: ProtectedComponentId {
+                versioned_component_id: new_version,
             },
             ..self
         }
@@ -628,7 +628,7 @@ pub struct WorkerMetadata {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
-    pub template_version: ComponentVersion,
+    pub component_version: ComponentVersion,
     pub retry_count: u64,
     pub pending_invocation_count: u64,
     pub updates: Vec<UpdateRecord>,
@@ -648,7 +648,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             args: value.args,
             env: value.env,
             status: value.status.try_into()?,
-            template_version: value.template_version,
+            component_version: value.component_version,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
             updates: value
@@ -670,7 +670,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             args: value.args,
             env: value.env,
             status: value.status.into(),
-            template_version: value.template_version,
+            component_version: value.component_version,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
             updates: value.updates.iter().cloned().map(|u| u.into()).collect(),
@@ -804,7 +804,7 @@ impl TryFrom<cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicy> 
 #[oai(rename_all = "camelCase")]
 pub struct PlanData {
     pub project_limit: i32,
-    pub template_limit: i32,
+    pub component_limit: i32,
     pub worker_limit: i32,
     pub storage_limit: i32,
     pub monthly_gas_limit: i64,
@@ -815,7 +815,7 @@ impl Default for PlanData {
     fn default() -> Self {
         Self {
             project_limit: 100,
-            template_limit: 100,
+            component_limit: 100,
             worker_limit: 1000,
             storage_limit: 500000000,
             monthly_gas_limit: 1000000000000,
@@ -828,7 +828,7 @@ impl From<cloud_api_grpc::proto::golem::cloud::plan::PlanData> for PlanData {
     fn from(value: cloud_api_grpc::proto::golem::cloud::plan::PlanData) -> Self {
         Self {
             project_limit: value.project_limit,
-            template_limit: value.template_limit,
+            component_limit: value.component_limit,
             worker_limit: value.worker_limit,
             storage_limit: value.storage_limit,
             monthly_gas_limit: value.monthly_gas_limit,
@@ -841,7 +841,7 @@ impl From<PlanData> for cloud_api_grpc::proto::golem::cloud::plan::PlanData {
     fn from(value: PlanData) -> Self {
         Self {
             project_limit: value.project_limit,
-            template_limit: value.template_limit,
+            component_limit: value.component_limit,
             worker_limit: value.worker_limit,
             storage_limit: value.storage_limit,
             monthly_gas_limit: value.monthly_gas_limit,
@@ -959,8 +959,8 @@ pub struct AccountSummary {
     pub id: AccountId,
     pub name: String,
     pub email: String,
-    pub templates_count: i64,
-    pub workers_count: i64,
+    pub component_count: i64,
+    pub worker_count: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -976,8 +976,8 @@ impl TryFrom<cloud_api_grpc::proto::golem::cloud::accountsummary::AccountSummary
             id: value.id.ok_or("Missing field: id")?.into(),
             name: value.name,
             email: value.email,
-            templates_count: value.template_count,
-            workers_count: value.worker_count,
+            component_count: value.component_count,
+            worker_count: value.worker_count,
             created_at: chrono::DateTime::<chrono::Utc>::from_str(&value.created_at)
                 .map_err(|err| format!("Invalid created_at value: {err}"))?,
         })
@@ -990,8 +990,8 @@ impl From<AccountSummary> for cloud_api_grpc::proto::golem::cloud::accountsummar
             id: Some(value.id.into()),
             name: value.name,
             email: value.email,
-            template_count: value.templates_count,
-            worker_count: value.workers_count,
+            component_count: value.component_count,
+            worker_count: value.worker_count,
             created_at: value.created_at.to_rfc3339(),
         }
     }

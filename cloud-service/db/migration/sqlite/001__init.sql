@@ -2,7 +2,7 @@ CREATE TABLE plans
 (
     plan_id              uuid    NOT NULL PRIMARY KEY,
     project_limit        integer NOT NULL,
-    template_limit       integer NOT NULL,
+    component_limit      integer NOT NULL,
     worker_limit         integer NOT NULL,
     storage_limit        integer NOT NULL,
     monthly_gas_limit    bigint  NOT NULL,
@@ -82,19 +82,19 @@ CREATE TABLE account_uploads
 );
 
 
-CREATE TABLE templates
+CREATE TABLE components
 (
-    template_id        uuid    NOT NULL,
-    project_id         uuid    NOT NULL,
-    name               text    NOT NULL,
-    size               integer NOT NULL,
-    version            bigint  NOT NULL,
-    created_at         timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    user_template      text    NOT NULL,
-    protected_template text    NOT NULL,
-    protector_version  bigint,
-    metadata           jsonb   NOT NULL,
-    PRIMARY KEY (template_id, version),
+    component_id        uuid    NOT NULL,
+    project_id          uuid    NOT NULL,
+    name                text    NOT NULL,
+    size                integer NOT NULL,
+    version             bigint  NOT NULL,
+    created_at          timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    user_component      text    NOT NULL,
+    protected_component text    NOT NULL,
+    protector_version   bigint,
+    metadata            jsonb   NOT NULL,
+    PRIMARY KEY (component_id, version),
     FOREIGN KEY (project_id) REFERENCES projects (project_id)
 );
 
@@ -136,10 +136,10 @@ CREATE TABLE project_policies
 (
     project_policy_id     uuid    NOT NULL PRIMARY KEY,
     name                  text    NOT NULL,
-    view_template         boolean NOT NULL,
-    create_template       boolean NOT NULL,
-    update_template       boolean NOT NULL,
-    delete_template       boolean NOT NULL,
+    view_component        boolean NOT NULL,
+    create_component      boolean NOT NULL,
+    update_component      boolean NOT NULL,
+    delete_component      boolean NOT NULL,
     view_worker           boolean NOT NULL,
     create_worker         boolean NOT NULL,
     update_worker         boolean NOT NULL,

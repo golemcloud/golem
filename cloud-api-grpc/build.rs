@@ -11,8 +11,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .extern_path(".wasm.rpc", "::golem_wasm_rpc::protobuf")
         .extern_path(".golem.common", "::golem_api_grpc::proto::golem::common")
         .extern_path(
-            ".golem.template",
-            "::golem_api_grpc::proto::golem::template",
+            ".golem.component",
+            "::golem_api_grpc::proto::golem::component",
         )
         .extern_path(
             ".golem.shardmanager",
@@ -24,8 +24,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "::golem_api_grpc::proto::golem::workerexecutor",
         )
         .extern_path(
-            ".golem.templatecompilation",
-            "::golem_api_grpc::proto::golem::templatecompilation",
+            ".golem.componentcompilation",
+            "::golem_api_grpc::proto::golem::componentcompilation",
         )
         .extern_path(
             ".golem.apidefinition",

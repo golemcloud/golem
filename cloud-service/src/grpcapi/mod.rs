@@ -1,12 +1,12 @@
 use crate::grpcapi::account::AccountGrpcApi;
 use crate::grpcapi::account_summary::AccountSummaryGrpcApi;
+use crate::grpcapi::component::ComponentGrpcApi;
 use crate::grpcapi::grant::GrantGrpcApi;
 use crate::grpcapi::limits::LimitsGrpcApi;
 use crate::grpcapi::login::LoginGrpcApi;
 use crate::grpcapi::project::ProjectGrpcApi;
 use crate::grpcapi::project_grant::ProjectGrantGrpcApi;
 use crate::grpcapi::project_policy::ProjectPolicyGrpcApi;
-use crate::grpcapi::template::TemplateGrpcApi;
 use crate::grpcapi::token::TokenGrpcApi;
 use crate::grpcapi::worker::WorkerGrpcApi;
 use crate::service::Services;
@@ -20,7 +20,7 @@ use cloud_api_grpc::proto::golem::cloud::projectgrant::cloud_project_grant_servi
 use cloud_api_grpc::proto::golem::cloud::projectpolicy::cloud_project_policy_service_server::CloudProjectPolicyServiceServer;
 use cloud_api_grpc::proto::golem::cloud::token::cloud_token_service_server::CloudTokenServiceServer;
 use cloud_common::model::TokenSecret as ModelTokenSecret;
-use golem_api_grpc::proto::golem::template::template_service_server::TemplateServiceServer;
+use golem_api_grpc::proto::golem::component::component_service_server::ComponentServiceServer;
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerServiceServer;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -29,13 +29,13 @@ use tonic::transport::{Error, Server};
 
 mod account;
 mod account_summary;
+mod component;
 mod grant;
 mod limits;
 mod login;
 mod project;
 mod project_grant;
 mod project_policy;
-mod template;
 mod token;
 mod worker;
 
@@ -81,7 +81,7 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         .set_serving::<CloudProjectPolicyServiceServer<ProjectPolicyGrpcApi>>()
         .await;
     health_reporter
-        .set_serving::<TemplateServiceServer<TemplateGrpcApi>>()
+        .set_serving::<ComponentServiceServer<ComponentGrpcApi>>()
         .await;
     health_reporter
         .set_serving::<CloudTokenServiceServer<TokenGrpcApi>>()
@@ -135,9 +135,9 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
             auth_service: services.auth_service.clone(),
             project_policy_service: services.project_policy_service.clone(),
         }))
-        .add_service(TemplateServiceServer::new(TemplateGrpcApi {
+        .add_service(ComponentServiceServer::new(ComponentGrpcApi {
             auth_service: services.auth_service.clone(),
-            template_service: services.template_service.clone(),
+            component_service: services.component_service.clone(),
         }))
         .add_service(CloudTokenServiceServer::new(TokenGrpcApi {
             auth_service: services.auth_service.clone(),
@@ -145,7 +145,7 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         }))
         .add_service(WorkerServiceServer::new(WorkerGrpcApi {
             auth_service: services.auth_service.clone(),
-            template_service: services.template_service.clone(),
+            component_service: services.component_service.clone(),
             worker_service: services.worker_service.clone(),
         }))
         .serve(addr)
