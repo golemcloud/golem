@@ -503,9 +503,10 @@ async fn javascript_example_4() {
         .invoke_and_await(&worker_id, "golem:it/api/create-promise", vec![])
         .await
         .unwrap();
-    println!("promise creation result: {:?}", result);
 
     drop(executor);
+
+    let_assert!(Some(Value::Record(_)) = result.into_iter().next());
 }
 
 #[tokio::test]
