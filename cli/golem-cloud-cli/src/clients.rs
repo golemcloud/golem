@@ -17,6 +17,7 @@ use golem_cloud_client::model::{TokenSecret, UnsafeToken};
 use crate::model::{AccountId, ProjectAction};
 
 pub mod account;
+pub mod component;
 pub mod errors;
 pub mod gateway;
 pub mod grant;
@@ -24,7 +25,6 @@ pub mod login;
 pub mod policy;
 pub mod project;
 pub mod project_grant;
-pub mod template;
 pub mod token;
 pub mod worker;
 
@@ -53,15 +53,15 @@ impl CloudAuthentication {
 
 pub fn action_cli_to_api(action: ProjectAction) -> golem_cloud_client::model::ProjectAction {
     match action {
-        ProjectAction::ViewTemplate => golem_cloud_client::model::ProjectAction::ViewTemplate {},
-        ProjectAction::CreateTemplate => {
-            golem_cloud_client::model::ProjectAction::CreateTemplate {}
+        ProjectAction::ViewComponent => golem_cloud_client::model::ProjectAction::ViewComponent {},
+        ProjectAction::CreateComponent => {
+            golem_cloud_client::model::ProjectAction::CreateComponent {}
         }
-        ProjectAction::UpdateTemplate => {
-            golem_cloud_client::model::ProjectAction::UpdateTemplate {}
+        ProjectAction::UpdateComponent => {
+            golem_cloud_client::model::ProjectAction::UpdateComponent {}
         }
-        ProjectAction::DeleteTemplate => {
-            golem_cloud_client::model::ProjectAction::DeleteTemplate {}
+        ProjectAction::DeleteComponent => {
+            golem_cloud_client::model::ProjectAction::DeleteComponent {}
         }
         ProjectAction::ViewWorker => golem_cloud_client::model::ProjectAction::ViewWorker {},
         ProjectAction::CreateWorker => golem_cloud_client::model::ProjectAction::CreateWorker {},

@@ -29,7 +29,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
 use tracing::{debug, error, info};
 
-use crate::model::{GolemError, InvocationKey, RawTemplateId};
+use crate::model::{GolemError, InvocationKey, RawComponentId};
 use crate::WorkerName;
 
 #[async_trait]
@@ -37,20 +37,20 @@ pub trait WorkerClient {
     async fn new_worker(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
         args: Vec<String>,
         env: Vec<(String, String)>,
     ) -> Result<WorkerId, GolemError>;
     async fn get_invocation_key(
         &self,
         name: &WorkerName,
-        template_id: &RawTemplateId,
+        component_id: &RawComponentId,
     ) -> Result<InvocationKey, GolemError>;
 
     async fn invoke_and_await(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
         function: String,
         parameters: InvokeParameters,
         invocation_key: InvocationKey,
@@ -60,7 +60,7 @@ pub trait WorkerClient {
     async fn invoke(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
         function: String,
         parameters: InvokeParameters,
     ) -> Result<(), GolemError>;
@@ -68,29 +68,36 @@ pub trait WorkerClient {
     async fn interrupt(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
     ) -> Result<(), GolemError>;
     async fn simulated_crash(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
     ) -> Result<(), GolemError>;
-    async fn delete(&self, name: WorkerName, template_id: RawTemplateId) -> Result<(), GolemError>;
+    async fn delete(
+        &self,
+        name: WorkerName,
+        component_id: RawComponentId,
+    ) -> Result<(), GolemError>;
     async fn get_metadata(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
     ) -> Result<WorkerMetadata, GolemError>;
     async fn list_metadata(
         &self,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
         filter: Option<Vec<String>>,
         cursor: Option<u64>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError>;
-    async fn connect(&self, name: WorkerName, template_id: RawTemplateId)
-        -> Result<(), GolemError>;
+    async fn connect(
+        &self,
+        name: WorkerName,
+        component_id: RawComponentId,
+    ) -> Result<(), GolemError>;
 }
 
 #[derive(Clone)]
@@ -105,16 +112,16 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     async fn new_worker(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
         args: Vec<String>,
         env: Vec<(String, String)>,
     ) -> Result<WorkerId, GolemError> {
-        info!("Creating worker {name} of {}", template_id.0);
+        info!("Creating worker {name} of {}", component_id.0);
 
         Ok(self
             .client
             .launch_new_worker(
-                &template_id.0,
+                &component_id.0,
                 &WorkerCreationRequest {
                     name: name.0,
                     args,
@@ -128,13 +135,13 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     async fn get_invocation_key(
         &self,
         name: &WorkerName,
-        template_id: &RawTemplateId,
+        component_id: &RawComponentId,
     ) -> Result<InvocationKey, GolemError> {
-        info!("Getting invocation key for {}/{}", template_id.0, name.0);
+        info!("Getting invocation key for {}/{}", component_id.0, name.0);
 
         let key = self
             .client
-            .get_invocation_key(&template_id.0, &name.0)
+            .get_invocation_key(&component_id.0, &name.0)
             .await?;
 
         Ok(key_api_to_cli(key))
@@ -143,7 +150,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     async fn invoke_and_await(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
         function: String,
         parameters: InvokeParameters,
         invocation_key: InvocationKey,
@@ -151,7 +158,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     ) -> Result<InvokeResult, GolemError> {
         info!(
             "Invoke and await for function {function} in {}/{}",
-            template_id.0, name.0
+            component_id.0, name.0
         );
 
         let calling_convention = if use_stdio {
@@ -163,7 +170,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
         Ok(self
             .client
             .invoke_and_await_function(
-                &template_id.0,
+                &component_id.0,
                 &name.0,
                 &invocation_key.0,
                 &function,
@@ -176,15 +183,18 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     async fn invoke(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
         function: String,
         parameters: InvokeParameters,
     ) -> Result<(), GolemError> {
-        info!("Invoke function {function} in {}/{}", template_id.0, name.0);
+        info!(
+            "Invoke function {function} in {}/{}",
+            component_id.0, name.0
+        );
 
         let _ = self
             .client
-            .invoke_function(&template_id.0, &name.0, &function, &parameters)
+            .invoke_function(&component_id.0, &name.0, &function, &parameters)
             .await?;
         Ok(())
     }
@@ -192,13 +202,13 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     async fn interrupt(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
     ) -> Result<(), GolemError> {
-        info!("Interrupting {}/{}", template_id.0, name.0);
+        info!("Interrupting {}/{}", component_id.0, name.0);
 
         let _ = self
             .client
-            .interrupt_worker(&template_id.0, &name.0, Some(false))
+            .interrupt_worker(&component_id.0, &name.0, Some(false))
             .await?;
         Ok(())
     }
@@ -206,48 +216,52 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     async fn simulated_crash(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
     ) -> Result<(), GolemError> {
-        info!("Simulating crash of {}/{}", template_id.0, name.0);
+        info!("Simulating crash of {}/{}", component_id.0, name.0);
 
         let _ = self
             .client
-            .interrupt_worker(&template_id.0, &name.0, Some(true))
+            .interrupt_worker(&component_id.0, &name.0, Some(true))
             .await?;
         Ok(())
     }
 
-    async fn delete(&self, name: WorkerName, template_id: RawTemplateId) -> Result<(), GolemError> {
-        info!("Deleting worker {}/{}", template_id.0, name.0);
+    async fn delete(
+        &self,
+        name: WorkerName,
+        component_id: RawComponentId,
+    ) -> Result<(), GolemError> {
+        info!("Deleting worker {}/{}", component_id.0, name.0);
 
-        let _ = self.client.delete_worker(&template_id.0, &name.0).await?;
+        let _ = self.client.delete_worker(&component_id.0, &name.0).await?;
         Ok(())
     }
 
     async fn get_metadata(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
     ) -> Result<WorkerMetadata, GolemError> {
-        info!("Getting worker {}/{} metadata", template_id.0, name.0);
+        info!("Getting worker {}/{} metadata", component_id.0, name.0);
 
         Ok(self
             .client
-            .get_worker_metadata(&template_id.0, &name.0)
+            .get_worker_metadata(&component_id.0, &name.0)
             .await?)
     }
 
     async fn list_metadata(
         &self,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
         filter: Option<Vec<String>>,
         cursor: Option<u64>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError> {
         info!(
-            "Getting workers metadata for template: {}, filter: {}",
-            template_id.0,
+            "Getting workers metadata for component: {}, filter: {}",
+            component_id.0,
             filter
                 .clone()
                 .map(|fs| fs.join(" AND "))
@@ -258,14 +272,14 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         Ok(self
             .client
-            .get_workers_metadata(&template_id.0, filter, cursor, count, precise)
+            .get_workers_metadata(&component_id.0, filter, cursor, count, precise)
             .await?)
     }
 
     async fn connect(
         &self,
         name: WorkerName,
-        template_id: RawTemplateId,
+        component_id: RawComponentId,
     ) -> Result<(), GolemError> {
         let mut url = self.context.base_url.clone();
 
@@ -277,8 +291,8 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
         url.path_segments_mut()
             .map_err(|_| GolemError("Can't get path.".to_string()))?
             .push("v2")
-            .push("templates")
-            .push(&template_id.0.to_string())
+            .push("components")
+            .push(&component_id.0.to_string())
             .push("workers")
             .push(&name.0)
             .push("connect");

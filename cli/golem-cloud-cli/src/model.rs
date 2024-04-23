@@ -263,43 +263,43 @@ impl From<&ProjectRef> for ProjectRefArgs {
     }
 }
 
-impl FromArgMatches for TemplateIdOrName {
+impl FromArgMatches for ComponentIdOrName {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
-        TemplateIdOrNameArgs::from_arg_matches(matches).map(|c| (&c).into())
+        ComponentIdOrNameArgs::from_arg_matches(matches).map(|c| (&c).into())
     }
 
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
-        let prc0: TemplateIdOrNameArgs = (&self.clone()).into();
+        let prc0: ComponentIdOrNameArgs = (&self.clone()).into();
         let mut prc = prc0.clone();
-        let res = TemplateIdOrNameArgs::update_from_arg_matches(&mut prc, matches);
+        let res = ComponentIdOrNameArgs::update_from_arg_matches(&mut prc, matches);
         *self = (&prc).into();
         res
     }
 }
 
-impl clap::Args for TemplateIdOrName {
+impl clap::Args for ComponentIdOrName {
     fn augment_args(cmd: clap::Command) -> clap::Command {
-        TemplateIdOrNameArgs::augment_args(cmd)
+        ComponentIdOrNameArgs::augment_args(cmd)
     }
 
     fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
-        TemplateIdOrNameArgs::augment_args_for_update(cmd)
+        ComponentIdOrNameArgs::augment_args_for_update(cmd)
     }
 }
 
 #[derive(clap::Args, Debug, Clone)]
-struct TemplateIdOrNameArgs {
-    #[arg(short = 'T', long, conflicts_with = "template_name", required = true)]
-    template_id: Option<Uuid>,
+struct ComponentIdOrNameArgs {
+    #[arg(short = 'C', long, conflicts_with = "component_name", required = true)]
+    component_id: Option<Uuid>,
 
-    #[arg(short, long, conflicts_with = "template_id", required = true)]
-    template_name: Option<String>,
+    #[arg(short = 'c', long, conflicts_with = "component_id", required = true)]
+    component_name: Option<String>,
 
     #[arg(
         short = 'P',
         long,
         conflicts_with = "project_name",
-        conflicts_with = "template_id"
+        conflicts_with = "component_id"
     )]
     project_id: Option<Uuid>,
 
@@ -307,13 +307,13 @@ struct TemplateIdOrNameArgs {
         short = 'p',
         long,
         conflicts_with = "project_id",
-        conflicts_with = "template_id"
+        conflicts_with = "component_id"
     )]
     project_name: Option<String>,
 }
 
-impl From<&TemplateIdOrNameArgs> for TemplateIdOrName {
-    fn from(value: &TemplateIdOrNameArgs) -> TemplateIdOrName {
+impl From<&ComponentIdOrNameArgs> for ComponentIdOrName {
+    fn from(value: &ComponentIdOrNameArgs) -> ComponentIdOrName {
         let pr = if let Some(id) = value.project_id {
             ProjectRef::Id(ProjectId(id))
         } else if let Some(name) = value.project_name.clone() {
@@ -322,36 +322,36 @@ impl From<&TemplateIdOrNameArgs> for TemplateIdOrName {
             ProjectRef::Default
         };
 
-        if let Some(id) = value.template_id {
-            TemplateIdOrName::Id(RawTemplateId(id))
+        if let Some(id) = value.component_id {
+            ComponentIdOrName::Id(RawComponentId(id))
         } else {
-            TemplateIdOrName::Name(
-                TemplateName(value.template_name.as_ref().unwrap().to_string()),
+            ComponentIdOrName::Name(
+                ComponentName(value.component_name.as_ref().unwrap().to_string()),
                 pr,
             )
         }
     }
 }
 
-impl From<&TemplateIdOrName> for TemplateIdOrNameArgs {
-    fn from(value: &TemplateIdOrName) -> TemplateIdOrNameArgs {
+impl From<&ComponentIdOrName> for ComponentIdOrNameArgs {
+    fn from(value: &ComponentIdOrName) -> ComponentIdOrNameArgs {
         match value {
-            TemplateIdOrName::Id(RawTemplateId(id)) => TemplateIdOrNameArgs {
-                template_id: Some(*id),
-                template_name: None,
+            ComponentIdOrName::Id(RawComponentId(id)) => ComponentIdOrNameArgs {
+                component_id: Some(*id),
+                component_name: None,
                 project_id: None,
                 project_name: None,
             },
-            TemplateIdOrName::Name(TemplateName(name), pr) => {
+            ComponentIdOrName::Name(ComponentName(name), pr) => {
                 let (project_id, project_name) = match pr {
                     ProjectRef::Id(ProjectId(id)) => (Some(*id), None),
                     ProjectRef::Name(name) => (None, Some(name.to_string())),
                     ProjectRef::Default => (None, None),
                 };
 
-                TemplateIdOrNameArgs {
-                    template_id: None,
-                    template_name: Some(name.clone()),
+                ComponentIdOrNameArgs {
+                    component_id: None,
+                    component_name: Some(name.clone()),
                     project_id,
                     project_name,
                 }
@@ -361,15 +361,15 @@ impl From<&TemplateIdOrName> for TemplateIdOrNameArgs {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct RawTemplateId(pub Uuid);
+pub struct RawComponentId(pub Uuid);
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
-pub struct TemplateName(pub String); // TODO: Validate
+pub struct ComponentName(pub String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum TemplateIdOrName {
-    Id(RawTemplateId),
-    Name(TemplateName, ProjectRef),
+pub enum ComponentIdOrName {
+    Id(RawComponentId),
+    Name(ComponentName, ProjectRef),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize)]
@@ -421,10 +421,10 @@ impl FromStr for Role {
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
 pub enum ProjectAction {
-    ViewTemplate,
-    CreateTemplate,
-    UpdateTemplate,
-    DeleteTemplate,
+    ViewComponent,
+    CreateComponent,
+    UpdateComponent,
+    DeleteComponent,
     ViewWorker,
     CreateWorker,
     UpdateWorker,
@@ -437,10 +437,10 @@ pub enum ProjectAction {
 impl Display for ProjectAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            ProjectAction::ViewTemplate => "ViewTemplate",
-            ProjectAction::CreateTemplate => "CreateTemplate",
-            ProjectAction::UpdateTemplate => "UpdateTemplate",
-            ProjectAction::DeleteTemplate => "DeleteTemplate",
+            ProjectAction::ViewComponent => "ViewComponent",
+            ProjectAction::CreateComponent => "CreateComponent",
+            ProjectAction::UpdateComponent => "UpdateComponent",
+            ProjectAction::DeleteComponent => "DeleteComponent",
             ProjectAction::ViewWorker => "ViewWorker",
             ProjectAction::CreateWorker => "CreateWorker",
             ProjectAction::UpdateWorker => "UpdateWorker",
@@ -459,10 +459,10 @@ impl FromStr for ProjectAction {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ViewTemplate" => Ok(ProjectAction::ViewTemplate),
-            "CreateTemplate" => Ok(ProjectAction::CreateTemplate),
-            "UpdateTemplate" => Ok(ProjectAction::UpdateTemplate),
-            "DeleteTemplate" => Ok(ProjectAction::DeleteTemplate),
+            "ViewComponent" => Ok(ProjectAction::ViewComponent),
+            "CreateComponent" => Ok(ProjectAction::CreateComponent),
+            "UpdateComponent" => Ok(ProjectAction::UpdateComponent),
+            "DeleteComponent" => Ok(ProjectAction::DeleteComponent),
             "ViewWorker" => Ok(ProjectAction::ViewWorker),
             "CreateWorker" => Ok(ProjectAction::CreateWorker),
             "UpdateWorker" => Ok(ProjectAction::UpdateWorker),

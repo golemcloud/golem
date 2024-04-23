@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use golem_cloud_client::api::{
-    AccountError, GrantError, LoginError, ProjectError, ProjectGrantError, ProjectPolicyError,
-    TemplateError, TokenError, WorkerError,
+    AccountError, ComponentError, GrantError, LoginError, ProjectError, ProjectGrantError,
+    ProjectPolicyError, TokenError, WorkerError,
 };
 
 pub trait ResponseContentErrorMapper {
@@ -140,25 +140,25 @@ impl ResponseContentErrorMapper for ProjectPolicyError {
     }
 }
 
-impl ResponseContentErrorMapper for TemplateError {
+impl ResponseContentErrorMapper for ComponentError {
     fn map(self) -> String {
         match self {
-            TemplateError::Error400(errors) => {
+            ComponentError::Error400(errors) => {
                 format!("BadRequest: {errors:?}")
             }
-            TemplateError::Error401(error) => {
+            ComponentError::Error401(error) => {
                 format!("Unauthorized: {error:?}")
             }
-            TemplateError::Error403(error) => {
+            ComponentError::Error403(error) => {
                 format!("Forbidden: {error:?}")
             }
-            TemplateError::Error404(error) => {
+            ComponentError::Error404(error) => {
                 format!("NotFound: {error:?}")
             }
-            TemplateError::Error409(error) => {
+            ComponentError::Error409(error) => {
                 format!("Conflict: {error:?}")
             }
-            TemplateError::Error500(error) => {
+            ComponentError::Error500(error) => {
                 format!("InternalError: {error:?}")
             }
         }

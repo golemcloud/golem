@@ -16,59 +16,59 @@ use std::io::Read;
 
 use async_trait::async_trait;
 use golem_cloud_client::model::{
-    Export, ExportFunction, ExportInstance, FunctionParameter, FunctionResult, NameOptionTypePair,
-    NameTypePair, ResourceMode, Template, TemplateQuery, Type, TypeEnum, TypeFlags, TypeRecord,
-    TypeTuple, TypeVariant,
+    Component, ComponentQuery, Export, ExportFunction, ExportInstance, FunctionParameter,
+    FunctionResult, NameOptionTypePair, NameTypePair, ResourceMode, Type, TypeEnum, TypeFlags,
+    TypeRecord, TypeTuple, TypeVariant,
 };
 use serde::Serialize;
 use tokio::fs::File;
 use tracing::info;
 
-use crate::model::{GolemError, PathBufOrStdin, TemplateName};
-use crate::{ProjectId, RawTemplateId};
+use crate::model::{ComponentName, GolemError, PathBufOrStdin};
+use crate::{ProjectId, RawComponentId};
 
 #[async_trait]
-pub trait TemplateClient {
+pub trait ComponentClient {
     async fn find(
         &self,
         project_id: Option<ProjectId>,
-        name: Option<TemplateName>,
-    ) -> Result<Vec<TemplateView>, GolemError>;
+        name: Option<ComponentName>,
+    ) -> Result<Vec<ComponentView>, GolemError>;
     async fn add(
         &self,
         project_id: Option<ProjectId>,
-        name: TemplateName,
+        name: ComponentName,
         file: PathBufOrStdin,
-    ) -> Result<TemplateView, GolemError>;
+    ) -> Result<ComponentView, GolemError>;
     async fn update(
         &self,
-        id: RawTemplateId,
+        id: RawComponentId,
         file: PathBufOrStdin,
-    ) -> Result<TemplateView, GolemError>;
+    ) -> Result<ComponentView, GolemError>;
 }
 
 #[derive(Clone)]
-pub struct TemplateClientLive<C: golem_cloud_client::api::TemplateClient + Sync + Send> {
+pub struct ComponentClientLive<C: golem_cloud_client::api::ComponentClient + Sync + Send> {
     pub client: C,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TemplateView {
-    pub template_id: String,
-    pub template_version: u64,
-    pub template_name: String,
-    pub template_size: i32,
+pub struct ComponentView {
+    pub component_id: String,
+    pub component_version: u64,
+    pub component_name: String,
+    pub component_size: u64,
     pub exports: Vec<String>,
 }
 
-impl From<&Template> for TemplateView {
-    fn from(value: &Template) -> Self {
-        TemplateView {
-            template_id: value.versioned_template_id.template_id.to_string(),
-            template_version: value.versioned_template_id.version,
-            template_name: value.template_name.to_string(),
-            template_size: value.template_size,
+impl From<&Component> for ComponentView {
+    fn from(value: &Component) -> Self {
+        ComponentView {
+            component_id: value.versioned_component_id.component_id.to_string(),
+            component_version: value.versioned_component_id.version,
+            component_name: value.component_name.to_string(),
+            component_size: value.component_size,
             exports: value
                 .metadata
                 .exports
@@ -192,45 +192,45 @@ fn show_exported_function(
 }
 
 #[async_trait]
-impl<C: golem_cloud_client::api::TemplateClient + Sync + Send> TemplateClient
-    for TemplateClientLive<C>
+impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
+    for ComponentClientLive<C>
 {
     async fn find(
         &self,
         project_id: Option<ProjectId>,
-        name: Option<TemplateName>,
-    ) -> Result<Vec<TemplateView>, GolemError> {
-        info!("Getting templates");
+        name: Option<ComponentName>,
+    ) -> Result<Vec<ComponentView>, GolemError> {
+        info!("Getting components");
 
         let project_id = project_id.map(|p| p.0);
         let name = name.map(|n| n.0);
 
-        let templates: Vec<Template> = self
+        let components: Vec<Component> = self
             .client
             .get(project_id.as_ref(), name.as_deref())
             .await?;
-        let views = templates.iter().map(|c| c.into()).collect();
+        let views = components.iter().map(|c| c.into()).collect();
         Ok(views)
     }
 
     async fn add(
         &self,
         project_id: Option<ProjectId>,
-        name: TemplateName,
+        name: ComponentName,
         path: PathBufOrStdin,
-    ) -> Result<TemplateView, GolemError> {
-        info!("Adding template {name:?} from {path:?}");
+    ) -> Result<ComponentView, GolemError> {
+        info!("Adding component {name:?} from {path:?}");
 
-        let query = TemplateQuery {
+        let query = ComponentQuery {
             project_id: project_id.map(|ProjectId(id)| id),
-            template_name: name.0,
+            component_name: name.0,
         };
 
-        let template = match path {
+        let component = match path {
             PathBufOrStdin::Path(path) => {
                 let file = File::open(path)
                     .await
-                    .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
+                    .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
                 self.client.post(&query, file).await?
             }
@@ -245,23 +245,23 @@ impl<C: golem_cloud_client::api::TemplateClient + Sync + Send> TemplateClient
             }
         };
 
-        Ok((&template).into())
+        Ok((&component).into())
     }
 
     async fn update(
         &self,
-        id: RawTemplateId,
+        id: RawComponentId,
         path: PathBufOrStdin,
-    ) -> Result<TemplateView, GolemError> {
-        info!("Updating template {id:?} from {path:?}");
+    ) -> Result<ComponentView, GolemError> {
+        info!("Updating component {id:?} from {path:?}");
 
-        let template = match path {
+        let component = match path {
             PathBufOrStdin::Path(path) => {
                 let file = File::open(path)
                     .await
-                    .map_err(|e| GolemError(format!("Can't open template file: {e}")))?;
+                    .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
-                self.client.template_id_upload_put(&id.0, file).await?
+                self.client.component_id_upload_put(&id.0, file).await?
             }
             PathBufOrStdin::Stdin => {
                 let mut bytes = Vec::new();
@@ -270,10 +270,10 @@ impl<C: golem_cloud_client::api::TemplateClient + Sync + Send> TemplateClient
                     .read_to_end(&mut bytes) // TODO: steaming request from stdin
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
-                self.client.template_id_upload_put(&id.0, bytes).await?
+                self.client.component_id_upload_put(&id.0, bytes).await?
             }
         };
 
-        Ok((&template).into())
+        Ok((&component).into())
     }
 }

@@ -30,32 +30,32 @@ use uuid::Uuid;
 use crate::account::{AccountHandler, AccountHandlerLive, AccountSubcommand};
 use crate::auth::{Auth, AuthLive};
 use crate::clients::account::AccountClientLive;
+use crate::clients::component::ComponentClientLive;
 use crate::clients::grant::GrantClientLive;
 use crate::clients::login::LoginClientLive;
 use crate::clients::policy::ProjectPolicyClientLive;
 use crate::clients::project::ProjectClientLive;
 use crate::clients::project_grant::ProjectGrantClientLive;
-use crate::clients::template::TemplateClientLive;
 use crate::clients::token::TokenClientLive;
 use crate::clients::worker::WorkerClientLive;
+use crate::component::{ComponentHandler, ComponentHandlerLive, ComponentSubcommand};
 use crate::gateway::{GatewayHandler, GatewayHandlerLive, GatewaySubcommand};
 use crate::policy::{ProjectPolicyHandler, ProjectPolicyHandlerLive, ProjectPolicySubcommand};
 use crate::project::{ProjectHandler, ProjectHandlerLive, ProjectSubcommand};
 use crate::project_grant::{ProjectGrantHandler, ProjectGrantHandlerLive};
-use crate::template::{TemplateHandler, TemplateHandlerLive, TemplateSubcommand};
 use crate::token::{TokenHandler, TokenHandlerLive, TokenSubcommand};
 use crate::worker::{WorkerHandler, WorkerHandlerLive, WorkerSubcommand};
 
 mod account;
 mod auth;
 pub mod clients;
+mod component;
 mod examples;
 mod gateway;
 pub mod model;
 mod policy;
 mod project;
 mod project_grant;
-mod template;
 mod token;
 mod worker;
 
@@ -71,11 +71,11 @@ pub fn parse_key_val(
 #[derive(Subcommand, Debug)]
 #[command()]
 enum Command {
-    /// Upload and manage Golem templates
+    /// Upload and manage Golem components
     #[command()]
-    Template {
+    Component {
         #[command(subcommand)]
-        subcommand: TemplateSubcommand,
+        subcommand: ComponentSubcommand,
     },
 
     /// Manage Golem workers
@@ -145,22 +145,22 @@ enum Command {
         #[command(subcommand)]
         subcommand: ProjectPolicySubcommand,
     },
-    /// Create a new Golem template from built-in examples
+    /// Create a new Golem component from built-in examples
     #[command()]
     New {
         /// Name of the example to use
         #[arg(short, long)]
         example: ExampleName,
 
-        /// The new template's name
+        /// The new component's name
         #[arg(short, long)]
-        template_name: golem_examples::model::TemplateName,
+        component_name: golem_examples::model::TemplateName,
 
-        /// The package name of the generated template (in namespace:name format)
+        /// The package name of the generated component (in namespace:name format)
         #[arg(short, long)]
         package_name: Option<PackageName>,
     },
-    /// Lists the built-in examples available for creating new templates
+    /// Lists the built-in examples available for creating new components
     #[command()]
     ListExamples {
         /// The minimum language tier to include in the list
@@ -313,13 +313,13 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     let project_srv = ProjectHandlerLive {
         client: &project_client,
     };
-    let template_client = TemplateClientLive {
-        client: golem_cloud_client::api::TemplateClientLive {
+    let component_client = ComponentClientLive {
+        client: golem_cloud_client::api::ComponentClientLive {
             context: context.clone(),
         },
     };
-    let template_srv = TemplateHandlerLive {
-        client: template_client,
+    let component_srv = ComponentHandlerLive {
+        client: component_client,
         projects: &project_client,
     };
     let project_policy_client = ProjectPolicyClientLive {
@@ -348,7 +348,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     };
     let worker_srv = WorkerHandlerLive {
         client: worker_client,
-        templates: &template_srv,
+        components: &component_srv,
     };
     let gateway_srv = GatewayHandlerLive {
         base_url: gateway_url.clone(),
@@ -357,7 +357,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
     };
 
     let res = match cmd.command {
-        Command::Template { subcommand } => template_srv.handle(subcommand).await,
+        Command::Component { subcommand } => component_srv.handle(subcommand).await,
         Command::Worker { subcommand } => worker_srv.handle(subcommand).await,
         Command::Account {
             account_id,
@@ -387,8 +387,8 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         Command::New {
             example,
             package_name,
-            template_name,
-        } => examples::process_new(example, template_name, package_name),
+            component_name,
+        } => examples::process_new(example, component_name, package_name),
         Command::ListExamples { min_tier, language } => {
             examples::process_list_examples(min_tier, language)
         }
