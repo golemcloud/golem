@@ -114,11 +114,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 );
             let component = this
                 .component_service()
-                .get(
-                    &this.engine(),
-                    &component_id,
-                    component_version,
-                )
+                .get(&this.engine(), &component_id, component_version)
                 .await?;
 
             let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {

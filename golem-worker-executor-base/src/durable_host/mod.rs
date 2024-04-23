@@ -50,8 +50,9 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, FailedUpdateRecord, InvocationKey, SuccessfulUpdateRecord,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, ComponentId, FailedUpdateRecord, InvocationKey,
+    SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -753,7 +754,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             Self::prepare_instance(worker_id, instance, store).await
         } else {
             debug!("Finished prepare_instance for {worker_id}");
-            result.map_err(|err| GolemError::failed_to_resume_instance(worker_id.clone(), err))
+            result.map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
         }
     }
 
