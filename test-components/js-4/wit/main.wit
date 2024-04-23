@@ -3,8 +3,6 @@ package golem:it;
 interface api {
   use golem:api/host@0.2.0.{promise-id};
   
-  add: func(value: u64);
-  get: func() -> u64;
   create-promise: func() -> promise-id;
 }
 
