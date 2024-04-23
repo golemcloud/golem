@@ -79,6 +79,19 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         *running = Some(RunningInvocationQueue::new(worker, self.queue.clone()));
     }
 
+    pub async fn detach(&self) {
+        let mut running = self.running.lock().await;
+        if let Some(running) = running.take() {
+            let queued_items = running
+                .queue
+                .write()
+                .unwrap()
+                .drain(..)
+                .collect::<VecDeque<_>>();
+            *self.queue.write().unwrap() = queued_items;
+        }
+    }
+
     /// Enqueue invocation of an exported function
     pub async fn enqueue(
         &self,

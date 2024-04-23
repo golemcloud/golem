@@ -2623,6 +2623,41 @@ pub struct InterruptResponse {}
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct ResumeResponse {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+pub struct UpdateResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
+pub enum UpdateMode {
+    Automatic,
+    Manual,
+}
+
+impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for UpdateMode {
+    fn from(value: golem_api_grpc::proto::golem::worker::UpdateMode) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => UpdateMode::Automatic,
+            golem_api_grpc::proto::golem::worker::UpdateMode::Manual => UpdateMode::Manual,
+        }
+    }
+}
+
+impl From<UpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
+    fn from(value: UpdateMode) -> Self {
+        match value {
+            UpdateMode::Automatic => golem_api_grpc::proto::golem::worker::UpdateMode::Automatic,
+            UpdateMode::Manual => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct UpdateWorkerRequest {
+    pub mode: UpdateMode,
+    pub target_version: ComponentVersion,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkersMetadataRequest {
     pub filter: Option<WorkerFilter>,

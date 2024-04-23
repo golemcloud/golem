@@ -370,6 +370,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     let entry = OplogEntry::successful_update(target_version);
                     let timestamp = entry.timestamp();
                     self.public_state.oplog.add(entry).await;
+                    self.public_state.oplog.commit().await;
                     self.update_worker_status(|status| {
                         status.component_version = target_version;
                         status.successful_updates.push(SuccessfulUpdateRecord {
@@ -390,6 +391,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     let entry = OplogEntry::failed_update(target_version, Some(error.to_string()));
                     let timestamp = entry.timestamp();
                     self.public_state.oplog.add(entry).await;
+                    self.public_state.oplog.commit().await;
                     self.update_worker_status(|status| {
                         status.failed_updates.push(FailedUpdateRecord {
                             timestamp,
@@ -676,7 +678,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<(), GolemError> {
+    ) -> Result<bool, GolemError> {
         debug!("Starting prepare_instance for {worker_id}");
         let start = Instant::now();
         let mut count = 0;
@@ -751,10 +753,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         if retry {
             debug!("Retrying prepare_instance for {worker_id} after failed update attempt");
-            Self::prepare_instance(worker_id, instance, store).await
+            Ok(true)
         } else {
             debug!("Finished prepare_instance for {worker_id}");
-            result.map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
+            result
+                .map(|_| false)
+                .map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
         }
     }
 

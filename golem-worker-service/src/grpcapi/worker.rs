@@ -18,15 +18,16 @@ use golem_api_grpc::proto::golem::worker::{
     complete_promise_response, delete_worker_response, get_invocation_key_response,
     get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
     invoke_and_await_response, invoke_and_await_response_json, invoke_response,
-    launch_new_worker_response, resume_worker_response, CompletePromiseRequest,
-    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
-    GetInvocationKeyRequest, GetInvocationKeyResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitRequestJson, InvokeAndAwaitResponse,
-    InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson, InvokeResponse, InvokeResultJson,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse,
+    launch_new_worker_response, resume_worker_response, update_worker_response,
+    CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest,
+    DeleteWorkerResponse, GetInvocationKeyRequest, GetInvocationKeyResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitRequestJson,
+    InvokeAndAwaitResponse, InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson,
+    InvokeResponse, InvokeResultJson, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::{
     worker_error, worker_execution_error, InvocationKey, InvokeResult, UnknownError,
@@ -90,6 +91,20 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
+    async fn complete_promise(
+        &self,
+        request: Request<CompletePromiseRequest>,
+    ) -> Result<Response<CompletePromiseResponse>, Status> {
+        let response = match self.complete_promise(request.into_inner()).await {
+            Ok(result) => complete_promise_response::Result::Success(result),
+            Err(error) => complete_promise_response::Result::Error(error),
+        };
+
+        Ok(Response::new(CompletePromiseResponse {
+            result: Some(response),
+        }))
+    }
+
     async fn delete_worker(
         &self,
         request: Request<DeleteWorkerRequest>,
@@ -106,20 +121,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
-    async fn complete_promise(
-        &self,
-        request: Request<CompletePromiseRequest>,
-    ) -> Result<Response<CompletePromiseResponse>, Status> {
-        let response = match self.complete_promise(request.into_inner()).await {
-            Ok(result) => complete_promise_response::Result::Success(result),
-            Err(error) => complete_promise_response::Result::Error(error),
-        };
-
-        Ok(Response::new(CompletePromiseResponse {
-            result: Some(response),
-        }))
-    }
-
     async fn get_worker_metadata(
         &self,
         request: Request<GetWorkerMetadataRequest>,
@@ -130,23 +131,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(GetWorkerMetadataResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn get_workers_metadata(
-        &self,
-        request: Request<GetWorkersMetadataRequest>,
-    ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
-        let response =
-            match self.get_workers_metadata(request.into_inner()).await {
-                Ok((cursor, workers)) => get_workers_metadata_response::Result::Success(
-                    GetWorkersMetadataSuccessResponse { workers, cursor },
-                ),
-                Err(error) => get_workers_metadata_response::Result::Error(error),
-            };
-
-        Ok(Response::new(GetWorkersMetadataResponse {
             result: Some(response),
         }))
     }
@@ -227,6 +211,52 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
+    type ConnectWorkerStream = golem_worker_service_base::service::worker::ConnectWorkerStream;
+
+    async fn connect_worker(
+        &self,
+        request: Request<ConnectWorkerRequest>,
+    ) -> Result<Response<Self::ConnectWorkerStream>, Status> {
+        let stream = self.connect_worker(request.into_inner()).await;
+        match stream {
+            Ok(stream) => Ok(Response::new(stream)),
+            Err(error) => Err(error_to_status(error)),
+        }
+    }
+
+    async fn get_workers_metadata(
+        &self,
+        request: Request<GetWorkersMetadataRequest>,
+    ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
+        let response =
+            match self.get_workers_metadata(request.into_inner()).await {
+                Ok((cursor, workers)) => get_workers_metadata_response::Result::Success(
+                    GetWorkersMetadataSuccessResponse { workers, cursor },
+                ),
+                Err(error) => get_workers_metadata_response::Result::Error(error),
+            };
+
+        Ok(Response::new(GetWorkersMetadataResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn update_worker(
+        &self,
+        request: Request<UpdateWorkerRequest>,
+    ) -> Result<Response<UpdateWorkerResponse>, Status> {
+        let response = match self.update_worker(request.into_inner()).await {
+            Ok(()) => update_worker_response::Result::Success(
+                golem_api_grpc::proto::golem::common::Empty {},
+            ),
+            Err(error) => update_worker_response::Result::Error(error),
+        };
+
+        Ok(Response::new(UpdateWorkerResponse {
+            result: Some(response),
+        }))
+    }
+
     async fn invoke_json(
         &self,
         request: Request<InvokeRequestJson>,
@@ -265,19 +295,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         Ok(Response::new(InvokeAndAwaitResponseJson {
             result: Some(response),
         }))
-    }
-
-    type ConnectWorkerStream = golem_worker_service_base::service::worker::ConnectWorkerStream;
-
-    async fn connect_worker(
-        &self,
-        request: Request<ConnectWorkerRequest>,
-    ) -> Result<Response<Self::ConnectWorkerStream>, Status> {
-        let stream = self.connect_worker(request.into_inner()).await;
-        match stream {
-            Ok(stream) => Ok(Response::new(stream)),
-            Err(error) => Err(error_to_status(error)),
-        }
     }
 }
 
@@ -562,6 +579,21 @@ impl WorkerGrpcApi {
             .await?;
 
         Ok(stream)
+    }
+
+    async fn update_worker(&self, request: UpdateWorkerRequest) -> Result<(), GrpcWorkerError> {
+        let worker_id = make_crate_worker_id(request.worker_id.clone())?;
+
+        self.worker_service
+            .update(
+                &worker_id,
+                request.mode(),
+                request.target_version,
+                &EmptyAuthCtx {},
+            )
+            .await?;
+
+        Ok(())
     }
 }
 

@@ -314,6 +314,31 @@ impl WorkerApi {
 
         Ok(Json(ResumeResponse {}))
     }
+
+    #[oai(
+        path = "/:component_id/workers/:worker_name/update",
+        method = "post",
+        operation_id = "update_worker"
+    )]
+    async fn update_worker(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        params: Json<UpdateWorkerRequest>,
+    ) -> Result<Json<UpdateResponse>> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        self.worker_service
+            .update(
+                &worker_id,
+                params.mode.clone().into(),
+                params.target_version,
+                &EmptyAuthCtx {},
+            )
+            .await?;
+
+        Ok(Json(UpdateResponse {}))
+    }
 }
 
 fn make_worker_id(

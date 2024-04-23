@@ -12,17 +12,17 @@ use tokio::time::sleep;
 use tonic::transport::Channel;
 use tracing::{debug, info};
 
-use golem_api_grpc::proto::golem::worker::InvokeResult as ProtoInvokeResult;
+use golem_api_grpc::proto::golem::worker::{InvokeResult as ProtoInvokeResult, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
     self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
     GetInvocationKeyRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
-    ResumeWorkerRequest,
+    ResumeWorkerRequest, UpdateWorkerRequest,
 };
 
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, FilterComparator, InvocationKey, Timestamp,
-    WorkerFilter, WorkerStatus,
+    AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, InvocationKey,
+    Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
     GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
@@ -150,6 +150,14 @@ pub trait WorkerService<AuthCtx> {
     ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)>;
 
     async fn resume(&self, worker_id: &WorkerId, auth_ctx: &AuthCtx) -> WorkerResult<()>;
+
+    async fn update(
+        &self,
+        worker_id: &WorkerId,
+        update_mode: UpdateMode,
+        target_version: ComponentVersion,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<()>;
 }
 
 #[derive(Clone, Debug)]
@@ -821,6 +829,50 @@ where
             .await?;
         Ok(())
     }
+
+    async fn update(
+        &self,
+        worker_id: &WorkerId,
+        update_mode: UpdateMode,
+        target_version: ComponentVersion,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<()> {
+        self.retry_on_invalid_shard_id(
+            worker_id,
+            worker_id,
+            |worker_executor_client, worker_id| {
+                Box::pin(async move {
+                    let response = worker_executor_client
+                        .update_worker(UpdateWorkerRequest {
+                            worker_id: Some(worker_id.clone().into()),
+                            mode: update_mode.into(),
+                            target_version,
+                        })
+                        .await
+                        .map_err(|err| {
+                            GolemError::RuntimeError(GolemErrorRuntimeError {
+                                details: err.to_string(),
+                            })
+                        })?;
+                    match response.into_inner() {
+                        workerexecutor::UpdateWorkerResponse {
+                            result: Some(workerexecutor::update_worker_response::Result::Success(_)),
+                        } => Ok(()),
+                        workerexecutor::UpdateWorkerResponse {
+                            result: Some(workerexecutor::update_worker_response::Result::Failure(err)),
+                        } => Err(err.try_into().unwrap()),
+                        workerexecutor::UpdateWorkerResponse { .. } => {
+                            Err(GolemError::Unknown(GolemErrorUnknown {
+                                details: "Empty response".to_string(),
+                            }))
+                        }
+                    }
+                })
+            },
+        )
+            .await?;
+        Ok(())
+    }
 }
 
 impl<AuthCtx> WorkerServiceDefault<AuthCtx>
@@ -1438,6 +1490,16 @@ where
     }
 
     async fn resume(&self, _worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<()> {
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        _worker_id: &WorkerId,
+        _update_mode: UpdateMode,
+        _target_version: ComponentVersion,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<()> {
         Ok(())
     }
 }

@@ -9,6 +9,7 @@ import public "golem/worker/promise_id.proto";
 import public "golem/common/resource_limits.proto";
 import public "golem/shardmanager/shard_id.proto";
 import public "golem/component/component_id.proto";
+import public "golem/worker/update_mode.proto";
 import public "golem/worker/worker_id.proto";
 import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/worker_status.proto";
@@ -225,12 +226,7 @@ message GetWorkersMetadataSuccessResponse {
 message UpdateWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   uint64 target_version = 2;
-  UpdateMode mode = 3;
-}
-
-enum UpdateMode {
-  AUTOMATIC = 0;
-  MANUAL = 1;
+  golem.worker.UpdateMode mode = 3;
 }
 
 message UpdateWorkerResponse {

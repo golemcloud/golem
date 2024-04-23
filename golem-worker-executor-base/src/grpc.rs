@@ -21,10 +21,11 @@ use std::sync::Arc;
 
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
+use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::{
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
-    GetWorkersMetadataResponse, UpdateMode, UpdateWorkerRequest, UpdateWorkerResponse,
+    GetWorkersMetadataResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::cache::PendingOrFinal;
 use golem_common::model as common_model;
@@ -841,6 +842,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         // This way we eliminate the race condition of activating the worker, but have
                         // time to inject the pending update oplog entry so the at the time the worker
                         // really gets activated it is going to see it and perform the update.
+
+                        // Ensuring the previous instance is dropped
+                        self.active_workers().remove(&worker_id);
+
+                        debug!("Activating worker {worker_id} for update",);
                         let (pending_worker, resume) = Worker::get_or_create_paused_pending(
                             self,
                             &worker_id,
@@ -851,6 +857,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         )
                         .await?;
 
+                        debug!("Enqueuing update for {worker_id}");
                         pending_worker
                             .invocation_queue
                             .enqueue_update(update_description.clone())
@@ -868,6 +875,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .update_status(&worker_id, &worker_status)
                             .await;
 
+                        debug!("Resuming initialization of {worker_id} to perform the update",);
                         resume.send(()).unwrap();
                     }
                     WorkerStatus::Running => {
