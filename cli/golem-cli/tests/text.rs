@@ -5,7 +5,7 @@ use crate::cli::{Cli, CliLive};
 use crate::worker::make_component;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
-use golem_client::model::{HttpApiDefinition, WorkerId};
+use golem_client::model::{ApiDeployment, HttpApiDefinition, WorkerId};
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
@@ -89,6 +89,21 @@ fn make(
             format!("text_api_definition_get{suffix}"),
             ctx.clone(),
             text_api_definition_get,
+        ),
+        Trial::test_in_context(
+            format!("text_api_deployment_deploy{suffix}"),
+            ctx.clone(),
+            text_api_deployment_deploy,
+        ),
+        Trial::test_in_context(
+            format!("text_api_deployment_get{suffix}"),
+            ctx.clone(),
+            text_api_deployment_get,
+        ),
+        Trial::test_in_context(
+            format!("text_api_deployment_list{suffix}"),
+            ctx.clone(),
+            text_api_deployment_list,
         ),
     ]
 }
@@ -687,6 +702,146 @@ fn text_api_definition_get(
             +--------+------------------------------+-----------+--------------------------------+--------------------------------+
             "
         );
+
+    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+
+    Ok(())
+}
+
+fn text_api_deployment_deploy(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let definition = crate::api_deployment::make_definition(
+        deps,
+        &cli,
+        &format!("text_api_deployment_deploy{name}"),
+    )?;
+    let host = format!("text-deploy-host{name}");
+    let cfg = &cli.config;
+
+    let res = cli.with_format(Format::Text).run_string(&[
+        "api-deployment",
+        "deploy",
+        &cfg.arg('i', "id"),
+        &definition.id,
+        &cfg.arg('V', "version"),
+        &definition.version,
+        &cfg.arg('H', "host"),
+        &host,
+        &cfg.arg('s', "subdomain"),
+        "sdomain",
+    ])?;
+
+    let expected = formatdoc!(
+        "
+            API deployment on sdomain.{host} with definition {}/{}
+            ",
+        definition.id,
+        definition.version,
+    );
+
+    assert_eq!(res, expected);
+
+    Ok(())
+}
+
+fn text_api_deployment_get(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let definition = crate::api_deployment::make_definition(
+        deps,
+        &cli,
+        &format!("text_api_deployment_get{name}"),
+    )?;
+    let host = format!("text-get-host{name}");
+    let cfg = &cli.config;
+
+    let _: ApiDeployment = cli.run(&[
+        "api-deployment",
+        "deploy",
+        &cfg.arg('i', "id"),
+        &definition.id,
+        &cfg.arg('V', "version"),
+        &definition.version,
+        &cfg.arg('H', "host"),
+        &host,
+        &cfg.arg('s', "subdomain"),
+        "sdomain",
+    ])?;
+
+    let res = cli.with_format(Format::Text).run_string(&[
+        "api-deployment",
+        "get",
+        &format!("sdomain.{host}"),
+    ])?;
+
+    let expected = formatdoc!(
+        "
+            API deployment on sdomain.{host} with definition {}/{}
+            ",
+        definition.id,
+        definition.version,
+    );
+
+    assert_eq!(res, expected);
+
+    Ok(())
+}
+
+fn text_api_deployment_list(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let definition = crate::api_deployment::make_definition(
+        deps,
+        &cli,
+        &format!("text_api_deployment_list{name:_>9}"),
+    )?;
+    let host = format!("text-list-host{name:->9}");
+    let cfg = &cli.config;
+
+    let _: ApiDeployment = cli.run(&[
+        "api-deployment",
+        "deploy",
+        &cfg.arg('i', "id"),
+        &definition.id,
+        &cfg.arg('V', "version"),
+        &definition.version,
+        &cfg.arg('H', "host"),
+        &host,
+        &cfg.arg('s', "subdomain"),
+        "sdomain",
+    ])?;
+
+    let res = cli.with_format(Format::Text).run_string(&[
+        "api-deployment",
+        "list",
+        &cfg.arg('i', "id"),
+        &definition.id,
+    ])?;
+
+    let expected = formatdoc!(
+        "
+        +---------------------------------+-----------------------------------+---------+
+        | Site                            | Definition ID                     | Version |
+        +---------------------------------+-----------------------------------+---------+
+        | sdomain.{host} | {} | {}   |
+        +---------------------------------+-----------------------------------+---------+
+        ",
+        definition.id,
+        definition.version,
+    );
 
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 

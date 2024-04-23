@@ -27,7 +27,11 @@ use tracing_subscriber::FmtSubscriber;
 use golem_cli::api_definition::{
     ApiDefinitionHandler, ApiDefinitionHandlerLive, ApiDefinitionSubcommand,
 };
+use golem_cli::api_deployment::{
+    ApiDeploymentHandler, ApiDeploymentHandlerLive, ApiDeploymentSubcommand,
+};
 use golem_cli::clients::api_definition::ApiDefinitionClientLive;
+use golem_cli::clients::api_deployment::ApiDeploymentClientLive;
 use golem_cli::clients::component::ComponentClientLive;
 use golem_cli::clients::health_check::HealthCheckClientLive;
 use golem_cli::clients::worker::WorkerClientLive;
@@ -93,6 +97,13 @@ enum Command {
     ApiDefinition {
         #[command(subcommand)]
         subcommand: ApiDefinitionSubcommand,
+    },
+
+    /// Manage Golem api deployments
+    #[command()]
+    ApiDeployment {
+        #[command(subcommand)]
+        subcommand: ApiDeploymentSubcommand,
     },
 }
 
@@ -213,6 +224,16 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         client: api_definition_client,
     };
 
+    let api_deployment_client = ApiDeploymentClientLive {
+        client: golem_client::api::ApiDeploymentClientLive {
+            context: worker_context.clone(),
+        },
+    };
+
+    let api_deployment_srv = ApiDeploymentHandlerLive {
+        client: api_deployment_client,
+    };
+
     let health_check_client_for_component = HealthCheckClientLive {
         client: golem_client::api::HealthCheckClientLive {
             context: component_context.clone(),
@@ -276,6 +297,7 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
             }
         },
         Command::ApiDefinition { subcommand } => api_definition_srv.handle(subcommand).await,
+        Command::ApiDeployment { subcommand } => api_deployment_srv.handle(subcommand).await,
     };
 
     match res {
