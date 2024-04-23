@@ -492,6 +492,24 @@ async fn javascript_example_3() {
 
 #[tokio::test]
 #[tracing::instrument]
+async fn javascript_example_4() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_component("js-4").await;
+    let worker_id = executor.start_worker(&component_id, "js-4").await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api/create-promise", vec![])
+        .await
+        .unwrap();
+    println!("promise creation result: {:?}", result);
+
+    drop(executor);
+}
+
+#[tokio::test]
+#[tracing::instrument]
 async fn csharp_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
