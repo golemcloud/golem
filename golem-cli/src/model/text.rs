@@ -3,7 +3,7 @@ use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::{ExampleDescription, InvocationKey};
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use golem_client::model::{
-    HttpApiDefinition, Route, WorkerId, WorkerMetadata, WorkersMetadataResponse,
+    ApiDeployment, HttpApiDefinition, Route, WorkerId, WorkerMetadata, WorkersMetadataResponse,
 };
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier};
 use indoc::{eprintdoc, printdoc};
@@ -372,5 +372,51 @@ impl TextFormat for WorkersMetadataResponse {
                 "
             )
         }
+    }
+}
+
+impl TextFormat for ApiDeployment {
+    fn print(&self) {
+        printdoc!(
+            "
+            API deployment on {}.{} with definition {}/{}
+            ",
+            self.site.subdomain,
+            self.site.host,
+            self.api_definition_id,
+            self.version,
+        );
+    }
+}
+
+#[derive(Table)]
+struct ApiDeploymentView {
+    #[table(title = "Site")]
+    pub site: String,
+    #[table(title = "Definition ID")]
+    pub id: String,
+    #[table(title = "Version")]
+    pub version: String,
+}
+
+impl From<&ApiDeployment> for ApiDeploymentView {
+    fn from(value: &ApiDeployment) -> Self {
+        ApiDeploymentView {
+            site: format!("{}.{}", value.site.subdomain, value.site.host),
+            id: value.api_definition_id.to_string(),
+            version: value.version.to_string(),
+        }
+    }
+}
+
+impl TextFormat for Vec<ApiDeployment> {
+    fn print(&self) {
+        print_stdout(
+            self.iter()
+                .map(ApiDeploymentView::from)
+                .collect::<Vec<_>>()
+                .with_title(),
+        )
+        .unwrap()
     }
 }

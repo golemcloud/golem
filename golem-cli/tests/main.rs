@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tracing::info;
 
 mod api_definition;
+mod api_deployment;
 pub mod cli;
 mod component;
 mod text;
@@ -17,7 +18,8 @@ fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
     tests.append(&mut component::all(deps.clone()));
     tests.append(&mut worker::all(deps.clone()));
     tests.append(&mut text::all(deps.clone()));
-    tests.append(&mut api_definition::all(deps));
+    tests.append(&mut api_definition::all(deps.clone()));
+    tests.append(&mut api_deployment::all(deps));
 
     libtest_mimic::run(&args, tests)
 }

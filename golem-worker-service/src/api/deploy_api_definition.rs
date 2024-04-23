@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSiteString};
-use poem_openapi::param::Query;
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 
@@ -27,14 +27,14 @@ impl ApiDeploymentApi {
         Self { deployment_service }
     }
 
-    #[oai(path = "/", method = "put")]
+    #[oai(path = "/deploy", method = "post", operation_id = "deploy")]
     async fn create_or_update(
         &self,
         payload: Json<ApiDeployment>,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         info!(
-            "Deploy API definition - id: {}, site: {}",
-            payload.api_definition_id, payload.site
+            "Deploy API definition - id: {}, version: {}, site: {}",
+            payload.api_definition_id, payload.version, payload.site
         );
 
         let api_deployment = api_definition::ApiDeployment {
@@ -60,8 +60,8 @@ impl ApiDeploymentApi {
         Ok(Json(deployment.into()))
     }
 
-    #[oai(path = "/", method = "get")]
-    async fn get(
+    #[oai(path = "/", method = "get", operation_id = "list_deployments")]
+    async fn list(
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
     ) -> Result<Json<Vec<ApiDeployment>>, ApiEndpointError> {
@@ -77,12 +77,24 @@ impl ApiDeploymentApi {
         Ok(Json(values.iter().map(|v| v.clone().into()).collect()))
     }
 
-    #[oai(path = "/", method = "delete")]
-    async fn delete(
-        &self,
-        #[oai(name = "site")] site_query: Query<String>,
-    ) -> Result<Json<String>, ApiEndpointError> {
-        let site = site_query.0;
+    #[oai(path = "/:site", method = "get", operation_id = "get_deployment")]
+    async fn get(&self, site: Path<String>) -> Result<Json<ApiDeployment>, ApiEndpointError> {
+        let site = site.0;
+
+        info!("Get API deployments for site: {site}");
+
+        let value = self
+            .deployment_service
+            .get_by_host(&ApiSiteString(site))
+            .await?
+            .ok_or(ApiEndpointError::not_found("Api deployment not found"))?;
+
+        Ok(Json(value.into()))
+    }
+
+    #[oai(path = "/:site", method = "delete", operation_id = "delete_deployment")]
+    async fn delete(&self, site: Path<String>) -> Result<Json<String>, ApiEndpointError> {
+        let site = site.0;
 
         self.deployment_service
             .delete(&CommonNamespace::default(), &ApiSiteString(site))

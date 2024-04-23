@@ -171,7 +171,7 @@ mod tests {
             })
         }
 
-        async fn get(
+        async fn get_definition(
             &self,
             api_definition_id: &str,
             version: &str,
@@ -185,7 +185,7 @@ mod tests {
             })
         }
 
-        async fn update(
+        async fn update_definition(
             &self,
             _id: &str,
             _version: &str,
@@ -200,7 +200,7 @@ mod tests {
             })
         }
 
-        async fn create(
+        async fn create_definition(
             &self,
             value: &HttpApiDefinition,
         ) -> Result<HttpApiDefinition, Error<ApiDefinitionError>> {
@@ -213,7 +213,7 @@ mod tests {
             })
         }
 
-        async fn delete(
+        async fn delete_definition(
             &self,
             api_definition_id: &str,
             version: &str,
@@ -223,7 +223,7 @@ mod tests {
             Ok("deleted".to_string())
         }
 
-        async fn list(
+        async fn list_definitions(
             &self,
             _id: Option<&str>,
         ) -> Result<Vec<HttpApiDefinition>, Error<ApiDefinitionError>> {

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod api_definition;
+pub mod api_deployment;
 pub mod clients;
 pub mod component;
 pub mod examples;
