@@ -803,6 +803,78 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v2/components/{component_id}/workers/{worker_name}/update:
+    post:
+      tags:
+      - Worker
+      operationId: update_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/UpdateWorkerRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UpdateResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/api/definitions/import:
     put:
       tags:
@@ -2537,6 +2609,11 @@ components:
       required:
       - timestamp
       - targetVersion
+    UpdateMode:
+      type: string
+      enum:
+      - Automatic
+      - Manual
     UpdateRecord:
       discriminator:
         propertyName: type
@@ -2579,6 +2656,19 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/SuccessfulUpdate'
+    UpdateResponse:
+      type: object
+    UpdateWorkerRequest:
+      type: object
+      properties:
+        mode:
+          $ref: '#/components/schemas/UpdateMode'
+        targetVersion:
+          type: integer
+          format: uint64
+      required:
+      - mode
+      - targetVersion
     ValidationErrorsBody:
       type: object
       properties:
