@@ -15,7 +15,8 @@
 use clap::Args;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::debug;
+use std::time::{Duration, Instant};
+use tracing::{debug, info};
 
 pub mod docker_postgres;
 pub mod k8s_postgres;
@@ -115,11 +116,9 @@ fn connection_string(host: &str, port: u16) -> String {
     format!("postgres://postgres:postgres@{host}:{port}/postgres?connect_timeout=3")
 }
 
-async fn assert_connection(host: &str, port: u16) {
+async fn check_if_running(host: &str, port: u16) -> Result<(), ::tokio_postgres::Error> {
     let (client, connection) =
-        ::tokio_postgres::connect(&connection_string(host, port), ::tokio_postgres::NoTls)
-            .await
-            .unwrap();
+        ::tokio_postgres::connect(&connection_string(host, port), ::tokio_postgres::NoTls).await?;
 
     let connection_fiber = tokio::spawn(async move {
         if let Err(e) = connection.await {
@@ -127,11 +126,27 @@ async fn assert_connection(host: &str, port: u16) {
         }
     });
 
-    let r = client
-        .simple_query("SELECT version();")
-        .await
-        .expect("Failed to connect to Postgres");
+    let r = client.simple_query("SELECT version();").await?;
 
     debug!("Test query returned with {r:?}");
     connection_fiber.abort();
+    Ok(())
+}
+
+async fn wait_for_startup(host: &str, port: u16, timeout: Duration) {
+    info!(
+        "Waiting for Postgres start on host {host}:{port}, timeout: {}s",
+        timeout.as_secs()
+    );
+    let start = Instant::now();
+    loop {
+        let running = check_if_running(host, port).await;
+        if running.is_ok() {
+            break;
+        }
+        if start.elapsed() > timeout {
+            std::panic!("Failed to verify that Postgres is running");
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 }

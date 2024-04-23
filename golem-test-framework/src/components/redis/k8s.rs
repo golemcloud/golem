@@ -127,7 +127,7 @@ impl K8sRedis {
         let host = format!("golem-redis.{}.svc.cluster.local", &namespace.0);
         let port = 6379;
 
-        super::wait_for_startup(&local_host, local_port, Duration::from_secs(120));
+        super::wait_for_startup(&local_host, local_port, Duration::from_secs(300));
 
         info!("Redis started on private host {host}:{port}, accessible from localhost as {local_host}:{local_port}");
 

@@ -16,7 +16,7 @@ use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
-use crate::components::rdb::{assert_connection, DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use k8s_openapi::api::core::v1::{Pod, Service};
@@ -24,6 +24,7 @@ use kube::api::PostParams;
 use kube::{Api, Client};
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::info;
 
@@ -122,7 +123,7 @@ impl K8sPostgresRdb {
         let host = format!("golem-postgres.{}.svc.cluster.local", &namespace.0);
         let port = 5432;
 
-        assert_connection(&local_host, local_port).await;
+        wait_for_startup(&local_host, local_port, Duration::from_secs(300)).await;
 
         info!("Test Postgres started on private host {host}:{port}, accessible from localhost as {local_host}:{local_port}");
 
