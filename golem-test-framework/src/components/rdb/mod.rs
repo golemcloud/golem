@@ -16,7 +16,7 @@ use clap::Args;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 pub mod docker_postgres;
 pub mod k8s_postgres;
@@ -141,11 +141,15 @@ async fn wait_for_startup(host: &str, port: u16, timeout: Duration) {
     let start = Instant::now();
     loop {
         let running = check_if_running(host, port).await;
-        if running.is_ok() {
-            break;
-        }
-        if start.elapsed() > timeout {
-            std::panic!("Failed to verify that Postgres is running");
+
+        match running {
+            Ok(_) => break,
+            Err(e) => {
+                if start.elapsed() > timeout {
+                    error!("Failed to verify that Postgres is running: {}", e);
+                    std::panic!("Failed to verify that Postgres is running");
+                }
+            }
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
