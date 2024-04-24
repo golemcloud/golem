@@ -117,7 +117,7 @@ pub trait ComponentService {
                     })),
                 });
             }
-        }    
+        }
         let response = client
             .create_component(tokio_stream::iter(chunks))
             .await
