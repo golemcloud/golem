@@ -325,7 +325,7 @@ impl WorkerApi {
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
         params: Json<UpdateWorkerRequest>,
-    ) -> Result<Json<UpdateResponse>> {
+    ) -> Result<Json<UpdateWorkerResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service
@@ -337,7 +337,7 @@ impl WorkerApi {
             )
             .await?;
 
-        Ok(Json(UpdateResponse {}))
+        Ok(Json(UpdateWorkerResponse {}))
     }
 }
 

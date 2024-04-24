@@ -838,7 +838,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/UpdateResponse'
+                $ref: '#/components/schemas/UpdateWorkerResponse'
         '400':
           description: ''
           content:
@@ -2609,11 +2609,6 @@ components:
       required:
       - timestamp
       - targetVersion
-    UpdateMode:
-      type: string
-      enum:
-      - Automatic
-      - Manual
     UpdateRecord:
       discriminator:
         propertyName: type
@@ -2656,19 +2651,19 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/SuccessfulUpdate'
-    UpdateResponse:
-      type: object
     UpdateWorkerRequest:
       type: object
       properties:
         mode:
-          $ref: '#/components/schemas/UpdateMode'
+          $ref: '#/components/schemas/WorkerUpdateMode'
         targetVersion:
           type: integer
           format: uint64
       required:
       - mode
       - targetVersion
+    UpdateWorkerResponse:
+      type: object
     ValidationErrorsBody:
       type: object
       properties:
@@ -2995,6 +2990,11 @@ components:
       required:
       - comparator
       - value
+    WorkerUpdateMode:
+      type: string
+      enum:
+      - Automatic
+      - Manual
     WorkerVersionFilter:
       type: object
       properties:

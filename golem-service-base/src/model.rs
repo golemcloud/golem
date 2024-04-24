@@ -2624,28 +2624,28 @@ pub struct InterruptResponse {}
 pub struct ResumeResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-pub struct UpdateResponse {}
+pub struct UpdateWorkerResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
-pub enum UpdateMode {
+pub enum WorkerUpdateMode {
     Automatic,
     Manual,
 }
 
-impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for UpdateMode {
+impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for WorkerUpdateMode {
     fn from(value: golem_api_grpc::proto::golem::worker::UpdateMode) -> Self {
         match value {
-            golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => UpdateMode::Automatic,
-            golem_api_grpc::proto::golem::worker::UpdateMode::Manual => UpdateMode::Manual,
+            golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => WorkerUpdateMode::Automatic,
+            golem_api_grpc::proto::golem::worker::UpdateMode::Manual => WorkerUpdateMode::Manual,
         }
     }
 }
 
-impl From<UpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
-    fn from(value: UpdateMode) -> Self {
+impl From<WorkerUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
+    fn from(value: WorkerUpdateMode) -> Self {
         match value {
-            UpdateMode::Automatic => golem_api_grpc::proto::golem::worker::UpdateMode::Automatic,
-            UpdateMode::Manual => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
+            WorkerUpdateMode::Automatic => golem_api_grpc::proto::golem::worker::UpdateMode::Automatic,
+            WorkerUpdateMode::Manual => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
         }
     }
 }
@@ -2654,7 +2654,7 @@ impl From<UpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct UpdateWorkerRequest {
-    pub mode: UpdateMode,
+    pub mode: WorkerUpdateMode,
     pub target_version: ComponentVersion,
 }
 
