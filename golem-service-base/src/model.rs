@@ -2635,7 +2635,9 @@ pub enum WorkerUpdateMode {
 impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for WorkerUpdateMode {
     fn from(value: golem_api_grpc::proto::golem::worker::UpdateMode) -> Self {
         match value {
-            golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => WorkerUpdateMode::Automatic,
+            golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => {
+                WorkerUpdateMode::Automatic
+            }
             golem_api_grpc::proto::golem::worker::UpdateMode::Manual => WorkerUpdateMode::Manual,
         }
     }
@@ -2644,7 +2646,9 @@ impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for WorkerUpdateMode
 impl From<WorkerUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
     fn from(value: WorkerUpdateMode) -> Self {
         match value {
-            WorkerUpdateMode::Automatic => golem_api_grpc::proto::golem::worker::UpdateMode::Automatic,
+            WorkerUpdateMode::Automatic => {
+                golem_api_grpc::proto::golem::worker::UpdateMode::Automatic
+            }
             WorkerUpdateMode::Manual => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
         }
     }
