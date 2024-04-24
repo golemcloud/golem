@@ -26,6 +26,7 @@ use kube::api::PostParams;
 use kube::{Api, Client};
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{info, Level};
 
@@ -130,7 +131,7 @@ impl K8sShardManager {
                     }
                 ],
                 "selector": { "app": Self::NAME },
-                "type": "NodePort"
+                "type": "LoadBalancer"
             }
         }))
         .expect("Failed to deserialize service definition");
@@ -149,7 +150,7 @@ impl K8sShardManager {
             routing: managed_routing,
         } = Routing::create(Self::NAME, Self::GRPC_PORT, namespace, routing_type).await;
 
-        wait_for_startup(&local_host, local_port).await;
+        wait_for_startup(&local_host, local_port, Duration::from_secs(400)).await;
 
         info!("Golem Shard Manager pod started");
 

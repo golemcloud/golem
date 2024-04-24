@@ -25,6 +25,7 @@ use kube::api::PostParams;
 use kube::{Api, Client};
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{info, Level};
 
@@ -148,7 +149,7 @@ impl K8sComponentService {
             routing: managed_routing,
         } = Routing::create(Self::NAME, Self::GRPC_PORT, namespace, routing_type).await;
 
-        wait_for_startup(&local_host, local_port).await;
+        wait_for_startup(&local_host, local_port, Duration::from_secs(400)).await;
 
         info!("Golem Component Service pod started");
 

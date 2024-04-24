@@ -21,6 +21,7 @@ use kube::api::{DeleteParams, PostParams};
 use kube::{Api, Client};
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::time::Duration;
 use tokio::process::{Child, Command};
 use tracing::{debug, error, info};
@@ -32,6 +33,12 @@ pub struct K8sNamespace(pub String);
 impl Default for K8sNamespace {
     fn default() -> Self {
         K8sNamespace("default".to_string())
+    }
+}
+
+impl Display for K8sNamespace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -257,7 +264,7 @@ impl Routing {
         port: u16,
         namespace: &K8sNamespace,
     ) -> Routing {
-        info!("Creating alb ingress for service {service_name}:{port} in {namespace:?}");
+        info!("Creating alb ingress for service {service_name}:{port} in {namespace}");
         let ingresses: Api<Ingress> =
             Api::namespaced(Client::try_default().await.unwrap(), &namespace.0);
 
@@ -324,7 +331,7 @@ impl Routing {
         port: u16,
         namespace: &K8sNamespace,
     ) -> Routing {
-        info!("Creating route for service {service_name}:{port} in {namespace:?}");
+        info!("Creating route for service {service_name}:{port} in {namespace}");
 
         let service: Api<Service> =
             Api::namespaced(Client::try_default().await.unwrap(), &namespace.0);

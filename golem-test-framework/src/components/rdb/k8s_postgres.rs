@@ -129,7 +129,7 @@ impl K8sPostgresRdb {
         let host = format!("golem-postgres.{}.svc.cluster.local", &namespace.0);
         let port = 5432;
 
-        wait_for_startup(&local_host, local_port, Duration::from_secs(420)).await;
+        wait_for_startup(&local_host, local_port, Duration::from_secs(600)).await;
 
         info!("Test Postgres started on private host {host}:{port}, accessible from localhost as {local_host}:{local_port}");
 
