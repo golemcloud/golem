@@ -50,6 +50,7 @@ message WorkerCreationFailed {
 
 message FailedToResumeWorker {
   WorkerId worker_id = 1;
+  WorkerExecutionError reason = 2;
 }
 
 message ComponentDownloadFailed {

@@ -114,7 +114,7 @@ impl ExternalOperations<Context> for Context {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Context> + Send),
-    ) -> Result<(), GolemError> {
+    ) -> Result<bool, GolemError> {
         DurableWorkerCtx::<Context>::prepare_instance(worker_id, instance, store).await
     }
 

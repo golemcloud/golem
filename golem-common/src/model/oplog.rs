@@ -292,6 +292,9 @@ impl OplogEntry {
                 | OplogEntry::Interrupted { .. }
                 | OplogEntry::Exited { .. }
                 | OplogEntry::PendingWorkerInvocation { .. }
+                | OplogEntry::PendingUpdate { .. }
+                | OplogEntry::SuccessfulUpdate { .. }
+                | OplogEntry::FailedUpdate { .. }
         )
     }
 

@@ -44,6 +44,8 @@ exclude = [
     "test-components/shopping-cart",
     "test-components/shopping-cart-resource",
     "test-components/stdio-cc",
+    "test-components/update-test-v1",
+    "test-components/update-test-v2",
     "test-components/variant-service",
     "test-components/write-stderr",
     "test-components/write-stdout",

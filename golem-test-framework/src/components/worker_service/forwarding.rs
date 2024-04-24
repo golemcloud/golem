@@ -25,7 +25,7 @@ use golem_api_grpc::proto::golem::worker::{
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
     InvokeRequest, InvokeResponse, InvokeResult, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
     LaunchNewWorkerSuccessResponse, LogEvent, ResumeWorkerRequest, ResumeWorkerResponse,
-    WorkerError, WorkerId,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerId,
 };
 use golem_api_grpc::proto::golem::workerexecutor::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
@@ -398,6 +398,39 @@ impl WorkerService for ForwardingWorkerService {
                             error: Some(worker::worker_error::Error::InternalError(error)),
                         },
                     )),
+                }
+            }
+        }
+    }
+
+    async fn update_worker(&self, request: UpdateWorkerRequest) -> UpdateWorkerResponse {
+        let result = self
+            .worker_executor
+            .client()
+            .await
+            .update_worker(workerexecutor::UpdateWorkerRequest {
+                worker_id: request.worker_id,
+                target_version: request.target_version,
+                mode: request.mode,
+            })
+            .await
+            .expect("Failed to call golem-worker-executor")
+            .into_inner();
+
+        match result.result {
+            None => {
+                panic!("No response from golem-worker-executor delete-worker call");
+            }
+            Some(workerexecutor::update_worker_response::Result::Success(_)) => {
+                UpdateWorkerResponse {
+                    result: Some(worker::update_worker_response::Result::Success(Empty {})),
+                }
+            }
+            Some(workerexecutor::update_worker_response::Result::Failure(error)) => {
+                UpdateWorkerResponse {
+                    result: Some(worker::update_worker_response::Result::Error(WorkerError {
+                        error: Some(worker::worker_error::Error::InternalError(error)),
+                    })),
                 }
             }
         }

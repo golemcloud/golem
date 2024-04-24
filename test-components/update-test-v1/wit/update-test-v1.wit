@@ -1,0 +1,11 @@
+package golem:component;
+
+interface api {
+  f1: func(speed-ms: u64) -> u64;
+  f2: func() -> u64;
+  f3: func() -> u64;
+}
+
+world update-test-v1 {
+  export api;
+}
