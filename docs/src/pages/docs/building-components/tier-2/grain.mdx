@@ -10,7 +10,7 @@ First install `grain` from its official source:
 brew install --no-quarantine --cask grain-lang/tap/grain
 ```
 
-You also have to install everything as described in [Common tooling](/docs/building-templates/common-tooling).
+You also have to install everything as described in [Common tooling](/docs/building-components/common-tooling).
 
 The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/docs/quickstart).
 
@@ -36,9 +36,9 @@ grain compile --release main.gr
 This results in a `main.gr.wasm` file which is a WASM **module**. We cannot write any WIT documents because there is no Grain binding generator available currently. This makes Grain a Tier 2 language, so we can convert the compiled module into a WASM **component** using the adapter from the `tier2` directory of the golem package:
 
 ```bash
-wasm-tools component new main.gr.wasm -o template.wasm --adapt tier2/wasi_snapshot_preview1.wasm
+wasm-tools component new main.gr.wasm -o component.wasm --adapt tier2/wasi_snapshot_preview1.wasm
 ```
 
 <Callout>Make sure you use the **tier2 adapter** from the golem package!</Callout>
 
-The resulting `template.wasm` is ready to be used with Golem!
+The resulting `component.wasm` is ready to be used with Golem!

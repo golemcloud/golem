@@ -65,19 +65,19 @@ If you are running into any port conflicts you can modify the `.env` file that w
 
 ### Building an Example
 
-Golem runs templates that are WebAssembly programs. Templates are like applications, except they may expose functions that can be called externally.
+Golem runs components that are WebAssembly programs. Components are like applications, except they may expose functions that can be called externally.
 
-To deploy to Golem, you must first [build a template](/docs/building-templates) using any programming language and toolchain that can build WebAssembly components.
+To deploy to Golem, you must first [build a component](/docs/building-components) using any programming language and toolchain that can build WebAssembly components.
 
-To get started quickly, you can use Golem CLI to create a template from an example:
+To get started quickly, you can use Golem CLI to create a component from an example:
 
 ```bash filename="Terminal" copy
-golem-cli new --example rust-shopping-cart --template-name shopping_cart
+golem-cli new --example rust-shopping-cart --component-name shopping_cart
 ```
 
-This will generate a new `shopping_cart` directory in the current directory with the example for your template.
+This will generate a new `shopping_cart` directory in the current directory with the example for your component.
 
-To **build** the newly created template you need some development tools installed. These are collected for each supported **guest language** on the [Building Templates](/docs/building-templates) page. For the above example, please read the [Rust](/docs/building-templates/tier-1/rust) specific instructions to set up `cargo-component`.
+To **build** the newly created component you need some development tools installed. These are collected for each supported **guest language** on the [Building Components](/docs/building-components) page. For the above example, please read the [Rust](/docs/building-components/tier-1/rust) specific instructions to set up `cargo-component`.
 
 Once you have that, navigate to the `shopping_cart`, and run:
 
@@ -85,26 +85,26 @@ Once you have that, navigate to the `shopping_cart`, and run:
 cargo component build --release
 ```
 
-This will write the resulting template to `shopping_cart/target/wasm32-wasi/release/shopping_cart.wasm`.
+This will write the resulting component to `shopping_cart/target/wasm32-wasi/release/shopping_cart.wasm`.
 
 <Callout>
-  The `golem-cli new` command prints out the necessary steps to build your template exactly as you
-  have to type them - using your custom template and package names and the selected example's
+  The `golem-cli new` command prints out the necessary steps to build your component exactly as you
+  have to type them - using your custom component and package names and the selected example's
   language specific tools.
 </Callout>
 
-### Uploading Your Template
+### Uploading Your Component
 
-To upload your template to Golem, you can use the `template add` command. Navigate to `shopping_cart/target/wasm32-wasi/release` and then do:
+To upload your component to Golem, you can use the `component add` command. Navigate to `shopping_cart/target/wasm32-wasi/release` and then do:
 
 ```bash filename="Terminal" copy
-golem-cli template add --template-name shopping-cart shopping_cart.wasm
+golem-cli component add --component-name shopping-cart shopping_cart.wasm
 ```
 
-Uploading a template to Golem does not actually execute the template. Instead, it only makes it available for execution to Golem
+Uploading a component to Golem does not actually execute the component. Instead, it only makes it available for execution to Golem
 .
 
-Every separate execution of your template is referred to as a _worker_ based on that template.
+Every separate execution of your component is referred to as a _worker_ based on that component.
 
 ### Create Workers
 
@@ -117,10 +117,10 @@ Here, we creating a new worker `shopping-cart-1` :
 ```bash filename="Terminal" copy
 golem-cli worker add \
   --worker-name shopping-cart-1 \
-  --template-name shopping-cart
+  --component-name shopping-cart
 ```
 
-When you add a template you will see some basic information about the template such as its name, unique identifier, version, and size. In addition, you will see a list of exports. These are the public API of your worker and can be used to call it with the CLI or REST API, as we will see below.
+When you add a component you will see some basic information about the component such as its name, unique identifier, version, and size. In addition, you will see a list of exports. These are the public API of your worker and can be used to call it with the CLI or REST API, as we will see below.
 
 ### Invoking Workers
 
@@ -130,15 +130,15 @@ Here, we invoke the function `initialize_cart` on the worker with a single strin
 
 ```bash filename="Terminal" copy
 golem-cli worker invoke-and-await \
-    --template-name=shopping-cart \
+    --component-name=shopping-cart \
     --worker-name=shopping-cart-1 \
-    --function=golem:template/api/initialize-cart \
+    --function=golem:component/api/initialize-cart \
     --parameters='["test-user"]'
 ```
 
 If a worker of the specified name has not been created, then when you attempt to invoke a function on the worker, it will first be created.
 
-Check the [Template interface](/docs/template-interface) section to learn about how to figure out the **function name** and how to encode your parameters in JSON.
+Check the [Component interface](/docs/component-interface) section to learn about how to figure out the **function name** and how to encode your parameters in JSON.
 
 ### Next Steps
 
@@ -146,7 +146,7 @@ In this guide, you have learned how to build and deploy invincible serverless wo
 
 Take your next steps with Golem by exploring the following resources:
 
-- [Building Templates](/docs/building-templates) describes you can use different **programming languages** for building Golem templates
+- [Building Components](/docs/building-component) describes you can use different **programming languages** for building Golem components
 - [Promises](/docs/promises) are a way to block your program until an **external condition** fulfills it.
 - The [Golem CLI](/docs/golem-cli) page lists all the commands available on Golem's **command line interface**
 - Golem can also be controlled using its [REST API](/docs/rest-api)

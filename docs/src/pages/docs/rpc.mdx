@@ -2,13 +2,13 @@
 
 ## Concept
 
-Golem allows creating and invoking **workers** through its [REST API](/docs/rest-api/worker) or [command-line interface](/docs/golem-cli), using the rules defined on the [template interface](/docs/template-interface) page. These methods are for working with Golem workers from the outside world. However, the public API for calling one worker from another is not very convenient.
+Golem allows creating and invoking **workers** through its [REST API](/docs/rest-api/worker) or [command-line interface](/docs/golem-cli), using the rules defined on the [component interface](/docs/component-interface) page. These methods are for working with Golem workers from the outside world. However, the public API for calling one worker from another is not very convenient.
 
 Golem instead introduces a new way to do worker-to-worker communication, using a method called **WASM RPC**. This consists of the following building blocks:
 
 - Golem provides a **host resource** for workers, which can be imported into any Golem project and used to invoke a remote worker by passing the target worker, the name of the invoked function and its parameters in a dynamic way using a data type called `wit-value`.
 - A CLI tool called `wasm-rpc-stubgen` can take any Golem worker, and generate a pair of a WIT definition and a WASM component implementing a "stub" for remotely calling that given worker. The generated stub internally uses the above mentioned low-level invocation API, providing a typed interface for working with a remote Golem worker.
-- The generated stub can be **composed** with other Golem workers using standard WASM tooling to get a resulting WASM ready to be uploaded as a Golem template, capable of typed worker-to-worker communication.
+- The generated stub can be **composed** with other Golem workers using standard WASM tooling to get a resulting WASM ready to be uploaded as a Golem component, capable of typed worker-to-worker communication.
 
 ## Details
 
@@ -75,8 +75,8 @@ world wit-value {
 
 ### Worker URI
 
-The **worker URI** that has to be passed to the remote interface as a parameter identifies a specific **Golem worker**, consisting of the **template ID** and the **worker name**.
-It can be constructed by hand using the pattern `worker://template-id/worker-name`, and a running worker can get its own URI using the Golem-specific host function `golem:api/host/get-self-uri`.
+The **worker URI** that has to be passed to the remote interface as a parameter identifies a specific **Golem worker**, consisting of the **component ID** and the **worker name**.
+It can be constructed by hand using the pattern `worker://component-id/worker-name`, and a running worker can get its own URI using the Golem-specific host function `golem:api/host/get-self-uri`.
 
 ### Stub generator
 
@@ -123,8 +123,8 @@ Options:
 
 The parameters have the following meaning:
 
-- `--source-wit-root` must point to the directory of the WIT specification of the **worker to be called remotely**. This is usually a `wit` subdirectory in the worker's template's source code.
-- `--dest-crate-root` is a new directory where the generated RPC stub will be put. The tool's current version does not generate a WASM file directly, instead it outputs a complete Rust crate which can be compiled via `cargo component build` (as described on the [Rust page](/docs/building-templates/tier-1/rust)) or included in a Rust workspace.
+- `--source-wit-root` must point to the directory of the WIT specification of the **worker to be called remotely**. This is usually a `wit` subdirectory in the worker's component's source code.
+- `--dest-crate-root` is a new directory where the generated RPC stub will be put. The tool's current version does not generate a WASM file directly, instead it outputs a complete Rust crate which can be compiled via `cargo component build` (as described on the [Rust page](/docs/building-components/tier-1/rust)) or included in a Rust workspace.
 - `--world` can be used to select the exported world from the source WIT, if there are more than one. If there is only one world defined, there is no need to use this parameter.
 - `--stub-crate-version` sets the generated Rust crate's version to the given value.
 - `--wasm-rpc-path-override` is useful when working on the `wasm-rpc` crate itself, to point the dependency to a local path instead of using the published version.
@@ -208,7 +208,7 @@ Similar to the `stubgen generate` subcommand, but instead of generating the sour
 
 The parameters have the following meaning:
 
-- `--source-wit-root` must point to the directory of the WIT specification of the **worker to be called remotely**. This is usually a `wit` subdirectory in the worker's template's source code.
+- `--source-wit-root` must point to the directory of the WIT specification of the **worker to be called remotely**. This is usually a `wit` subdirectory in the worker's component's source code.
 - `--dest-wasm` is the target WASM file to be generated.
 - `--dest-wit-root` is the target **directory** where the stub's WIT file and its dependencies will be generated into.
 - `--world` can be used to select the exported world from the source WIT, if there are more than one. If there is only one world defined, there is no need to use this parameter.

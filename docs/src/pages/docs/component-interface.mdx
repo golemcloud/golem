@@ -1,8 +1,8 @@
-# Template Interface
+# Component Interface
 
-This section describes how your **Golem Template**'s public interface is defined using the **WASM component model** and how is it mapped into the Golem API.
+This section describes how your **Golem Component**'s public interface is defined using the **WASM component model** and how is it mapped into the Golem API.
 
-The page is divided into two major sections by tiers, as the ability to define your template's interface is one of the primary differentiators between our different language tiers. Read the [Building Templates](/docs/building-templates) page for more information.
+The page is divided into two major sections by tiers, as the ability to define your component's interface is one of the primary differentiators between our different language tiers. Read the [Building Components](/docs/building-components) page for more information.
 
 This page will use [Golem CLI](/docs/golem-cli) parameter names when talking about how to invoke functions, but the same rules apply when using the [REST API](/docs/rest-api) too.
 
@@ -10,7 +10,7 @@ This page will use [Golem CLI](/docs/golem-cli) parameter names when talking abo
 
 **Tier 1 languages** use the **WASM component model**'s tooling to define their interface using WIT files. Please read the [official design document of the WIT format](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md) to learn what it is capable of.
 
-For each tier 1 language there is a **binding generator** tool that takes the WIT definition and generates the appropriate binding code in the given guest language. Read [Building Templates](/docs/building-templates) for more information about how these tools work.
+For each tier 1 language there is a **binding generator** tool that takes the WIT definition and generates the appropriate binding code in the given guest language. Read [Building Components](/docs/building-components) for more information about how these tools work.
 
 The WIT definition is also embedded in the compiled WASM that you upload to **Golem**. This is how Golem knows what the exported functions are, and it can validate the provided parameters to make sure they have the correct type.
 
@@ -139,7 +139,7 @@ The following table maps types you can use in WIT to their JSON encoding:
 | variant         | JSON object with a single field that has the name of one of the variants. For example: `{ "child": 10 }`                                                         | Variant that can be one of the specified types, discriminated by a case name. |
 | enum            | JSON string holding the name of the enum, for example "low"                                                                                                      | Enum is a set of possible named values                                        |
 | flags           | A JSON array of strings                                                                                                                                          | Set of possible name values, where you can select more than one of them.      |
-| handle          | a JSON string that starts with the resource owner's worker uri, followed by a slash and a numeric resource id: `"worker://template-id/worker-name/resource-id"`  | Points to a resource created on a given worker                                |
+| handle          | a JSON string that starts with the resource owner's worker uri, followed by a slash and a numeric resource id: `"worker://component-id/worker-name/resource-id"` | Points to a resource created on a given worker                                |
 
 ## Tier 2 languages
 

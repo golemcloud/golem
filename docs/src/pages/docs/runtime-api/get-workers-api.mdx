@@ -1,6 +1,6 @@
 # Get Workers API
 
-The get workers API allows you to get information about the workers for given template.
+The get workers API allows you to get information about the workers for given component.
 
 To use the get workers API, first make sure to add the contents of the `wit/deps` folders from https://github.com/golemcloud/golem-wit to your own `wit/deps` folder. You can then interact with the get workers interface from your own code in whatever language you are working in.
 
@@ -11,10 +11,10 @@ package golem:it;
 
 interface api {
   use golem:api/host@0.2.0.{
-           template-id,
+           component-id,
            worker-metadata
   };
-  get-idle-workers: func(template-id: template-id) -> list<worker-metadata>;
+  get-idle-workers: func(component-id: component-id) -> list<worker-metadata>;
 }
 
 world workers {
@@ -37,10 +37,10 @@ struct Component;
 impl Guest for Component {
 
     fn get_idle_workers(
-        template_id: TemplateId
+        component_id: ComponentId
     ) -> Vec<WorkerMetadata> {
         println!(
-            "Get idle workers of template: {template_id:?}"
+            "Get idle workers of component: {component_id:?}"
         );
         let filter = Some(WorkerAnyFilter {
             filters: vec![WorkerAllFilter {
@@ -51,7 +51,7 @@ impl Guest for Component {
             }]
         });
         let mut workers: Vec<WorkerMetadata> = Vec::new();
-        let getter = GetWorkers::new(template_id, filter.as_ref(), true);
+        let getter = GetWorkers::new(component_id, filter.as_ref(), true);
         loop {
             match getter.get_next() {
                 Some(values) => {
@@ -69,13 +69,13 @@ The `get-idle-workers` function is using the `get-workers` golem-wit resource, w
 
 ```
 resource get-workers {
-  constructor(template-id: template-id, filter: option<worker-any-filter>, precise: bool);
+  constructor(component-id: component-id, filter: option<worker-any-filter>, precise: bool);
 
   get-next: func() -> option<list<worker-metadata>>;
 }
 ```
 
-With `get-workers` resource, our template is able to get workers of provided template with matching filters, `get-next` function will return next chunk of workers, or will return none if there is no more workers.
+With `get-workers` resource, our component is able to get workers of provided component with matching filters, `get-next` function will return next chunk of workers, or will return none if there is no more workers.
 
 Filter types
 

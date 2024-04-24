@@ -2,7 +2,7 @@ import { Callout } from "nextra/components"
 
 # Golem CLI
 
-Golem CLI is a command-line interface for interacting with Golem. Golem CLI allows users to upload their templates, launch new workers based on these templates and call functions on running workers.
+Golem CLI is a command-line interface for interacting with Golem. Golem CLI allows users to upload their components, launch new workers based on these components and call functions on running workers.
 
 <Callout type="info">
   The Golem CLI is used to interact with your own deployment using the open source version of Golem.
@@ -16,16 +16,16 @@ Golem CLI is a command-line interface for interacting with Golem. Golem CLI allo
 
 ## The main functions of the CLI are:
 
-- creating new projects from templates
-- uploading a new template
-- launching new workers based on these templates
+- creating new projects from components
+- uploading a new component
+- launching new workers based on these components
 - invoking functions on workers
 - connecting to workers to see their logs
 
 ## Secondary functions of the tool are:
 
 - authentication
-- creating projects and organizing templates into projects
+- creating projects and organizing components into projects
 - managing permissions for projects and accounts
 - managing (transferring) ownership of projects
 
@@ -76,29 +76,29 @@ A new user can launch the binary and create a new account on Golem Cloud by sign
 
 To obtain help for using the CLI, use `--help`. Similarly, use `--help` option after a subcommand to get subcommand documentation.
 
-## Creating a new template
+## Creating a new component
 
-The compiled code Golem can execute is called a **golem template**. Before we can upload a template we need to create its guest-language specific source and compile it to a WebAssembly program.
+The compiled code Golem can execute is called a **golem component**. Before we can upload a component we need to create its guest-language specific source and compile it to a WebAssembly program.
 
 The following CLI commands help with this:
 
 ### `golem-cli list-examples`
 
-Golem has a library of **examples** which you can use as a starting point for your program. (The templates are defined in the open-source https://github.com/golemcloud/golem-templates repository).
+Golem has a library of **examples** which you can use as a starting point for your program. (The examples are defined in the open-source https://github.com/golemcloud/golem-examples repository).
 
 The `list-examples` command can list and filter the available commands for you.
 
 - Use `--language X` to filter for your chosen guest language, such as `Rust`, `Go`, etc.
-- Use `--tier N` to show only examples for a given **language tier** - see [Building Templates](/docs/building-templates) for a definition of tiers.
+- Use `--tier N` to show only examples for a given **language tier** - see [Building Components](/docs/building-components) for a definition of tiers.
 
 ### `golem-cli new`
 
-Once you selected the example to use you can use the `new` command to create a new directory ready to be compiled to a **golem template**.
+Once you selected the example to use you can use the `new` command to create a new directory ready to be compiled to a **golem component**.
 
 You have to specify two parameters:
 
 - `--example NAME` with the selected example's name, for example `rust-actor-minimal`
-- `--template-name NAME` with your chosen name for the new template. You can use either PascalCase, snake_case or kebab-case for the name. Try to avoid numbers if possible, as some templates may have problems with it.
+- `--component-name NAME` with your chosen name for the new component. You can use either PascalCase, snake_case or kebab-case for the name. Try to avoid numbers if possible, as some components may have problems with it.
 
 Optionally you can also specify a package name:
 
@@ -106,29 +106,29 @@ Optionally you can also specify a package name:
 
 The command prints out the **instructions** specific to the generated source that describes how to compile it to a WASM file ready to be uploaded to **Golem**.
 
-### `golem-cli template add`
+### `golem-cli component add`
 
-Once you have the compiled WASM you have to **upload** it to the system before you can start creating workers based on it. If it is a new template, use the `template add` command (if it is a new version of an existing template you can use `template update`).
+Once you have the compiled WASM you have to **upload** it to the system before you can start creating workers based on it. If it is a new component, use the `component add` command (if it is a new version of an existing component you can use `component update`).
 
 Required parameters:
 
-- `--template-name NAME` is the name of the template in **Golem**. You can use the same name you used for instantiating the example, but it is not necessary.
-- `template.wasm` the path to the compiled WASM program
+- `--component-name NAME` is the name of the component in **Golem**. You can use the same name you used for instantiating the example, but it is not necessary.
+- `component.wasm` the path to the compiled WASM program
 
 <Callout type="info">Projects are specific to Golem Cloud.</Callout>
 
-Optionally you can also organise your templates into separate **projects**. If not specified, each new template is added to the **default project** of your account.
+Optionally you can also organise your components into separate **projects**. If not specified, each new component is added to the **default project** of your account.
 
 If needed, you can select an already created project (read below for information about how to create one) by either its ID or its name:
 
 - `--project-name NAME`
 - `--project-id UUID`
 
-Once the template is successfully uploaded the CLI will print its **metadata**. The metadata contains all the detected **exported functions** with their type signature. See the [Template Interface](/docs/template-interface) page for more information about types and how they are mapped to JSON structures.
+Once the component is successfully uploaded the CLI will print its **metadata**. The metadata contains all the detected **exported functions** with their type signature. See the [Component Interface](/docs/component-interface) page for more information about types and how they are mapped to JSON structures.
 
 ## Creating and invoking workers
 
-The uploaded template is just a definition of a runnable code but it does not run by itself. You can create an arbitrary number of **workers** based on a template, each holding to its own state and allowing you to invoke **exported functions** on them.
+The uploaded component is just a definition of a runnable code but it does not run by itself. You can create an arbitrary number of **workers** based on a component, each holding to its own state and allowing you to invoke **exported functions** on them.
 
 Workers hold some per-worker data which you can specify when you create one, and can be used to store configuration of that worker. These are **environment variables** and the list of **arguments** (which would be passed to the `main` function if it was a regular executable process).
 
@@ -136,25 +136,25 @@ If you try to invoke a function on a worker that does not exist yet, it will be 
 
 ### `golem-cli worker add`
 
-The `worker add` command creates a new worker based on a template, but does not invoke it yet. This prepares the worker, initializes it and loads in memory.
+The `worker add` command creates a new worker based on a component, but does not invoke it yet. This prepares the worker, initializes it and loads in memory.
 
-You need to give a **unique name** to your worker (unique **per template**). If the worker corresponds to some business entity in your system, you can use the identifier of that for example.
+You need to give a **unique name** to your worker (unique **per component**). If the worker corresponds to some business entity in your system, you can use the identifier of that for example.
 
 - `--worker-name NAME`
 
-You also have to specify which **template** to create the worker based on. This can be done by name or by the template's ID (an UUID you get when you execute `template add`).
+You also have to specify which **component** to create the worker based on. This can be done by name or by the component's ID (an UUID you get when you execute `component add`).
 
 Either specify:
 
-- `--template-id UUID` if you know the identifier of the template
+- `--component-id UUID` if you know the identifier of the component
 
 Or:
 
-- `--template-name` if you only know its name.
+- `--component-name` if you only know its name.
 
 <Callout type="info">Projects are specific to Golem Cloud.</Callout>
 
-Note that template names are only unique within a project. If you have multiple **projects** with templates you also have to specify which project you mean, either by its name or its ID:
+Note that component names are only unique within a project. If you have multiple **projects** with components you also have to specify which project you mean, either by its name or its ID:
 
 - `--project-name NAME`
 - OR `--project-id UUID`
@@ -164,7 +164,7 @@ Optionally you can also specify a list of **environment variables** and a list o
 - `--env NAME1=VALUE1` defines an environment variable `NAME1` with a value `VALUE1`. You can have multiple `--env` parameters to define more.
 - `arg1 arg2 ...` all the remaining parameters of the command are passed to the worker as command line arguments.
 
-The newly created worker will always use the **latest version** of the template that you uploaded via `template add` or `template update`.
+The newly created worker will always use the **latest version** of the component that you uploaded via `component add` or `component update`.
 
 ### `golem-cli worker invoke-and-await`
 
@@ -172,19 +172,19 @@ The `worker invoke-and-await` command executes an **exported function** of a **w
 
 This is the primary command to execute something in **Golem** if you are also interested in its result value. Alternatively you can use `worker invoke` to just trigger the execution of a function without waiting for it. This is useful for long-running functions where you don't want to block until they finish running.
 
-When invoking a function you have to specify the template your worker is based on (as worker names are only unique within a template's scope!). This can be done in multiple ways, as described above.
+When invoking a function you have to specify the component your worker is based on (as worker names are only unique within a component's scope!). This can be done in multiple ways, as described above.
 
 Either specify:
 
-- `--template-id UUID` if you know the identifier of the template
+- `--component-id UUID` if you know the identifier of the component
 
 Or:
 
-- `--template-name` if you only know its name.
+- `--component-name` if you only know its name.
 
 <Callout type="info">Projects are specific to Golem Cloud.</Callout>
 
-Note that template names are only unique within a project. If you have multiple **projects** with templates you also have to specify which project you mean, either by its name or its ID:
+Note that component names are only unique within a project. If you have multiple **projects** with components you also have to specify which project you mean, either by its name or its ID:
 
 - `--project-name NAME`
 - OR `--project-id UUID`
@@ -198,12 +198,12 @@ And the function to be called with all its parameters:
 - `--function NAME` the fully qualified name of the exported function
 - `--parameters JSON_ARR` a JSON array with all the parameters to be passed to the exported function. If the function does not expect any parameters it should be an empty array (`[]`)
 
-See the [Template Interface](/docs/template-interface) page for more information about what a fully qualified exported function name is, and how to encode the different types in JSON.
+See the [Component Interface](/docs/component-interface) page for more information about what a fully qualified exported function name is, and how to encode the different types in JSON.
 
 There are two more optional parameters to this command:
 
 - `--invocation-key KEY` associates an invocation key, previously created with the `worker invocation-key` CLI command. This is an advanced features you can use to avoid accidentally invoking the same thing twice. Creating an invocation key always succeeds. Once you have an invocation key, if you accidentally invoke the same function twice with the same ID, Golem guarantees that it won't be executed twice.
-- `--use-stdio` switches the call into **stdio mode**. This is useful for **tier 2 languages** (see [Building Templates](/docs/building-templates) to learn more about tiers) where you cannot define your program's interface with a WIT file. In stdio mode the JSON you provide in `--parameters` is passed directly to the component's `run` (or `main`) function through the standard input, and the result of the call is the program's standard output.
+- `--use-stdio` switches the call into **stdio mode**. This is useful for **tier 2 languages** (see [Building Components](/docs/building-components) to learn more about tiers) where you cannot define your program's interface with a WIT file. In stdio mode the JSON you provide in `--parameters` is passed directly to the component's `run` (or `main`) function through the standard input, and the result of the call is the program's standard output.
 
 ## Observing workers
 
@@ -211,15 +211,15 @@ There are two more optional parameters to this command:
 
 To get the status and some additional metadata about a worker you can use the `worker get` command.
 
-To use this command you need to specify the template and the worker name, the same way as described above for `worker invoke-and-await`.
+To use this command you need to specify the component and the worker name, the same way as described above for `worker invoke-and-await`.
 
 ### `golem-cli worker list`
 
-To get the status and some additional metadata about a template workers you can use the `worker list` command.
+To get the status and some additional metadata about a component workers you can use the `worker list` command.
 
-To use this command you need to specify the template name or id. You can filter workers metadata:
+To use this command you need to specify the component name or id. You can filter workers metadata:
 
-- `--filter "propery op value"` - filter examples: `--filter "name = worker-name"`, `--filter "version >= 0"`, `--filter "status = Running"`, `--filter "env.var1 = value"`, `--filter "created_at > 2024-04-01T12:10:00Z"`. Can be used multiple times (AND condition is applied between them)
+- `--filter "property op value"` - filter examples: `--filter "name = worker-name"`, `--filter "version >= 0"`, `--filter "status = Running"`, `--filter "env.var1 = value"`, `--filter "created_at > 2024-04-01T12:10:00Z"`. Can be used multiple times (AND condition is applied between them)
 
 ### `golem-cli worker connect`
 
@@ -231,36 +231,36 @@ This is an aggregated streaming log from the following sources:
 - The worker's **standard error**
 - The worker's **logs** via the WASI [logging interface](https://github.com/WebAssembly/wasi-logging)
 
-To use this command you need to specify the template and the worker name, the same way as described above for `worker invoke-and-await`.
+To use this command you need to specify the component and the worker name, the same way as described above for `worker invoke-and-await`.
 
 ## Full command reference
 
 ### Deployment
 
-The deployment facilities of Golem CLI allow developers to create, deploy, manage, and interact with user-defined templates within Golem. There is optional `--project-name` parameters in all deployment commands. If no project is specified, the default project for the account is used.
+The deployment facilities of Golem CLI allow developers to create, deploy, manage, and interact with user-defined components within Golem. There is optional `--project-name` parameters in all deployment commands. If no project is specified, the default project for the account is used.
 
-| golem-cli template add --template-name &lt;text&gt; &lt;template.wasm&gt;                                                                                                                | Adds a new template to the registry in the specified project. Returns new template details.                                                                                                       |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| golem-cli template update --template-name &lt;text&gt; &lt;template.wasm&gt;                                                                                                             | Updates a template, which does not change the template id, but which associates a new “latest version” of the template for subsequent worker creation.                                            |
-| golem-cli template list [--template-name &lt;text&gt;]                                                                                                                                   | Lists all templates in default project. Use --project-name to specify different project. You can also specify template name to search by name                                                     |
-| golem-cli worker add --worker-name &lt;text&gt; --template-name &lt;text&gt; [(-e, --env &lt;text&gt;)] &lt;args&gt;…                                                                    | Given a template name, launches a new worker based on the template that will have the specified name.Returns worker details.                                                                      |
-| golem-cli worker invoke --template-name &lt;text&gt; --worker-name &lt;text&gt; --function &lt;text&gt; --parameters &lt;json&gt;                                                        | Invokes a function on the worker, passing it the specified (flattened) parameters. Returns immediately after invocation without waiting for completion.                                           |
-| golem-cli worker invocation-key --template-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                  | Creates new invocation key to that can be used only once to call invoke-and-await.                                                                                                                |
-| golem-cli worker invoke-and-await --template-name &lt;text&gt; --worker-name &lt;text&gt; [--invocation-key &lt;key&gt;] --function &lt;text&gt; --parameters &lt;json&gt; [--use-stdio] | Invokes a function on the worker, passing it the specified (flattened) parameters. Waits for completion and returns function result as json. If no invocation key provided CLI creates a new one. |
-| golem-cli worker connect --template-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                         | Connects to a running worker, displaying the messages logged or written to the standard output from the worker.                                                                                   |
-| golem-cli worker interrupt --template-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                       | Interrupts running worker.                                                                                                                                                                        |
-| golem-cli worker simulated-crash --template-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                 | Simulates a hardware failure or fatal crash in the specified worker (for testing purposes). Note that Golem will detect and recover the worker so the worker will not stay down for long.         |
-| golem-cli worker delete --template-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                          | Deletes worker.                                                                                                                                                                                   |
-| golem-cli worker get --template-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                             | Get worker metadata.                                                                                                                                                                              |
-| golem-cli worker list --template-name &lt;text&gt; [--filter &lt;filter&gt;] [--count &lt;count&gt;] [--cursor &lt;cursor&gt;] [--precise &lt;precise&gt;]                               | Get template workers metadata.                                                                                                                                                                    |
+| golem-cli component add --component-name &lt;text&gt; &lt;component.wasm&gt;                                                                                                              | Adds a new component to the registry in the specified project. Returns new component details.                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| golem-cli component update --component-name &lt;text&gt; &lt;component.wasm&gt;                                                                                                           | Updates a component, which does not change the component id, but which associates a new “latest version” of the component for subsequent worker creation.                                         |
+| golem-cli component list [--component-name &lt;text&gt;]                                                                                                                                  | Lists all components in default project. Use --project-name to specify different project. You can also specify component name to search by name                                                   |
+| golem-cli worker add --worker-name &lt;text&gt; --component-name &lt;text&gt; [(-e, --env &lt;text&gt;)] &lt;args&gt;…                                                                    | Given a component name, launches a new worker based on the component that will have the specified name.Returns worker details.                                                                    |
+| golem-cli worker invoke --component-name &lt;text&gt; --worker-name &lt;text&gt; --function &lt;text&gt; --parameters &lt;json&gt;                                                        | Invokes a function on the worker, passing it the specified (flattened) parameters. Returns immediately after invocation without waiting for completion.                                           |
+| golem-cli worker invocation-key --component-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                  | Creates new invocation key to that can be used only once to call invoke-and-await.                                                                                                                |
+| golem-cli worker invoke-and-await --component-name &lt;text&gt; --worker-name &lt;text&gt; [--invocation-key &lt;key&gt;] --function &lt;text&gt; --parameters &lt;json&gt; [--use-stdio] | Invokes a function on the worker, passing it the specified (flattened) parameters. Waits for completion and returns function result as json. If no invocation key provided CLI creates a new one. |
+| golem-cli worker connect --component-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                         | Connects to a running worker, displaying the messages logged or written to the standard output from the worker.                                                                                   |
+| golem-cli worker interrupt --component-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                       | Interrupts running worker.                                                                                                                                                                        |
+| golem-cli worker simulated-crash --component-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                 | Simulates a hardware failure or fatal crash in the specified worker (for testing purposes). Note that Golem will detect and recover the worker so the worker will not stay down for long.         |
+| golem-cli worker delete --component-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                          | Deletes worker.                                                                                                                                                                                   |
+| golem-cli worker get --component-name &lt;text&gt; --worker-name &lt;text&gt;                                                                                                             | Get worker metadata.                                                                                                                                                                              |
+| golem-cli worker list --component-name &lt;text&gt; [--filter &lt;filter&gt;] [--count &lt;count&gt;] [--cursor &lt;cursor&gt;] [--precise &lt;precise&gt;]                               | Get component workers metadata.                                                                                                                                                                   |
 
 ### Projects
 
 <Callout type="info">Projects are specific to Golem Cloud.</Callout>
 
-The projects facilities of Golem CLI allow developers to create and manage projects, which are collections of templates that are owned by an account within Golem Cloud.
+The projects facilities of Golem CLI allow developers to create and manage projects, which are collections of components that are owned by an account within Golem Cloud.
 
-When a new user account is created, an automatic default project is created for this user. When a user is working with templates and workers and doesn't specify the project, the default one is assumed.
+When a new user account is created, an automatic default project is created for this user. When a user is working with components and workers and doesn't specify the project, the default one is assumed.
 
 | golem-cloud-cli project list [--project-name &lt;text&gt;]                                   | Lists all projects the user has access to.    |
 | -------------------------------------------------------------------------------------------- | --------------------------------------------- |
@@ -289,11 +289,11 @@ The tokens facility of Golem CLI allow developers to create and manage tokens, w
 
 ### Examples
 
-Templates allow developers to create example component source code for different languages
+Golem-cli can create new component source code based on examples for different languages
 
-| golem-cli list-examples [--language &lt;text&gt;]                                               | Lists existing examples.                                             |
-| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| golem-cli new --example &lt;text&gt; --template-name &lt;text&gt; [--package-name &lt;text&gt;] | Create example template source code project using specified example. |
+| golem-cli list-examples [--language &lt;text&gt;]                                                | Lists existing examples.                                              |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| golem-cli new --example &lt;text&gt; --component-name &lt;text&gt; [--package-name &lt;text&gt;] | Create example component source code project using specified example. |
 
 ### Account
 

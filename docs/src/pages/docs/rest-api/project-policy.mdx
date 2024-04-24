@@ -8,14 +8,14 @@ Project policies describe a set of actions one account can perform when it was a
 
 The following actions can be used in the projectActions fields of this API:
 
-- `ViewComponent` grants read access to a template
-- `CreateComponent` allows creating new templates in a project
-- `UpdateComponent` allows uploading new versions for existing templates in a project
-- `DeleteComponent` allows deleting templates from a project
-- `ViewInstance` allows querying existing workers of a template belonging to the project
-- `CreateInstance` allows launching new workers of a template in the project
-- `UpdateInstance` allows manipulating existing workers of a template belonging to the project
-- `DeleteInstance` allows deleting workers of a template belonging to the project
+- `ViewComponent` grants read access to a component
+- `CreateComponent` allows creating new components in a project
+- `UpdateComponent` allows uploading new versions for existing components in a project
+- `DeleteComponent` allows deleting components from a project
+- `ViewWorker` allows querying existing workers of a component belonging to the project
+- `CreateWorker` allows launching new workers of a component in the project
+- `UpdateWorker` allows manipulating existing workers of a component belonging to the project
+- `DeleteWorker` allows deleting workers of a component belonging to the project
 - `ViewProjectGrants` allows listing the existing grants of the project
 - `CreateProjectGrants` allows creating new grants for the project
 - `DeleteProjectGrants` allows deleting existing grants of the project
@@ -35,7 +35,7 @@ Returns a given project policy by it's ID. Project policy identifiers are used i
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
   "name": "string",
   "projectActions": {
-    "actions": ["ViewTemplate"]
+    "actions": ["ViewComponent"]
   }
 }
 ```
@@ -54,7 +54,7 @@ Creates a new project policy and returns the object describing it, including the
 {
   "name": "string",
   "projectActions": {
-    "actions": ["ViewTemplate"]
+    "actions": ["ViewComponent"]
   }
 }
 ```
@@ -66,7 +66,7 @@ Creates a new project policy and returns the object describing it, including the
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
   "name": "string",
   "projectActions": {
-    "actions": ["ViewTemplate"]
+    "actions": ["ViewComponent"]
   }
 }
 ```

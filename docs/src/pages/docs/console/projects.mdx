@@ -8,8 +8,8 @@ Here in the console, every project is more than just a collection of files and s
 
 Projects in Golem Cloud provide a focused setting for your development, where you can access and manage all the critical components of your application:
 
-- **Templates**: Reusable WebAssembly programs are the foundation for your cloud services
-- **Workers**: Workers are the dynamic, executable instances of your templates with baked in durability
+- **Components**: Reusable WebAssembly programs are the foundation for your cloud services
+- **Workers**: Workers are the dynamic, executable instances of your components with baked in durability
 - **API Gateway**: Build scalable APIs to expose your workers to the world
 - **Users**: Collaborate with your team, granting custom access to align with roles and responsibilities.
 
@@ -19,11 +19,11 @@ The diagram below shows how these parts work together in a project:
 classDiagram
     direction TB
     class Project {
-        Template []
+        Component []
         ApiGateway []
         User []
     }
-    class Template {
+    class Component {
         WASM Binary
         version
     }
@@ -43,10 +43,10 @@ classDiagram
         Expression Mappings
     }
 
-    Project --> Template
+    Project --> Component
     Project --> ApiGateway
     Project --> User
-    Template --> Worker
+    Component --> Worker
     ApiGateway --> Route : consists of
     Route --> Worker : binds to
 ```

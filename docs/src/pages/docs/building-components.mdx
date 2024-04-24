@@ -1,8 +1,8 @@
 import { Callout, Card, Cards } from "nextra/components"
 
-# Building Templates
+# Building Components
 
-This page describes the latest recommended way of how to build **Golem Templates** that are fully compatible with **Golem**.
+This page describes the latest recommended way of how to build **Golem Components** that are fully compatible with **Golem**.
 
 <Callout>
     **Golem** is using the **WASM component model** and provides access to the outside world through **WASI Preview2**.
@@ -11,9 +11,9 @@ This page describes the latest recommended way of how to build **Golem Templates
 
 </Callout>
 
-## Writing Templates
+## Writing Components
 
-Any programming language that can be compiled to WASM can be used to create Golem templates. It is not necessary to have **WASM component model support** ready as there are external tools to convert a WASM module into a WASM component.
+Any programming language that can be compiled to WASM can be used to create Golem components. It is not necessary to have **WASM component model support** ready as there are external tools to convert a WASM module into a WASM component.
 
 In order to work with standard IO, file and filesystems, random number generation, HTTP calls, etc. the chosen programming language must have library support built on [WASI](https://wasi.dev) - it can be **WASI Preview1** (all the current implementations are targeting that), as there are external tools to wrap a WASM module using WASI Preview1 as a WASM component targeting WASI Preview2.
 
@@ -37,12 +37,12 @@ This makes Tier 1 languages applicable in both **actor-like** and **workflow-lik
 The currently supported Tier 1 languages are:
 
 <Cards>
-  <Card title="Rust" href="/docs/building-templates/tier-1/rust" />
-  <Card title="Go" href="/docs/building-templates/tier-1/go" />
-  <Card title="C" href="/docs/building-templates/tier-1/c" />
-  <Card title="Python" href="/docs/building-templates/tier-1/python" />
-  <Card title="Javascript" href="/docs/building-templates/tier-1/javascript" />
-  <Card title="Scala.JS" href="/docs/building-templates/tier-1/scala" />
+  <Card title="Rust" href="/docs/building-components/tier-1/rust" />
+  <Card title="Go" href="/docs/building-components/tier-1/go" />
+  <Card title="C" href="/docs/building-components/tier-1/c" />
+  <Card title="Python" href="/docs/building-components/tier-1/python" />
+  <Card title="Javascript" href="/docs/building-components/tier-1/javascript" />
+  <Card title="Scala.JS" href="/docs/building-components/tier-1/scala" />
 </Cards>
 
 <Callout>
@@ -72,9 +72,9 @@ Golem provides two special **calling conventions** for workers implemented with 
 The currently supported Tier 2 languages are:
 
 <Cards>
-  <Card title="Swift" href="/docs/building-templates/tier-2/swift" />
-  <Card title="Zig" href="/docs/building-templates/tier-2/zig" />
-  <Card title="Grain" href="/docs/building-templates/tier-2/grain" />
+  <Card title="Swift" href="/docs/building-components/tier-2/swift" />
+  <Card title="Zig" href="/docs/building-components/tier-2/zig" />
+  <Card title="Grain" href="/docs/building-components/tier-2/grain" />
 </Cards>
 
 <Callout>
@@ -88,8 +88,8 @@ Tier 3 languages can be compiled to WASM modules but they don't (or don't fully)
 
 The currently supported Tier 3 languages are:
 
-- [C#](/docs/building-templates/tier-3/c-sharp) - does not support **reading** from the standard input, so the `stdio` and `stdio-eventloop` calling conventions cannot be used. Parameters can be passed via environment variables and output can be written to the standard output.
+- [C#](/docs/building-components/tier-3/c-sharp) - does not support **reading** from the standard input, so the `stdio` and `stdio-eventloop` calling conventions cannot be used. Parameters can be passed via environment variables and output can be written to the standard output.
 
-## Writing and Building Templates
+## Writing and Building components
 
-Please refer to the chosen guest language's subpage for more information about what tools to install and how to build Golem templates.
+Please refer to the chosen guest language's subpage for more information about what tools to install and how to build Golem components.

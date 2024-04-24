@@ -11,7 +11,7 @@ brew tap tinygo-org/tools
 brew install tinygo
 ```
 
-You also have to install everything as described in [Common tooling](/docs/building-templates/common-tooling).
+You also have to install everything as described in [Common tooling](/docs/building-components/common-tooling).
 
 The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/docs/quickstart).
 
@@ -21,10 +21,10 @@ If you prefer to do it from scratch, first we have to create a now Go module:
 go mod init golem.com/tinygo_example
 ```
 
-Then create a `wit` directory with a `main.wit` describing your template, optionally importing WASI or Golem specific extra interfaces (put them in `wit/deps`, copied from `golem-cli`'s package):
+Then create a `wit` directory with a `main.wit` describing your component, optionally importing WASI or Golem specific extra interfaces (put them in `wit/deps`, copied from `golem-cli`'s package):
 
 ```go
-package my:template;
+package my:component;
 
 world tinygo-example {
     import wasi:poll/poll;
@@ -42,7 +42,7 @@ The next step is generating **bindings** with `wit-bindgen`:
 wit-bindgen tiny-go --out-dir tinygo_example ./wit
 ```
 
-And write your template in the module's `main` package (`main.go` in the root):
+And write your component in the module's `main` package (`main.go` in the root):
 
 ```go
 package main
@@ -102,7 +102,7 @@ The final step is converting the module in a WASM component, including mapping i
 This is done with `wasm-tools` too:
 
 ```bash
-wasm-tools component new main.embed.wasm -o template.wasm --adapt adapters/tier1/wasi_snapshot_preview1.wasm
+wasm-tools component new main.embed.wasm -o component.wasm --adapt adapters/tier1/wasi_snapshot_preview1.wasm
 ```
 
 The `wasi_snapshot_preview1.wasm` describes the mapping from WASI Preview1 to Preview2. You **must** use the version of this file packaged together with `golem-cli.`
@@ -112,7 +112,7 @@ Make sure you use the **tier1 adapter** from the golem package!
 
 </Callout>
 
-The resulting `template.wasm` is ready to be used with **Golem**.
+The resulting `component.wasm` is ready to be used with **Golem**.
 
 ### HTTP
 

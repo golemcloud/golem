@@ -10,14 +10,14 @@
     "type": "separator",
     "title": "Docs"
   },
-  "building-templates": "Building Templates",
+  "building-components": "Building Components",
   "console": {
     "title": "Management Console"
   },
   "promises": "Promises",
   "rpc": "Worker to Worker communication",
   "transaction-api": "Transactions",
-  "template-interface": "Template Interface",
+  "component-interface": "Component Interface",
   "faq": "FAQ",
   "technical-details": "Technical details",
   "release-notes": "Release Notes",
@@ -25,9 +25,9 @@
     "type": "separator",
     "title": "API Reference"
   },
+  "runtime-api": "Runtime API",
   "golem-cli": "Golem CLI",
   "rest-api": "REST API",
-  "runtime-api": "Runtime API",
   "-- Other": {
     "type": "separator",
     "title": "Other"

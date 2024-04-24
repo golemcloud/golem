@@ -4,15 +4,15 @@ The worker API allows to launch new workers, query and manipulate their status, 
 
 ## Launch a new worker.
 
-| Path                                  | Method | Protected |
-| ------------------------------------- | ------ | --------- |
-| `/v2/templates/{template_id}/workers` | POST   | Yes       |
+| Path                                    | Method | Protected |
+| --------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/workers` | POST   | Yes       |
 
 Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
 
 The parameters in the request are the following:
 
-- `name` is the name of the created worker. This has to be unique, but only for a given template
+- `name` is the name of the created worker. This has to be unique, but only for a given component
 - `args` is a list of strings which appear as command line arguments for the worker
 - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
 
@@ -34,18 +34,18 @@ The parameters in the request are the following:
 ```json copy
 {
   "workerId": {
-    "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+    "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
     "workerName": "string"
   },
-  "templateVersionUsed": 0
+  "componentVersionUsed": 0
 }
 ```
 
 ## Get metadata of multiple workers
 
-| Path                                  | Method | Protected |
-| ------------------------------------- | ------ | --------- |
-| `/v2/templates/{template_id}/workers` | GET    | Yes       |
+| Path                                    | Method | Protected |
+| --------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/workers` | GET    | Yes       |
 
 ### Filters
 
@@ -62,7 +62,7 @@ The parameters in the request are the following:
 - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
 - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
 
-Returns metadata about an existing template workers:
+Returns metadata about an existing component workers:
 
 - `workers` list of workers metadata
 - `cursor` cursor for next request, if cursor is empty/null, there are no other values
@@ -83,7 +83,7 @@ Returns metadata about an existing template workers:
   "workers": [
     {
       "workerId": {
-        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+        "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
         "workerName": "string"
       },
       "accountId": "string",
@@ -93,7 +93,7 @@ Returns metadata about an existing template workers:
         "property2": "string"
       },
       "status": "Running",
-      "templateVersion": 0,
+      "componentVersion": 0,
       "retryCount": 0
     }
   ],
@@ -103,9 +103,9 @@ Returns metadata about an existing template workers:
 
 ## Delete a worker
 
-| Path                                                | Method | Protected |
-| --------------------------------------------------- | ------ | --------- |
-| `/v2/templates/{template_id}/workers/{worker_name}` | DELETE | Yes       |
+| Path                                                  | Method | Protected |
+| ----------------------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/workers/{worker_name}` | DELETE | Yes       |
 
 Interrupts and deletes an existing worker.
 
@@ -117,17 +117,17 @@ Interrupts and deletes an existing worker.
 
 ## Get metadata of a worker
 
-| Path                                                | Method | Protected |
-| --------------------------------------------------- | ------ | --------- |
-| `/v2/templates/{template_id}/workers/{worker_name}` | GET    | Yes       |
+| Path                                                  | Method | Protected |
+| ----------------------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/workers/{worker_name}` | GET    | Yes       |
 
 Returns metadata about an existing worker:
 
-- `workerId` is a combination of the used template and the worker's user specified name
+- `workerId` is a combination of the used component and the worker's user specified name
 - `accountId` the account the worker is created by
 - `args` is the provided command line arguments passed to the worker
 - `env` is the provided map of environment variables passed to the worker
-- `templateVersion` is the version of the template used by the worker
+- `componentVersion` is the version of the component used by the worker
 - `retryCount` is the number of retries the worker did in case of a failure
 - `status` is the worker's current status, one of the following:
 - `Running` if the worker is currently executing
@@ -143,7 +143,7 @@ Returns metadata about an existing worker:
 ```json copy
 {
   "workerId": {
-    "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+    "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
     "workerName": "string"
   },
   "accountId": "string",
@@ -153,16 +153,16 @@ Returns metadata about an existing worker:
     "property2": "string"
   },
   "status": "Running",
-  "templateVersion": 0,
+  "componentVersion": 0,
   "retryCount": 0
 }
 ```
 
 ## Get an invocation key
 
-| Path                                                    | Method | Protected |
-| ------------------------------------------------------- | ------ | --------- |
-| `/v2/templates/{template_id}/workers/{worker_name}/key` | POST   | Yes       |
+| Path                                                      | Method | Protected |
+| --------------------------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/workers/{worker_name}/key` | POST   | Yes       |
 
 Creates an invocation key for a given worker.
 An invocation key is passed to the below defined invoke APIs to guarantee that retrying those invocations only performs the operation on the worker once.
@@ -177,9 +177,9 @@ An invocation key is passed to the below defined invoke APIs to guarantee that r
 
 ## Invoke a function and await it's resolution
 
-| Path                                                                 | Method | Protected |
-| -------------------------------------------------------------------- | ------ | --------- |
-| `/v2/templates/{template_id}/workers/{worker_name}/invoke-and-await` | POST   | Yes       |
+| Path                                                                   | Method | Protected |
+| ---------------------------------------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/workers/{worker_name}/invoke-and-await` | POST   | Yes       |
 
 Supply the parameters in the request body as JSON.
 
@@ -209,12 +209,12 @@ Supply the parameters in the request body as JSON.
 
 ## Invoke a function
 
-| Path                                                       | Method | Protected |
-| ---------------------------------------------------------- | ------ | --------- |
-| `/v2/templates/{template_id}/workers/{worker_name}/invoke` | POST   | Yes       |
+| Path                                                         | Method | Protected |
+| ------------------------------------------------------------ | ------ | --------- |
+| `/v2/components/{component_id}/workers/{worker_name}/invoke` | POST   | Yes       |
 
 A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns. Custom calling convention and invocation key is not supported.
-To understand how to get the function name and how to encode the function parameters check Template interface
+To understand how to get the function name and how to encode the function parameters check Component interface
 
 **Query Parameters**
 
@@ -238,9 +238,9 @@ To understand how to get the function name and how to encode the function parame
 
 ## Complete a promise
 
-| Path                                                         | Method | Protected |
-| ------------------------------------------------------------ | ------ | --------- |
-| `/v2/templates/{template_id}/workers/{worker_name}/complete` | POST   | Yes       |
+| Path                                                           | Method | Protected |
+| -------------------------------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/workers/{worker_name}/complete` | POST   | Yes       |
 
 Completes a promise with a given custom array of bytes.
 The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
@@ -263,9 +263,9 @@ true
 
 ## Interrupt a worker
 
-| Path                                                          | Method | Protected |
-| ------------------------------------------------------------- | ------ | --------- |
-| `/v2/templates/{template_id}/workers/{worker_name}/interrupt` | POST   | Yes       |
+| Path                                                            | Method | Protected |
+| --------------------------------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/workers/{worker_name}/interrupt` | POST   | Yes       |
 
 Interrupts the execution of a worker.
 The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
@@ -286,9 +286,9 @@ For example in case of a new invocation, the previously interrupted invocation i
 
 ## Advanced search for workers
 
-| Path                                       | Method | Protected |
-| ------------------------------------------ | ------ | --------- |
-| `/v2/templates/{template_id}/workers/find` | POST   | Yes       |
+| Path                                         | Method | Protected |
+| -------------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/workers/find` | POST   | Yes       |
 
 ### Filter types
 
@@ -308,7 +308,7 @@ For example in case of a new invocation, the previously interrupted invocation i
 - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
 - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
 
-Returns metadata about an existing template workers:
+Returns metadata about an existing component workers:
 
 - `workers` list of workers metadata
 - `cursor` cursor for next request, if cursor is empty/null, there are no other values
@@ -335,7 +335,7 @@ Returns metadata about an existing template workers:
   "workers": [
     {
       "workerId": {
-        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+        "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
         "workerName": "string"
       },
       "accountId": "string",
@@ -345,7 +345,7 @@ Returns metadata about an existing template workers:
         "property2": "string"
       },
       "status": "Running",
-      "templateVersion": 0,
+      "componentVersion": 0,
       "retryCount": 0
     }
   ],
@@ -355,9 +355,9 @@ Returns metadata about an existing template workers:
 
 ## Resume a worker
 
-| Path                                                       | Method | Protected |
-| ---------------------------------------------------------- | ------ | --------- |
-| `/v2/templates/{template_id}/workers/{worker_name}/resume` | POST   | Yes       |
+| Path                                                         | Method | Protected |
+| ------------------------------------------------------------ | ------ | --------- |
+| `/v2/components/{component_id}/workers/{worker_name}/resume` | POST   | Yes       |
 
 **Example Response JSON**
 
@@ -372,6 +372,6 @@ Returns metadata about an existing template workers:
 | 400         | Invalid request, returning with a list of issues detected in the request | `{"errors":["string"]}`                                       |
 | 401         | Unauthorized                                                             | `{"error":"string"}`                                          |
 | 403         | Maximum number of workers exceeded                                       | `{"error":"string"}`                                          |
-| 404         | Template / Worker / Promise not found                                    | `{"error":"string"}`                                          |
+| 404         | Component / Worker / Promise not found                                   | `{"error":"string"}`                                          |
 | 409         | Worker already exists                                                    | `{"error":"string"}`                                          |
 | 500         | Internal server error                                                    | `{"golemError":{"type":"InvalidRequest","details":"string"}}` |

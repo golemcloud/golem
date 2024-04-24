@@ -1,0 +1,16 @@
+import { Callout, Card, Cards } from "nextra/components"
+
+<Callout>
+  Our naming convention has been partially reverted to the original - **templates** are now called
+  **components**
+</Callout>
+
+# Breaking changes April 2024
+
+Several breaking changes are being applied as a preparation of the 1.0 version.
+
+We reverted the change introduced in [August of 2023](/docs/release-notes/august-2023) and now Golem **templates** are called **components** again, to be better aligned with the rest of the WebAssembly ecosystem.
+
+New persistence features changed the serialization format used by Golem in a non backward compatible way. Note that this will not happen after the first stable release.
+
+New features are being added to Golem's _runtime API_ which requires updating Golem's WIT definitions in the user components that are using them.

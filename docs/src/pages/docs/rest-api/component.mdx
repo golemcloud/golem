@@ -1,51 +1,51 @@
 import { Callout } from "nextra/components"
 
-# Template API
+# Component API
 
 <Callout type="info">Specifying or querying by projects is only available for Golem Cloud.</Callout>
 
-The template API provides endpoint to upload, download and find Golem templates (WASM files with associated metadata).
+The component API provides endpoint to upload, download and find Golem components (WASM files with associated metadata).
 
-## Get the metadata for all template versions
+## Get the metadata for all component versions
 
-| Path                          | Method | Protected |
-| ----------------------------- | ------ | --------- |
-| `/v2/templates/{template_id}` | GET    | Yes       |
+| Path                            | Method | Protected |
+| ------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}` | GET    | Yes       |
 
-Each template can have multiple versions. Every time a new WASM is uploaded for a given template id, that creates a new version.
-This endpoint returns a list of all versions for the template id provided as part of the URL. Each element of the response describes a single version of a template, but does not contain the binary (WASM) itself:
+Each component can have multiple versions. Every time a new WASM is uploaded for a given component id, that creates a new version.
+This endpoint returns a list of all versions for the component id provided as part of the URL. Each element of the response describes a single version of a component, but does not contain the binary (WASM) itself:
 
-- `versionedTemplateId` associates a specific version with the template id
-- `userTemplateId` and protectedTemplateId are implementation details, not used elsewhere on the public API
-- `templateName` is the human-readable name of the template
-- `templateSize` is the WASM binary's size in bytes
+- `versionedComponentId` associates a specific version with the component id
+- `userComponentId` and protectedComponentId are implementation details, not used elsewhere on the public API
+- `componentName` is the human-readable name of the component
+- `componentSize` is the WASM binary's size in bytes
 - `metadata` contains information extracted from the WASM itself
 - `metadata.exports` is a list of exported functions, including their parameter's and return value's types
-- `metadata.producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem template.
+- `metadata.producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem component.
 
 **Example Response JSON**
 
 ```json copy
 [
   {
-    "versionedTemplateId": {
-      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+    "versionedComponentId": {
+      "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
       "version": 0
     },
-    "userTemplateId": {
-      "versionedTemplateId": {
-        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+    "userComponentId": {
+      "versionedComponentId": {
+        "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
         "version": 0
       }
     },
-    "protectedTemplateId": {
-      "versionedTemplateId": {
-        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+    "protectedComponentId": {
+      "versionedComponentId": {
+        "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
         "version": 0
       }
     },
-    "templateName": "string",
-    "templateSize": 0,
+    "componentName": "string",
+    "componentSize": 0,
     "metadata": {
       "exports": [
         {
@@ -107,11 +107,11 @@ This endpoint returns a list of all versions for the template id provided as par
 ]
 ```
 
-## Update a template
+## Update a component
 
-| Path                                 | Method | Protected |
-| ------------------------------------ | ------ | --------- |
-| `/v2/templates/{template_id}/upload` | PUT    | Yes       |
+| Path                                   | Method | Protected |
+| -------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/upload` | PUT    | Yes       |
 
 **Request Body**: `WASM Binary File`
 
@@ -121,24 +121,24 @@ This endpoint returns a list of all versions for the template id provided as par
 
 ```json copy
 {
-  "versionedTemplateId": {
-    "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+  "versionedComponentId": {
+    "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
     "version": 0
   },
-  "userTemplateId": {
-    "versionedTemplateId": {
-      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+  "userComponentId": {
+    "versionedComponentId": {
+      "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
       "version": 0
     }
   },
-  "protectedTemplateId": {
-    "versionedTemplateId": {
-      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+  "protectedComponentId": {
+    "versionedComponentId": {
+      "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
       "version": 0
     }
   },
-  "templateName": "string",
-  "templateSize": 0,
+  "componentName": "string",
+  "componentSize": 0,
   "metadata": {
     "exports": [
       {
@@ -199,11 +199,11 @@ This endpoint returns a list of all versions for the template id provided as par
 }
 ```
 
-## Upload a new template
+## Upload a new component
 
-| Path            | Method | Protected |
-| --------------- | ------ | --------- |
-| `/v2/templates` | POST   | Yes       |
+| Path             | Method | Protected |
+| ---------------- | ------ | --------- |
+| `/v2/components` | POST   | Yes       |
 
 The request body is encoded as multipart/form-data containing metadata and the WASM binary.
 
@@ -216,34 +216,34 @@ The request body is encoded as multipart/form-data containing metadata and the W
 ```json copy
 {
   "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
-  "templateName": "string"
+  "componentName": "string"
 }
 ```
 
-**Field `template`**: string binary
+**Field `component`**: string binary
 
 **Example Response JSON**
 
 ```json copy
 {
-  "versionedTemplateId": {
-    "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+  "versionedComponentId": {
+    "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
     "version": 0
   },
-  "userTemplateId": {
-    "versionedTemplateId": {
-      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+  "userComponentId": {
+    "versionedComponentId": {
+      "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
       "version": 0
     }
   },
-  "protectedTemplateId": {
-    "versionedTemplateId": {
-      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+  "protectedComponentId": {
+    "versionedComponentId": {
+      "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
       "version": 0
     }
   },
-  "templateName": "string",
-  "templateSize": 0,
+  "componentName": "string",
+  "componentSize": 0,
   "metadata": {
     "exports": [
       {
@@ -304,44 +304,44 @@ The request body is encoded as multipart/form-data containing metadata and the W
 }
 ```
 
-## Get all templates
+## Get all components
 
-| Path            | Method | Protected |
-| --------------- | ------ | --------- |
-| `/v2/templates` | GET    | Yes       |
+| Path             | Method | Protected |
+| ---------------- | ------ | --------- |
+| `/v2/components` | GET    | Yes       |
 
-Gets all templates, optionally filtered by project and/or template name.
+Gets all components, optionally filtered by project and/or component name.
 
 **Query Parameters**
 
-| Name          | Type   | Required | Description                |
-| ------------- | ------ | -------- | -------------------------- |
-| project-id    | string | No       | Project ID to filter by    |
-| template-name | string | No       | Template name to filter by |
+| Name           | Type   | Required | Description                 |
+| -------------- | ------ | -------- | --------------------------- |
+| project-id     | string | No       | Project ID to filter by     |
+| component-name | string | No       | Component name to filter by |
 
 **Example Response JSON**
 
 ```json copy
 [
   {
-    "versionedTemplateId": {
-      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+    "versionedComponentId": {
+      "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
       "version": 0
     },
-    "userTemplateId": {
-      "versionedTemplateId": {
-        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+    "userComponentId": {
+      "versionedComponentId": {
+        "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
         "version": 0
       }
     },
-    "protectedTemplateId": {
-      "versionedTemplateId": {
-        "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+    "protectedComponentId": {
+      "versionedComponentId": {
+        "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
         "version": 0
       }
     },
-    "templateName": "string",
-    "templateSize": 0,
+    "componentName": "string",
+    "componentSize": 0,
     "metadata": {
       "exports": [
         {
@@ -403,13 +403,13 @@ Gets all templates, optionally filtered by project and/or template name.
 ]
 ```
 
-## Download a template
+## Download a component
 
-| Path                                   | Method | Protected |
-| -------------------------------------- | ------ | --------- |
-| `/v2/templates/{template_id}/download` | GET    | Yes       |
+| Path                                     | Method | Protected |
+| ---------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/download` | GET    | Yes       |
 
-Downloads a specific version of the template's WASM.
+Downloads a specific version of the component's WASM.
 
 **Query Parameters**
 
@@ -419,36 +419,36 @@ Downloads a specific version of the template's WASM.
 
 **Response Body:** `WASM Binary File`
 
-## Get the latest version of a given template
+## Get the latest version of a given component
 
-| Path                                 | Method | Protected |
-| ------------------------------------ | ------ | --------- |
-| `/v2/templates/{template_id}/latest` | GET    | Yes       |
+| Path                                   | Method | Protected |
+| -------------------------------------- | ------ | --------- |
+| `/v2/components/{component_id}/latest` | GET    | Yes       |
 
-Gets the latest version of a template.
+Gets the latest version of a component.
 
 **Example Response JSON**
 
 ```json copy
 {
-  "versionedTemplateId": {
-    "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+  "versionedComponentId": {
+    "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
     "version": 0
   },
-  "userTemplateId": {
-    "versionedTemplateId": {
-      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+  "userComponentId": {
+    "versionedComponentId": {
+      "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
       "version": 0
     }
   },
-  "protectedTemplateId": {
-    "versionedTemplateId": {
-      "templateId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
+  "protectedComponentId": {
+    "versionedComponentId": {
+      "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
       "version": 0
     }
   },
-  "templateName": "string",
-  "templateSize": 0,
+  "componentName": "string",
+  "componentSize": 0,
   "metadata": {
     "exports": [
       {
@@ -509,13 +509,13 @@ Gets the latest version of a template.
 }
 ```
 
-## Template API Errors
+## Component API Errors
 
 | Status Code | Description                                                              | Body                    |
 | ----------- | ------------------------------------------------------------------------ | ----------------------- |
 | 400         | Invalid request, returning with a list of issues detected in the request | `{"errors":["string"]}` |
 | 401         | Unauthorized                                                             | `{"error":"string"}`    |
-| 403         | Maximum number of templates exceeded                                     | `{"error":"string"}`    |
-| 404         | Template not found                                                       | `{"error":"string"}`    |
-| 409         | Template already exists                                                  | `{"error":"string"}`    |
+| 403         | Maximum number of components exceeded                                    | `{"error":"string"}`    |
+| 404         | Component not found                                                      | `{"error":"string"}`    |
+| 409         | Component already exists                                                 | `{"error":"string"}`    |
 | 500         | Internal server error                                                    | `{"error":"string"}`    |

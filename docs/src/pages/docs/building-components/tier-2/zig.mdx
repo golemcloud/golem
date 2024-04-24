@@ -4,7 +4,7 @@ import { Callout } from "nextra/components"
 
 Install the latest version (**0.12**) of **Zig** (for example `brew install zig`).
 
-You also have to install everything as described in [Common tooling](/docs/building-templates/common-tooling).
+You also have to install everything as described in [Common tooling](/docs/building-components/common-tooling).
 
 Currently we consider **Zig** a **Tier 2** guest language, which means we cannot use any WIT interface definitions for it and can only call the Zig program's `main` function exposed as a parameterless `run` function for Golem.
 
@@ -56,11 +56,11 @@ Then we have to convert the module to a WASM component, including mapping its WA
 This is done with `wasm-tools`:
 
 ```bash
-wasm-tools component new zig-out/bin/main.wasm -o template.wasm --adapt tier2/wasi_snapshot_preview1.wasm
+wasm-tools component new zig-out/bin/main.wasm -o component.wasm --adapt tier2/wasi_snapshot_preview1.wasm
 ```
 
 The `wasi_snapshot_preview1.wasm` describes the mapping from WASI Preview1 to Preview2. You **must** use the version of this file packaged together with `golem-cli.`
 
 <Callout>Make sure you use the **tier2 adapter** from the golem package!</Callout>
 
-The resulting `template.wasm` is ready to be used with **Golem**.
+The resulting `component.wasm` is ready to be used with **Golem**.
