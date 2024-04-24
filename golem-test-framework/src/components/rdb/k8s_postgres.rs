@@ -38,7 +38,11 @@ pub struct K8sPostgresRdb {
 }
 
 impl K8sPostgresRdb {
-    pub async fn new(namespace: &K8sNamespace, routing_type: &K8sRoutingType) -> Self {
+    pub async fn new(
+        namespace: &K8sNamespace,
+        routing_type: &K8sRoutingType,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
+    ) -> Self {
         info!("Creating Postgres pod");
 
         let pods: Api<Pod> = Api::namespaced(
@@ -87,7 +91,7 @@ impl K8sPostgresRdb {
         let _res_pod = pods.create(&pp, &pod).await.expect("Failed to create pod");
         let managed_pod = AsyncDropper::new(ManagedPod::new("golem-postgres", namespace));
 
-        let service: Service = serde_json::from_value(json!({
+        let mut service: Service = serde_json::from_value(json!({
             "apiVersion": "v1",
             "kind": "Service",
             "metadata": {
@@ -107,6 +111,8 @@ impl K8sPostgresRdb {
             }
         }))
         .expect("Failed to deserialize service description");
+
+        service.metadata.annotations = service_annotations;
 
         let _res_srv = services
             .create(&pp, &service)

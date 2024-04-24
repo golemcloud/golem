@@ -20,6 +20,7 @@ use k8s_openapi::api::networking::v1::Ingress;
 use kube::api::{DeleteParams, PostParams};
 use kube::{Api, Client};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::process::{Child, Command};
 use tracing::{debug, error, info};
@@ -243,62 +244,74 @@ impl Routing {
 
     async fn create_ingress(service_name: &str, port: u16, namespace: &K8sNamespace) -> Routing {
         info!("Creating ingress for service {service_name}:{port} in {namespace:?}");
-        let ingresses: Api<Ingress> =
+        // let ingresses: Api<Ingress> =
+        //     Api::namespaced(Client::try_default().await.unwrap(), &namespace.0);
+        //
+        // let listener = format!("[{{\"HTTP\": {}}}]", port);
+        //
+        // let ingress: Ingress = serde_json::from_value(json!({
+        //     "apiVersion": "networking.k8s.io/v1",
+        //     "kind": "Ingress",
+        //     "metadata": {
+        //         "name": service_name,
+        //         "labels": {
+        //             "app": service_name,
+        //             "app-group": "golem"
+        //         },
+        //         "annotations": {
+        //             "alb.ingress.kubernetes.io/scheme": "internet-facing",
+        //             "alb.ingress.kubernetes.io/target-type": "ip",
+        //             "alb.ingress.kubernetes.io/listen-ports": listener
+        //         }
+        //     },
+        //     "spec": {
+        //         "ingressClassName": "alb",
+        //         "rules": [
+        //             {
+        //                 "http": {
+        //                     "paths": [
+        //                         {
+        //                             "backend": {
+        //                                 "service": {
+        //                                     "name": service_name,
+        //                                     "port": {
+        //                                         "number": port
+        //                                     }
+        //                                 }
+        //                             },
+        //                             "path": "/*",
+        //                             "pathType": "ImplementationSpecific"
+        //                         }
+        //                     ]
+        //                 }
+        //             }
+        //         ]
+        //     }
+        // }))
+        // .expect("Failed to deserialize ingress definition");
+        //
+        // let pp = PostParams::default();
+        //
+        // let _ = ingresses
+        //     .create(&pp, &ingress)
+        //     .await
+        //     .expect("Failed to create ingress");
+        //
+        // let routing = AsyncDropper::new(ManagedRouting::ingress(service_name, namespace));
+        //
+        // let hostname = Self::wait_for_load_balancer(&ingresses, service_name).await;
+
+        let service: Api<Service> =
             Api::namespaced(Client::try_default().await.unwrap(), &namespace.0);
 
-        let ingress: Ingress = serde_json::from_value(json!({
-            "apiVersion": "networking.k8s.io/v1",
-            "kind": "Ingress",
-            "metadata": {
-                "name": service_name,
-                "labels": {
-                    "app": service_name,
-                    "app-group": "golem"
-                },
-                "annotations": {
-                    "alb.ingress.kubernetes.io/scheme": "internet-facing",
-                    "alb.ingress.kubernetes.io/target-type": "ip"
-                }
-            },
-            "spec": {
-                "ingressClassName": "alb",
-                "rules": [
-                    {
-                        "http": {
-                            "paths": [
-                                {
-                                    "backend": {
-                                        "service": {
-                                            "name": service_name,
-                                            "port": {
-                                                "number": port
-                                            }
-                                        }
-                                    },
-                                    "path": "/*",
-                                    "pathType": "ImplementationSpecific"
-                                }
-                            ]
-                        }
-                    }
-                ]
-            }
-        }))
-        .expect("Failed to deserialize ingress definition");
+        let hostname = Self::wait_for_service_load_balancer(&service, service_name).await;
 
-        let pp = PostParams::default();
-
-        let _ = ingresses
-            .create(&pp, &ingress)
-            .await
-            .expect("Failed to create ingress");
-
-        let hostname = Self::wait_for_load_balancer(&ingresses, service_name).await;
+        let routing = AsyncDropper::new(ManagedRouting::ingress(service_name, namespace));
 
         Routing {
             hostname,
-            port: 80,
-            routing: AsyncDropper::new(ManagedRouting::ingress(service_name, namespace)),
+            port,
+            routing,
         }
     }
 
@@ -321,6 +334,42 @@ impl Routing {
             .status
             .as_ref()
             .ok_or(anyhow!("No ingress status for {service_name}"))?
+            .load_balancer
+            .as_ref()
+            .ok_or(anyhow!("No load balancer for {service_name}"))?
+            .ingress
+            .as_ref()
+            .ok_or(anyhow!("No ingress for {service_name}"))?
+            .first()
+            .as_ref()
+            .ok_or(anyhow!("Empty ingress for {service_name}"))?
+            .hostname
+            .as_ref()
+            .ok_or(anyhow!("No ingress hostname for {service_name}"))?
+            .to_string();
+
+        Ok(hostname)
+    }
+
+    async fn wait_for_service_load_balancer(service: &Api<Service>, name: &str) -> String {
+        loop {
+            let s = service.get(name).await.expect("Failed to get ingresses");
+
+            match Self::service_hostname(&s, name) {
+                Ok(hostname) => return hostname,
+                Err(e) => {
+                    error!("Can't get hostname for {name}: {e:?}");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
+
+    fn service_hostname(service: &Service, service_name: &str) -> anyhow::Result<String> {
+        let hostname = service
+            .status
+            .as_ref()
+            .ok_or(anyhow!("No service status for {service_name}"))?
             .load_balancer
             .as_ref()
             .ok_or(anyhow!("No load balancer for {service_name}"))?
@@ -439,4 +488,21 @@ impl Routing {
             break (Url::parse(any_res).expect("Failed to parse url"), None);
         }
     }
+}
+
+pub fn aws_nlb_service_annotations() -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    map.insert(
+        "service.beta.kubernetes.io/aws-load-balancer-type".to_string(),
+        "external".to_string(),
+    );
+    map.insert(
+        "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type".to_string(),
+        "ip".to_string(),
+    );
+    map.insert(
+        "service.beta.kubernetes.io/aws-load-balancer-scheme".to_string(),
+        "internet-facing".to_string(),
+    );
+    map
 }

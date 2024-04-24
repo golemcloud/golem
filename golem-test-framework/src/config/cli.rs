@@ -17,7 +17,7 @@ use crate::components::component_service::k8s::K8sComponentService;
 use crate::components::component_service::provided::ProvidedComponentService;
 use crate::components::component_service::spawned::SpawnedComponentService;
 use crate::components::component_service::ComponentService;
-use crate::components::k8s::{K8sNamespace, K8sRoutingType};
+use crate::components::k8s::{aws_nlb_service_annotations, K8sNamespace, K8sRoutingType};
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::k8s_postgres::K8sPostgresRdb;
 use crate::components::rdb::provided_postgres::ProvidedPostgresRdb;
@@ -455,9 +455,10 @@ impl CliTestDependencies {
                 let namespace = K8sNamespace(namespace.clone());
 
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(K8sPostgresRdb::new(&namespace, &routing_type).await);
-                let redis: Arc<dyn Redis + Send + Sync + 'static> =
-                    Arc::new(K8sRedis::new(&namespace, &routing_type, redis_prefix.clone()).await);
+                    Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, None).await);
+                let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
+                    K8sRedis::new(&namespace, &routing_type, redis_prefix.clone(), None).await,
+                );
                 let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
                     SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
                 );
@@ -516,10 +517,23 @@ impl CliTestDependencies {
                 let routing_type = K8sRoutingType::Ingress;
                 let namespace = K8sNamespace(namespace.clone());
 
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(K8sPostgresRdb::new(&namespace, &routing_type).await);
-                let redis: Arc<dyn Redis + Send + Sync + 'static> =
-                    Arc::new(K8sRedis::new(&namespace, &routing_type, redis_prefix.clone()).await);
+                let rdb: Arc<dyn Rdb + Send + Sync + 'static> = Arc::new(
+                    K8sPostgresRdb::new(
+                        &namespace,
+                        &routing_type,
+                        Some(aws_nlb_service_annotations()),
+                    )
+                    .await,
+                );
+                let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
+                    K8sRedis::new(
+                        &namespace,
+                        &routing_type,
+                        redis_prefix.clone(),
+                        Some(aws_nlb_service_annotations()),
+                    )
+                    .await,
+                );
                 let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
                     SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
                 );
