@@ -10,6 +10,7 @@ message ApiDefinition {
   oneof definition {
     HttpApiDefinition http = 3;
   }
+  bool draft = 4;
 }
 
 message ApiDefinitionList {
