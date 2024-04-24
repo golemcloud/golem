@@ -25,6 +25,8 @@ use golem_api_grpc::proto::golem::component::{
     GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
     UpdateComponentRequestChunk, UpdateComponentRequestHeader,
 };
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
@@ -87,22 +89,35 @@ pub trait ComponentService {
     async fn add_component(&self, local_path: &Path) -> ComponentId {
         let mut client = self.client().await;
         let file_name = local_path.file_name().unwrap().to_string_lossy();
-        let data = std::fs::read(local_path)
+        let mut file = File::open(local_path)
+            .await
             .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
 
-        let chunks: Vec<CreateComponentRequest> = vec![
-            CreateComponentRequest {
-                data: Some(Data::Header(CreateComponentRequestHeader {
-                    project_id: None,
-                    component_name: file_name.to_string(),
-                })),
-            },
-            CreateComponentRequest {
-                data: Some(Data::Chunk(CreateComponentRequestChunk {
-                    component_chunk: data,
-                })),
-            },
-        ];
+        let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
+            data: Some(Data::Header(CreateComponentRequestHeader {
+                project_id: None,
+                component_name: file_name.to_string(),
+            })),
+        }];
+
+        loop {
+            let mut buffer = [0; 4096];
+
+            let n = file
+                .read(&mut buffer)
+                .await
+                .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
+
+            if n == 0 {
+                break;
+            } else {
+                chunks.push(CreateComponentRequest {
+                    data: Some(Data::Chunk(CreateComponentRequestChunk {
+                        component_chunk: buffer[0..n].to_vec(),
+                    })),
+                });
+            }
+        }
         let response = client
             .create_component(tokio_stream::iter(chunks))
             .await
@@ -132,25 +147,38 @@ pub trait ComponentService {
 
     async fn update_component(&self, component_id: &ComponentId, local_path: &Path) -> u64 {
         let mut client = self.client().await;
-        let data = std::fs::read(local_path)
+        let mut file = File::open(local_path)
+            .await
             .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
 
-        let chunks: Vec<UpdateComponentRequest> = vec![
-            UpdateComponentRequest {
-                data: Some(update_component_request::Data::Header(
-                    UpdateComponentRequestHeader {
-                        component_id: Some(component_id.clone().into()),
-                    },
-                )),
-            },
-            UpdateComponentRequest {
-                data: Some(update_component_request::Data::Chunk(
-                    UpdateComponentRequestChunk {
-                        component_chunk: data,
-                    },
-                )),
-            },
-        ];
+        let mut chunks: Vec<UpdateComponentRequest> = vec![UpdateComponentRequest {
+            data: Some(update_component_request::Data::Header(
+                UpdateComponentRequestHeader {
+                    component_id: Some(component_id.clone().into()),
+                },
+            )),
+        }];
+
+        loop {
+            let mut buffer = [0; 4096];
+
+            let n = file
+                .read(&mut buffer)
+                .await
+                .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
+
+            if n == 0 {
+                break;
+            } else {
+                chunks.push(UpdateComponentRequest {
+                    data: Some(update_component_request::Data::Chunk(
+                        UpdateComponentRequestChunk {
+                            component_chunk: buffer[0..n].to_vec(),
+                        },
+                    )),
+                });
+            }
+        }
         let response = client
             .update_component(tokio_stream::iter(chunks))
             .await
