@@ -626,7 +626,7 @@ mod tests {
             workerid_strat().prop_map(|worker_id| GolemError::WorkerAlreadyExists { worker_id }),
             workerid_strat().prop_map(|worker_id| GolemError::WorkerNotFound { worker_id }),
             (workerid_strat(), ".*").prop_map(|(worker_id, details)| GolemError::WorkerCreationFailed { worker_id, details }),
-            workerid_strat().prop_map(|worker_id| GolemError::FailedToResumeWorker { worker_id }),
+            (workerid_strat(), ".*").prop_map(|(worker_id, reason)| GolemError::FailedToResumeWorker { worker_id, reason: Box::new(GolemError::unknown(reason)) }),
             (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| GolemError::ComponentDownloadFailed { component_id, component_version, reason }),
             (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| GolemError::ComponentParseFailed { component_id, component_version, reason }),
             (componentid_strat(), ".*").prop_map(|(component_id, reason)| GolemError::GetLatestVersionOfComponentFailed { component_id, reason }),

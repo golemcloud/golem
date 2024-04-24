@@ -28,7 +28,7 @@ use crate::workerctx::{FuelManagement, WorkerCtx};
 /// Invokes a function on a worker.
 /// Returns true if the function invocation was finished, false if it was interrupted or scheduled for retry.
 ///
-/// The WorkerDetails reference is hold until the invocation finishes
+/// The context is held until the invocation finishes
 ///
 /// Arguments:
 /// - `full_function_name`: the name of the function to invoke, including the interface name if applicable

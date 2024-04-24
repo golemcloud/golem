@@ -316,11 +316,13 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker but by general it can be no-op.
+    ///
+    /// If the result is true, the instance
     async fn prepare_instance(
         worker_id: &WorkerId,
         instance: &wasmtime::component::Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<(), GolemError>;
+    ) -> Result<bool, GolemError>;
 
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(

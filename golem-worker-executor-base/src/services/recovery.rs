@@ -804,7 +804,7 @@ mod tests {
             _worker_id: &WorkerId,
             _instance: &Instance,
             _store: &mut (impl AsContextMut<Data = Self> + Send),
-        ) -> Result<(), GolemError> {
+        ) -> Result<bool, GolemError> {
             unimplemented!()
         }
 

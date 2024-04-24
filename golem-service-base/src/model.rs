@@ -2099,6 +2099,7 @@ impl From<GolemErrorWorkerCreationFailed>
 #[error("Failed to resume worker: {worker_id}")]
 pub struct GolemErrorFailedToResumeWorker {
     pub worker_id: WorkerId,
+    pub reason: Box<GolemError>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::FailedToResumeWorker>
@@ -2114,6 +2115,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FailedToResumeWorker>
                 .worker_id
                 .ok_or("Missing field: worker_id")?
                 .try_into()?,
+            reason: Box::new((*value.reason.ok_or("Missing field: reason")?).try_into()?),
         })
     }
 }
@@ -2124,6 +2126,7 @@ impl From<GolemErrorFailedToResumeWorker>
     fn from(value: GolemErrorFailedToResumeWorker) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
+            reason: Some(Box::new((*value.reason).into())),
         }
     }
 }
@@ -2620,6 +2623,45 @@ pub struct InterruptResponse {}
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct ResumeResponse {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+pub struct UpdateWorkerResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
+pub enum WorkerUpdateMode {
+    Automatic,
+    Manual,
+}
+
+impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for WorkerUpdateMode {
+    fn from(value: golem_api_grpc::proto::golem::worker::UpdateMode) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => {
+                WorkerUpdateMode::Automatic
+            }
+            golem_api_grpc::proto::golem::worker::UpdateMode::Manual => WorkerUpdateMode::Manual,
+        }
+    }
+}
+
+impl From<WorkerUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
+    fn from(value: WorkerUpdateMode) -> Self {
+        match value {
+            WorkerUpdateMode::Automatic => {
+                golem_api_grpc::proto::golem::worker::UpdateMode::Automatic
+            }
+            WorkerUpdateMode::Manual => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct UpdateWorkerRequest {
+    pub mode: WorkerUpdateMode,
+    pub target_version: ComponentVersion,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkersMetadataRequest {
     pub filter: Option<WorkerFilter>,
@@ -2877,7 +2919,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerExecutionError> for Gol
                 Ok(GolemError::WorkerCreationFailed(err.try_into()?))
             }
             Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::FailedToResumeWorker(err)) => {
-                Ok(GolemError::FailedToResumeWorker(err.try_into()?))
+                Ok(GolemError::FailedToResumeWorker((*err).try_into()?))
             }
             Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ComponentDownloadFailed(err)) => {
                 Ok(GolemError::ComponentDownloadFailed(err.try_into()?))
@@ -2964,7 +3006,7 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::WorkerExecutionE
             }
             GolemError::FailedToResumeWorker(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::FailedToResumeWorker(err.into())),
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::FailedToResumeWorker(Box::new(err.into()))),
                 }
             }
             GolemError::ComponentDownloadFailed(err) => {

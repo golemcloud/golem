@@ -1,0 +1,14 @@
+package golem:component;
+
+// See https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md for more details about the WIT syntax
+
+interface api {
+  f1: func(speed-ms: u64) -> u64;
+  f2: func() -> u64;
+  f3: func() -> u64;
+  f4: func() -> u64;
+}
+
+world update-test-v2 {
+  export api;
+}
