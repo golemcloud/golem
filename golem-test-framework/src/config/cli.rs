@@ -387,8 +387,8 @@ impl CliTestDependencies {
                 );
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
                     SpawnedComponentService::new(
-                        &build_root.join("../../../golem-component-service"),
-                        &workspace_root.join("../../../golem-component-service"),
+                        &build_root.join("golem-component-service"),
+                        &workspace_root.join("golem-component-service"),
                         *component_service_http_port,
                         *component_service_grpc_port,
                         rdb.clone(),
