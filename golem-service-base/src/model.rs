@@ -16,7 +16,8 @@ use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
 use golem_common::model::{
-    parse_function_name, ComponentVersion, ShardId, TemplateId, WorkerFilter, WorkerStatus,
+    parse_function_name, ComponentId, ComponentVersion, ShardId, Timestamp, WorkerFilter,
+    WorkerStatus,
 };
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use http::Uri;
@@ -40,118 +41,125 @@ pub struct WorkerCreationResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
-pub struct TemplateName(pub String);
+pub struct ComponentName(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct VersionedTemplateId {
-    pub template_id: TemplateId,
+pub struct VersionedComponentId {
+    pub component_id: ComponentId,
     pub version: ComponentVersion,
 }
 
-impl VersionedTemplateId {
+impl VersionedComponentId {
     pub fn slug(&self) -> String {
-        format!("{}#{}", self.template_id.0, self.version)
+        format!("{}#{}", self.component_id.0, self.version)
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::VersionedTemplateId> for VersionedTemplateId {
+impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId>
+    for VersionedComponentId
+{
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::template::VersionedTemplateId,
+        value: golem_api_grpc::proto::golem::component::VersionedComponentId,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            template_id: value.template_id.ok_or("Missing template_id")?.try_into()?,
+            component_id: value
+                .component_id
+                .ok_or("Missing component_id")?
+                .try_into()?,
             version: value.version,
         })
     }
 }
 
-impl From<VersionedTemplateId> for golem_api_grpc::proto::golem::template::VersionedTemplateId {
-    fn from(value: VersionedTemplateId) -> Self {
+impl From<VersionedComponentId> for golem_api_grpc::proto::golem::component::VersionedComponentId {
+    fn from(value: VersionedComponentId) -> Self {
         Self {
-            template_id: Some(value.template_id.into()),
+            component_id: Some(value.component_id.into()),
             version: value.version,
         }
     }
 }
 
-impl std::fmt::Display for VersionedTemplateId {
+impl std::fmt::Display for VersionedComponentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}#{}", self.template_id, self.version)
+        write!(f, "{}#{}", self.component_id, self.version)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct UserTemplateId {
-    pub versioned_template_id: VersionedTemplateId,
+pub struct UserComponentId {
+    pub versioned_component_id: VersionedComponentId,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::UserTemplateId> for UserTemplateId {
+impl TryFrom<golem_api_grpc::proto::golem::component::UserComponentId> for UserComponentId {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::template::UserTemplateId,
+        value: golem_api_grpc::proto::golem::component::UserComponentId,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            versioned_template_id: value
-                .versioned_template_id
-                .ok_or("Missing versioned_template_id")?
+            versioned_component_id: value
+                .versioned_component_id
+                .ok_or("Missing versioned_component_id")?
                 .try_into()?,
         })
     }
 }
 
-impl From<UserTemplateId> for golem_api_grpc::proto::golem::template::UserTemplateId {
-    fn from(value: UserTemplateId) -> Self {
+impl From<UserComponentId> for golem_api_grpc::proto::golem::component::UserComponentId {
+    fn from(value: UserComponentId) -> Self {
         Self {
-            versioned_template_id: Some(value.versioned_template_id.into()),
+            versioned_component_id: Some(value.versioned_component_id.into()),
         }
     }
 }
 
-impl UserTemplateId {
+impl UserComponentId {
     pub fn slug(&self) -> String {
-        format!("{}:user", self.versioned_template_id.slug())
+        format!("{}:user", self.versioned_component_id.slug())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct ProtectedTemplateId {
-    pub versioned_template_id: VersionedTemplateId,
+pub struct ProtectedComponentId {
+    pub versioned_component_id: VersionedComponentId,
 }
 
-impl ProtectedTemplateId {
+impl ProtectedComponentId {
     pub fn slug(&self) -> String {
-        format!("{}:protected", self.versioned_template_id.slug())
+        format!("{}:protected", self.versioned_component_id.slug())
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::ProtectedTemplateId> for ProtectedTemplateId {
+impl TryFrom<golem_api_grpc::proto::golem::component::ProtectedComponentId>
+    for ProtectedComponentId
+{
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::template::ProtectedTemplateId,
+        value: golem_api_grpc::proto::golem::component::ProtectedComponentId,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            versioned_template_id: value
-                .versioned_template_id
-                .ok_or("Missing versioned_template_id")?
+            versioned_component_id: value
+                .versioned_component_id
+                .ok_or("Missing versioned_component_id")?
                 .try_into()?,
         })
     }
 }
 
-impl From<ProtectedTemplateId> for golem_api_grpc::proto::golem::template::ProtectedTemplateId {
-    fn from(value: ProtectedTemplateId) -> Self {
+impl From<ProtectedComponentId> for golem_api_grpc::proto::golem::component::ProtectedComponentId {
+    fn from(value: ProtectedComponentId) -> Self {
         Self {
-            versioned_template_id: Some(value.versioned_template_id.into()),
+            versioned_component_id: Some(value.versioned_component_id.into()),
         }
     }
 }
@@ -1172,11 +1180,11 @@ pub struct FunctionParameter {
     pub typ: Type,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::FunctionParameter> for FunctionParameter {
+impl TryFrom<golem_api_grpc::proto::golem::component::FunctionParameter> for FunctionParameter {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::template::FunctionParameter,
+        value: golem_api_grpc::proto::golem::component::FunctionParameter,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
@@ -1185,7 +1193,7 @@ impl TryFrom<golem_api_grpc::proto::golem::template::FunctionParameter> for Func
     }
 }
 
-impl From<FunctionParameter> for golem_api_grpc::proto::golem::template::FunctionParameter {
+impl From<FunctionParameter> for golem_api_grpc::proto::golem::component::FunctionParameter {
     fn from(value: FunctionParameter) -> Self {
         Self {
             name: value.name,
@@ -1202,11 +1210,11 @@ pub struct FunctionResult {
     pub typ: Type,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::FunctionResult> for FunctionResult {
+impl TryFrom<golem_api_grpc::proto::golem::component::FunctionResult> for FunctionResult {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::template::FunctionResult,
+        value: golem_api_grpc::proto::golem::component::FunctionResult,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
@@ -1215,7 +1223,7 @@ impl TryFrom<golem_api_grpc::proto::golem::template::FunctionResult> for Functio
     }
 }
 
-impl From<FunctionResult> for golem_api_grpc::proto::golem::template::FunctionResult {
+impl From<FunctionResult> for golem_api_grpc::proto::golem::component::FunctionResult {
     fn from(value: FunctionResult) -> Self {
         Self {
             name: value.name,
@@ -1230,11 +1238,11 @@ pub struct ExportInstance {
     pub functions: Vec<ExportFunction>,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::ExportInstance> for ExportInstance {
+impl TryFrom<golem_api_grpc::proto::golem::component::ExportInstance> for ExportInstance {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::template::ExportInstance,
+        value: golem_api_grpc::proto::golem::component::ExportInstance,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
@@ -1247,7 +1255,7 @@ impl TryFrom<golem_api_grpc::proto::golem::template::ExportInstance> for ExportI
     }
 }
 
-impl From<ExportInstance> for golem_api_grpc::proto::golem::template::ExportInstance {
+impl From<ExportInstance> for golem_api_grpc::proto::golem::component::ExportInstance {
     fn from(value: ExportInstance) -> Self {
         Self {
             name: value.name,
@@ -1267,11 +1275,11 @@ pub struct ExportFunction {
     pub results: Vec<FunctionResult>,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::ExportFunction> for ExportFunction {
+impl TryFrom<golem_api_grpc::proto::golem::component::ExportFunction> for ExportFunction {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::template::ExportFunction,
+        value: golem_api_grpc::proto::golem::component::ExportFunction,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
@@ -1289,7 +1297,7 @@ impl TryFrom<golem_api_grpc::proto::golem::template::ExportFunction> for ExportF
     }
 }
 
-impl From<ExportFunction> for golem_api_grpc::proto::golem::template::ExportFunction {
+impl From<ExportFunction> for golem_api_grpc::proto::golem::component::ExportFunction {
     fn from(value: ExportFunction) -> Self {
         Self {
             name: value.name,
@@ -1314,37 +1322,37 @@ pub enum Export {
     Function(ExportFunction),
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::Export> for Export {
+impl TryFrom<golem_api_grpc::proto::golem::component::Export> for Export {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::template::Export,
+        value: golem_api_grpc::proto::golem::component::Export,
     ) -> Result<Self, Self::Error> {
         match value.export {
             None => Err("Missing export".to_string()),
-            Some(golem_api_grpc::proto::golem::template::export::Export::Instance(instance)) => {
+            Some(golem_api_grpc::proto::golem::component::export::Export::Instance(instance)) => {
                 Ok(Self::Instance(instance.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::template::export::Export::Function(function)) => {
+            Some(golem_api_grpc::proto::golem::component::export::Export::Function(function)) => {
                 Ok(Self::Function(function.try_into()?))
             }
         }
     }
 }
 
-impl From<Export> for golem_api_grpc::proto::golem::template::Export {
+impl From<Export> for golem_api_grpc::proto::golem::component::Export {
     fn from(value: Export) -> Self {
         match value {
             Export::Instance(instance) => Self {
                 export: Some(
-                    golem_api_grpc::proto::golem::template::export::Export::Instance(
+                    golem_api_grpc::proto::golem::component::export::Export::Instance(
                         instance.into(),
                     ),
                 ),
             },
             Export::Function(function) => Self {
                 export: Some(
-                    golem_api_grpc::proto::golem::template::export::Export::Function(
+                    golem_api_grpc::proto::golem::component::export::Export::Function(
                         function.into(),
                     ),
                 ),
@@ -1359,8 +1367,8 @@ pub struct VersionedName {
     pub version: String,
 }
 
-impl From<golem_api_grpc::proto::golem::template::VersionedName> for VersionedName {
-    fn from(value: golem_api_grpc::proto::golem::template::VersionedName) -> Self {
+impl From<golem_api_grpc::proto::golem::component::VersionedName> for VersionedName {
+    fn from(value: golem_api_grpc::proto::golem::component::VersionedName) -> Self {
         Self {
             name: value.name,
             version: value.version,
@@ -1368,7 +1376,7 @@ impl From<golem_api_grpc::proto::golem::template::VersionedName> for VersionedNa
     }
 }
 
-impl From<VersionedName> for golem_api_grpc::proto::golem::template::VersionedName {
+impl From<VersionedName> for golem_api_grpc::proto::golem::component::VersionedName {
     fn from(value: VersionedName) -> Self {
         Self {
             name: value.name,
@@ -1383,8 +1391,8 @@ pub struct ProducerField {
     pub values: Vec<VersionedName>,
 }
 
-impl From<golem_api_grpc::proto::golem::template::ProducerField> for ProducerField {
-    fn from(value: golem_api_grpc::proto::golem::template::ProducerField) -> Self {
+impl From<golem_api_grpc::proto::golem::component::ProducerField> for ProducerField {
+    fn from(value: golem_api_grpc::proto::golem::component::ProducerField) -> Self {
         Self {
             name: value.name,
             values: value.values.into_iter().map(|value| value.into()).collect(),
@@ -1392,7 +1400,7 @@ impl From<golem_api_grpc::proto::golem::template::ProducerField> for ProducerFie
     }
 }
 
-impl From<ProducerField> for golem_api_grpc::proto::golem::template::ProducerField {
+impl From<ProducerField> for golem_api_grpc::proto::golem::component::ProducerField {
     fn from(value: ProducerField) -> Self {
         Self {
             name: value.name,
@@ -1406,15 +1414,15 @@ pub struct Producers {
     pub fields: Vec<ProducerField>,
 }
 
-impl From<golem_api_grpc::proto::golem::template::Producers> for Producers {
-    fn from(value: golem_api_grpc::proto::golem::template::Producers) -> Self {
+impl From<golem_api_grpc::proto::golem::component::Producers> for Producers {
+    fn from(value: golem_api_grpc::proto::golem::component::Producers) -> Self {
         Self {
             fields: value.fields.into_iter().map(|field| field.into()).collect(),
         }
     }
 }
 
-impl From<Producers> for golem_api_grpc::proto::golem::template::Producers {
+impl From<Producers> for golem_api_grpc::proto::golem::component::Producers {
     fn from(value: Producers) -> Self {
         Self {
             fields: value.fields.into_iter().map(|field| field.into()).collect(),
@@ -1700,12 +1708,12 @@ impl From<Type> for golem_wasm_ast::analysis::AnalysedType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-pub struct TemplateMetadata {
+pub struct ComponentMetadata {
     pub exports: Vec<Export>,
     pub producers: Vec<Producers>,
 }
 
-impl TemplateMetadata {
+impl ComponentMetadata {
     pub fn instances(&self) -> Vec<ExportInstance> {
         let mut instances = vec![];
         for export in self.exports.clone() {
@@ -1766,11 +1774,11 @@ impl TemplateMetadata {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::TemplateMetadata> for TemplateMetadata {
+impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata> for ComponentMetadata {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::template::TemplateMetadata,
+        value: golem_api_grpc::proto::golem::component::ComponentMetadata,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             exports: value
@@ -1787,8 +1795,8 @@ impl TryFrom<golem_api_grpc::proto::golem::template::TemplateMetadata> for Templ
     }
 }
 
-impl From<TemplateMetadata> for golem_api_grpc::proto::golem::template::TemplateMetadata {
-    fn from(value: TemplateMetadata) -> Self {
+impl From<ComponentMetadata> for golem_api_grpc::proto::golem::component::ComponentMetadata {
+    fn from(value: ComponentMetadata) -> Self {
         Self {
             exports: value
                 .exports
@@ -1809,7 +1817,7 @@ impl From<TemplateMetadata> for golem_api_grpc::proto::golem::template::Template
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerId {
-    pub template_id: TemplateId,
+    pub component_id: ComponentId,
     pub worker_name: Id,
 }
 
@@ -1826,9 +1834,9 @@ impl TryFrom<String> for Id {
 }
 
 impl WorkerId {
-    pub fn new(template_id: TemplateId, worker_name: String) -> Result<Self, &'static str> {
+    pub fn new(component_id: ComponentId, worker_name: String) -> Result<Self, &'static str> {
         Ok(Self {
-            template_id,
+            component_id,
             worker_name: worker_name.try_into()?,
         })
     }
@@ -1855,7 +1863,7 @@ fn valid_id(identifier: &str) -> Result<&str, &'static str> {
 impl From<golem_common::model::WorkerId> for WorkerId {
     fn from(value: golem_common::model::WorkerId) -> Self {
         Self {
-            template_id: value.template_id,
+            component_id: value.component_id,
             worker_name: Id(value.worker_name),
         }
     }
@@ -1864,7 +1872,7 @@ impl From<golem_common::model::WorkerId> for WorkerId {
 impl From<WorkerId> for golem_common::model::WorkerId {
     fn from(value: WorkerId) -> Self {
         Self {
-            template_id: value.template_id,
+            component_id: value.component_id,
             worker_name: value.worker_name.0,
         }
     }
@@ -1879,7 +1887,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
         let worker_name: Id = value.name.try_into().map_err(String::from)?;
 
         Ok(Self {
-            template_id: value.template_id.ok_or("Missing template_id")?.try_into()?,
+            component_id: value
+                .component_id
+                .ok_or("Missing component_id")?
+                .try_into()?,
             worker_name,
         })
     }
@@ -1888,7 +1899,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
 impl From<WorkerId> for golem_api_grpc::proto::golem::worker::WorkerId {
     fn from(value: WorkerId) -> Self {
         Self {
-            template_id: Some(value.template_id.into()),
+            component_id: Some(value.component_id.into()),
             name: value.worker_name.0,
         }
     }
@@ -1896,7 +1907,7 @@ impl From<WorkerId> for golem_api_grpc::proto::golem::worker::WorkerId {
 
 impl std::fmt::Display for WorkerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.template_id, self.worker_name.0)
+        write!(f, "{}/{}", self.component_id, self.worker_name.0)
     }
 }
 
@@ -2120,44 +2131,44 @@ impl From<GolemErrorFailedToResumeWorker>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-#[error("Failed to download template {template_id}: {reason}")]
-pub struct GolemErrorTemplateDownloadFailed {
-    pub template_id: VersionedTemplateId,
+#[error("Failed to download component {component_id}: {reason}")]
+pub struct GolemErrorComponentDownloadFailed {
+    pub component_id: VersionedComponentId,
     pub reason: String,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::worker::TemplateDownloadFailed>
-    for GolemErrorTemplateDownloadFailed
+impl TryFrom<golem_api_grpc::proto::golem::worker::ComponentDownloadFailed>
+    for GolemErrorComponentDownloadFailed
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::worker::TemplateDownloadFailed,
+        value: golem_api_grpc::proto::golem::worker::ComponentDownloadFailed,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            template_id: VersionedTemplateId {
-                template_id: value
-                    .template_id
-                    .ok_or("Missing field: template_id")?
+            component_id: VersionedComponentId {
+                component_id: value
+                    .component_id
+                    .ok_or("Missing field: component_id")?
                     .try_into()?,
-                version: value.template_version,
+                version: value.component_version,
             },
             reason: value.reason,
         })
     }
 }
 
-impl From<GolemErrorTemplateDownloadFailed>
-    for golem_api_grpc::proto::golem::worker::TemplateDownloadFailed
+impl From<GolemErrorComponentDownloadFailed>
+    for golem_api_grpc::proto::golem::worker::ComponentDownloadFailed
 {
-    fn from(value: GolemErrorTemplateDownloadFailed) -> Self {
-        let template_version = value.template_id.version;
-        let template_id = golem_api_grpc::proto::golem::template::TemplateId {
-            value: Some(value.template_id.template_id.0.into()),
+    fn from(value: GolemErrorComponentDownloadFailed) -> Self {
+        let component_version = value.component_id.version;
+        let component_id = golem_api_grpc::proto::golem::component::ComponentId {
+            value: Some(value.component_id.component_id.0.into()),
         };
         Self {
-            template_id: Some(template_id),
-            template_version,
+            component_id: Some(component_id),
+            component_version,
             reason: value.reason,
         }
     }
@@ -2166,44 +2177,44 @@ impl From<GolemErrorTemplateDownloadFailed>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-#[error("Failed to parse template {template_id}: {reason}")]
-pub struct GolemErrorTemplateParseFailed {
-    pub template_id: VersionedTemplateId,
+#[error("Failed to parse component {component_id}: {reason}")]
+pub struct GolemErrorComponentParseFailed {
+    pub component_id: VersionedComponentId,
     pub reason: String,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::worker::TemplateParseFailed>
-    for GolemErrorTemplateParseFailed
+impl TryFrom<golem_api_grpc::proto::golem::worker::ComponentParseFailed>
+    for GolemErrorComponentParseFailed
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::worker::TemplateParseFailed,
+        value: golem_api_grpc::proto::golem::worker::ComponentParseFailed,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            template_id: VersionedTemplateId {
-                template_id: value
-                    .template_id
-                    .ok_or("Missing field: template_id")?
+            component_id: VersionedComponentId {
+                component_id: value
+                    .component_id
+                    .ok_or("Missing field: component_id")?
                     .try_into()?,
-                version: value.template_version,
+                version: value.component_version,
             },
             reason: value.reason,
         })
     }
 }
 
-impl From<GolemErrorTemplateParseFailed>
-    for golem_api_grpc::proto::golem::worker::TemplateParseFailed
+impl From<GolemErrorComponentParseFailed>
+    for golem_api_grpc::proto::golem::worker::ComponentParseFailed
 {
-    fn from(value: GolemErrorTemplateParseFailed) -> Self {
-        let template_version = value.template_id.version;
-        let template_id = golem_api_grpc::proto::golem::template::TemplateId {
-            value: Some(value.template_id.template_id.0.into()),
+    fn from(value: GolemErrorComponentParseFailed) -> Self {
+        let component_version = value.component_id.version;
+        let component_id = golem_api_grpc::proto::golem::component::ComponentId {
+            value: Some(value.component_id.component_id.0.into()),
         };
         Self {
-            template_id: Some(template_id),
-            template_version,
+            component_id: Some(component_id),
+            component_version,
             reason: value.reason,
         }
     }
@@ -2212,36 +2223,36 @@ impl From<GolemErrorTemplateParseFailed>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-#[error("Failed to get latest version of template {template_id}: {reason}")]
-pub struct GolemErrorGetLatestVersionOfTemplateFailed {
-    pub template_id: TemplateId,
+#[error("Failed to get latest version of component {component_id}: {reason}")]
+pub struct GolemErrorGetLatestVersionOfComponentFailed {
+    pub component_id: ComponentId,
     pub reason: String,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::worker::GetLatestVersionOfTemplateFailed>
-    for GolemErrorGetLatestVersionOfTemplateFailed
+impl TryFrom<golem_api_grpc::proto::golem::worker::GetLatestVersionOfComponentFailed>
+    for GolemErrorGetLatestVersionOfComponentFailed
 {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::worker::GetLatestVersionOfTemplateFailed,
+        value: golem_api_grpc::proto::golem::worker::GetLatestVersionOfComponentFailed,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            template_id: value
-                .template_id
-                .ok_or("Missing field: template_id")?
+            component_id: value
+                .component_id
+                .ok_or("Missing field: component_id")?
                 .try_into()?,
             reason: value.reason,
         })
     }
 }
 
-impl From<GolemErrorGetLatestVersionOfTemplateFailed>
-    for golem_api_grpc::proto::golem::worker::GetLatestVersionOfTemplateFailed
+impl From<GolemErrorGetLatestVersionOfComponentFailed>
+    for golem_api_grpc::proto::golem::worker::GetLatestVersionOfComponentFailed
 {
-    fn from(value: GolemErrorGetLatestVersionOfTemplateFailed) -> Self {
+    fn from(value: GolemErrorGetLatestVersionOfComponentFailed) -> Self {
         Self {
-            template_id: Some(value.template_id.into()),
+            component_id: Some(value.component_id.into()),
             reason: value.reason,
         }
     }
@@ -2631,8 +2642,12 @@ pub struct WorkerMetadata {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
-    pub template_version: u64,
+    pub component_version: ComponentVersion,
     pub retry_count: u64,
+    pub pending_invocation_count: u64,
+    pub updates: Vec<UpdateRecord>,
+    pub created_at: Timestamp,
+    pub last_error: Option<String>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -2646,8 +2661,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             args: value.args,
             env: value.env,
             status: value.status.try_into()?,
-            template_version: value.template_version,
+            component_version: value.component_version,
             retry_count: value.retry_count,
+            pending_invocation_count: value.pending_invocation_count,
+            updates: value
+                .updates
+                .into_iter()
+                .map(|update| update.try_into())
+                .collect::<Result<Vec<UpdateRecord>, String>>()?,
+            created_at: value.created_at.ok_or("Missing created_at")?.into(),
+            last_error: value.last_error,
         })
     }
 }
@@ -2662,8 +2685,120 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             args: value.args,
             env: value.env,
             status: value.status.into(),
-            template_version: value.template_version,
+            component_version: value.component_version,
             retry_count: value.retry_count,
+            pending_invocation_count: value.pending_invocation_count,
+            updates: value.updates.iter().cloned().map(|u| u.into()).collect(),
+            created_at: Some(value.created_at.into()),
+            last_error: value.last_error,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union)]
+#[serde(rename_all = "camelCase")]
+#[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
+pub enum UpdateRecord {
+    PendingUpdate(PendingUpdate),
+    SuccessfulUpdate(SuccessfulUpdate),
+    FailedUpdate(FailedUpdate),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct PendingUpdate {
+    timestamp: Timestamp,
+    target_version: ComponentVersion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct SuccessfulUpdate {
+    timestamp: Timestamp,
+    target_version: ComponentVersion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct FailedUpdate {
+    timestamp: Timestamp,
+    target_version: ComponentVersion,
+    details: Option<String>,
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateRecord> for UpdateRecord {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::UpdateRecord,
+    ) -> Result<Self, Self::Error> {
+        match value.update.ok_or("Missing update field")? {
+            golem_api_grpc::proto::golem::worker::update_record::Update::Failed(failed) => {
+                Ok(Self::FailedUpdate(FailedUpdate {
+                    timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
+                    target_version: value.target_version,
+                    details: { failed.details },
+                }))
+            }
+            golem_api_grpc::proto::golem::worker::update_record::Update::Pending(_) => {
+                Ok(Self::PendingUpdate(PendingUpdate {
+                    timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
+                    target_version: value.target_version,
+                }))
+            }
+            golem_api_grpc::proto::golem::worker::update_record::Update::Successful(_) => {
+                Ok(Self::SuccessfulUpdate(SuccessfulUpdate {
+                    timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
+                    target_version: value.target_version,
+                }))
+            }
+        }
+    }
+}
+
+impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
+    fn from(value: UpdateRecord) -> Self {
+        match value {
+            UpdateRecord::FailedUpdate(FailedUpdate {
+                timestamp,
+                target_version,
+                details,
+            }) => Self {
+                timestamp: Some(timestamp.into()),
+                target_version,
+                update: Some(
+                    golem_api_grpc::proto::golem::worker::update_record::Update::Failed(
+                        golem_api_grpc::proto::golem::worker::FailedUpdate { details },
+                    ),
+                ),
+            },
+            UpdateRecord::PendingUpdate(PendingUpdate {
+                timestamp,
+                target_version,
+            }) => Self {
+                timestamp: Some(timestamp.into()),
+                target_version,
+                update: Some(
+                    golem_api_grpc::proto::golem::worker::update_record::Update::Pending(
+                        golem_api_grpc::proto::golem::worker::PendingUpdate {},
+                    ),
+                ),
+            },
+            UpdateRecord::SuccessfulUpdate(SuccessfulUpdate {
+                timestamp,
+                target_version,
+            }) => Self {
+                timestamp: Some(timestamp.into()),
+                target_version,
+                update: Some(
+                    golem_api_grpc::proto::golem::worker::update_record::Update::Successful(
+                        golem_api_grpc::proto::golem::worker::SuccessfulUpdate {},
+                    ),
+                ),
+            },
         }
     }
 }
@@ -2687,11 +2822,11 @@ pub enum GolemError {
     #[error(transparent)]
     FailedToResumeWorker(GolemErrorFailedToResumeWorker),
     #[error(transparent)]
-    TemplateDownloadFailed(GolemErrorTemplateDownloadFailed),
+    ComponentDownloadFailed(GolemErrorComponentDownloadFailed),
     #[error(transparent)]
-    TemplateParseFailed(GolemErrorTemplateParseFailed),
+    ComponentParseFailed(GolemErrorComponentParseFailed),
     #[error(transparent)]
-    GetLatestVersionOfTemplateFailed(GolemErrorGetLatestVersionOfTemplateFailed),
+    GetLatestVersionOfComponentFailed(GolemErrorGetLatestVersionOfComponentFailed),
     #[error(transparent)]
     PromiseNotFound(GolemErrorPromiseNotFound),
     #[error(transparent)]
@@ -2744,17 +2879,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerExecutionError> for Gol
             Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::FailedToResumeWorker(err)) => {
                 Ok(GolemError::FailedToResumeWorker(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::TemplateDownloadFailed(err)) => {
-                Ok(GolemError::TemplateDownloadFailed(err.try_into()?))
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ComponentDownloadFailed(err)) => {
+                Ok(GolemError::ComponentDownloadFailed(err.try_into()?))
             }
-            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::TemplateParseFailed(err)) => {
-                Ok(GolemError::TemplateParseFailed(err.try_into()?))
+            Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ComponentParseFailed(err)) => {
+                Ok(GolemError::ComponentParseFailed(err.try_into()?))
             }
             Some(
-                golem_api_grpc::proto::golem::worker::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(
+                golem_api_grpc::proto::golem::worker::worker_execution_error::Error::GetLatestVersionOfComponentFailed(
                     err,
                 ),
-            ) => Ok(GolemError::GetLatestVersionOfTemplateFailed(
+            ) => Ok(GolemError::GetLatestVersionOfComponentFailed(
                 err.try_into()?,
             )),
             Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::PromiseNotFound(err)) => {
@@ -2832,19 +2967,19 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::WorkerExecutionE
                     error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::FailedToResumeWorker(err.into())),
                 }
             }
-            GolemError::TemplateDownloadFailed(err) => {
+            GolemError::ComponentDownloadFailed(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::TemplateDownloadFailed(err.into())),
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ComponentDownloadFailed(err.into())),
                 }
             }
-            GolemError::TemplateParseFailed(err) => {
+            GolemError::ComponentParseFailed(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::TemplateParseFailed(err.into())),
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::ComponentParseFailed(err.into())),
                 }
             }
-            GolemError::GetLatestVersionOfTemplateFailed(err) => {
+            GolemError::GetLatestVersionOfComponentFailed(err) => {
                 golem_api_grpc::proto::golem::worker::WorkerExecutionError {
-                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(err.into())),
+                    error: Some(golem_api_grpc::proto::golem::worker::worker_execution_error::Error::GetLatestVersionOfComponentFailed(err.into())),
                 }
             }
             GolemError::PromiseNotFound(err) => {
@@ -2966,68 +3101,68 @@ impl From<golem_api_grpc::proto::golem::common::ErrorsBody> for ErrorsBody {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct Template {
-    pub versioned_template_id: VersionedTemplateId,
-    pub user_template_id: UserTemplateId,
-    pub protected_template_id: ProtectedTemplateId,
-    pub template_name: TemplateName,
-    pub template_size: i32,
-    pub metadata: TemplateMetadata,
+pub struct Component {
+    pub versioned_component_id: VersionedComponentId,
+    pub user_component_id: UserComponentId,
+    pub protected_component_id: ProtectedComponentId,
+    pub component_name: ComponentName,
+    pub component_size: u64,
+    pub metadata: ComponentMetadata,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::template::Template> for Template {
+impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::template::Template,
+        value: golem_api_grpc::proto::golem::component::Component,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            versioned_template_id: value
-                .versioned_template_id
-                .ok_or("Missing versioned_template_id")?
+            versioned_component_id: value
+                .versioned_component_id
+                .ok_or("Missing versioned_component_id")?
                 .try_into()?,
-            user_template_id: value
-                .user_template_id
-                .ok_or("Missing user_template_id")?
+            user_component_id: value
+                .user_component_id
+                .ok_or("Missing user_component_id")?
                 .try_into()?,
-            protected_template_id: value
-                .protected_template_id
-                .ok_or("Missing protected_template_id")?
+            protected_component_id: value
+                .protected_component_id
+                .ok_or("Missing protected_component_id")?
                 .try_into()?,
-            template_name: TemplateName(value.template_name),
-            template_size: value.template_size,
+            component_name: ComponentName(value.component_name),
+            component_size: value.component_size,
             metadata: value.metadata.ok_or("Missing metadata")?.try_into()?,
         })
     }
 }
 
-impl From<Template> for golem_api_grpc::proto::golem::template::Template {
-    fn from(value: Template) -> Self {
+impl From<Component> for golem_api_grpc::proto::golem::component::Component {
+    fn from(value: Component) -> Self {
         Self {
-            versioned_template_id: Some(value.versioned_template_id.into()),
-            user_template_id: Some(value.user_template_id.into()),
-            protected_template_id: Some(value.protected_template_id.into()),
-            template_name: value.template_name.0,
-            template_size: value.template_size,
+            versioned_component_id: Some(value.versioned_component_id.into()),
+            user_component_id: Some(value.user_component_id.into()),
+            protected_component_id: Some(value.protected_component_id.into()),
+            component_name: value.component_name.0,
+            component_size: value.component_size,
             metadata: Some(value.metadata.into()),
             project_id: None,
         }
     }
 }
 
-impl Template {
+impl Component {
     pub fn next_version(self) -> Self {
-        let new_version = VersionedTemplateId {
-            template_id: self.versioned_template_id.template_id,
-            version: self.versioned_template_id.version + 1,
+        let new_version = VersionedComponentId {
+            component_id: self.versioned_component_id.component_id,
+            version: self.versioned_component_id.version + 1,
         };
         Self {
-            versioned_template_id: new_version.clone(),
-            user_template_id: UserTemplateId {
-                versioned_template_id: new_version.clone(),
+            versioned_component_id: new_version.clone(),
+            user_component_id: UserComponentId {
+                versioned_component_id: new_version.clone(),
             },
-            protected_template_id: ProtectedTemplateId {
-                versioned_template_id: new_version,
+            protected_component_id: ProtectedComponentId {
+                versioned_component_id: new_version,
             },
             ..self
         }

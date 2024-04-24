@@ -1,0 +1,40 @@
+enable_tracing_console = false
+enable_json_log = false
+
+grpc_host = "0.0.0.0"
+grpc_port = 8080
+
+http_host= "0.0.0.0"
+http_port = 9090
+
+[component_service.retries]
+max_attempts = 3
+min_delay = "100ms"
+max_delay = "1s"
+multiplier = 3
+
+[compiled_component_service]
+type = "S3"
+[compiled_component_service.config]
+object_prefix = ""
+[compiled_component_service.config.retries]
+max_attempts = 3
+min_delay = "100ms"
+max_delay = "1s"
+multiplier = 3
+
+[upload_worker]
+num_workers = 10
+[upload_worker.retries]
+max_attempts = 3
+min_delay = "100ms"
+max_delay = "1s"
+multiplier = 3
+
+[compile_worker]
+max_component_size = 1000000
+[compile_worker.retries]
+max_attempts = 3
+min_delay = "100ms"
+max_delay = "1s"
+multiplier = 3

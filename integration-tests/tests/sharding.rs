@@ -68,14 +68,14 @@ async fn service_is_responsive_to_shard_changes() {
         unstable_environment(stop_rx);
     });
 
-    let template_id = DEPS.store_template("option-service").await;
+    let component_id = DEPS.store_component("option-service").await;
 
     let mut worker_ids = Vec::new();
 
     for n in 1..=4 {
         info!("Worker {n} starting");
         let worker_name = format!("sharding-test-1-{n}");
-        let worker_id = DEPS.start_worker(&template_id, &worker_name).await;
+        let worker_id = DEPS.start_worker(&component_id, &worker_name).await;
         info!("Worker {n} started");
         worker_ids.push(worker_id);
     }
@@ -146,14 +146,14 @@ async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
         worker_invocation(worker_command_rx, worker_event_tx).await;
     });
 
-    let template_id = DEPS.store_template("option-service").await;
+    let component_id = DEPS.store_component("option-service").await;
 
     let mut worker_ids = Vec::new();
 
     for n in 1..=4 {
         info!("Worker {n} starting");
         let worker_name = format!("sharding-test-{id}-{n}");
-        let worker_id = DEPS.start_worker(&template_id, &worker_name).await;
+        let worker_id = DEPS.start_worker(&component_id, &worker_name).await;
         info!("Worker {n} started");
         worker_ids.push(worker_id);
     }

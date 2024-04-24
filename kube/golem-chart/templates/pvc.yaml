@@ -1,31 +1,31 @@
-{{- if eq .Values.templateStore.type "pvc" }}
+{{- if eq .Values.componentStore.type "pvc" }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: golem-template-store-{{.Values.env}}
+  name: golem-component-store-{{.Values.env}}
 spec:
-  storageClassName: {{ .Values.templateStore.pvc.storageClassName }}
+  storageClassName: {{ .Values.componentStore.pvc.storageClassName }}
   accessModes:
-    - {{ .Values.templateStore.pvc.accessMode }}
+    - {{ .Values.componentStore.pvc.accessMode }}
   resources:
     requests:
-      storage: {{ .Values.templateStore.pvc.storageSize }}
+      storage: {{ .Values.componentStore.pvc.storageSize }}
 ---
 {{- end }}
 
 
-{{- if eq .Values.templateCompiledStore.type "pvc" }}
+{{- if eq .Values.componentCompiledStore.type "pvc" }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: golem-template-compiled-store-{{.Values.env}}
+  name: golem-component-compiled-store-{{.Values.env}}
 spec:
-  storageClassName: {{ .Values.templateCompiledStore.pvc.storageClassName }}
+  storageClassName: {{ .Values.componentCompiledStore.pvc.storageClassName }}
   accessModes:
-    - {{ .Values.templateCompiledStore.pvc.accessMode }}
+    - {{ .Values.componentCompiledStore.pvc.accessMode }}
   resources:
     requests:
-      storage: {{ .Values.templateCompiledStore.pvc.storageSize }}
+      storage: {{ .Values.componentCompiledStore.pvc.storageSize }}
 ---
 {{- end }}
 

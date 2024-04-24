@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::clients::template::TemplateClientLive;
+use crate::clients::component::ComponentClientLive;
 use async_trait::async_trait;
 use clap::builder::ValueParser;
 use clap::Subcommand;
 use golem_client::model::{
-    InvokeParameters, InvokeResult, StringFilterComparator, Template, Type, WorkerFilter,
+    Component, InvokeParameters, InvokeResult, StringFilterComparator, Type, WorkerFilter,
     WorkerMetadata, WorkerNameFilter, WorkersMetadataResponse,
 };
 use golem_client::Context;
@@ -26,16 +26,16 @@ use tokio::task::JoinHandle;
 use tracing::{error, info};
 
 use crate::clients::worker::{WorkerClient, WorkerClientLive};
+use crate::component::{ComponentHandler, ComponentHandlerLive};
+use crate::model::component::function_params_types;
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::template::function_params_types;
 use crate::model::text::WorkerAddView;
 use crate::model::wave::type_to_analysed;
 use crate::model::{
-    Format, GolemError, GolemResult, InvocationKey, JsonValueParser, TemplateId, TemplateIdOrName,
-    WorkerName,
+    ComponentId, ComponentIdOrName, Format, GolemError, GolemResult, InvocationKey,
+    JsonValueParser, WorkerName,
 };
 use crate::parse_key_val;
-use crate::template::{TemplateHandler, TemplateHandlerLive};
 
 #[derive(Subcommand, Debug)]
 #[command()]
@@ -43,9 +43,9 @@ pub enum WorkerSubcommand {
     /// Creates a new idle worker
     #[command()]
     Add {
-        /// The Golem template to use for the worker, identified by either its name or its template ID
+        /// The Golem component to use for the worker, identified by either its name or its component ID
         #[command(flatten)]
-        template_id_or_name: TemplateIdOrName,
+        component_id_or_name: ComponentIdOrName,
 
         /// Name of the newly created worker
         #[arg(short, long)]
@@ -63,9 +63,9 @@ pub enum WorkerSubcommand {
     /// Generates an invocation ID for achieving at-most-one invocation when doing retries
     #[command()]
     InvocationKey {
-        /// The Golem template the worker to be invoked belongs to
+        /// The Golem component the worker to be invoked belongs to
         #[command(flatten)]
-        template_id_or_name: TemplateIdOrName,
+        component_id_or_name: ComponentIdOrName,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -75,9 +75,9 @@ pub enum WorkerSubcommand {
     /// Invokes a worker and waits for its completion
     #[command()]
     InvokeAndAwait {
-        /// The Golem template the worker to be invoked belongs to
+        /// The Golem component the worker to be invoked belongs to
         #[command(flatten)]
-        template_id_or_name: TemplateIdOrName,
+        component_id_or_name: ComponentIdOrName,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -114,9 +114,9 @@ pub enum WorkerSubcommand {
     /// Triggers a function invocation on a worker without waiting for its completion
     #[command()]
     Invoke {
-        /// The Golem template the worker to be invoked belongs to
+        /// The Golem component the worker to be invoked belongs to
         #[command(flatten)]
-        template_id_or_name: TemplateIdOrName,
+        component_id_or_name: ComponentIdOrName,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -145,9 +145,9 @@ pub enum WorkerSubcommand {
     /// Connect to a worker and live stream its standard output, error and log channels
     #[command()]
     Connect {
-        /// The Golem template the worker to be connected to belongs to
+        /// The Golem component the worker to be connected to belongs to
         #[command(flatten)]
-        template_id_or_name: TemplateIdOrName,
+        component_id_or_name: ComponentIdOrName,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -157,9 +157,9 @@ pub enum WorkerSubcommand {
     /// Interrupts a running worker
     #[command()]
     Interrupt {
-        /// The Golem template the worker to be interrupted belongs to
+        /// The Golem component the worker to be interrupted belongs to
         #[command(flatten)]
-        template_id_or_name: TemplateIdOrName,
+        component_id_or_name: ComponentIdOrName,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -171,9 +171,9 @@ pub enum WorkerSubcommand {
     /// The worker starts recovering and resuming immediately.
     #[command()]
     SimulatedCrash {
-        /// The Golem template the worker to be crashed belongs to
+        /// The Golem component the worker to be crashed belongs to
         #[command(flatten)]
-        template_id_or_name: TemplateIdOrName,
+        component_id_or_name: ComponentIdOrName,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -183,9 +183,9 @@ pub enum WorkerSubcommand {
     /// Deletes a worker
     #[command()]
     Delete {
-        /// The Golem template the worker to be deleted belongs to
+        /// The Golem component the worker to be deleted belongs to
         #[command(flatten)]
-        template_id_or_name: TemplateIdOrName,
+        component_id_or_name: ComponentIdOrName,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -195,20 +195,20 @@ pub enum WorkerSubcommand {
     /// Retrieves metadata about an existing worker
     #[command()]
     Get {
-        /// The Golem template the worker to be retrieved belongs to
+        /// The Golem component the worker to be retrieved belongs to
         #[command(flatten)]
-        template_id_or_name: TemplateIdOrName,
+        component_id_or_name: ComponentIdOrName,
 
         /// Name of the worker
         #[arg(short, long)]
         worker_name: WorkerName,
     },
-    /// Retrieves metadata about an existing workers in a template
+    /// Retrieves metadata about an existing workers in a component
     #[command()]
     List {
-        /// The Golem template the workers to be retrieved belongs to
+        /// The Golem component the workers to be retrieved belongs to
         #[command(flatten)]
-        template_id_or_name: TemplateIdOrName,
+        component_id_or_name: ComponentIdOrName,
 
         /// Filter for worker metadata in form of `property op value`.
         ///
@@ -220,7 +220,7 @@ pub enum WorkerSubcommand {
         /// Position where to start listing, if not provided, starts from the beginning
         ///
         /// It is used to get the next page of results. To get next page, use the cursor returned in the response
-        #[arg(short, long)]
+        #[arg(short = 'P', long)]
         cursor: Option<u64>,
 
         /// Count of listed values, if count is not provided, returns all values
@@ -242,22 +242,22 @@ pub trait WorkerHandler {
     ) -> Result<GolemResult, GolemError>;
 }
 
-pub struct WorkerHandlerLive<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> {
+pub struct WorkerHandlerLive<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> {
     pub client: C,
-    pub templates: &'r R,
+    pub components: &'r R,
     pub worker_context: Context,
-    pub template_context: Context,
+    pub component_context: Context,
     pub allow_insecure: bool,
 }
 
-// same as resolve_worker_template_version, but with no borrowing, so we can spawn it.
-async fn resolve_worker_template_version_no_ref(
+// same as resolve_worker_component_version, but with no borrowing, so we can spawn it.
+async fn resolve_worker_component_version_no_ref(
     worker_context: Context,
-    template_context: Context,
+    component_context: Context,
     allow_insecure: bool,
-    template_id: TemplateId,
+    component_id: ComponentId,
     worker_name: WorkerName,
-) -> Result<Option<Template>, GolemError> {
+) -> Result<Option<Component>, GolemError> {
     let client = WorkerClientLive {
         client: golem_client::api::WorkerClientLive {
             context: worker_context.clone(),
@@ -266,28 +266,28 @@ async fn resolve_worker_template_version_no_ref(
         allow_insecure,
     };
 
-    let templates = TemplateHandlerLive {
-        client: TemplateClientLive {
-            client: golem_client::api::TemplateClientLive {
-                context: template_context.clone(),
+    let components = ComponentHandlerLive {
+        client: ComponentClientLive {
+            client: golem_client::api::ComponentClientLive {
+                context: component_context.clone(),
             },
         },
     };
-    resolve_worker_template_version(&client, &templates, &template_id, worker_name).await
+    resolve_worker_component_version(&client, &components, &component_id, worker_name).await
 }
 
-async fn resolve_worker_template_version<
+async fn resolve_worker_component_version<
     C: WorkerClient + Send + Sync,
-    R: TemplateHandler + Send + Sync,
+    R: ComponentHandler + Send + Sync,
 >(
     client: &C,
-    templates: &R,
-    template_id: &TemplateId,
+    components: &R,
+    component_id: &ComponentId,
     worker_name: WorkerName,
-) -> Result<Option<Template>, GolemError> {
+) -> Result<Option<Component>, GolemError> {
     let worker_meta = client
         .find_metadata(
-            template_id.clone(),
+            component_id.clone(),
             Some(WorkerFilter::Name(WorkerNameFilter {
                 comparator: StringFilterComparator::Equal,
                 value: worker_name.0,
@@ -304,8 +304,8 @@ async fn resolve_worker_template_version<
         ))
     } else if let Some(worker) = worker_meta.workers.first() {
         Ok(Some(
-            templates
-                .get_metadata(template_id, worker.template_version)
+            components
+                .get_metadata(component_id, worker.component_version)
                 .await?,
         ))
     } else {
@@ -315,10 +315,10 @@ async fn resolve_worker_template_version<
 
 fn wave_parameters_to_json(
     wave: &[String],
-    template: &Template,
+    component: &Component,
     function: &str,
 ) -> Result<serde_json::value::Value, GolemError> {
-    let types = function_params_types(template, function)?;
+    let types = function_params_types(component, function)?;
 
     if wave.len() != types.len() {
         return Err(GolemError(format!(
@@ -351,63 +351,64 @@ fn parse_parameter(wave: &str, typ: &Type) -> Result<TypeAnnotatedValue, GolemEr
     }
 }
 
-async fn resolve_parameters<C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync>(
+async fn resolve_parameters<C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync>(
     client: &C,
-    templates: &R,
-    template_id: &TemplateId,
+    components: &R,
+    component_id: &ComponentId,
     worker_name: &WorkerName,
     parameters: Option<serde_json::value::Value>,
     wave: Vec<String>,
     function: &str,
-) -> Result<(serde_json::value::Value, Option<Template>), GolemError> {
+) -> Result<(serde_json::value::Value, Option<Component>), GolemError> {
     if let Some(parameters) = parameters {
         Ok((parameters, None))
-    } else if let Some(template) =
-        resolve_worker_template_version(client, templates, template_id, worker_name.clone()).await?
+    } else if let Some(component) =
+        resolve_worker_component_version(client, components, component_id, worker_name.clone())
+            .await?
     {
-        let json = wave_parameters_to_json(&wave, &template, function)?;
+        let json = wave_parameters_to_json(&wave, &component, function)?;
 
-        Ok((json, Some(template)))
+        Ok((json, Some(component)))
     } else {
-        info!("No worker found with name {worker_name}. Assuming it should be create with the latest template version");
-        let template = templates.get_latest_metadata(template_id).await?;
+        info!("No worker found with name {worker_name}. Assuming it should be create with the latest component version");
+        let component = components.get_latest_metadata(component_id).await?;
 
-        let json = wave_parameters_to_json(&wave, &template, function)?;
+        let json = wave_parameters_to_json(&wave, &component, function)?;
 
-        // We are not going to use this template for result parsing.
+        // We are not going to use this component for result parsing.
         Ok((json, None))
     }
 }
 
-async fn to_invoke_result_view<C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync>(
+async fn to_invoke_result_view<C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync>(
     res: InvokeResult,
-    async_template_request: AsyncTemplateRequest,
+    async_component_request: AsyncComponentRequest,
     client: &C,
-    templates: &R,
-    template_id: &TemplateId,
+    components: &R,
+    component_id: &ComponentId,
     worker_name: &WorkerName,
     function: &str,
 ) -> Result<InvokeResultView, GolemError> {
-    let template = match async_template_request {
-        AsyncTemplateRequest::Empty => None,
-        AsyncTemplateRequest::Resolved(template) => Some(template),
-        AsyncTemplateRequest::Async(join_meta) => match join_meta.await.unwrap() {
-            Ok(Some(template_meta)) => Some(template_meta),
+    let component = match async_component_request {
+        AsyncComponentRequest::Empty => None,
+        AsyncComponentRequest::Resolved(component) => Some(component),
+        AsyncComponentRequest::Async(join_meta) => match join_meta.await.unwrap() {
+            Ok(Some(component)) => Some(component),
             _ => None,
         },
     };
 
-    let template = match template {
+    let component = match component {
         None => {
-            match resolve_worker_template_version(
+            match resolve_worker_component_version(
                 client,
-                templates,
-                template_id,
+                components,
+                component_id,
                 worker_name.clone(),
             )
             .await
             {
-                Ok(Some(template)) => template,
+                Ok(Some(component)) => component,
                 _ => {
                     error!("Failed to get worker metadata after successful call.");
 
@@ -415,22 +416,22 @@ async fn to_invoke_result_view<C: WorkerClient + Send + Sync, R: TemplateHandler
                 }
             }
         }
-        Some(template) => template,
+        Some(component) => component,
     };
 
     Ok(InvokeResultView::try_parse_or_json(
-        res, &template, function,
+        res, &component, function,
     ))
 }
 
-enum AsyncTemplateRequest {
+enum AsyncComponentRequest {
     Empty,
-    Resolved(Template),
-    Async(JoinHandle<Result<Option<Template>, GolemError>>),
+    Resolved(Component),
+    Async(JoinHandle<Result<Option<Component>, GolemError>>),
 }
 
 #[async_trait]
-impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> WorkerHandler
+impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> WorkerHandler
     for WorkerHandlerLive<'r, C, R>
 {
     async fn handle(
@@ -440,35 +441,35 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
     ) -> Result<GolemResult, GolemError> {
         match subcommand {
             WorkerSubcommand::Add {
-                template_id_or_name,
+                component_id_or_name,
                 worker_name,
                 env,
                 args,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name).await?;
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
 
                 let inst = self
                     .client
-                    .new_worker(worker_name, template_id, args, env)
+                    .new_worker(worker_name, component_id, args, env)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(WorkerAddView(inst))))
             }
             WorkerSubcommand::InvocationKey {
-                template_id_or_name,
+                component_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name).await?;
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
 
                 let key = self
                     .client
-                    .get_invocation_key(&worker_name, &template_id)
+                    .get_invocation_key(&worker_name, &component_id)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(key)))
             }
             WorkerSubcommand::InvokeAndAwait {
-                template_id_or_name,
+                component_id_or_name,
                 worker_name,
                 invocation_key,
                 function,
@@ -477,12 +478,12 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 use_stdio,
             } => {
                 let human_readable = format == Format::Text;
-                let template_id = self.templates.resolve_id(template_id_or_name).await?;
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
 
-                let (parameters, template_meta) = resolve_parameters(
+                let (parameters, component_meta) = resolve_parameters(
                     &self.client,
-                    self.templates,
-                    &template_id,
+                    self.components,
+                    &component_id,
                     &worker_name,
                     parameters,
                     wave,
@@ -490,26 +491,26 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 )
                 .await?;
 
-                let async_template_request = if let Some(template) = template_meta {
-                    AsyncTemplateRequest::Resolved(template)
+                let async_component_request = if let Some(component) = component_meta {
+                    AsyncComponentRequest::Resolved(component)
                 } else if human_readable {
-                    AsyncTemplateRequest::Async(tokio::spawn(
-                        resolve_worker_template_version_no_ref(
+                    AsyncComponentRequest::Async(tokio::spawn(
+                        resolve_worker_component_version_no_ref(
                             self.worker_context.clone(),
-                            self.template_context.clone(),
+                            self.component_context.clone(),
                             self.allow_insecure,
-                            template_id.clone(),
+                            component_id.clone(),
                             worker_name.clone(),
                         ),
                     ))
                 } else {
-                    AsyncTemplateRequest::Empty
+                    AsyncComponentRequest::Empty
                 };
 
                 let invocation_key = match invocation_key {
                     None => {
                         self.client
-                            .get_invocation_key(&worker_name, &template_id)
+                            .get_invocation_key(&worker_name, &component_id)
                             .await?
                     }
                     Some(key) => key,
@@ -519,7 +520,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                     .client
                     .invoke_and_await(
                         worker_name.clone(),
-                        template_id.clone(),
+                        component_id.clone(),
                         function.clone(),
                         InvokeParameters { params: parameters },
                         invocation_key,
@@ -530,10 +531,10 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 if human_readable {
                     let view = to_invoke_result_view(
                         res,
-                        async_template_request,
+                        async_component_request,
                         &self.client,
-                        self.templates,
-                        &template_id,
+                        self.components,
+                        &component_id,
                         &worker_name,
                         &function,
                     )
@@ -545,18 +546,18 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 }
             }
             WorkerSubcommand::Invoke {
-                template_id_or_name,
+                component_id_or_name,
                 worker_name,
                 function,
                 parameters,
                 wave,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name).await?;
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
 
                 let (parameters, _) = resolve_parameters(
                     &self.client,
-                    self.templates,
-                    &template_id,
+                    self.components,
+                    &component_id,
                     &worker_name,
                     parameters,
                     wave,
@@ -567,7 +568,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 self.client
                     .invoke(
                         worker_name,
-                        template_id,
+                        component_id,
                         function,
                         InvokeParameters { params: parameters },
                     )
@@ -576,70 +577,70 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                 Ok(GolemResult::Str("Invoked".to_string()))
             }
             WorkerSubcommand::Connect {
-                template_id_or_name,
+                component_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name).await?;
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
 
-                self.client.connect(worker_name, template_id).await?;
+                self.client.connect(worker_name, component_id).await?;
 
                 Err(GolemError("Unexpected connection closure".to_string()))
             }
             WorkerSubcommand::Interrupt {
-                template_id_or_name,
+                component_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name).await?;
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
 
-                self.client.interrupt(worker_name, template_id).await?;
+                self.client.interrupt(worker_name, component_id).await?;
 
                 Ok(GolemResult::Str("Interrupted".to_string()))
             }
             WorkerSubcommand::SimulatedCrash {
-                template_id_or_name,
+                component_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name).await?;
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
 
                 self.client
-                    .simulated_crash(worker_name, template_id)
+                    .simulated_crash(worker_name, component_id)
                     .await?;
 
                 Ok(GolemResult::Str("Done".to_string()))
             }
             WorkerSubcommand::Delete {
-                template_id_or_name,
+                component_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name).await?;
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
 
-                self.client.delete(worker_name, template_id).await?;
+                self.client.delete(worker_name, component_id).await?;
 
                 Ok(GolemResult::Str("Deleted".to_string()))
             }
             WorkerSubcommand::Get {
-                template_id_or_name,
+                component_id_or_name,
                 worker_name,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name).await?;
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
 
-                let response = self.client.get_metadata(worker_name, template_id).await?;
+                let response = self.client.get_metadata(worker_name, component_id).await?;
 
                 Ok(GolemResult::Ok(Box::new(response)))
             }
             WorkerSubcommand::List {
-                template_id_or_name,
+                component_id_or_name,
                 filter,
                 count,
                 cursor,
                 precise,
             } => {
-                let template_id = self.templates.resolve_id(template_id_or_name).await?;
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
 
                 if count.is_some() {
                     let response = self
                         .client
-                        .list_metadata(template_id, filter, cursor, count, precise)
+                        .list_metadata(component_id, filter, cursor, count, precise)
                         .await?;
 
                     Ok(GolemResult::Ok(Box::new(response)))
@@ -651,7 +652,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: TemplateHandler + Send + Sync> Worker
                         let response = self
                             .client
                             .list_metadata(
-                                template_id.clone(),
+                                component_id.clone(),
                                 filter.clone(),
                                 new_cursor,
                                 Some(50),

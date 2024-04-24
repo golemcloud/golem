@@ -312,6 +312,30 @@ impl OplogEntry {
             _ => Ok(None),
         }
     }
+
+    pub fn timestamp(&self) -> Timestamp {
+        match self {
+            OplogEntry::Create { timestamp, .. }
+            | OplogEntry::ImportedFunctionInvoked { timestamp, .. }
+            | OplogEntry::ExportedFunctionInvoked { timestamp, .. }
+            | OplogEntry::ExportedFunctionCompleted { timestamp, .. }
+            | OplogEntry::Suspend { timestamp }
+            | OplogEntry::Error { timestamp, .. }
+            | OplogEntry::NoOp { timestamp }
+            | OplogEntry::Jump { timestamp, .. }
+            | OplogEntry::Interrupted { timestamp }
+            | OplogEntry::Exited { timestamp }
+            | OplogEntry::ChangeRetryPolicy { timestamp, .. }
+            | OplogEntry::BeginAtomicRegion { timestamp }
+            | OplogEntry::EndAtomicRegion { timestamp, .. }
+            | OplogEntry::BeginRemoteWrite { timestamp }
+            | OplogEntry::EndRemoteWrite { timestamp, .. }
+            | OplogEntry::PendingWorkerInvocation { timestamp, .. }
+            | OplogEntry::PendingUpdate { timestamp, .. }
+            | OplogEntry::SuccessfulUpdate { timestamp, .. }
+            | OplogEntry::FailedUpdate { timestamp, .. } => *timestamp,
+        }
+    }
 }
 
 /// Describes a pending update
@@ -325,6 +349,21 @@ pub enum UpdateDescription {
         target_version: ComponentVersion,
         source: SnapshotSource,
     },
+}
+
+impl UpdateDescription {
+    pub fn target_version(&self) -> &ComponentVersion {
+        match self {
+            UpdateDescription::Automatic { target_version } => target_version,
+            UpdateDescription::SnapshotBased { target_version, .. } => target_version,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct TimestampedUpdateDescription {
+    pub timestamp: Timestamp,
+    pub description: UpdateDescription,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]

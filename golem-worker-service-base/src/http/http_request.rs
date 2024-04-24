@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::api_definition::ApiSite;
+use crate::api_definition::ApiSiteString;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
@@ -24,11 +24,11 @@ pub struct InputHttpRequest {
 }
 
 impl InputHttpRequest {
-    pub fn get_host(&self) -> Option<ApiSite> {
+    pub fn get_host(&self) -> Option<ApiSiteString> {
         self.headers
             .get("host")
             .and_then(|host| host.to_str().ok())
-            .map(ApiSite::from)
+            .map(|host_str| ApiSiteString(host_str.to_string()))
     }
 
     // Converts all request details to type-annotated-value
@@ -330,7 +330,7 @@ mod tests {
 
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
 
-    use golem_common::model::TemplateId;
+    use golem_common::model::ComponentId;
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
@@ -355,8 +355,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -391,8 +391,8 @@ mod tests {
         expected_map.insert("x".to_string(), serde_json::Value::String("y".to_string()));
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -429,8 +429,8 @@ mod tests {
         );
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -472,8 +472,8 @@ mod tests {
         );
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -517,8 +517,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -587,8 +587,8 @@ mod tests {
         );
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -620,8 +620,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -658,8 +658,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -692,8 +692,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -724,8 +724,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -756,8 +756,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -793,8 +793,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -827,8 +827,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -880,8 +880,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -933,8 +933,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -985,8 +985,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -1043,8 +1043,8 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            template: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-                .parse::<TemplateId>()
+            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+                .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
@@ -1125,7 +1125,7 @@ mod tests {
             path: {}
             binding:
               type: wit-worker
-              template: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              component: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
               workerId: '{}'
               functionName: golem:it/api/get-cart-contents
               functionParams: {}

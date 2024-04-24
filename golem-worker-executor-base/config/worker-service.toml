@@ -21,11 +21,11 @@ min_delay = "100ms"
 max_delay = "2s"
 multiplier = 2
 
-[template_service]
+[component_service]
 # host
 # port
 
-[template_service.retries]
+[component_service.retries]
 max_attempts = 3
 min_delay = "100ms"
 max_delay = "1s"

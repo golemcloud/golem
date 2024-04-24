@@ -2,7 +2,7 @@ syntax = "proto3";
 
 import "golem/worker/promise_id.proto";
 import "golem/shardmanager/shard_id.proto";
-import "golem/template/template_id.proto";
+import "golem/component/component_id.proto";
 import "golem/worker/worker_id.proto";
 
 package golem.worker;
@@ -14,9 +14,9 @@ message WorkerExecutionError {
     WorkerAlreadyExists worker_already_exists = 2;
     WorkerCreationFailed worker_creation_failed = 3;
     FailedToResumeWorker failed_to_resume_worker = 4;
-    TemplateDownloadFailed template_download_failed = 5;
-    TemplateParseFailed template_parse_failed = 6;
-    GetLatestVersionOfTemplateFailed get_latest_version_of_template_failed = 7;
+    ComponentDownloadFailed component_download_failed = 5;
+    ComponentParseFailed component_parse_failed = 6;
+    GetLatestVersionOfComponentFailed get_latest_version_of_component_failed = 7;
     PromiseNotFound promise_not_found = 8;
     PromiseDropped promise_dropped = 9;
     PromiseAlreadyCompleted promise_already_completed = 10;
@@ -52,20 +52,20 @@ message FailedToResumeWorker {
   WorkerId worker_id = 1;
 }
 
-message TemplateDownloadFailed {
-  golem.template.TemplateId template_id = 1;
-  uint64 template_version = 2;
+message ComponentDownloadFailed {
+  golem.component.ComponentId component_id = 1;
+  uint64 component_version = 2;
   string reason = 3;
 }
 
-message TemplateParseFailed {
-  golem.template.TemplateId template_id = 1;
-  uint64 template_version = 2;
+message ComponentParseFailed {
+  golem.component.ComponentId component_id = 1;
+  uint64 component_version = 2;
   string reason = 3;
 }
 
-message GetLatestVersionOfTemplateFailed {
-  golem.template.TemplateId template_id = 1;
+message GetLatestVersionOfComponentFailed {
+  golem.component.ComponentId component_id = 1;
   string reason = 2;
 }
 

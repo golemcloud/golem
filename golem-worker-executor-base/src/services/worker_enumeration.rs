@@ -7,7 +7,7 @@ use crate::services::{golem_config, HasConfig, HasOplogService, HasWorkerService
 use crate::worker::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::{TemplateId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus};
+use golem_common::model::{ComponentId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus};
 use golem_common::redis::RedisPool;
 use std::sync::Arc;
 use tracing::info;
@@ -16,7 +16,7 @@ use tracing::info;
 pub trait RunningWorkerEnumerationService {
     async fn get(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
     ) -> Result<Vec<WorkerMetadata>, GolemError>;
 }
@@ -32,12 +32,12 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
 {
     async fn get(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
     ) -> Result<Vec<WorkerMetadata>, GolemError> {
         info!(
-            "Get workers for template: {}, filter: {}",
-            template_id,
+            "Get workers for component: {}, filter: {}",
+            component_id,
             filter
                 .clone()
                 .map(|f| f.to_string())
@@ -46,18 +46,18 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
 
         let active_workers = self.active_workers.enum_workers();
 
-        let mut template_workers: Vec<WorkerMetadata> = vec![];
+        let mut workers: Vec<WorkerMetadata> = vec![];
         for (worker_id, worker) in active_workers {
             let metadata = worker.get_metadata();
-            if worker_id.template_id == *template_id
+            if worker_id.component_id == *component_id
                 && (metadata.last_known_status.status == WorkerStatus::Running)
                 && filter.clone().map_or(true, |f| f.matches(&metadata))
             {
-                template_workers.push(metadata);
+                workers.push(metadata);
             }
         }
 
-        Ok(template_workers)
+        Ok(workers)
     }
 }
 
@@ -93,7 +93,7 @@ impl RunningWorkerEnumerationService
 {
     async fn get(
         &self,
-        _template_id: &TemplateId,
+        _component_id: &ComponentId,
         _filter: Option<WorkerFilter>,
     ) -> Result<Vec<WorkerMetadata>, GolemError> {
         unimplemented!()
@@ -104,7 +104,7 @@ impl RunningWorkerEnumerationService
 pub trait WorkerEnumerationService {
     async fn get(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
@@ -137,26 +137,26 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
 
     async fn get_internal(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
         precise: bool,
     ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
         let mut new_cursor: Option<u64> = None;
-        let mut template_workers: Vec<WorkerMetadata> = vec![];
+        let mut workers: Vec<WorkerMetadata> = vec![];
 
-        let template_worker_redis_key = get_template_worker_redis_key(template_id);
+        let worker_redis_key = get_worker_redis_key(component_id);
 
         let (new_redis_cursor, worker_redis_keys) = self
             .redis
-            .with("instance", "scan")
-            .scan(template_worker_redis_key, cursor, count)
+            .with("worker_enumeration", "scan")
+            .scan(worker_redis_key, cursor, count)
             .await
             .map_err(|e| GolemError::unknown(e.details()))?;
 
         for worker_redis_key in worker_redis_keys {
-            let worker_id = get_worker_id_from_redis_key(&worker_redis_key, template_id)?;
+            let worker_id = get_worker_id_from_redis_key(&worker_redis_key, component_id)?;
             let worker_metadata = self.worker_service.get(&worker_id).await;
 
             if let Some(worker_metadata) = worker_metadata {
@@ -176,7 +176,7 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
                 };
 
                 if filter.clone().map_or(true, |f| f.matches(&metadata)) {
-                    template_workers.push(metadata);
+                    workers.push(metadata);
                 }
             }
         }
@@ -185,7 +185,7 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
             new_cursor = Some(new_redis_cursor);
         }
 
-        Ok((new_cursor, template_workers))
+        Ok((new_cursor, workers))
     }
 }
 
@@ -213,15 +213,15 @@ impl WorkerEnumerationService
 {
     async fn get(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
         precise: bool,
     ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
         info!(
-            "Get workers for template: {}, filter: {}, cursor: {}, count: {}, precise: {}",
-            template_id,
+            "Get workers for component: {}, filter: {}, cursor: {}, count: {}, precise: {}",
+            component_id,
             filter
                 .clone()
                 .map(|f| f.to_string())
@@ -231,14 +231,14 @@ impl WorkerEnumerationService
             precise
         );
         let mut new_cursor: Option<u64> = Some(cursor);
-        let mut template_workers: Vec<WorkerMetadata> = vec![];
+        let mut workers: Vec<WorkerMetadata> = vec![];
 
-        while new_cursor.is_some() && (template_workers.len() as u64) < count {
-            let new_count = count - (template_workers.len() as u64);
+        while new_cursor.is_some() && (workers.len() as u64) < count {
+            let new_count = count - (workers.len() as u64);
 
-            let (next_cursor, workers) = self
+            let (next_cursor, workers_page) = self
                 .get_internal(
-                    template_id,
+                    component_id,
                     filter.clone(),
                     new_cursor.unwrap_or(0),
                     new_count,
@@ -246,29 +246,29 @@ impl WorkerEnumerationService
                 )
                 .await?;
 
-            template_workers.extend(workers);
+            workers.extend(workers_page);
 
             new_cursor = next_cursor;
         }
 
-        Ok((new_cursor, template_workers))
+        Ok((new_cursor, workers))
     }
 }
 
-fn get_template_worker_redis_key(template_id: &TemplateId) -> String {
-    format!("instance:oplog:{}*", template_id.0)
+fn get_worker_redis_key(component_id: &ComponentId) -> String {
+    format!("instance:oplog:{}*", component_id.0)
 }
 
 fn get_worker_id_from_redis_key(
     worker_redis_key: &str,
-    template_id: &TemplateId,
+    component_id: &ComponentId,
 ) -> Result<WorkerId, GolemError> {
-    let template_prefix = format!("instance:oplog:{}:", template_id.0);
-    if worker_redis_key.starts_with(&template_prefix) {
-        let worker_name = &worker_redis_key[template_prefix.len()..];
+    let redis_prefix = format!("instance:oplog:{}:", component_id.0);
+    if worker_redis_key.starts_with(&redis_prefix) {
+        let worker_name = &worker_redis_key[redis_prefix.len()..];
         Ok(WorkerId {
             worker_name: worker_name.to_string(),
-            template_id: template_id.clone(),
+            component_id: component_id.clone(),
         })
     } else {
         Err(GolemError::unknown(
@@ -294,7 +294,7 @@ impl WorkerEnumerationService
 {
     async fn get(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
@@ -305,26 +305,26 @@ impl WorkerEnumerationService
         let all_workers_count = workers.len() as u64;
 
         if all_workers_count > cursor {
-            let mut template_workers: Vec<WorkerMetadata> = vec![];
+            let mut component_workers: Vec<WorkerMetadata> = vec![];
             let mut index = 0;
             for worker in workers {
                 if index >= cursor
-                    && worker.worker_id.template_id == *template_id
+                    && worker.worker_id.component_id == *component_id
                     && filter.clone().map_or(true, |f| f.matches(&worker))
                 {
-                    template_workers.push(worker);
+                    component_workers.push(worker);
                 }
 
                 index += 1;
 
-                if (template_workers.len() as u64) == count {
+                if (component_workers.len() as u64) == count {
                     break;
                 }
             }
             if index >= all_workers_count {
-                Ok((None, template_workers))
+                Ok((None, component_workers))
             } else {
-                Ok((Some(index), template_workers))
+                Ok((Some(index), component_workers))
             }
         } else {
             Ok((None, vec![]))
@@ -356,7 +356,7 @@ impl WorkerEnumerationService
 {
     async fn get(
         &self,
-        _template_id: &TemplateId,
+        _component_id: &ComponentId,
         _filter: Option<WorkerFilter>,
         _cursor: u64,
         _count: u64,

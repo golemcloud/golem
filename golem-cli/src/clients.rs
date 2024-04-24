@@ -13,7 +13,8 @@
 // limitations under the License.
 
 pub mod api_definition;
+pub mod api_deployment;
+pub mod component;
 pub mod errors;
 pub mod health_check;
-pub mod template;
 pub mod worker;

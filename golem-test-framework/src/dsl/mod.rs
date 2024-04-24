@@ -30,7 +30,7 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    InvocationKey, TemplateId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    ComponentId, InvocationKey, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerStatusRecord,
 };
 use golem_wasm_ast::analysis::AnalysisContext;
@@ -45,26 +45,26 @@ use tracing::{debug, info};
 
 #[async_trait]
 pub trait TestDsl {
-    async fn store_template(&self, name: &str) -> TemplateId;
-    async fn store_template_unverified(&self, name: &str) -> TemplateId;
-    async fn update_template(&self, template_id: &TemplateId, name: &str);
+    async fn store_component(&self, name: &str) -> ComponentId;
+    async fn store_component_unverified(&self, name: &str) -> ComponentId;
+    async fn update_component(&self, component_id: &ComponentId, name: &str);
 
-    async fn start_worker(&self, template_id: &TemplateId, name: &str) -> WorkerId;
+    async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
     async fn try_start_worker(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         name: &str,
     ) -> Result<WorkerId, Error>;
     async fn start_worker_with(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
     ) -> WorkerId;
     async fn try_start_worker_with(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
@@ -72,7 +72,7 @@ pub trait TestDsl {
     async fn get_worker_metadata(&self, worker_id: &WorkerId) -> Option<WorkerMetadata>;
     async fn get_workers_metadata(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
@@ -146,58 +146,58 @@ pub trait TestDsl {
 
 #[async_trait]
 impl<T: TestDependencies + Send + Sync> TestDsl for T {
-    async fn store_template(&self, name: &str) -> TemplateId {
-        let source_path = self.template_directory().join(format!("{name}.wasm"));
-        dump_template_info(&source_path);
-        self.template_service()
-            .get_or_add_template(&source_path)
+    async fn store_component(&self, name: &str) -> ComponentId {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        dump_component_info(&source_path);
+        self.component_service()
+            .get_or_add_component(&source_path)
             .await
     }
 
-    async fn store_template_unverified(&self, name: &str) -> TemplateId {
-        let source_path = self.template_directory().join(format!("{name}.wasm"));
-        self.template_service()
-            .get_or_add_template(&source_path)
+    async fn store_component_unverified(&self, name: &str) -> ComponentId {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        self.component_service()
+            .get_or_add_component(&source_path)
             .await
     }
 
-    async fn update_template(&self, template_id: &TemplateId, name: &str) {
-        let source_path = self.template_directory().join(format!("{name}.wasm"));
-        dump_template_info(&source_path);
-        self.template_service()
-            .update_template(template_id, &source_path)
+    async fn update_component(&self, component_id: &ComponentId, name: &str) {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        dump_component_info(&source_path);
+        self.component_service()
+            .update_component(component_id, &source_path)
             .await;
     }
 
-    async fn start_worker(&self, template_id: &TemplateId, name: &str) -> WorkerId {
-        self.start_worker_with(template_id, name, vec![], HashMap::new())
+    async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId {
+        self.start_worker_with(component_id, name, vec![], HashMap::new())
             .await
     }
 
     async fn try_start_worker(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         name: &str,
     ) -> Result<WorkerId, Error> {
-        self.try_start_worker_with(template_id, name, vec![], HashMap::new())
+        self.try_start_worker_with(component_id, name, vec![], HashMap::new())
             .await
     }
 
     async fn start_worker_with(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
     ) -> WorkerId {
-        self.try_start_worker_with(template_id, name, args, env)
+        self.try_start_worker_with(component_id, name, args, env)
             .await
             .expect("Failed to start worker")
     }
 
     async fn try_start_worker_with(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
@@ -205,7 +205,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let response = self
             .worker_service()
             .create_worker(LaunchNewWorkerRequest {
-                template_id: Some(template_id.clone().into()),
+                component_id: Some(component_id.clone().into()),
                 name: name.to_string(),
                 args,
                 env,
@@ -259,18 +259,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn get_workers_metadata(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
         precise: bool,
     ) -> (Option<u64>, Vec<WorkerMetadata>) {
-        let template_id: golem_api_grpc::proto::golem::template::TemplateId =
-            template_id.clone().into();
+        let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+            component_id.clone().into();
         let response = self
             .worker_service()
             .get_workers_metadata(GetWorkersMetadataRequest {
-                template_id: Some(template_id),
+                component_id: Some(component_id),
                 filter: filter.map(|f| f.into()),
                 cursor,
                 count,
@@ -765,17 +765,17 @@ pub fn worker_error_message(error: &Error) -> String {
                 worker_execution_error::Error::FailedToResumeWorker(error) => {
                     format!("Failed to resume worker: {:?}", error.worker_id)
                 }
-                worker_execution_error::Error::TemplateDownloadFailed(error) => format!(
-                    "Failed to download template: {:?} version {}: {}",
-                    error.template_id, error.template_version, error.reason
+                worker_execution_error::Error::ComponentDownloadFailed(error) => format!(
+                    "Failed to download component: {:?} version {}: {}",
+                    error.component_id, error.component_version, error.reason
                 ),
-                worker_execution_error::Error::TemplateParseFailed(error) => format!(
-                    "Failed to parse template: {:?} version {}: {}",
-                    error.template_id, error.template_version, error.reason
+                worker_execution_error::Error::ComponentParseFailed(error) => format!(
+                    "Failed to parse component: {:?} version {}: {}",
+                    error.component_id, error.component_version, error.reason
                 ),
-                worker_execution_error::Error::GetLatestVersionOfTemplateFailed(error) => format!(
-                    "Failed to get latest version of template: {:?}: {}",
-                    error.template_id, error.reason
+                worker_execution_error::Error::GetLatestVersionOfComponentFailed(error) => format!(
+                    "Failed to get latest version of component: {:?}: {}",
+                    error.component_id, error.reason
                 ),
                 worker_execution_error::Error::PromiseNotFound(error) => {
                     format!("Promise not found: {:?}", error.promise_id)
@@ -866,12 +866,12 @@ pub fn to_worker_metadata(
             pending_updates: VecDeque::new(),
             failed_updates: vec![],
             successful_updates: vec![],
-            component_version: metadata.template_version,
+            component_version: metadata.component_version,
         },
     }
 }
 
-fn dump_template_info(path: &Path) {
+fn dump_component_info(path: &Path) {
     let data = std::fs::read(path).unwrap();
     let component = Component::<IgnoreAllButMetadata>::from_bytes(&data).unwrap();
 

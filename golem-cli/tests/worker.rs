@@ -1,5 +1,5 @@
 use crate::cli::{Cli, CliLive};
-use golem_cli::model::template::TemplateView;
+use golem_cli::model::component::ComponentView;
 use golem_cli::model::{Format, InvocationKey};
 use golem_client::model::{WorkerId, WorkersMetadataResponse};
 use golem_test_framework::config::TestDependencies;
@@ -92,29 +92,29 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
     short_args
 }
 
-pub fn make_template_from_file(
+pub fn make_component_from_file(
     deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-    template_name: &str,
+    component_name: &str,
     cli: &CliLive,
     file: &str,
-) -> Result<TemplateView, Failed> {
-    let env_service = deps.template_directory().join(file);
+) -> Result<ComponentView, Failed> {
+    let env_service = deps.component_directory().join(file);
     let cfg = &cli.config;
     cli.run(&[
-        "template",
+        "component",
         "add",
-        &cfg.arg('t', "template-name"),
-        &template_name,
+        &cfg.arg('c', "component-name"),
+        &component_name,
         env_service.to_str().unwrap(),
     ])
 }
 
-pub fn make_template(
+pub fn make_component(
     deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-    template_name: &str,
+    component_name: &str,
     cli: &CliLive,
-) -> Result<TemplateView, Failed> {
-    make_template_from_file(deps, template_name, cli, "environment-service.wasm")
+) -> Result<ComponentView, Failed> {
+    make_component_from_file(deps, component_name, cli, "environment-service.wasm")
 }
 
 fn worker_new_instance(
@@ -124,8 +124,8 @@ fn worker_new_instance(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id =
-        make_template(deps, &format!("{name} worker new instance"), &cli)?.template_id;
+    let component_id =
+        make_component(deps, &format!("{name} worker new instance"), &cli)?.component_id;
     let worker_name = format!("{name}_worker_new_instance");
     let cfg = &cli.config;
     let worker_id: WorkerId = cli.run(&[
@@ -133,11 +133,11 @@ fn worker_new_instance(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
 
-    assert_eq!(worker_id.template_id.to_string(), template_id);
+    assert_eq!(worker_id.component_id.to_string(), component_id);
     assert_eq!(worker_id.worker_name, worker_name);
     Ok(())
 }
@@ -149,8 +149,8 @@ fn worker_get_invocation_key(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id =
-        make_template(deps, &format!("{name} worker invocation key"), &cli)?.template_id;
+    let component_id =
+        make_component(deps, &format!("{name} worker invocation key"), &cli)?.component_id;
     let worker_name = format!("{name}_worker_invocation_key");
     let cfg = &cli.config;
     let _: WorkerId = cli.run(&[
@@ -158,14 +158,14 @@ fn worker_get_invocation_key(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
     let _: InvocationKey = cli.run(&[
         "worker",
         "invocation-key",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
     ])?;
@@ -179,8 +179,8 @@ fn worker_invoke_and_await(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id =
-        make_template(deps, &format!("{name} worker_invoke_and_await"), &cli)?.template_id;
+    let component_id =
+        make_component(deps, &format!("{name} worker_invoke_and_await"), &cli)?.component_id;
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
     let _: WorkerId = cli.run(&[
@@ -188,8 +188,8 @@ fn worker_invoke_and_await(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('e', "env"),
         "TEST_ENV=test-value",
         "test-arg",
@@ -197,16 +197,16 @@ fn worker_invoke_and_await(
     let args_key: InvocationKey = cli.run(&[
         "worker",
         "invocation-key",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
     ])?;
     let args = cli.run_json(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
@@ -224,8 +224,8 @@ fn worker_invoke_and_await(
     let env_key: InvocationKey = cli.run(&[
         "worker",
         "invocation-key",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
     ])?;
@@ -233,8 +233,8 @@ fn worker_invoke_and_await(
     let env = cli.run_json(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
@@ -264,13 +264,13 @@ fn worker_invoke_and_await_wave_params(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id = make_template_from_file(
+    let component_id = make_component_from_file(
         deps,
         &format!("{name} worker_invoke_and_await_wave_params"),
         &cli,
         "key-value-service.wasm",
     )?
-    .template_id;
+    .component_id;
     let worker_name = format!("{name}_worker_invoke_and_await_wave_params");
     let cfg = &cli.config;
     let _: WorkerId = cli.run(&[
@@ -278,14 +278,14 @@ fn worker_invoke_and_await_wave_params(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
     let res_set = cli.with_format(Format::Text).run_string(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
@@ -302,8 +302,8 @@ fn worker_invoke_and_await_wave_params(
     let res_get = cli.with_format(Format::Text).run_string(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
@@ -334,8 +334,8 @@ fn worker_invoke_no_params(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id =
-        make_template(deps, &format!("{name} worker_invoke_no_params"), &cli)?.template_id;
+    let component_id =
+        make_component(deps, &format!("{name} worker_invoke_no_params"), &cli)?.component_id;
     let worker_name = format!("{name}_worker_invoke_no_params");
     let cfg = &cli.config;
     let _: WorkerId = cli.run(&[
@@ -343,14 +343,14 @@ fn worker_invoke_no_params(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
     cli.run_unit(&[
         "worker",
         "invoke",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
@@ -367,8 +367,8 @@ fn worker_invoke_json_params(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id =
-        make_template(deps, &format!("{name} worker_invoke_json_params"), &cli)?.template_id;
+    let component_id =
+        make_component(deps, &format!("{name} worker_invoke_json_params"), &cli)?.component_id;
     let worker_name = format!("{name}_worker_invoke_json_params");
     let cfg = &cli.config;
     let _: WorkerId = cli.run(&[
@@ -376,14 +376,14 @@ fn worker_invoke_json_params(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
     cli.run_unit(&[
         "worker",
         "invoke",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
@@ -402,13 +402,13 @@ fn worker_invoke_wave_params(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id = make_template_from_file(
+    let component_id = make_component_from_file(
         deps,
         &format!("{name} worker_invoke_wave_params"),
         &cli,
         "key-value-service.wasm",
     )?
-    .template_id;
+    .component_id;
     let worker_name = format!("{name}_worker_invoke_wave_params");
     let cfg = &cli.config;
     let _: WorkerId = cli.run(&[
@@ -416,14 +416,14 @@ fn worker_invoke_wave_params(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
     cli.run_unit(&[
         "worker",
         "invoke",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
@@ -448,30 +448,30 @@ fn worker_connect(
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let stdout_service = deps.template_directory().join("write-stdout.wasm");
-    let template: TemplateView = cli.run(&[
-        "template",
+    let stdout_service = deps.component_directory().join("write-stdout.wasm");
+    let component: ComponentView = cli.run(&[
+        "component",
         "add",
-        &cfg.arg('t', "template-name"),
+        &cfg.arg('c', "component-name"),
         &format!("{name} worker_connect"),
         stdout_service.to_str().unwrap(),
     ])?;
-    let template_id = template.template_id;
+    let component_id = component.component_id;
     let worker_name = format!("{name}_worker_connect");
     let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
 
     let mut child = cli.run_stdout(&[
         "worker",
         "connect",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
     ])?;
@@ -493,8 +493,8 @@ fn worker_connect(
     let _ = cli.run_json(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
@@ -521,22 +521,22 @@ fn worker_connect_failed(
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let stdout_service = deps.template_directory().join("write-stdout.wasm");
-    let template: TemplateView = cli.run(&[
-        "template",
+    let stdout_service = deps.component_directory().join("write-stdout.wasm");
+    let component: ComponentView = cli.run(&[
+        "component",
         "add",
-        &cfg.arg('t', "template-name"),
+        &cfg.arg('c', "component-name"),
         &format!("{name} worker_connect_failed"),
         stdout_service.to_str().unwrap(),
     ])?;
-    let template_id = template.template_id;
+    let component_id = component.component_id;
     let worker_name = format!("{name}_worker_connect_failed");
 
     let mut child = cli.run_stdout(&[
         "worker",
         "connect",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('w', "worker-name"),
         &worker_name,
     ])?;
@@ -557,31 +557,31 @@ fn worker_interrupt(
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let interruption_service = deps.template_directory().join("interruption.wasm");
-    let template: TemplateView = cli.run(&[
-        "template",
+    let interruption_service = deps.component_directory().join("interruption.wasm");
+    let component: ComponentView = cli.run(&[
+        "component",
         "add",
-        &cfg.arg('t', "template-name"),
+        &cfg.arg('c', "component-name"),
         &format!("{name} worker_interrupt"),
         interruption_service.to_str().unwrap(),
     ])?;
-    let template_id = template.template_id;
+    let component_id = component.component_id;
     let worker_name = format!("{name}_worker_interrupt");
     let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
     cli.run_unit(&[
         "worker",
         "interrupt",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
 
     Ok(())
@@ -596,31 +596,31 @@ fn worker_simulated_crash(
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
 
-    let interruption_service = deps.template_directory().join("interruption.wasm");
-    let template: TemplateView = cli.run(&[
-        "template",
+    let interruption_service = deps.component_directory().join("interruption.wasm");
+    let component: ComponentView = cli.run(&[
+        "component",
         "add",
-        &cfg.arg('t', "template-name"),
+        &cfg.arg('c', "component-name"),
         &format!("{name} worker_simulated_crash"),
         interruption_service.to_str().unwrap(),
     ])?;
-    let template_id = template.template_id;
+    let component_id = component.component_id;
     let worker_name = format!("{name}_worker_simulated_crash");
     let _: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
     cli.run_unit(&[
         "worker",
         "simulated-crash",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
     ])?;
 
     Ok(())
@@ -633,7 +633,7 @@ fn worker_list(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let template_id = make_template(deps, &format!("{name} worker_list"), &cli)?.template_id;
+    let component_id = make_component(deps, &format!("{name} worker_list"), &cli)?.component_id;
     let cfg = &cli.config;
 
     let workers_count = 10;
@@ -646,8 +646,8 @@ fn worker_list(
             "add",
             &cfg.arg('w', "worker-name"),
             &worker_name,
-            &cfg.arg('T', "template-id"),
-            &template_id,
+            &cfg.arg('C', "component-id"),
+            &component_id,
         ])?;
 
         worker_ids.push(worker_id);
@@ -657,8 +657,8 @@ fn worker_list(
         let result: WorkersMetadataResponse = cli.run(&[
             "worker",
             "list",
-            &cfg.arg('T', "template-id"),
-            &template_id,
+            &cfg.arg('C', "component-id"),
+            &component_id,
             &cfg.arg('f', "filter"),
             format!("name = {}", worker_id.worker_name).as_str(),
             &cfg.arg('f', "filter"),
@@ -674,8 +674,8 @@ fn worker_list(
     let result: WorkersMetadataResponse = cli.run(&[
         "worker",
         "list",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('f', "filter"),
         "version >= 0",
         &cfg.arg('f', "filter"),
@@ -690,15 +690,15 @@ fn worker_list(
     let result2: WorkersMetadataResponse = cli.run(&[
         "worker",
         "list",
-        &cfg.arg('T', "template-id"),
-        &template_id,
+        &cfg.arg('C', "component-id"),
+        &component_id,
         &cfg.arg('f', "filter"),
         "version >= 0",
         &cfg.arg('f', "filter"),
         format!("name like {}_worker", name).as_str(),
         &cfg.arg('n', "count"),
         (workers_count - result.workers.len()).to_string().as_str(),
-        &cfg.arg('c', "cursor"),
+        &cfg.arg('P', "cursor"),
         result.cursor.unwrap().to_string().as_str(),
     ])?;
 
@@ -708,15 +708,15 @@ fn worker_list(
         let result3: WorkersMetadataResponse = cli.run(&[
             "worker",
             "list",
-            &cfg.arg('T', "template-id"),
-            &template_id,
+            &cfg.arg('C', "component-id"),
+            &component_id,
             &cfg.arg('f', "filter"),
             "version >= 0",
             &cfg.arg('f', "filter"),
             format!("name like {}_worker", name).as_str(),
             &cfg.arg('n', "count"),
             workers_count.to_string().as_str(),
-            &cfg.arg('c', "cursor"),
+            &cfg.arg('P', "cursor"),
             cursor2.to_string().as_str(),
         ])?;
         assert_eq!(result3.workers.len(), 0);

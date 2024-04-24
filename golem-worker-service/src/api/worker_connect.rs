@@ -15,7 +15,7 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use golem_common::model::TemplateId;
+use golem_common::model::ComponentId;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::{proxy_worker_connection, ConnectWorkerStream};
@@ -90,14 +90,14 @@ async fn get_worker_stream(
 }
 
 fn get_worker_id(req: &Request) -> Result<WorkerId, String> {
-    let (template_id, worker_name) = req.path_params::<(String, String)>().map_err(|_| {
-        "Valid path parameters (template_id and worker_name) are required ".to_string()
+    let (component_id, worker_name) = req.path_params::<(String, String)>().map_err(|_| {
+        "Valid path parameters (component_id and worker_name) are required ".to_string()
     })?;
 
-    let template_id = TemplateId::try_from(template_id.as_str())
-        .map_err(|error| format!("Invalid template id: {error}"))?;
+    let component_id = ComponentId::try_from(component_id.as_str())
+        .map_err(|error| format!("Invalid component id: {error}"))?;
 
-    let worker_id = WorkerId::new(template_id, worker_name)
+    let worker_id = WorkerId::new(component_id, worker_name)
         .map_err(|error| format!("Invalid worker name: {error}"))?;
 
     Ok(worker_id)

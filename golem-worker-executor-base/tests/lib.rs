@@ -9,6 +9,8 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
+use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
+use golem_test_framework::components::component_service::ComponentService;
 use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::provided::ProvidedRedis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
@@ -16,8 +18,6 @@ use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::shard_manager::ShardManager;
-use golem_test_framework::components::template_service::filesystem::FileSystemTemplateService;
-use golem_test_framework::components::template_service::TemplateService;
 use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
@@ -42,8 +42,8 @@ pub(crate) struct WorkerExecutorPerTestDependencies {
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
     worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
-    template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
-    template_directory: PathBuf,
+    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+    component_directory: PathBuf,
 }
 
 impl TestDependencies for WorkerExecutorPerTestDependencies {
@@ -63,12 +63,12 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
         panic!("Not supported")
     }
 
-    fn template_directory(&self) -> PathBuf {
-        self.template_directory.clone()
+    fn component_directory(&self) -> PathBuf {
+        self.component_directory.clone()
     }
 
-    fn template_service(&self) -> Arc<dyn TemplateService + Send + Sync + 'static> {
-        self.template_service.clone()
+    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+        self.component_service.clone()
     }
 
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
@@ -83,8 +83,8 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
 struct WorkerExecutorTestDependencies {
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
-    template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
-    template_directory: PathBuf,
+    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+    component_directory: PathBuf,
 }
 
 impl WorkerExecutorTestDependencies {
@@ -98,14 +98,15 @@ impl WorkerExecutorTestDependencies {
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
             SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
         );
-        let template_directory = Path::new("../test-templates").to_path_buf();
-        let template_service: Arc<dyn TemplateService + Send + Sync + 'static> =
-            Arc::new(FileSystemTemplateService::new(Path::new("data/templates")));
+        let component_directory = Path::new("../test-components").to_path_buf();
+        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+            FileSystemComponentService::new(Path::new("data/components")),
+        );
         Self {
             redis,
             redis_monitor,
-            template_directory,
-            template_service,
+            component_directory,
+            component_service,
         }
     }
 
@@ -127,15 +128,15 @@ impl WorkerExecutorTestDependencies {
         );
         // Fake worker service forwarding all requests to the worker executor directly
         let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
-            ForwardingWorkerService::new(worker_executor.clone(), self.template_service()),
+            ForwardingWorkerService::new(worker_executor.clone(), self.component_service()),
         );
         WorkerExecutorPerTestDependencies {
             redis,
             redis_monitor: self.redis_monitor.clone(),
             worker_executor,
             worker_service,
-            template_service: self.template_service().clone(),
-            template_directory: self.template_directory.clone(),
+            component_service: self.component_service().clone(),
+            component_directory: self.component_directory.clone(),
         }
     }
 }
@@ -157,12 +158,12 @@ impl TestDependencies for WorkerExecutorTestDependencies {
         panic!("Not supported")
     }
 
-    fn template_directory(&self) -> PathBuf {
-        self.template_directory.clone()
+    fn component_directory(&self) -> PathBuf {
+        self.component_directory.clone()
     }
 
-    fn template_service(&self) -> Arc<dyn TemplateService + Send + Sync + 'static> {
-        self.template_service.clone()
+    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+        self.component_service.clone()
     }
 
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {

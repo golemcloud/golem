@@ -17,7 +17,7 @@ use golem_service_base::routing_table::RoutingTableConfig;
 pub struct WorkerServiceBaseConfig {
     pub environment: String,
     pub redis: RedisConfig,
-    pub template_service: TemplateServiceConfig,
+    pub component_service: ComponentServiceConfig,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
     pub port: u16,
@@ -62,7 +62,7 @@ impl Default for WorkerServiceBaseConfig {
         Self {
             environment: "local".to_string(),
             redis: RedisConfig::default(),
-            template_service: TemplateServiceConfig::default(),
+            component_service: ComponentServiceConfig::default(),
             enable_tracing_console: false,
             enable_json_log: false,
             port: 9000,
@@ -75,14 +75,14 @@ impl Default for WorkerServiceBaseConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct TemplateServiceConfig {
+pub struct ComponentServiceConfig {
     pub host: String,
     pub port: u16,
     pub access_token: Uuid,
     pub retries: RetryConfig,
 }
 
-impl TemplateServiceConfig {
+impl ComponentServiceConfig {
     pub fn url(&self) -> Url {
         Url::parse(&format!("http://{}:{}", self.host, self.port))
             .expect("Failed to parse ComponentService URL")
@@ -98,7 +98,7 @@ impl TemplateServiceConfig {
     }
 }
 
-impl Default for TemplateServiceConfig {
+impl Default for ComponentServiceConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),

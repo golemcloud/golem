@@ -50,7 +50,7 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, TemplateId, WorkerFilter, WorkerId,
+    AccountId, CallingConvention, ComponentId, InvocationKey, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -311,7 +311,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             deleted_regions: self.state.deleted_regions.clone(),
             overridden_retry_config: self.state.overridden_retry_policy.clone(),
             pending_invocations: self.public_state.invocation_queue().pending_invocations(),
-            pending_updates: last_known_status.pending_updates,
+            pending_updates: self.public_state.invocation_queue().pending_updates(),
             failed_updates: last_known_status.failed_updates,
             successful_updates: last_known_status.successful_updates,
             component_version: last_known_status.component_version,
@@ -340,7 +340,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             deleted_regions: self.state.deleted_regions.clone(),
             overridden_retry_config: self.state.overridden_retry_policy.clone(),
             pending_invocations: self.public_state.invocation_queue().pending_invocations(),
-            pending_updates: last_known_status.pending_updates,
+            pending_updates: self.public_state.invocation_queue().pending_updates(),
             failed_updates: last_known_status.failed_updates,
             successful_updates: last_known_status.successful_updates,
             component_version: last_known_status.component_version,
@@ -684,7 +684,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .await;
 
                         if !finished {
-                            break Err(GolemError::failed_to_resume_instance(worker_id.clone()));
+                            break Err(GolemError::failed_to_resume_worker(worker_id.clone()));
                         } else {
                             let result = store
                                 .as_context()
@@ -693,9 +693,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 .get_current_invocation_result();
                             if matches!(result, LookupResult::Complete(Err(_))) {
                                 // TODO: include the inner error in the failure?
-                                break Err(GolemError::failed_to_resume_instance(
-                                    worker_id.clone(),
-                                ));
+                                break Err(GolemError::failed_to_resume_worker(worker_id.clone()));
                             }
                         }
 
@@ -1123,14 +1121,14 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     pub async fn get_workers(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
         precise: bool,
     ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
         self.worker_enumeration_service
-            .get(template_id, filter, cursor, count, precise)
+            .get(component_id, filter, cursor, count, precise)
             .await
     }
 }

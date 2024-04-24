@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+import "golem/component/component_id.proto";
+
+package golem.component;
+
+
+message VersionedComponentId {
+  ComponentId component_id = 1;
+  uint64 version = 2;
+}

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_service::ComponentService;
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
@@ -19,7 +20,6 @@ use crate::components::k8s::{
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
 use crate::components::worker_service::{env_vars, wait_for_startup, WorkerService};
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
@@ -50,7 +50,7 @@ impl K8sWorkerService {
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         verbosity: Level,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -61,7 +61,7 @@ impl K8sWorkerService {
             Self::HTTP_PORT,
             Self::GRPC_PORT,
             Self::CUSTOM_REQUEST_PORT,
-            template_service,
+            component_service,
             shard_manager,
             rdb,
             redis,

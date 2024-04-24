@@ -116,11 +116,11 @@ spec:
               value: {{.Values.env}}
             - name: REDIS_HOST
               value: {{ .Values.workerExecutor.redis.host }}
-            - name: GOLEM__TEMPLATE_SERVICE__CONFIG__HOST
-              value: service-template-service-{{.Values.env}}
-            - name: GOLEM__TEMPLATE_SERVICE__CONFIG__PORT
-              value: "{{ .Values.templateService.ports.grpc }}"
-            - name: GOLEM__TEMPLATE_SERVICE__CONFIG__ACCESS_TOKEN
+            - name: GOLEM__COMPONENT_SERVICE__CONFIG__HOST
+              value: service-component-service-{{.Values.env}}
+            - name: GOLEM__COMPONENT_SERVICE__CONFIG__PORT
+              value: "{{ .Values.componentService.ports.grpc }}"
+            - name: GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN
               value: "2A354594-7A63-4091-A46B-CC58D379F677"
             - name: GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST
               value: service-shard-manager-{{.Values.env}}
@@ -175,21 +175,21 @@ spec:
               value: "{{ .Values.workerService.ports.grpc }}"
             - name: GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN
               value: "2A354594-7A63-4091-A46B-CC58D379F677"
-{{- if eq .Values.templateCompiledStore.type "pvc" }}
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
+{{- if eq .Values.componentCompiledStore.type "pvc" }}
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__TYPE
               value: "Local"
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT
-              value: "/golem/template/compiled"
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__ROOT
+              value: "/golem/component/compiled"
 {{- end }}
-{{- if eq .Values.templateCompiledStore.type "s3" }}
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
+{{- if eq .Values.componentCompiledStore.type "s3" }}
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__TYPE
               value: "S3"
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION
-              value: {{ .Values.templateCompiledStore.s3.region }}
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX
-              value: {{ .Values.templateCompiledStore.s3.objectPrefix }}
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__BUCKET
-              value: {{ .Values.templateCompiledStore.s3.bucket }}
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__REGION
+              value: {{ .Values.componentCompiledStore.s3.region }}
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__OBJECT_PREFIX
+              value: {{ .Values.componentCompiledStore.s3.objectPrefix }}
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__BUCKET
+              value: {{ .Values.componentCompiledStore.s3.bucket }}
 {{- end }}
 {{- if eq .Values.workerBlobStore.type "pvc" }}
             - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__TYPE
@@ -224,24 +224,24 @@ spec:
             failureThreshold: 5
             initialDelaySeconds: 45
             timeoutSeconds: 2
-{{- if or (eq .Values.templateCompiledStore.type "pvc") (eq .Values.workerBlobStore.type "pvc") }}
+{{- if or (eq .Values.componentCompiledStore.type "pvc") (eq .Values.workerBlobStore.type "pvc") }}
           volumeMounts:
 {{- end }}
-{{- if eq .Values.templateCompiledStore.type "pvc" }}
-            - name: golem-template-compiled-store-{{.Values.env}}
-              mountPath: /golem/template/compiled
+{{- if eq .Values.componentCompiledStore.type "pvc" }}
+            - name: golem-component-compiled-store-{{.Values.env}}
+              mountPath: /golem/component/compiled
 {{- end }}
 {{- if eq .Values.workerBlobStore.type "pvc" }}
             - name: golem-worker-blob-store-{{.Values.env}}
               mountPath: /golem/worker/blob
 {{- end }}
-{{- if or (eq .Values.templateCompiledStore.type "pvc") (eq .Values.workerBlobStore.type "pvc") }}
+{{- if or (eq .Values.componentCompiledStore.type "pvc") (eq .Values.workerBlobStore.type "pvc") }}
       volumes:
 {{- end }}
-{{- if eq .Values.templateCompiledStore.type "pvc" }}
-        - name: golem-template-compiled-store-{{.Values.env}}
+{{- if eq .Values.componentCompiledStore.type "pvc" }}
+        - name: golem-component-compiled-store-{{.Values.env}}
           persistentVolumeClaim:
-            claimName: golem-template-compiled-store-{{.Values.env}}
+            claimName: golem-component-compiled-store-{{.Values.env}}
 {{- end }}
 {{- if eq .Values.workerBlobStore.type "pvc" }}
         - name: golem-worker-blob-store-{{.Values.env}}
@@ -290,11 +290,11 @@ spec:
               value: service-shard-manager-{{.Values.env}}
             - name: GOLEM__ROUTING_TABLE__PORT
               value: "{{ .Values.shardManager.ports.grpc }}"
-            - name: GOLEM__TEMPLATE_SERVICE__HOST
-              value: service-template-service-{{.Values.env}}
-            - name: GOLEM__TEMPLATE_SERVICE__PORT
-              value: "{{ .Values.templateService.ports.grpc }}"
-            - name: GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN
+            - name: GOLEM__COMPONENT_SERVICE__HOST
+              value: service-component-service-{{.Values.env}}
+            - name: GOLEM__COMPONENT_SERVICE__PORT
+              value: "{{ .Values.componentService.ports.grpc }}"
+            - name: GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN
               value: "2A354594-7A63-4091-A46B-CC58D379F677"
             - name: GOLEM__REDIS__KEY_PREFIX
               value: {{.Values.env}}
@@ -358,30 +358,30 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: deployment-template-service-{{.Values.env}}
+  name: deployment-component-service-{{.Values.env}}
   labels:
     env: {{.Values.env}}
 spec:
-  replicas: {{ .Values.templateService.replica }}
+  replicas: {{ .Values.componentService.replica }}
   selector:
     matchLabels:
-      app: template-service-app-{{.Values.env}}
+      app: component-service-app-{{.Values.env}}
   template:
     metadata:
       labels:
-        app: template-service-app-{{.Values.env}}
+        app: component-service-app-{{.Values.env}}
         env: {{.Values.env}}
     spec:
 {{- if .Values.serviceAccountName }}
       serviceAccountName: {{ .Values.serviceAccountName }}
 {{- end }}
-{{- if .Values.templateService.nodeSelector }}
-      nodeSelector: {{- .Values.templateService.nodeSelector | toYaml | nindent 8 }}
+{{- if .Values.componentService.nodeSelector }}
+      nodeSelector: {{- .Values.componentService.nodeSelector | toYaml | nindent 8 }}
 {{- end }}
       containers:
-        - name: template-service-app-{{.Values.env}}
-          image: "{{ .Values.templateService.image }}"
-          imagePullPolicy: {{.Values.templateService.imagePullPolicy}}
+        - name: component-service-app-{{.Values.env}}
+          image: "{{ .Values.componentService.image }}"
+          imagePullPolicy: {{.Values.componentService.imagePullPolicy}}
           env:
             - name: ENVIRONMENT
               value: {{.Values.env}}
@@ -396,60 +396,60 @@ spec:
             - name: GOLEM__DB__CONFIG__MAX_CONNECTIONS
               value: "10"
             - name: GOLEM__DB__CONFIG__DATABASE
-              value: {{ .Values.templateService.postgres.database }}
+              value: {{ .Values.componentService.postgres.database }}
             - name: GOLEM__DB__CONFIG__SCHEMA
-              value: {{ .Values.templateService.postgres.schema }}
+              value: {{ .Values.componentService.postgres.schema }}
             - name: GOLEM__DB__CONFIG__HOST
-              value: {{ .Values.templateService.postgres.host }}
+              value: {{ .Values.componentService.postgres.host }}
             - name: GOLEM__DB__CONFIG__PORT
-              value: "{{ .Values.templateService.postgres.port }}"
+              value: "{{ .Values.componentService.postgres.port }}"
             - name: GOLEM__DB__CONFIG__USERNAME
-              value: {{ .Values.templateService.postgres.username }}
+              value: {{ .Values.componentService.postgres.username }}
             - name: GOLEM__COMPILATION__TYPE
               value: "Enabled"
             - name: GOLEM__COMPILATION__CONFIG__HOST
-              value: service-template-compilation-service-{{.Values.env}}
+              value: service-component-compilation-service-{{.Values.env}}
             - name: GOLEM__COMPILATION__CONFIG__PORT
-              value: "{{.Values.templateCompilationService.ports.grpc}}"
+              value: "{{.Values.componentCompilationService.ports.grpc}}"
 
-{{- if .Values.templateService.postgres.password.plain }}
+{{- if .Values.componentService.postgres.password.plain }}
             - name: GOLEM__DB__CONFIG__PASSWORD
-              value: "{{ .Values.templateService.postgres.password.plain }}"
+              value: "{{ .Values.componentService.postgres.password.plain }}"
 {{- end }}
-{{- if .Values.templateService.postgres.password.fromSecret.name }}
+{{- if .Values.componentService.postgres.password.fromSecret.name }}
             - name: GOLEM__DB__CONFIG__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.templateService.postgres.password.fromSecret.name }}
-                  key: {{ .Values.templateService.postgres.password.fromSecret.key }}
+                  name: {{ .Values.componentService.postgres.password.fromSecret.name }}
+                  key: {{ .Values.componentService.postgres.password.fromSecret.key }}
 {{- end }}
             - name: GOLEM__HTTP_PORT
-              value: "{{ .Values.templateService.ports.http }}"
+              value: "{{ .Values.componentService.ports.http }}"
             - name: GOLEM__GRPC_PORT
-              value: "{{ .Values.templateService.ports.grpc }}"
-{{- if eq .Values.templateStore.type "pvc" }}
-            - name: GOLEM__TEMPLATE_STORE__TYPE
+              value: "{{ .Values.componentService.ports.grpc }}"
+{{- if eq .Values.componentStore.type "pvc" }}
+            - name: GOLEM__COMPONENT_STORE__TYPE
               value: "Local"
-            - name: GOLEM__TEMPLATE_STORE__CONFIG__ROOT_PATH
-              value: "/golem/template"
-            - name: GOLEM__TEMPLATE_STORE__CONFIG__OBJECT_PREFIX
+            - name: GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH
+              value: "/golem/component"
+            - name: GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX
               value: ""
 {{- end }}
-{{- if eq .Values.templateStore.type "s3" }}
-            - name: GOLEM__TEMPLATE_STORE__TYPE
+{{- if eq .Values.componentStore.type "s3" }}
+            - name: GOLEM__COMPONENT_STORE__TYPE
               value: "S3"
-            - name: GOLEM__TEMPLATE_STORE__REGION
-              value: {{ .Values.templateStore.s3.region }}
-            - name: GOLEM__TEMPLATE_STORE__CONFIG__OBJECT_PREFIX
-              value: {{ .Values.templateStore.s3.objectPrefix }}
-            - name: GOLEM__TEMPLATE_STORE__CONFIG__BUCKET_NAME
-              value: {{ .Values.templateStore.s3.bucket }}
+            - name: GOLEM__COMPONENT_STORE__REGION
+              value: {{ .Values.componentStore.s3.region }}
+            - name: GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX
+              value: {{ .Values.componentStore.s3.objectPrefix }}
+            - name: GOLEM__COMPONENT_STORE__CONFIG__BUCKET_NAME
+              value: {{ .Values.componentStore.s3.bucket }}
 {{- end }}
           ports:
             - name: http
-              containerPort: {{ .Values.templateService.ports.http }}
+              containerPort: {{ .Values.componentService.ports.http }}
             - name: grpc
-              containerPort: {{ .Values.templateService.ports.grpc }}
+              containerPort: {{ .Values.componentService.ports.grpc }}
           livenessProbe:
             httpGet:
               path: "/healthcheck"
@@ -464,16 +464,16 @@ spec:
             periodSeconds: 10
             failureThreshold: 5
             initialDelaySeconds: 20
-{{- if eq .Values.templateStore.type "pvc" }}
+{{- if eq .Values.componentStore.type "pvc" }}
           volumeMounts:
-            - name: golem-template-store-{{.Values.env}}
-              mountPath: /golem/template
+            - name: golem-component-store-{{.Values.env}}
+              mountPath: /golem/component
 {{- end }}
-{{- if eq .Values.templateStore.type "pvc" }}
+{{- if eq .Values.componentStore.type "pvc" }}
       volumes:
-        - name: golem-template-store-{{.Values.env}}
+        - name: golem-component-store-{{.Values.env}}
           persistentVolumeClaim:
-            claimName: golem-template-store-{{.Values.env}}
+            claimName: golem-component-store-{{.Values.env}}
 {{- end }}
 
 ---
@@ -481,38 +481,38 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: deployment-template-compilation-service-{{.Values.env}}
+  name: deployment-component-compilation-service-{{.Values.env}}
   labels:
     env: {{.Values.env}}
 spec:
-  replicas: {{ .Values.templateCompilationService.replica }}
+  replicas: {{ .Values.componentCompilationService.replica }}
   selector:
     matchLabels:
-      app: template-compilation-service-app-{{.Values.env}}
+      app: component-compilation-service-app-{{.Values.env}}
   template:
     metadata:
       labels:
-        app: template-compilation-service-app-{{.Values.env}}
+        app: component-compilation-service-app-{{.Values.env}}
         env: {{.Values.env}}
     spec:
 {{- if .Values.serviceAccountName }}
       serviceAccountName: {{ .Values.serviceAccountName }}
 {{- end }}
-{{- if .Values.templateCompilationService.nodeSelector }}
-      nodeSelector: {{- .Values.templateCompilationService.nodeSelector | toYaml | nindent 8 }}
+{{- if .Values.componentCompilationService.nodeSelector }}
+      nodeSelector: {{- .Values.componentCompilationService.nodeSelector | toYaml | nindent 8 }}
 {{- end }}
       containers:
-        - name: template-compilation-service-app-{{.Values.env}}
-          image: "{{ .Values.templateCompilationService.image }}"
-          imagePullPolicy: {{.Values.templateCompilationService.imagePullPolicy}}
+        - name: component-compilation-service-app-{{.Values.env}}
+          image: "{{ .Values.componentCompilationService.image }}"
+          imagePullPolicy: {{.Values.componentCompilationService.imagePullPolicy}}
           env:
             - name: ENVIRONMENT
               value: {{.Values.env}}
-            - name: GOLEM__TEMPLATE_SERVICE__HOST
-              value: service-template-service-{{.Values.env}}
-            - name: GOLEM__TEMPLATE_SERVICE__PORT
-              value: "{{ .Values.templateService.ports.grpc }}"
-            - name: GOLEM__TEMPLATE_SERVICE__ACCESS_TOKEN
+            - name: GOLEM__COMPONENT_SERVICE__HOST
+              value: service-component-service-{{.Values.env}}
+            - name: GOLEM__COMPONENT_SERVICE__PORT
+              value: "{{ .Values.componentService.ports.grpc }}"
+            - name: GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN
               value: "2A354594-7A63-4091-A46B-CC58D379F677"
             - name: RUST_BACKTRACE
               value: "1"
@@ -521,30 +521,30 @@ spec:
             - name: GOLEM__ENABLE_JSON_LOG
               value: "{{ .Values.logging.json }}"
             - name: GOLEM__HTTP_PORT
-              value: "{{ .Values.templateCompilationService.ports.http }}"
+              value: "{{ .Values.componentCompilationService.ports.http }}"
             - name: GOLEM__GRPC_PORT
-              value: "{{ .Values.templateCompilationService.ports.grpc }}"
-{{- if eq .Values.templateCompiledStore.type "pvc" }}
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
+              value: "{{ .Values.componentCompilationService.ports.grpc }}"
+{{- if eq .Values.componentCompiledStore.type "pvc" }}
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__TYPE
               value: "Local"
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__ROOT
-              value: "/golem/template/compiled"
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__ROOT
+              value: "/golem/component/compiled"
 {{- end }}
-{{- if eq .Values.templateCompiledStore.type "s3" }}
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__TYPE
+{{- if eq .Values.componentCompiledStore.type "s3" }}
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__TYPE
               value: "S3"
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__REGION
-              value: {{ .Values.templateCompiledStore.s3.region }}
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__OBJECT_PREFIX
-              value: {{ .Values.templateCompiledStore.s3.objectPrefix }}
-            - name: GOLEM__COMPILED_TEMPLATE_SERVICE__CONFIG__BUCKET
-              value: {{ .Values.templateCompiledStore.s3.bucket }}
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__REGION
+              value: {{ .Values.componentCompiledStore.s3.region }}
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__OBJECT_PREFIX
+              value: {{ .Values.componentCompiledStore.s3.objectPrefix }}
+            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__BUCKET
+              value: {{ .Values.componentCompiledStore.s3.bucket }}
 {{- end }}
           ports:
             - name: http
-              containerPort: {{ .Values.templateCompilationService.ports.http }}
+              containerPort: {{ .Values.componentCompilationService.ports.http }}
             - name: grpc
-              containerPort: {{ .Values.templateCompilationService.ports.grpc }}
+              containerPort: {{ .Values.componentCompilationService.ports.grpc }}
           livenessProbe:
             httpGet:
               path: "/healthcheck"
@@ -553,14 +553,14 @@ spec:
             failureThreshold: 5
             initialDelaySeconds: 45
             timeoutSeconds: 2
-{{- if eq .Values.templateCompiledStore.type "pvc" }}
+{{- if eq .Values.componentCompiledStore.type "pvc" }}
           volumeMounts:
-            - name: golem-template-compiled-store-{{.Values.env}}
-              mountPath: /golem/template/compiled
+            - name: golem-component-compiled-store-{{.Values.env}}
+              mountPath: /golem/component/compiled
 {{- end }}
-{{- if eq .Values.templateCompiledStore.type "pvc" }}
+{{- if eq .Values.componentCompiledStore.type "pvc" }}
       volumes:
-        - name: golem-template-compiled-store-{{.Values.env}}
+        - name: golem-component-compiled-store-{{.Values.env}}
           persistentVolumeClaim:
-            claimName: golem-template-compiled-store-{{.Values.env}}
+            claimName: golem-component-compiled-store-{{.Values.env}}
 {{- end }}

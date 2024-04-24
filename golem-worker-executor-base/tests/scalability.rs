@@ -2,7 +2,7 @@ use crate::common::{start, TestContext, TestWorkerExecutor};
 use assert2::check;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
-use golem_common::model::TemplateId;
+use golem_common::model::ComponentId;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_rpc::Value;
 use std::future::Future;
@@ -12,7 +12,7 @@ use tracing::info;
 
 #[tokio::test(flavor = "multi_thread")]
 #[tracing::instrument]
-async fn spawning_many_instances_that_sleep() {
+async fn spawning_many_workers_that_sleep() {
     let context = TestContext::new();
     fn worker_name(n: i32) -> String {
         format!("sleeping-worker-{}", n)
@@ -29,9 +29,9 @@ async fn spawning_many_instances_that_sleep() {
     }
 
     let executor = start(&context).await.unwrap();
-    let template_id = executor.store_template("clocks").await;
+    let component_id = executor.store_component("clocks").await;
 
-    let warmup_worker = executor.start_worker(&template_id, &worker_name(0)).await;
+    let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;
 
     let executor_clone = executor.clone();
     let warmup_result = timed(async move {
@@ -48,15 +48,15 @@ async fn spawning_many_instances_that_sleep() {
     info!("{N} instances");
 
     let start = tokio::time::Instant::now();
-    let input: Vec<(i32, TemplateId, TestWorkerExecutor)> = (1..N)
-        .map(|i| (i, template_id.clone(), executor.clone()))
+    let input: Vec<(i32, ComponentId, TestWorkerExecutor)> = (1..N)
+        .map(|i| (i, component_id.clone(), executor.clone()))
         .collect();
     let fibers: Vec<_> = input
         .into_iter()
-        .map(|(n, template_id, executor_clone)| {
+        .map(|(n, component_id, executor_clone)| {
             spawn(async move {
                 let worker = executor_clone
-                    .start_worker(&template_id, &worker_name(n))
+                    .start_worker(&component_id, &worker_name(n))
                     .await;
                 timed(async move {
                     executor_clone
@@ -97,7 +97,7 @@ async fn spawning_many_instances_that_sleep() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[tracing::instrument]
-async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
+async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended() {
     let context = TestContext::new();
     fn worker_name(n: i32) -> String {
         format!("sleeping-suspending-worker-{}", n)
@@ -114,9 +114,9 @@ async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
     }
 
     let executor = start(&context).await.unwrap();
-    let template_id = executor.store_template("clocks").await;
+    let component_id = executor.store_component("clocks").await;
 
-    let warmup_worker = executor.start_worker(&template_id, &worker_name(0)).await;
+    let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;
 
     let executor_clone = executor.clone();
     let warmup_result = timed(async move {
@@ -133,15 +133,15 @@ async fn spawning_many_instances_that_sleep_long_enough_to_get_suspended() {
     info!("{N} instances");
 
     let start = tokio::time::Instant::now();
-    let input: Vec<(i32, TemplateId, TestWorkerExecutor)> = (1..N)
-        .map(|i| (i, template_id.clone(), executor.clone()))
+    let input: Vec<(i32, ComponentId, TestWorkerExecutor)> = (1..N)
+        .map(|i| (i, component_id.clone(), executor.clone()))
         .collect();
     let fibers: Vec<_> = input
         .into_iter()
-        .map(|(n, template_id, executor_clone)| {
+        .map(|(n, component_id, executor_clone)| {
             spawn(async move {
                 let worker = executor_clone
-                    .start_worker(&template_id, &worker_name(n))
+                    .start_worker(&component_id, &worker_name(n))
                     .await;
                 timed(async move {
                     executor_clone

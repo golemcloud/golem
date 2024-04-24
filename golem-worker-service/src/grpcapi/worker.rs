@@ -39,7 +39,7 @@ use tap::TapFallible;
 use tonic::{Request, Response, Status};
 
 use crate::empty_worker_metadata;
-use crate::service::template::TemplateService;
+use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 
 fn server_error<T>(error: T) -> GrpcWorkerError
@@ -56,14 +56,14 @@ where
 }
 
 pub struct WorkerGrpcApi {
-    template_service: TemplateService,
+    component_service: ComponentService,
     worker_service: WorkerService,
 }
 
 impl WorkerGrpcApi {
-    pub fn new(template_service: TemplateService, worker_service: WorkerService) -> Self {
+    pub fn new(component_service: ComponentService, worker_service: WorkerService) -> Self {
         Self {
-            template_service,
+            component_service,
             worker_service,
         }
     }
@@ -286,29 +286,29 @@ impl WorkerGrpcApi {
         &self,
         request: LaunchNewWorkerRequest,
     ) -> Result<(WorkerId, ComponentVersion), GrpcWorkerError> {
-        let template_id: golem_common::model::TemplateId = request
-            .template_id
+        let component_id: golem_common::model::ComponentId = request
+            .component_id
             .and_then(|id| id.try_into().ok())
-            .ok_or_else(|| bad_request_error("Missing template id"))?;
+            .ok_or_else(|| bad_request_error("Missing component id"))?;
 
-        let latest_template_version = self
-            .template_service
-            .get_latest(&template_id, &EmptyAuthCtx {})
+        let latest_component = self
+            .component_service
+            .get_latest(&component_id, &EmptyAuthCtx {})
             .await
-            .tap_err(|error| tracing::error!("Error getting latest template version: {:?}", error))
+            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
             .map_err(|_| GrpcWorkerError {
                 error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Template not found: {}", &template_id),
+                    error: format!("Component not found: {}", &component_id),
                 })),
             })?;
 
-        let worker_id = make_worker_id(template_id, request.name)?;
+        let worker_id = make_worker_id(component_id, request.name)?;
 
         let worker = self
             .worker_service
             .create(
                 &worker_id,
-                latest_template_version.versioned_template_id.version,
+                latest_component.versioned_component_id.version,
                 request.args,
                 request.env,
                 empty_worker_metadata(),
@@ -318,7 +318,7 @@ impl WorkerGrpcApi {
 
         Ok((
             worker.into(),
-            latest_template_version.versioned_template_id.version,
+            latest_component.versioned_component_id.version,
         ))
     }
 
@@ -373,11 +373,11 @@ impl WorkerGrpcApi {
         &self,
         request: GetWorkersMetadataRequest,
     ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GrpcWorkerError> {
-        let template_id: golem_common::model::TemplateId = request
-            .template_id
-            .ok_or_else(|| bad_request_error("Missing template id"))?
+        let component_id: golem_common::model::ComponentId = request
+            .component_id
+            .ok_or_else(|| bad_request_error("Missing component id"))?
             .try_into()
-            .map_err(|_| bad_request_error("Invalid template id"))?;
+            .map_err(|_| bad_request_error("Invalid component id"))?;
 
         let filter: Option<WorkerFilter> =
             match request.filter {
@@ -390,7 +390,7 @@ impl WorkerGrpcApi {
         let (new_cursor, workers) = self
             .worker_service
             .find_metadata(
-                &template_id,
+                &component_id,
                 filter,
                 request.cursor,
                 request.count,
@@ -566,10 +566,10 @@ impl WorkerGrpcApi {
 }
 
 fn make_worker_id(
-    template_id: golem_common::model::TemplateId,
+    component_id: golem_common::model::ComponentId,
     worker_name: String,
 ) -> std::result::Result<golem_service_base::model::WorkerId, GrpcWorkerError> {
-    golem_service_base::model::WorkerId::new(template_id, worker_name)
+    golem_service_base::model::WorkerId::new(component_id, worker_name)
         .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))
 }
 
@@ -633,17 +633,17 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
                 worker_execution_error::Error::FailedToResumeWorker(err) => {
                     format!("Failed To Resume Worker: Worker ID = {:?}", err.worker_id)
                 }
-                worker_execution_error::Error::TemplateDownloadFailed(err) => format!(
-                    "Template Download Failed: Template ID = {:?}, Version: {}, Reason: {}",
-                    err.template_id, err.template_version, err.reason
+                worker_execution_error::Error::ComponentDownloadFailed(err) => format!(
+                    "Component Download Failed: Component ID = {:?}, Version: {}, Reason: {}",
+                    err.component_id, err.component_version, err.reason
                 ),
-                worker_execution_error::Error::TemplateParseFailed(err) => format!(
-                    "Template Parse Failed: Template ID = {:?}, Version: {}, Reason: {}",
-                    err.template_id, err.template_version, err.reason
+                worker_execution_error::Error::ComponentParseFailed(err) => format!(
+                    "Component Parsing Failed: Component ID = {:?}, Version: {}, Reason: {}",
+                    err.component_id, err.component_version, err.reason
                 ),
-                worker_execution_error::Error::GetLatestVersionOfTemplateFailed(err) => format!(
-                    "Get Latest Version Of Template Failed: Template ID = {:?}, Reason: {}",
-                    err.template_id, err.reason
+                worker_execution_error::Error::GetLatestVersionOfComponentFailed(err) => format!(
+                    "Get Latest Version Of Component Failed: Component ID = {:?}, Reason: {}",
+                    err.component_id, err.reason
                 ),
                 worker_execution_error::Error::PromiseNotFound(err) => {
                     format!("Promise Not Found: Promise ID = {:?}", err.promise_id)

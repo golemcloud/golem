@@ -36,16 +36,16 @@ pub fn process_new(
                 ExampleParameters {
                     template_name,
                     package_name: package_name
-                        .unwrap_or(PackageName::from_string("golem:template").unwrap()),
+                        .unwrap_or(PackageName::from_string("golem:component").unwrap()),
                     target_path: cwd,
                 },
             ) {
                 Ok(instructions) => Ok(GolemResult::Str(instructions.to_string())),
-                Err(err) => GolemResult::err(format!("Failed to instantiate template: {err}")),
+                Err(err) => GolemResult::err(format!("Failed to instantiate component: {err}")),
             }
         }
         None => {
-            GolemResult::err(format!("Unknown template {example_name}. Use the list-templates command to see the available commands."))
+            GolemResult::err(format!("Unknown component {example_name}. Use the list-examples command to see the available examples."))
         }
     }
 }

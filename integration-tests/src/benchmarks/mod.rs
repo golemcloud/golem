@@ -28,18 +28,18 @@ pub struct Context {
     pub worker_ids: Vec<WorkerId>,
 }
 
-pub async fn setup(config: CliParams, template_name: &str) -> Context {
+pub async fn setup(config: CliParams, component_name: &str) -> Context {
     // Initialize infrastructure
     let deps = CliTestDependencies::new(config.clone()).await;
 
-    // Upload test template
-    let template_id = deps.store_template(template_name).await;
+    // Upload test component
+    let component_id = deps.store_component(component_name).await;
     let mut worker_ids = Vec::new();
 
     // Create 'size' workers
     for i in 0..config.benchmark_config.size {
         let worker_id = deps
-            .start_worker(&template_id, &format!("worker-{i}"))
+            .start_worker(&component_id, &format!("worker-{i}"))
             .await;
         worker_ids.push(worker_id);
     }

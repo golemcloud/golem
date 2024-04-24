@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Mutex;
 
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite};
+use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSiteString};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
@@ -18,10 +18,12 @@ const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 pub trait ApiDeploymentRepo<Namespace: ApiNamespace> {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>>;
 
-    async fn get(&self, host: &ApiSite)
-        -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
+    async fn get(
+        &self,
+        host: &ApiSiteString,
+    ) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
 
-    async fn delete(&self, host: &ApiSite) -> Result<bool, Box<dyn Error>>;
+    async fn delete(&self, host: &ApiSiteString) -> Result<bool, Box<dyn Error>>;
 
     async fn get_by_id(
         &self,
@@ -31,7 +33,7 @@ pub trait ApiDeploymentRepo<Namespace: ApiNamespace> {
 }
 
 pub struct InMemoryDeployment<Namespace> {
-    deployments: Mutex<HashMap<ApiSite, ApiDeployment<Namespace>>>,
+    deployments: Mutex<HashMap<ApiSiteString, ApiDeployment<Namespace>>>,
 }
 
 impl<Namespace> Default for InMemoryDeployment<Namespace> {
@@ -54,14 +56,14 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeploymen
 
         let mut deployments = self.deployments.lock().unwrap();
 
-        deployments.insert(key, deployment.clone());
+        deployments.insert(ApiSiteString::from(&key), deployment.clone());
 
         Ok(())
     }
 
     async fn get(
         &self,
-        host: &ApiSite,
+        host: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
         debug!("Get API site: {}", host);
         let deployments = self.deployments.lock().unwrap();
@@ -71,7 +73,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeploymen
         Ok(deployment)
     }
 
-    async fn delete(&self, host: &ApiSite) -> Result<bool, Box<dyn Error>> {
+    async fn delete(&self, host: &ApiSiteString) -> Result<bool, Box<dyn Error>> {
         debug!("Delete API site: {}", host);
         let mut deployments = self.deployments.lock().unwrap();
 
@@ -115,10 +117,10 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
     async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>> {
         debug!(
             "Deploy API site: {}, id: {}",
-            deployment.site, deployment.api_definition_id
+            &deployment.site, &deployment.api_definition_id
         );
 
-        let key = redis_keys::api_deployment_redis_key(&deployment.site);
+        let key = redis_keys::api_deployment_redis_key(&ApiSiteString::from(&deployment.site));
 
         let value = self.pool.serialize(deployment).map_err(|e| e.to_string())?;
 
@@ -148,7 +150,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
 
     async fn get(
         &self,
-        host: &ApiSite,
+        host: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
         info!("Get host id: {}", host);
 
@@ -173,7 +175,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         }
     }
 
-    async fn delete(&self, host: &ApiSite) -> Result<bool, Box<dyn Error>> {
+    async fn delete(&self, host: &ApiSiteString) -> Result<bool, Box<dyn Error>> {
         debug!("Delete API site: {}", host);
         let key = redis_keys::api_deployment_redis_key(host);
         let value: Option<Bytes> = self
@@ -245,7 +247,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         let mut deployments = Vec::new();
 
         for site in sites {
-            let key = redis_keys::api_deployment_redis_key(&ApiSite(site));
+            let key = redis_keys::api_deployment_redis_key(&ApiSiteString(site));
 
             let value: Option<Bytes> = self
                 .pool
@@ -268,11 +270,11 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
 }
 
 mod redis_keys {
-    use crate::api_definition::{ApiDefinitionId, ApiSite};
+    use crate::api_definition::{ApiDefinitionId, ApiSiteString};
     use crate::repo::api_deployment_repo::API_DEFINITION_REDIS_NAMESPACE;
     use crate::repo::api_namespace::ApiNamespace;
 
-    pub(crate) fn api_deployment_redis_key(api_site: &ApiSite) -> String {
+    pub(crate) fn api_deployment_redis_key(api_site: &ApiSiteString) -> String {
         format!("{}:deployment:{}", API_DEFINITION_REDIS_NAMESPACE, api_site)
     }
 
@@ -289,7 +291,9 @@ mod redis_keys {
 
 #[cfg(test)]
 mod tests {
-    use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiVersion};
+    use crate::api_definition::{
+        ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion,
+    };
 
     use crate::auth::CommonNamespace;
     use crate::repo::api_deployment_repo::redis_keys::{
@@ -304,7 +308,12 @@ mod tests {
 
         let namespace = CommonNamespace::default();
 
-        let site = ApiSite::from("test.dev-api.golem.cloud");
+        let site = ApiSite {
+            host: "dev-api.golem.cloud".to_string(),
+            subdomain: "test".to_string(),
+        };
+
+        let site_str = ApiSiteString::from(&site);
 
         let api_definition_id = ApiDefinitionId("api1".to_string());
         let version = ApiVersion("0.0.1".to_string());
@@ -320,7 +329,7 @@ mod tests {
 
         let _ = registry.deploy(&deployment).await;
 
-        let result = registry.get(&site).await.unwrap_or(None);
+        let result = registry.get(&site_str).await.unwrap_or(None);
 
         let result1 = registry
             .get_by_id(
@@ -330,9 +339,9 @@ mod tests {
             .await
             .unwrap_or(vec![]);
 
-        let delete = registry.delete(&site).await.unwrap_or(false);
+        let delete = registry.delete(&site_str).await.unwrap_or(false);
 
-        let result2 = registry.get(&site).await.unwrap_or(None);
+        let result2 = registry.get(&site_str).await.unwrap_or(None);
 
         assert!(result.is_some());
         assert_eq!(result.unwrap(), deployment);
@@ -345,7 +354,7 @@ mod tests {
     #[test]
     pub fn test_get_api_deployment_redis_key() {
         assert_eq!(
-            api_deployment_redis_key(&ApiSite::from("foo.dev-api.golem.cloud")),
+            api_deployment_redis_key(&ApiSiteString("foo.dev-api.golem.cloud".to_string())),
             "apidefinition:deployment:foo.dev-api.golem.cloud"
         );
     }

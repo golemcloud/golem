@@ -1,0 +1,12 @@
+{
+    "type": "module",
+    "scripts": {
+        "build": "jco componentize -w wit -o out/component.wasm main.js"
+    },
+    "devDependencies": {
+        "@bytecodealliance/componentize-js": "0.8.3",
+        "@bytecodealliance/jco": "^1.1.1",
+        "@bytecodealliance/preview2-shim": "0.16.1"
+    }
+  }
+  

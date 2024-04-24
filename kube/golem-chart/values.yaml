@@ -63,8 +63,8 @@ workerService:
         key: password
 #  nodeSelector:
 
-templateService:
-  image: golemservices/golem-template-service:latest
+componentService:
+  image: golemservices/golem-component-service:latest
   imagePullPolicy: Always
   replica: 1
   ports:
@@ -85,8 +85,8 @@ templateService:
         key: password
 #  nodeSelector:
 
-templateCompilationService:
-  image: golemservices/golem-template-compilation-service:latest
+componentCompilationService:
+  image: golemservices/golem-component-compilation-service:latest
   imagePullPolicy: Always
   replica: 1
   ports:
@@ -103,7 +103,7 @@ logging:
 
 env: default
 
-templateStore:
+componentStore:
   type: pvc
   pvc:
     storageClassName: hostpath
@@ -114,7 +114,7 @@ templateStore:
     bucket: ""
     region: "us-east-1"
 
-templateCompiledStore:
+componentCompiledStore:
   type: pvc
   pvc:
     storageClassName: hostpath

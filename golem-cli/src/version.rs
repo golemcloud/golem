@@ -29,7 +29,7 @@ pub struct VersionHandlerLive<
     T: HealthCheckClient + Send + Sync,
     W: HealthCheckClient + Send + Sync,
 > {
-    pub template_client: T,
+    pub component_client: T,
     pub worker_client: W,
 }
 
@@ -38,25 +38,25 @@ impl<T: HealthCheckClient + Send + Sync, W: HealthCheckClient + Send + Sync> Ver
     for VersionHandlerLive<T, W>
 {
     async fn check(&self) -> Result<GolemResult, GolemError> {
-        let template_version_info = self.template_client.version().await?;
+        let component_version_info = self.component_client.version().await?;
         let worker_version_info = self.worker_client.version().await?;
 
         let cli_version = Version::from(VERSION).unwrap();
-        let template_version = Version::from(template_version_info.version.as_str()).unwrap();
+        let component_version = Version::from(component_version_info.version.as_str()).unwrap();
         let worker_version = Version::from(worker_version_info.version.as_str()).unwrap();
 
         let warning = |cli_version: Version, server_version: Version| -> String {
             format!("Warning: golem-cli {} is older than the targeted Golem servers ({})\nInstall the matching version with:\ncargo install golem-cli@{}\n", cli_version.as_str(), server_version.as_str(), server_version.as_str()).to_string()
         };
 
-        if cli_version < template_version && cli_version < worker_version {
-            if template_version > worker_version {
-                Err(GolemError(warning(cli_version, template_version)))
+        if cli_version < component_version && cli_version < worker_version {
+            if component_version > worker_version {
+                Err(GolemError(warning(cli_version, component_version)))
             } else {
                 Err(GolemError(warning(cli_version, worker_version)))
             }
-        } else if cli_version < template_version {
-            Err(GolemError(warning(cli_version, template_version)))
+        } else if cli_version < component_version {
+            Err(GolemError(warning(cli_version, component_version)))
         } else if cli_version < worker_version {
             Err(GolemError(warning(cli_version, worker_version)))
         } else {
@@ -98,9 +98,12 @@ mod tests {
         format!("Warning: golem-cli 0.0.0 is older than the targeted Golem servers ({})\nInstall the matching version with:\ncargo install golem-cli@{}\n", server_version, server_version).to_string()
     }
 
-    async fn check_version(template_version: &'static str, worker_version: &'static str) -> String {
+    async fn check_version(
+        component_version: &'static str,
+        worker_version: &'static str,
+    ) -> String {
         let update_srv = VersionHandlerLive {
-            template_client: client(template_version),
+            component_client: client(component_version),
             worker_client: client(worker_version),
         };
 
@@ -127,7 +130,7 @@ mod tests {
     }
 
     #[tokio::test]
-    pub async fn both_newer_template_newest() {
+    pub async fn both_newer_component_newest() {
         let result = check_version("0.1.0", "0.0.3").await;
         let expected = warning("0.1.0");
         assert_eq!(result, expected)
@@ -148,7 +151,7 @@ mod tests {
     }
 
     #[tokio::test]
-    pub async fn newer_template() {
+    pub async fn newer_component() {
         let result = check_version("0.0.1", "0.0.0").await;
         let expected = warning("0.0.1");
         assert_eq!(result, expected)

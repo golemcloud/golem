@@ -23,12 +23,12 @@ use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
 
+pub mod component_service;
 pub mod k8s;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
 pub mod shard_manager;
-pub mod template_service;
 pub mod worker_executor;
 pub mod worker_executor_cluster;
 pub mod worker_service;
@@ -118,10 +118,10 @@ async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str) {
         if success {
             break;
         } else {
-            if start.elapsed().as_secs() > 30 {
+            if start.elapsed().as_secs() > 90 {
                 panic!("Failed to verify that {name} is running");
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     }
 }

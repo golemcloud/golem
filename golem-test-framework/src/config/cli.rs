@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_service::docker::DockerComponentService;
+use crate::components::component_service::k8s::K8sComponentService;
+use crate::components::component_service::provided::ProvidedComponentService;
+use crate::components::component_service::spawned::SpawnedComponentService;
+use crate::components::component_service::ComponentService;
 use crate::components::k8s::{K8sNamespace, K8sRoutingType};
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::k8s_postgres::K8sPostgresRdb;
@@ -29,11 +34,6 @@ use crate::components::shard_manager::k8s::K8sShardManager;
 use crate::components::shard_manager::provided::ProvidedShardManager;
 use crate::components::shard_manager::spawned::SpawnedShardManager;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::docker::DockerTemplateService;
-use crate::components::template_service::k8s::K8sTemplateService;
-use crate::components::template_service::provided::ProvidedTemplateService;
-use crate::components::template_service::spawned::SpawnedTemplateService;
-use crate::components::template_service::TemplateService;
 use crate::components::worker_executor_cluster::docker::DockerWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::k8s::K8sWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::provided::ProvidedWorkerExecutorCluster;
@@ -65,10 +65,10 @@ pub struct CliTestDependencies {
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-    template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
-    template_directory: PathBuf,
+    component_directory: PathBuf,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -77,8 +77,8 @@ pub struct CliParams {
     #[command(subcommand)]
     pub mode: TestMode,
 
-    #[arg(long, default_value = "test-templates")]
-    pub template_directory: String,
+    #[arg(long, default_value = "test-components")]
+    pub component_directory: String,
 
     #[command(flatten)]
     pub benchmark_config: BenchmarkConfig,
@@ -129,11 +129,11 @@ pub enum TestMode {
         #[arg(long, default_value = "9020")]
         shard_manager_grpc_port: u16,
         #[arg(long, default_value = "localhost")]
-        template_service_host: String,
+        component_service_host: String,
         #[arg(long, default_value = "8081")]
-        template_service_http_port: u16,
+        component_service_http_port: u16,
         #[arg(long, default_value = "9091")]
-        template_service_grpc_port: u16,
+        component_service_grpc_port: u16,
         #[arg(long, default_value = "localhost")]
         worker_service_host: String,
         #[arg(long, default_value = "8082")]
@@ -177,9 +177,9 @@ pub enum TestMode {
         #[arg(long, default_value = "9020")]
         shard_manager_grpc_port: u16,
         #[arg(long, default_value = "8081")]
-        template_service_http_port: u16,
+        component_service_http_port: u16,
         #[arg(long, default_value = "9091")]
-        template_service_grpc_port: u16,
+        component_service_grpc_port: u16,
         #[arg(long, default_value = "8082")]
         worker_service_http_port: u16,
         #[arg(long, default_value = "9092")]
@@ -232,9 +232,9 @@ impl CliTestDependencies {
                 shard_manager_host,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
-                template_service_host,
-                template_service_http_port,
-                template_service_grpc_port,
+                component_service_host,
+                component_service_http_port,
+                component_service_grpc_port,
                 worker_service_host,
                 worker_service_http_port,
                 worker_service_grpc_port,
@@ -259,11 +259,11 @@ impl CliTestDependencies {
                         *shard_manager_http_port,
                         *shard_manager_grpc_port,
                     ));
-                let template_service: Arc<dyn TemplateService + Send + Sync + 'static> =
-                    Arc::new(ProvidedTemplateService::new(
-                        template_service_host.clone(),
-                        *template_service_http_port,
-                        *template_service_grpc_port,
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+                    Arc::new(ProvidedComponentService::new(
+                        component_service_host.clone(),
+                        *component_service_http_port,
+                        *component_service_grpc_port,
                     ));
                 let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
                     Arc::new(ProvidedWorkerService::new(
@@ -285,10 +285,10 @@ impl CliTestDependencies {
                     redis,
                     redis_monitor,
                     shard_manager,
-                    template_service,
+                    component_service,
                     worker_service,
                     worker_executor_cluster,
-                    template_directory: Path::new(&params.template_directory).to_path_buf(),
+                    component_directory: Path::new(&params.component_directory).to_path_buf(),
                 }
             }
             TestMode::Docker {
@@ -307,12 +307,12 @@ impl CliTestDependencies {
                 let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
                     DockerShardManager::new(redis.clone(), params.service_verbosity()),
                 );
-                let template_service: Arc<dyn TemplateService + Send + Sync + 'static> = Arc::new(
-                    DockerTemplateService::new(rdb.clone(), params.service_verbosity()),
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                    DockerComponentService::new(rdb.clone(), params.service_verbosity()),
                 );
                 let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
                     Arc::new(DockerWorkerService::new(
-                        template_service.clone(),
+                        component_service.clone(),
                         shard_manager.clone(),
                         rdb.clone(),
                         redis.clone(),
@@ -325,7 +325,7 @@ impl CliTestDependencies {
                     *worker_executor_base_http_port,
                     *worker_executor_base_grpc_port,
                     redis.clone(),
-                    template_service.clone(),
+                    component_service.clone(),
                     shard_manager.clone(),
                     worker_service.clone(),
                     params.service_verbosity(),
@@ -336,10 +336,10 @@ impl CliTestDependencies {
                     redis,
                     redis_monitor,
                     shard_manager,
-                    template_service,
+                    component_service,
                     worker_service,
                     worker_executor_cluster,
-                    template_directory: Path::new(&params.template_directory).to_path_buf(),
+                    component_directory: Path::new(&params.component_directory).to_path_buf(),
                 }
             }
             TestMode::Spawned {
@@ -350,8 +350,8 @@ impl CliTestDependencies {
                 redis_prefix,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
-                template_service_http_port,
-                template_service_grpc_port,
+                component_service_http_port,
+                component_service_grpc_port,
                 worker_service_http_port,
                 worker_service_grpc_port,
                 worker_service_custom_request_port,
@@ -385,12 +385,12 @@ impl CliTestDependencies {
                     )
                     .await,
                 );
-                let template_service: Arc<dyn TemplateService + Send + Sync + 'static> = Arc::new(
-                    SpawnedTemplateService::new(
-                        &build_root.join("golem-template-service"),
-                        &workspace_root.join("golem-template-service"),
-                        *template_service_http_port,
-                        *template_service_grpc_port,
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                    SpawnedComponentService::new(
+                        &build_root.join("../../../golem-component-service"),
+                        &workspace_root.join("../../../golem-component-service"),
+                        *component_service_http_port,
+                        *component_service_grpc_port,
                         rdb.clone(),
                         params.service_verbosity(),
                         Level::INFO,
@@ -405,7 +405,7 @@ impl CliTestDependencies {
                         *worker_service_http_port,
                         *worker_service_grpc_port,
                         *worker_service_custom_request_port,
-                        template_service.clone(),
+                        component_service.clone(),
                         shard_manager.clone(),
                         rdb.clone(),
                         redis.clone(),
@@ -425,7 +425,7 @@ impl CliTestDependencies {
                         &build_root.join("worker-executor"),
                         &workspace_root.join("golem-worker-executor"),
                         redis.clone(),
-                        template_service.clone(),
+                        component_service.clone(),
                         shard_manager.clone(),
                         worker_service.clone(),
                         params.service_verbosity(),
@@ -440,10 +440,10 @@ impl CliTestDependencies {
                     redis,
                     redis_monitor,
                     shard_manager,
-                    template_service,
+                    component_service,
                     worker_service,
                     worker_executor_cluster,
-                    template_directory: Path::new(&params.template_directory).to_path_buf(),
+                    component_directory: Path::new(&params.component_directory).to_path_buf(),
                 }
             }
             TestMode::Minikube {
@@ -465,8 +465,8 @@ impl CliTestDependencies {
                     K8sShardManager::new(&namespace, &routing_type, Level::INFO, redis.clone())
                         .await,
                 );
-                let template_service: Arc<dyn TemplateService + Send + Sync + 'static> = Arc::new(
-                    K8sTemplateService::new(&namespace, &routing_type, Level::INFO, rdb.clone())
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                    K8sComponentService::new(&namespace, &routing_type, Level::INFO, rdb.clone())
                         .await,
                 );
                 let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
@@ -474,7 +474,7 @@ impl CliTestDependencies {
                         &namespace,
                         &routing_type,
                         Level::INFO,
-                        template_service.clone(),
+                        component_service.clone(),
                         shard_manager.clone(),
                         rdb.clone(),
                         redis.clone(),
@@ -489,7 +489,7 @@ impl CliTestDependencies {
                         &namespace,
                         &routing_type,
                         redis.clone(),
-                        template_service.clone(),
+                        component_service.clone(),
                         shard_manager.clone(),
                         worker_service.clone(),
                         Level::INFO,
@@ -502,10 +502,10 @@ impl CliTestDependencies {
                     redis,
                     redis_monitor,
                     shard_manager,
-                    template_service,
+                    component_service,
                     worker_service,
                     worker_executor_cluster,
-                    template_directory: Path::new(&params.template_directory).to_path_buf(),
+                    component_directory: Path::new(&params.component_directory).to_path_buf(),
                 }
             }
             TestMode::Aws {
@@ -527,8 +527,8 @@ impl CliTestDependencies {
                     K8sShardManager::new(&namespace, &routing_type, Level::INFO, redis.clone())
                         .await,
                 );
-                let template_service: Arc<dyn TemplateService + Send + Sync + 'static> = Arc::new(
-                    K8sTemplateService::new(&namespace, &routing_type, Level::INFO, rdb.clone())
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                    K8sComponentService::new(&namespace, &routing_type, Level::INFO, rdb.clone())
                         .await,
                 );
                 let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
@@ -536,7 +536,7 @@ impl CliTestDependencies {
                         &namespace,
                         &routing_type,
                         Level::INFO,
-                        template_service.clone(),
+                        component_service.clone(),
                         shard_manager.clone(),
                         rdb.clone(),
                         redis.clone(),
@@ -551,7 +551,7 @@ impl CliTestDependencies {
                         &namespace,
                         &routing_type,
                         redis.clone(),
-                        template_service.clone(),
+                        component_service.clone(),
                         shard_manager.clone(),
                         worker_service.clone(),
                         Level::INFO,
@@ -564,10 +564,10 @@ impl CliTestDependencies {
                     redis,
                     redis_monitor,
                     shard_manager,
-                    template_service,
+                    component_service,
                     worker_service,
                     worker_executor_cluster,
-                    template_directory: Path::new(&params.template_directory).to_path_buf(),
+                    component_directory: Path::new(&params.component_directory).to_path_buf(),
                 }
             }
         }
@@ -591,12 +591,12 @@ impl TestDependencies for CliTestDependencies {
         self.shard_manager.clone()
     }
 
-    fn template_directory(&self) -> PathBuf {
-        self.template_directory.clone()
+    fn component_directory(&self) -> PathBuf {
+        self.component_directory.clone()
     }
 
-    fn template_service(&self) -> Arc<dyn TemplateService + Send + Sync + 'static> {
-        self.template_service.clone()
+    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+        self.component_service.clone()
     }
 
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
