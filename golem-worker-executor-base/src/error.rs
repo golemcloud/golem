@@ -42,6 +42,7 @@ pub enum GolemError {
     },
     FailedToResumeWorker {
         worker_id: WorkerId,
+        reason: Box<GolemError>,
     },
     ComponentDownloadFailed {
         component_id: ComponentId,
@@ -96,8 +97,11 @@ pub enum GolemError {
 }
 
 impl GolemError {
-    pub fn failed_to_resume_worker(worker_id: WorkerId) -> Self {
-        GolemError::FailedToResumeWorker { worker_id }
+    pub fn failed_to_resume_worker(worker_id: WorkerId, reason: GolemError) -> Self {
+        GolemError::FailedToResumeWorker {
+            worker_id,
+            reason: Box::new(reason),
+        }
     }
 
     pub fn worker_creation_failed(worker_id: WorkerId, details: impl Into<String>) -> Self {
@@ -200,8 +204,8 @@ impl Display for GolemError {
             GolemError::WorkerCreationFailed { worker_id, details } => {
                 write!(f, "Failed to create worker: {worker_id}: {details}")
             }
-            GolemError::FailedToResumeWorker { worker_id } => {
-                write!(f, "Failed to resume worker: {worker_id}")
+            GolemError::FailedToResumeWorker { worker_id, reason } => {
+                write!(f, "Failed to resume worker: {worker_id}: {reason}")
             }
             GolemError::ComponentDownloadFailed {
                 component_id,
@@ -394,15 +398,18 @@ impl From<GolemError> for golem::worker::WorkerExecutionError {
                     ),
                 }
             }
-            GolemError::FailedToResumeWorker { worker_id } => golem::worker::WorkerExecutionError {
-                error: Some(
-                    golem::worker::worker_execution_error::Error::FailedToResumeWorker(
-                        golem::worker::FailedToResumeWorker {
-                            worker_id: Some(worker_id.into()),
-                        },
+            GolemError::FailedToResumeWorker { worker_id, reason } => {
+                golem::worker::WorkerExecutionError {
+                    error: Some(
+                        golem::worker::worker_execution_error::Error::FailedToResumeWorker(
+                            Box::new(golem::worker::FailedToResumeWorker {
+                                worker_id: Some(worker_id.into()),
+                                reason: Some(Box::new((*reason).clone().into())),
+                            }),
+                        ),
                     ),
-                ),
-            },
+                }
+            }
             GolemError::ComponentDownloadFailed {
                 component_id,
                 component_version,
@@ -606,6 +613,9 @@ impl TryFrom<golem::worker::WorkerExecutionError> for GolemError {
                     .worker_id
                     .ok_or("Missing worker_id")?
                     .try_into()?,
+                reason: Box::new(
+                    (*failed_to_resume_worker.reason.ok_or("Missing reason")?).try_into()?,
+                ),
             }),
             Some(golem::worker::worker_execution_error::Error::ComponentDownloadFailed(
                 component_download_failed,

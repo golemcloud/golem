@@ -88,7 +88,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_id: WorkerId,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
-        worker_metadata: WorkerMetadata,
+        mut worker_metadata: WorkerMetadata,
         pending_worker: &PendingWorker<Ctx>,
     ) -> Result<Arc<Self>, GolemError>
     where
@@ -98,116 +98,146 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let result = {
             let component_id = worker_id.component_id.clone();
 
-            let component = this
-                .component_service()
-                .get(
-                    &this.engine(),
-                    &component_id,
-                    worker_metadata.last_known_status.component_version,
+            loop {
+                info!("##### {:?}", worker_metadata.last_known_status);
+                let component_version = worker_metadata
+                    .last_known_status
+                    .pending_updates
+                    .front()
+                    .map_or(
+                        worker_metadata.last_known_status.component_version,
+                        |update| {
+                            let target_version = *update.description.target_version();
+                            info!("Attempting automatic update for {worker_id} to version {target_version} from {}",
+                            worker_metadata.last_known_status.component_version
+                        );
+                            target_version
+                        },
+                    );
+                let component = this
+                    .component_service()
+                    .get(&this.engine(), &component_id, component_version)
+                    .await?;
+
+                let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
+                    last_known_status: worker_metadata.last_known_status.clone(),
+                }));
+
+                let context = Ctx::create(
+                    worker_metadata.worker_id.clone(),
+                    worker_metadata.account_id.clone(),
+                    this.promise_service(),
+                    this.invocation_key_service(),
+                    this.worker_service(),
+                    this.worker_enumeration_service(),
+                    this.key_value_service(),
+                    this.blob_store_service(),
+                    pending_worker.event_service.clone(),
+                    this.active_workers(),
+                    this.oplog_service(),
+                    pending_worker.oplog.clone(),
+                    pending_worker.invocation_queue.clone(),
+                    this.scheduler_service(),
+                    this.recovery_management(),
+                    this.rpc(),
+                    this.extra_deps(),
+                    this.config(),
+                    WorkerConfig::new(
+                        worker_metadata.worker_id.clone(),
+                        worker_metadata.last_known_status.component_version,
+                        worker_args.clone(),
+                        worker_env.clone(),
+                        worker_metadata.last_known_status.deleted_regions.clone(),
+                    ),
+                    execution_status.clone(),
                 )
                 .await?;
 
-            let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
-                last_known_status: worker_metadata.last_known_status.clone(),
-            }));
+                let public_state = context.get_public_state().clone();
+                let mut store = Store::new(&this.engine(), context);
+                store.set_epoch_deadline(this.config().limits.epoch_ticks);
+                let worker_id_clone = worker_metadata.worker_id.clone();
+                store.epoch_deadline_callback(move |mut store| {
+                    let current_level = store.get_fuel().unwrap_or(0);
+                    if store.data().is_out_of_fuel(current_level as i64) {
+                        debug!("{worker_id_clone} ran out of fuel, borrowing more");
+                        store.data_mut().borrow_fuel_sync();
+                    }
 
-            let context = Ctx::create(
-                worker_metadata.worker_id.clone(),
-                worker_metadata.account_id.clone(),
-                this.promise_service(),
-                this.invocation_key_service(),
-                this.worker_service(),
-                this.worker_enumeration_service(),
-                this.key_value_service(),
-                this.blob_store_service(),
-                pending_worker.event_service.clone(),
-                this.active_workers(),
-                this.oplog_service(),
-                pending_worker.oplog.clone(),
-                pending_worker.invocation_queue.clone(),
-                this.scheduler_service(),
-                this.recovery_management(),
-                this.rpc(),
-                this.extra_deps(),
-                this.config(),
-                WorkerConfig::new(
-                    worker_metadata.worker_id.clone(),
-                    worker_metadata.last_known_status.component_version,
-                    worker_args,
-                    worker_env,
-                    worker_metadata.last_known_status.deleted_regions.clone(),
-                ),
-                execution_status.clone(),
-            )
-            .await?;
+                    match store.data_mut().check_interrupt() {
+                        Some(kind) => Err(kind.into()),
+                        None => Ok(UpdateDeadline::Yield(1)),
+                    }
+                });
 
-            let public_state = context.get_public_state().clone();
+                store.set_fuel(i64::MAX as u64)?;
+                store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
 
-            let mut store = Store::new(&this.engine(), context);
-            store.set_epoch_deadline(this.config().limits.epoch_ticks);
-            let worker_id_clone = worker_metadata.worker_id.clone();
-            store.epoch_deadline_callback(move |mut store| {
-                let current_level = store.get_fuel().unwrap_or(0);
-                if store.data().is_out_of_fuel(current_level as i64) {
-                    debug!("{worker_id_clone} ran out of fuel, borrowing more");
-                    store.data_mut().borrow_fuel_sync();
-                }
+                store.limiter_async(|ctx| ctx.resource_limiter());
 
-                match store.data_mut().check_interrupt() {
-                    Some(kind) => Err(kind.into()),
-                    None => Ok(UpdateDeadline::Yield(1)),
-                }
-            });
-
-            store.set_fuel(i64::MAX as u64)?;
-            store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
-
-            store.limiter_async(|ctx| ctx.resource_limiter());
-
-            let instance_pre = this.linker().instantiate_pre(&component).map_err(|e| {
-                GolemError::worker_creation_failed(
-                    worker_id.clone(),
-                    format!("Failed to pre-instantiate worker {worker_id}: {e}"),
-                )
-            })?;
-
-            let instance = instance_pre
-                .instantiate_async(&mut store)
-                .await
-                .map_err(|e| {
+                let instance_pre = this.linker().instantiate_pre(&component).map_err(|e| {
                     GolemError::worker_creation_failed(
                         worker_id.clone(),
-                        format!("Failed to instantiate worker {worker_id}: {e}"),
+                        format!("Failed to pre-instantiate worker {worker_id}: {e}"),
                     )
                 })?;
 
-            let result = Arc::new(Worker {
-                metadata: worker_metadata.clone(),
-                instance,
-                store: Mutex::new(store),
-                public_state,
-                execution_status,
-            });
+                let instance = instance_pre
+                    .instantiate_async(&mut store)
+                    .await
+                    .map_err(|e| {
+                        GolemError::worker_creation_failed(
+                            worker_id.clone(),
+                            format!("Failed to instantiate worker {worker_id}: {e}"),
+                        )
+                    })?;
 
-            result
-                .public_state
-                .invocation_queue()
-                .attach(result.clone())
-                .await;
+                let result = Arc::new(Worker {
+                    metadata: worker_metadata.clone(),
+                    instance,
+                    store: Mutex::new(store),
+                    public_state,
+                    execution_status,
+                });
 
-            {
-                let mut store = result.store.lock().await;
-                Ctx::prepare_instance(&worker_metadata.worker_id, &result.instance, &mut *store)
+                result
+                    .public_state
+                    .invocation_queue()
+                    .attach(result.clone())
+                    .await;
+
+                let need_restart = {
+                    let mut store = result.store.lock().await;
+                    Ctx::prepare_instance(&worker_metadata.worker_id, &result.instance, &mut *store)
+                        .await?
+                };
+
+                if need_restart {
+                    // Need to detach the invocation queue, because we have to be able
+                    // to attach it to the next try's instance
+                    result.public_state.invocation_queue().detach().await;
+
+                    // Need to use the latest worker status
+                    let updated_status = calculate_last_known_status(
+                        this,
+                        &worker_metadata.worker_id,
+                        &Some(worker_metadata.clone()),
+                    )
                     .await?;
+                    worker_metadata.last_known_status = updated_status;
+
+                    // Restart the whole loop
+                    continue;
+                }
+
+                info!(
+                    "Worker {}/{} activated",
+                    worker_id.slug(),
+                    worker_metadata.last_known_status.component_version
+                );
+
+                break Ok(result);
             }
-
-            info!(
-                "Worker {}/{} activated",
-                worker_id.slug(),
-                worker_metadata.last_known_status.component_version
-            );
-
-            Ok(result)
         };
 
         match &result {
@@ -353,12 +383,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 },
             )
             .await?;
-        validate_worker(
-            worker_details.metadata.clone(),
-            worker_args,
-            worker_env,
-            component_version,
-        )?;
+        validate_worker(worker_details.metadata.clone(), worker_args, worker_env)?;
         Ok(worker_details)
     }
 
@@ -463,7 +488,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let worker_env_clone = worker_env.clone();
         let config_clone = this.config().clone();
 
-        let worker_metadata = Self::get_or_create_worker_metadata(
+        let mut worker_metadata = Self::get_or_create_worker_metadata(
             this,
             worker_id,
             component_version,
@@ -504,6 +529,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     let pending_worker_clone = pending_worker.clone();
                     Box::pin(async move {
                         resume_receiver.await.unwrap();
+
+                        // Getting an up-to-date worker metadata before continuing with the worker creation
+                        let worker_status = calculate_last_known_status(
+                            &this_clone,
+                            &worker_id_clone_2,
+                            &Some(worker_metadata.clone()),
+                        )
+                        .await?;
+                        worker_metadata.last_known_status = worker_status;
+
                         Worker::new(
                             &this_clone,
                             worker_id_clone_2,
@@ -702,7 +737,6 @@ fn validate_worker(
     worker_metadata: WorkerMetadata,
     worker_args: Vec<String>,
     worker_env: Vec<(String, String)>,
-    component_version: Option<u64>,
 ) -> Result<(), GolemError> {
     let mut errors: Vec<String> = Vec::new();
     if worker_metadata.args != worker_args {
@@ -719,15 +753,6 @@ fn validate_worker(
         );
         errors.push(error)
     }
-    if let Some(version) = component_version {
-        if worker_metadata.last_known_status.component_version != version {
-            let error = format!(
-                "Worker is already running with different component version: {:?} != {:?}",
-                worker_metadata.last_known_status.component_version, version
-            );
-            errors.push(error)
-        }
-    };
     if errors.is_empty() {
         Ok(())
     } else {
