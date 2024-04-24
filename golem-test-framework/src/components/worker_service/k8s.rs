@@ -54,6 +54,7 @@ impl K8sWorkerService {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting Golem Worker Service pod");
 
@@ -124,7 +125,7 @@ impl K8sWorkerService {
         let _res_pod = pods.create(&pp, &pod).await.expect("Failed to create pod");
         let managed_pod = AsyncDropper::new(ManagedPod::new(Self::NAME, namespace));
 
-        let service: Service = serde_json::from_value(json!({
+        let mut service: Service = serde_json::from_value(json!({
             "apiVersion": "v1",
             "kind": "Service",
             "metadata": {
@@ -157,6 +158,7 @@ impl K8sWorkerService {
             }
         }))
         .expect("Failed to deserialize service definition");
+        service.metadata.annotations = service_annotations;
 
         let _res_srv = services
             .create(&pp, &service)

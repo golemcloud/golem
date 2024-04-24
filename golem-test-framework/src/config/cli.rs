@@ -463,12 +463,24 @@ impl CliTestDependencies {
                     SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
                 );
                 let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
-                    K8sShardManager::new(&namespace, &routing_type, Level::INFO, redis.clone())
-                        .await,
+                    K8sShardManager::new(
+                        &namespace,
+                        &routing_type,
+                        Level::INFO,
+                        redis.clone(),
+                        None,
+                    )
+                    .await,
                 );
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    K8sComponentService::new(&namespace, &routing_type, Level::INFO, rdb.clone())
-                        .await,
+                    K8sComponentService::new(
+                        &namespace,
+                        &routing_type,
+                        Level::INFO,
+                        rdb.clone(),
+                        None,
+                    )
+                    .await,
                 );
                 let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
                     K8sWorkerService::new(
@@ -479,6 +491,7 @@ impl CliTestDependencies {
                         shard_manager.clone(),
                         rdb.clone(),
                         redis.clone(),
+                        None,
                     )
                     .await,
                 );
@@ -494,6 +507,7 @@ impl CliTestDependencies {
                         shard_manager.clone(),
                         worker_service.clone(),
                         Level::INFO,
+                        None,
                     )
                     .await,
                 );
@@ -514,23 +528,20 @@ impl CliTestDependencies {
                 cluster_size,
                 redis_prefix,
             } => {
-                let routing_type = K8sRoutingType::Ingress;
+                let routing_type = K8sRoutingType::Service;
                 let namespace = K8sNamespace(namespace.clone());
+                let service_annotations = Some(aws_nlb_service_annotations());
 
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> = Arc::new(
-                    K8sPostgresRdb::new(
-                        &namespace,
-                        &routing_type,
-                        Some(aws_nlb_service_annotations()),
-                    )
-                    .await,
+                    K8sPostgresRdb::new(&namespace, &routing_type, service_annotations.clone())
+                        .await,
                 );
                 let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
                     K8sRedis::new(
                         &namespace,
                         &routing_type,
                         redis_prefix.clone(),
-                        Some(aws_nlb_service_annotations()),
+                        service_annotations.clone(),
                     )
                     .await,
                 );
@@ -538,12 +549,24 @@ impl CliTestDependencies {
                     SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
                 );
                 let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
-                    K8sShardManager::new(&namespace, &routing_type, Level::INFO, redis.clone())
-                        .await,
+                    K8sShardManager::new(
+                        &namespace,
+                        &routing_type,
+                        Level::INFO,
+                        redis.clone(),
+                        service_annotations.clone(),
+                    )
+                    .await,
                 );
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    K8sComponentService::new(&namespace, &routing_type, Level::INFO, rdb.clone())
-                        .await,
+                    K8sComponentService::new(
+                        &namespace,
+                        &routing_type,
+                        Level::INFO,
+                        rdb.clone(),
+                        service_annotations.clone(),
+                    )
+                    .await,
                 );
                 let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
                     K8sWorkerService::new(
@@ -554,6 +577,7 @@ impl CliTestDependencies {
                         shard_manager.clone(),
                         rdb.clone(),
                         redis.clone(),
+                        service_annotations.clone(),
                     )
                     .await,
                 );
@@ -569,6 +593,7 @@ impl CliTestDependencies {
                         shard_manager.clone(),
                         worker_service.clone(),
                         Level::INFO,
+                        service_annotations.clone(),
                     )
                     .await,
                 );

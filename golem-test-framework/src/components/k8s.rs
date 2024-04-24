@@ -38,7 +38,8 @@ impl Default for K8sNamespace {
 #[derive(Debug, Clone)]
 pub enum K8sRoutingType {
     Minikube,
-    Ingress,
+    Service,
+    AlbIngress,
 }
 
 pub type K8sPod = AsyncDropper<ManagedPod>;
@@ -118,6 +119,7 @@ impl AsyncDrop for ManagedService {
 pub enum ManagedRouting {
     Minikube { child: Option<Child> },
     Ingress(ManagedIngress),
+    Service,
 }
 
 impl ManagedRouting {
@@ -126,6 +128,9 @@ impl ManagedRouting {
     }
     pub fn ingress<S: Into<String>>(name: S, namespace: &K8sNamespace) -> ManagedRouting {
         ManagedRouting::Ingress(ManagedIngress::new(name, namespace))
+    }
+    pub fn service() -> ManagedRouting {
+        ManagedRouting::Service
     }
 }
 
@@ -225,7 +230,12 @@ impl Routing {
     ) -> Routing {
         match k8s_routing_type {
             K8sRoutingType::Minikube => Self::create_minikube_tunnel(service_name, namespace).await,
-            K8sRoutingType::Ingress => Self::create_ingress(service_name, port, namespace).await,
+            K8sRoutingType::Service => {
+                Self::create_service_route(service_name, port, namespace).await
+            }
+            K8sRoutingType::AlbIngress => {
+                Self::create_alb_ingress(service_name, port, namespace).await
+            }
         }
     }
 
@@ -242,71 +252,86 @@ impl Routing {
         }
     }
 
-    async fn create_ingress(service_name: &str, port: u16, namespace: &K8sNamespace) -> Routing {
-        info!("Creating ingress for service {service_name}:{port} in {namespace:?}");
-        // let ingresses: Api<Ingress> =
-        //     Api::namespaced(Client::try_default().await.unwrap(), &namespace.0);
-        //
-        // let listener = format!("[{{\"HTTP\": {}}}]", port);
-        //
-        // let ingress: Ingress = serde_json::from_value(json!({
-        //     "apiVersion": "networking.k8s.io/v1",
-        //     "kind": "Ingress",
-        //     "metadata": {
-        //         "name": service_name,
-        //         "labels": {
-        //             "app": service_name,
-        //             "app-group": "golem"
-        //         },
-        //         "annotations": {
-        //             "alb.ingress.kubernetes.io/scheme": "internet-facing",
-        //             "alb.ingress.kubernetes.io/target-type": "ip",
-        //             "alb.ingress.kubernetes.io/listen-ports": listener
-        //         }
-        //     },
-        //     "spec": {
-        //         "ingressClassName": "alb",
-        //         "rules": [
-        //             {
-        //                 "http": {
-        //                     "paths": [
-        //                         {
-        //                             "backend": {
-        //                                 "service": {
-        //                                     "name": service_name,
-        //                                     "port": {
-        //                                         "number": port
-        //                                     }
-        //                                 }
-        //                             },
-        //                             "path": "/*",
-        //                             "pathType": "ImplementationSpecific"
-        //                         }
-        //                     ]
-        //                 }
-        //             }
-        //         ]
-        //     }
-        // }))
-        // .expect("Failed to deserialize ingress definition");
-        //
-        // let pp = PostParams::default();
-        //
-        // let _ = ingresses
-        //     .create(&pp, &ingress)
-        //     .await
-        //     .expect("Failed to create ingress");
-        //
-        // let routing = AsyncDropper::new(ManagedRouting::ingress(service_name, namespace));
-        //
-        // let hostname = Self::wait_for_load_balancer(&ingresses, service_name).await;
+    async fn create_alb_ingress(
+        service_name: &str,
+        port: u16,
+        namespace: &K8sNamespace,
+    ) -> Routing {
+        info!("Creating alb ingress for service {service_name}:{port} in {namespace:?}");
+        let ingresses: Api<Ingress> =
+            Api::namespaced(Client::try_default().await.unwrap(), &namespace.0);
+
+        let ingress: Ingress = serde_json::from_value(json!({
+            "apiVersion": "networking.k8s.io/v1",
+            "kind": "Ingress",
+            "metadata": {
+                "name": service_name,
+                "labels": {
+                    "app": service_name,
+                    "app-group": "golem"
+                },
+                "annotations": {
+                    "alb.ingress.kubernetes.io/scheme": "internet-facing",
+                    "alb.ingress.kubernetes.io/target-type": "ip"
+                }
+            },
+            "spec": {
+                "ingressClassName": "alb",
+                "rules": [
+                    {
+                        "http": {
+                            "paths": [
+                                {
+                                    "backend": {
+                                        "service": {
+                                            "name": service_name,
+                                            "port": {
+                                                "number": port
+                                            }
+                                        }
+                                    },
+                                    "path": "/*",
+                                    "pathType": "ImplementationSpecific"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }))
+        .expect("Failed to deserialize ingress definition");
+
+        let pp = PostParams::default();
+
+        let _ = ingresses
+            .create(&pp, &ingress)
+            .await
+            .expect("Failed to create ingress");
+
+        let routing = AsyncDropper::new(ManagedRouting::ingress(service_name, namespace));
+
+        let hostname = Self::wait_for_load_balancer(&ingresses, service_name).await;
+
+        Routing {
+            hostname,
+            port: 80,
+            routing,
+        }
+    }
+
+    async fn create_service_route(
+        service_name: &str,
+        port: u16,
+        namespace: &K8sNamespace,
+    ) -> Routing {
+        info!("Creating route for service {service_name}:{port} in {namespace:?}");
 
         let service: Api<Service> =
             Api::namespaced(Client::try_default().await.unwrap(), &namespace.0);
 
         let hostname = Self::wait_for_service_load_balancer(&service, service_name).await;
 
-        let routing = AsyncDropper::new(ManagedRouting::ingress(service_name, namespace));
+        let routing = AsyncDropper::new(ManagedRouting::service());
 
         Routing {
             hostname,

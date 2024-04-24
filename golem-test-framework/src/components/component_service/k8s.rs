@@ -47,6 +47,7 @@ impl K8sComponentService {
         routing_type: &K8sRoutingType,
         verbosity: Level,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting Golem Component Service pod");
 
@@ -104,7 +105,7 @@ impl K8sComponentService {
         let _res_pod = pods.create(&pp, &pod).await.expect("Failed to create pod");
         let managed_pod = AsyncDropper::new(ManagedPod::new(Self::NAME, namespace));
 
-        let service: Service = serde_json::from_value(json!({
+        let mut service: Service = serde_json::from_value(json!({
             "apiVersion": "v1",
             "kind": "Service",
             "metadata": {
@@ -132,6 +133,7 @@ impl K8sComponentService {
             }
         }))
         .expect("Failed to deserialize service definition");
+        service.metadata.annotations = service_annotations;
 
         let _res_srv = services
             .create(&pp, &service)

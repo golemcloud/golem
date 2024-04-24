@@ -40,6 +40,7 @@ impl K8sWorkerExecutorCluster {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors = Vec::new();
@@ -55,6 +56,7 @@ impl K8sWorkerExecutorCluster {
                     component_service.clone(),
                     shard_manager.clone(),
                     worker_service.clone(),
+                    service_annotations.clone(),
                 )
                 .await,
             );

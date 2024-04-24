@@ -48,6 +48,7 @@ impl K8sShardManager {
         routing_type: &K8sRoutingType,
         verbosity: Level,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting Golem Shard Manager pod");
 
@@ -105,7 +106,7 @@ impl K8sShardManager {
         let _res_pod = pods.create(&pp, &pod).await.expect("Failed to create pod");
         let managed_pod = AsyncDropper::new(ManagedPod::new(Self::NAME, namespace));
 
-        let service: Service = serde_json::from_value(json!({
+        let mut service: Service = serde_json::from_value(json!({
             "apiVersion": "v1",
             "kind": "Service",
             "metadata": {
@@ -133,6 +134,7 @@ impl K8sShardManager {
             }
         }))
         .expect("Failed to deserialize service definition");
+        service.metadata.annotations = service_annotations;
 
         let _res_srv = services
             .create(&pp, &service)
