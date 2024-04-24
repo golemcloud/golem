@@ -1,61 +1,66 @@
-import { Callout } from "nextra/components"
+import { Callout, Steps, FileTree } from "nextra/components"
 
 # JavaScript
 
-JavaScript can be used as a Tier 1 guest language using https://github.com/bytecodealliance/componentize-js.
+JavaScript can be used as a Tier 1 guest language.
 
-The easiest way to get started once the tooling is installed is to use the `golem new` command as described in the [Quickstart](/docs/quickstart).
+The tools used in this guide are:
 
-If you prefer doing it from scratch, start with a npm `package.json` like this:
+- `@bytecodealliance/jco` - Convert Javascript to WASM Components
+- `@bytecodealliance/componentize-js` - JavaScript Componentization Tool
 
-```json
+The easiest way to get started once the tooling is installed is to use the `golem-cli new` command as described in the [Quickstart](/docs/quickstart).
+
+View the available examples with:
+
+```bash copy
+golem-cli list-examples --language javascript
+```
+
+Then generate a new example project with:
+
+```bash copy
+golem-cli new --example js-actor-minimal --component-name js-component
+```
+
+## Manual Installation
+
+Here's the target project structure
+
+<FileTree>
+  <FileTree.Folder name="src" defaultOpen>
+    <FileTree.File name="main.js" />
+  </FileTree.Folder>
+  <FileTree.Folder name="wit" defaultOpen>
+    <FileTree.File name="main.wit" />
+    <FileTree.Folder name="deps" />
+  </FileTree.Folder>
+  <FileTree.File name="package.json" />
+</FileTree>
+
+<Steps>
+
+### Add a package.json file
+
+```json filename="package.json" copy
 {
   "type": "module",
-  "devDependencies": {
-    "@bytecodealliance/jco": "1.0.0",
-    "@bytecodealliance/componentize-js": "0.7.0"
-  },
   "scripts": {
-    "build": "node componentize.js"
+    "build": "jco componentize -w wit -o out/component.wasm src/main.js"
+  },
+  "devDependencies": {
+    "@bytecodealliance/componentize-js": "0.8.3",
+    "@bytecodealliance/jco": "1.1.1"
   }
 }
 ```
 
-Run `npm install` to download the required tooling:
+### Create a WIT File
 
-```bash
-npm install
-```
+Create a WIT file in the `wit` directory, for example `wit/main.wit`:
 
-Then add the following build script called `componentize.js` to your project:
+```jsx copy
 
-```jsx
-import { componentize } from "@bytecodealliance/componentize-js"
-import { readFile, writeFile, mkdir } from "node:fs/promises"
-import { resolve } from "node:path"
-
-const jsSource = await readFile("main.js", "utf8")
-
-const { component } = await componentize(jsSource, {
-  witPath: resolve("wit"),
-  enableStdout: true,
-  preview2Adapter: "adapters/tier1/wasi_snapshot_preview1.wasm",
-})
-
-await mkdir("out", { recursive: true })
-await writeFile("out/component_name.wasm", component)
-```
-
-The `adapters/tier1/wasi_snapshot_preview1.wasm` to be used can be downloaded from the `golem-wit` repository: [https://github.com/golemcloud/golem-wit/blob/main/adapters/tier1/wasi_snapshot_preview1.wasm](https://github.com/golemcloud/golem-wit/blob/main/adapters/tier1/wasi_snapshot_preview1.wasm)
-
-<Callout>
-When using `golem new` to generate the project, the correct version of the adapter WASM is automatically put in the project's directory.
-
-</Callout>
-
-The next step is to define your worker component's interface using a WIT file:
-
-```jsx
 package golem:component;
 
 interface api {
@@ -66,33 +71,106 @@ interface api {
 world demo  {
   export api;
 }
+
 ```
 
-Put it in a file in the `wit` subdirectory, for example `wit/main.wit`
+### Create a main.js file
 
-If needed you can put additional WIT files from [https://github.com/golemcloud/golem-wit/tree/main/wit/deps](https://github.com/golemcloud/golem-wit/tree/main/wit/deps) to the `wit/deps` directory in your project, and import them to your main interface definition.
+Create an empty `main.js` file in the `src` directory:
 
-Finally write a JS file implementing the interface defined in the WIT file:
+Full file path from the root of the project: `src/main.js`
 
-```jsx
-var state = 0
+The exported object must have the same shape as the interface exported by your WIT world.
+
+```javascript copy
+let state = 0
 
 export const api = {
-  add: function (value) {
+  add(value) {
     console.log(`Adding ${value} to the counter`)
     state += Number(value)
   },
-  get: function () {
+  get() {
     console.log(`Returning the current counter value: ${state}`)
     return BigInt(state)
   },
 }
 ```
 
-Running the build script with
+### Install Dependencies
 
-```jsx
+```bash copy
+npm install
+```
+
+### Build the Component
+
+```bash copy
 npm run build
 ```
 
-produces a WASM file in the `out` directory ready to be uploaded to Golem!
+Produces a WASM file in the `out` directory ready to be uploaded to Golem!
+
+</Steps>
+
+## Using Additional WIT Files (Optional)
+
+If needed you can put additional WIT files from [golem-wit](https://github.com/golemcloud/golem-wit/tree/main/wit/deps) to the `wit/deps` directory in your project.
+
+Then import them to your main interface definition.
+
+For example if you wanted to use a wasi clock you would add the following to your `main.wit` file:
+
+```jsx copy
+package golem:component;
+
+interface api {
+  add: func(value: u64);
+  get: func() -> u64;
+}
+
+world demo {
+  // Add the import!
+  import wasi:clocks/wall-clock@0.2.0;
+  export api;
+}
+
+```
+
+Then you need to add the wasi deps to your `wit/deps directory`.
+
+> We need both folders because `clocks` depends on the `io`.
+
+<FileTree>
+  <FileTree.Folder name="src">
+    <FileTree.File name="main.js" />
+  </FileTree.Folder>
+  <FileTree.Folder name="wit" defaultOpen>
+    <FileTree.File name="main.wit" />
+    <FileTree.Folder name="deps" defaultOpen>
+      <FileTree.Folder name="clocks">
+        <FileTree.File name="world.wit" />
+        <FileTree.File name="wall-clock.wit" />
+        <FileTree.File name="monotonic-clock.wit" />
+      </FileTree.Folder>
+      <FileTree.Folder name="io">
+        <FileTree.File name="world.wit" />
+        <FileTree.File name="streams.wit" />
+        <FileTree.File name="error.wit" />
+        <FileTree.File name="poll.wit" />
+      </FileTree.Folder>
+    </FileTree.Folder>
+  </FileTree.Folder>
+  <FileTree.File name="package.json" />
+</FileTree>
+
+These wasi functions can be imported from your javascript like this:
+
+```javascript copy
+import { now } from "wasi:clocks/wall-clock@0.2.0"
+
+function useNow() {
+  let currentTimestamp = now()
+  console.log(`The current time is`, currentTimestamp)
+}
+```
