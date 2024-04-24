@@ -106,8 +106,13 @@ fn display_golem_error(error: golem_client::model::GolemError) -> String {
                 details
             )
         }
-        GolemError::FailedToResumeWorker(GolemErrorFailedToResumeWorker { worker_id }) => {
-            format!("Failed to resume worker: {}", display_worker_id(worker_id))
+        GolemError::FailedToResumeWorker(inner) => {
+            let GolemErrorFailedToResumeWorker { worker_id, reason } = *inner;
+            format!(
+                "Failed to resume worker {}: {}",
+                display_worker_id(worker_id),
+                display_golem_error(reason)
+            )
         }
         GolemError::ComponentDownloadFailed(GolemErrorComponentDownloadFailed {
             component_id,
