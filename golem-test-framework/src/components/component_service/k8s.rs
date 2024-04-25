@@ -48,6 +48,7 @@ impl K8sComponentService {
         routing_type: &K8sRoutingType,
         verbosity: Level,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting Golem Component Service pod");
@@ -149,7 +150,7 @@ impl K8sComponentService {
             routing: managed_routing,
         } = Routing::create(Self::NAME, Self::GRPC_PORT, namespace, routing_type).await;
 
-        wait_for_startup(&local_host, local_port, Duration::from_secs(400)).await;
+        wait_for_startup(&local_host, local_port, timeout).await;
 
         info!("Golem Component Service pod started");
 

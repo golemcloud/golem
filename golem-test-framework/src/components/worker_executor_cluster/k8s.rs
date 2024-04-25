@@ -23,6 +23,7 @@ use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tracing::{info, Level};
 
 pub struct K8sWorkerExecutorCluster {
@@ -40,6 +41,7 @@ impl K8sWorkerExecutorCluster {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
+        timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
@@ -56,6 +58,7 @@ impl K8sWorkerExecutorCluster {
                     component_service.clone(),
                     shard_manager.clone(),
                     worker_service.clone(),
+                    timeout.clone(),
                     service_annotations.clone(),
                 )
                 .await,

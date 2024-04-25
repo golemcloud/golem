@@ -49,6 +49,7 @@ impl K8sShardManager {
         routing_type: &K8sRoutingType,
         verbosity: Level,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
+        timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting Golem Shard Manager pod");
@@ -150,7 +151,7 @@ impl K8sShardManager {
             routing: managed_routing,
         } = Routing::create(Self::NAME, Self::GRPC_PORT, namespace, routing_type).await;
 
-        wait_for_startup(&local_host, local_port, Duration::from_secs(400)).await;
+        wait_for_startup(&local_host, local_port, timeout).await;
 
         info!("Golem Shard Manager pod started");
 

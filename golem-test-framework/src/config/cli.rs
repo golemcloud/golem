@@ -49,6 +49,7 @@ use crate::dsl::benchmark::BenchmarkConfig;
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -453,11 +454,19 @@ impl CliTestDependencies {
             } => {
                 let routing_type = K8sRoutingType::Minikube;
                 let namespace = K8sNamespace(namespace.clone());
+                let timeout = Duration::from_secs(90);
 
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, None).await);
+                    Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
                 let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
-                    K8sRedis::new(&namespace, &routing_type, redis_prefix.clone(), None).await,
+                    K8sRedis::new(
+                        &namespace,
+                        &routing_type,
+                        redis_prefix.clone(),
+                        timeout,
+                        None,
+                    )
+                    .await,
                 );
                 let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
                     SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
@@ -468,6 +477,7 @@ impl CliTestDependencies {
                         &routing_type,
                         Level::INFO,
                         redis.clone(),
+                        timeout.clone(),
                         None,
                     )
                     .await,
@@ -478,6 +488,7 @@ impl CliTestDependencies {
                         &routing_type,
                         Level::INFO,
                         rdb.clone(),
+                        timeout.clone(),
                         None,
                     )
                     .await,
@@ -491,6 +502,7 @@ impl CliTestDependencies {
                         shard_manager.clone(),
                         rdb.clone(),
                         redis.clone(),
+                        timeout.clone(),
                         None,
                     )
                     .await,
@@ -507,6 +519,7 @@ impl CliTestDependencies {
                         shard_manager.clone(),
                         worker_service.clone(),
                         Level::INFO,
+                        timeout.clone(),
                         None,
                     )
                     .await,
@@ -531,16 +544,23 @@ impl CliTestDependencies {
                 let routing_type = K8sRoutingType::Service;
                 let namespace = K8sNamespace(namespace.clone());
                 let service_annotations = Some(aws_nlb_service_annotations());
+                let timeout = Duration::from_secs(900);
 
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> = Arc::new(
-                    K8sPostgresRdb::new(&namespace, &routing_type, service_annotations.clone())
-                        .await,
+                    K8sPostgresRdb::new(
+                        &namespace,
+                        &routing_type,
+                        timeout.clone(),
+                        service_annotations.clone(),
+                    )
+                    .await,
                 );
                 let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
                     K8sRedis::new(
                         &namespace,
                         &routing_type,
                         redis_prefix.clone(),
+                        timeout.clone(),
                         service_annotations.clone(),
                     )
                     .await,
@@ -554,6 +574,7 @@ impl CliTestDependencies {
                         &routing_type,
                         Level::INFO,
                         redis.clone(),
+                        timeout.clone(),
                         service_annotations.clone(),
                     )
                     .await,
@@ -564,6 +585,7 @@ impl CliTestDependencies {
                         &routing_type,
                         Level::INFO,
                         rdb.clone(),
+                        timeout.clone(),
                         service_annotations.clone(),
                     )
                     .await,
@@ -577,6 +599,7 @@ impl CliTestDependencies {
                         shard_manager.clone(),
                         rdb.clone(),
                         redis.clone(),
+                        timeout.clone(),
                         service_annotations.clone(),
                     )
                     .await,
@@ -593,6 +616,7 @@ impl CliTestDependencies {
                         shard_manager.clone(),
                         worker_service.clone(),
                         Level::INFO,
+                        timeout.clone(),
                         service_annotations.clone(),
                     )
                     .await,

@@ -55,6 +55,7 @@ impl K8sWorkerService {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
+        timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting Golem Worker Service pod");
@@ -174,7 +175,7 @@ impl K8sWorkerService {
             routing: managed_routing,
         } = Routing::create(Self::NAME, Self::GRPC_PORT, namespace, routing_type).await;
 
-        wait_for_startup(&local_host, local_port, Duration::from_secs(400)).await;
+        wait_for_startup(&local_host, local_port, timeout).await;
 
         info!("Golem Worker Service pod started");
 
