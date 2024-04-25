@@ -74,6 +74,7 @@ fn make(
             worker_simulated_crash,
         ),
         Trial::test_in_context(format!("worker_list{suffix}"), ctx.clone(), worker_list),
+        Trial::test_in_context(format!("worker_update{suffix}"), ctx.clone(), worker_update),
     ]
 }
 
@@ -721,6 +722,41 @@ fn worker_list(
         ])?;
         assert_eq!(result3.workers.len(), 0);
     }
+
+    Ok(())
+}
+
+fn worker_update(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let cfg = &cli.config;
+
+    let component_id = make_component(deps, &format!("{name} worker_update"), &cli)?.component_id;
+    let worker_name = format!("{name}_worker_update");
+    let _: WorkerId = cli.run(&[
+        "worker",
+        "add",
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('C', "component-id"),
+        &component_id,
+    ])?;
+    cli.run_unit(&[
+        "worker",
+        "update",
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('m', "mode"),
+        "auto",
+        &cfg.arg('t', "target-version"),
+        "1",
+    ])?;
 
     Ok(())
 }

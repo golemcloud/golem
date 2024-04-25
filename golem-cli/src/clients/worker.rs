@@ -17,8 +17,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::model::{
-    CallingConvention, InvokeParameters, InvokeResult, WorkerCreationRequest, WorkerFilter,
-    WorkerId, WorkerMetadata, WorkersMetadataRequest, WorkersMetadataResponse,
+    CallingConvention, InvokeParameters, InvokeResult, UpdateWorkerRequest, WorkerCreationRequest,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkersMetadataRequest, WorkersMetadataResponse,
 };
 use golem_client::Context;
 use native_tls::TlsConnector;
@@ -29,7 +29,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
 use tracing::{debug, info};
 
-use crate::model::{ComponentId, GolemError, InvocationKey, WorkerName};
+use crate::model::{ComponentId, GolemError, InvocationKey, WorkerName, WorkerUpdateMode};
 
 #[async_trait]
 pub trait WorkerClient {
@@ -97,6 +97,14 @@ pub trait WorkerClient {
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError>;
     async fn connect(&self, name: WorkerName, component_id: ComponentId) -> Result<(), GolemError>;
+
+    async fn update(
+        &self,
+        name: WorkerName,
+        component_id: ComponentId,
+        mode: WorkerUpdateMode,
+        target_version: u64,
+    ) -> Result<(), GolemError>;
 }
 
 #[derive(Clone)]
@@ -450,6 +458,33 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         future::select(pings, read_res).await;
 
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        name: WorkerName,
+        component_id: ComponentId,
+        mode: WorkerUpdateMode,
+        target_version: u64,
+    ) -> Result<(), GolemError> {
+        info!("Updating worker {name} of {}", component_id.0);
+        let update_mode = match mode {
+            WorkerUpdateMode::Automatic => golem_client::model::WorkerUpdateMode::Automatic,
+            WorkerUpdateMode::Manual => golem_client::model::WorkerUpdateMode::Manual,
+        };
+
+        let _ = self
+            .client
+            .update_worker(
+                &component_id.0,
+                &name.0,
+                &UpdateWorkerRequest {
+                    mode: update_mode,
+                    target_version,
+                },
+            )
+            .await?;
         Ok(())
     }
 }
