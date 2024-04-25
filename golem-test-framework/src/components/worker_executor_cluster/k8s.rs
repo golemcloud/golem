@@ -58,7 +58,7 @@ impl K8sWorkerExecutorCluster {
                     component_service.clone(),
                     shard_manager.clone(),
                     worker_service.clone(),
-                    timeout.clone(),
+                    timeout,
                     service_annotations.clone(),
                 )
                 .await,
