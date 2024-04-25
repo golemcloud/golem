@@ -1,7 +1,7 @@
 use crate::cli::{Cli, CliLive};
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::{Format, InvocationKey};
-use golem_client::model::{WorkerId, WorkersMetadataResponse};
+use golem_client::model::{UpdateRecord, WorkerId, WorkersMetadataResponse};
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
@@ -734,9 +734,20 @@ fn worker_update(
     ),
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
-
     let component_id = make_component(deps, &format!("{name} worker_update"), &cli)?.component_id;
     let worker_name = format!("{name}_worker_update");
+
+    let workers_list = || -> Result<WorkersMetadataResponse, Failed> {
+        cli.run(&[
+            "worker",
+            "list",
+            &cfg.arg('C', "component-id"),
+            &component_id,
+            &cfg.arg('f', "filter"),
+            format!("name like {}_worker", name).as_str(),
+        ])
+    };
+
     let _: WorkerId = cli.run(&[
         "worker",
         "add",
@@ -745,6 +756,8 @@ fn worker_update(
         &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
+    let original_updates = workers_list()?.workers[0].updates.len();
+
     cli.run_unit(&[
         "worker",
         "update",
@@ -757,6 +770,14 @@ fn worker_update(
         &cfg.arg('t', "target-version"),
         "1",
     ])?;
+    let worker_updates_after_update = workers_list()?.workers[0].updates[0].clone();
+    let target_version = if let UpdateRecord::PendingUpdate(pu) = worker_updates_after_update {
+        pu.target_version
+    } else {
+        0
+    };
 
+    assert_eq!(original_updates, 0);
+    assert_eq!(target_version, 1);
     Ok(())
 }
