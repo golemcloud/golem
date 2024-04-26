@@ -21,8 +21,10 @@ use async_mutex::Mutex;
 use bytes::Bytes;
 use golem_common::cache::PendingOrFinal;
 use golem_common::config::RetryConfig;
-use golem_common::model::oplog::{OplogEntry, TimestampedUpdateDescription, UpdateDescription};
-use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder};
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
+};
+use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, FailedUpdateRecord, InvocationKey, SuccessfulUpdateRecord,
     Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
@@ -41,6 +43,7 @@ use crate::services::invocation_key::LookupResult;
 use crate::services::invocation_queue::InvocationQueue;
 use crate::services::oplog::Oplog;
 use crate::services::recovery::is_worker_error_retriable;
+use crate::services::worker_activator::WorkerActivator;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
     HasAll, HasComponentService, HasConfig, HasInvocationKeyService, HasInvocationQueue,
@@ -99,7 +102,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let component_id = worker_id.component_id.clone();
 
             loop {
-                info!("##### {:?}", worker_metadata.last_known_status);
+                info!("##### {:?}", worker_metadata.last_known_status); // TODO: remove
                 let component_version = worker_metadata
                     .last_known_status
                     .pending_updates
@@ -108,7 +111,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         worker_metadata.last_known_status.component_version,
                         |update| {
                             let target_version = *update.description.target_version();
-                            info!("Attempting automatic update for {worker_id} to version {target_version} from {}",
+                            info!("Attempting {} update for {worker_id} from {} to version {target_version}",
+                                match update.description {
+                                    UpdateDescription::Automatic { .. } => "automatic",
+                                    UpdateDescription::SnapshotBased { .. } => "snapshot based"
+                                },
                             worker_metadata.last_known_status.component_version
                         );
                             target_version
@@ -200,10 +207,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     execution_status,
                 });
 
-                result
-                    .public_state
-                    .invocation_queue()
-                    .attach(result.clone())
+                InvocationQueue::attach(result.public_state.invocation_queue(), result.clone())
                     .await;
 
                 let need_restart = {
@@ -363,6 +367,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         worker_id_clone_1,
                         config_clone,
                         oplog,
+                        this.worker_activator().clone(),
                         &initial_pending_invocations,
                         &initial_pending_updates,
                     )
@@ -440,6 +445,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         worker_id_clone_1,
                         config_clone,
                         oplog,
+                        this.worker_activator().clone(),
                         &initial_pending_invocations,
                         &initial_pending_updates,
                     )
@@ -521,6 +527,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         worker_id_clone_1,
                         config_clone,
                         oplog,
+                        this.worker_activator().clone(),
                         &initial_pending_invocations,
                         &initial_pending_updates,
                     )
@@ -711,12 +718,14 @@ impl<Ctx: WorkerCtx> PendingWorker<Ctx> {
         worker_id: WorkerId,
         config: Arc<GolemConfig>,
         oplog: Arc<dyn Oplog + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         initial_pending_invocations: &[TimestampedWorkerInvocation],
         initial_pending_updates: &[TimestampedUpdateDescription],
     ) -> Result<PendingWorker<Ctx>, GolemError> {
         let invocation_queue = Arc::new(InvocationQueue::new(
             worker_id.clone(),
             oplog.clone(),
+            worker_activator.clone(),
             initial_pending_invocations,
             initial_pending_updates,
         ));
@@ -925,7 +934,8 @@ where
             last_known.overridden_retry_config.clone(),
             &new_entries,
         );
-        let deleted_regions = calculate_deleted_regions(last_known.deleted_regions, &new_entries);
+        let mut deleted_regions =
+            calculate_deleted_regions(last_known.deleted_regions, &new_entries);
         let pending_invocations =
             calculate_pending_invocations(last_known.pending_invocations, &new_entries);
         let (pending_updates, failed_updates, successful_updates, component_version) =
@@ -934,8 +944,18 @@ where
                 last_known.failed_updates,
                 last_known.successful_updates,
                 last_known.component_version,
+                last_known.oplog_idx,
                 &new_entries,
             );
+
+        if let Some(TimestampedUpdateDescription {
+            oplog_index,
+            description: UpdateDescription::SnapshotBased { .. },
+            ..
+        }) = pending_updates.front()
+        {
+            deleted_regions.add(OplogRegion::from_range(1..=*oplog_index));
+        }
 
         Ok(WorkerStatusRecord {
             oplog_idx: last_oplog_index,
@@ -1136,6 +1156,7 @@ fn calculate_update_fields(
     initial_failed_updates: Vec<FailedUpdateRecord>,
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
     initial_version: u64,
+    start_index: OplogIndex,
     entries: &Vec<OplogEntry>,
 ) -> (
     VecDeque<TimestampedUpdateDescription>,
@@ -1147,7 +1168,7 @@ fn calculate_update_fields(
     let mut failed_updates = initial_failed_updates;
     let mut successful_updates = initial_successful_updates;
     let mut version = initial_version;
-    for entry in entries {
+    for (n, entry) in entries.iter().enumerate() {
         match entry {
             OplogEntry::Create {
                 component_version, ..
@@ -1161,6 +1182,7 @@ fn calculate_update_fields(
             } => {
                 pending_updates.push_back(TimestampedUpdateDescription {
                     timestamp: *timestamp,
+                    oplog_index: start_index + (n as OplogIndex),
                     description: description.clone(),
                 });
             }

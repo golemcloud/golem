@@ -18,14 +18,7 @@ use std::time::Duration;
 
 use crate::model::{InterruptKind, LastError, TrapType};
 use crate::services::rpc::Rpc;
-use crate::services::{
-    active_workers, blob_store, component, golem_config, invocation_key, key_value, oplog, promise,
-    scheduler, worker, worker_enumeration, HasActiveWorkers, HasAll, HasBlobStoreService,
-    HasComponentService, HasConfig, HasExtraDeps, HasInvocationKeyService, HasKeyValueService,
-    HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasWasmtimeEngine,
-    HasWorkerEnumerationService, HasWorkerService,
-};
+use crate::services::{active_workers, blob_store, component, golem_config, invocation_key, key_value, oplog, promise, scheduler, worker, worker_enumeration, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasExtraDeps, HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService, HasWorkerActivator, worker_activator};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_mutex::Mutex;
@@ -89,6 +82,7 @@ pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
     rpc: Arc<dyn Rpc + Send + Sync>,
+    worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -113,6 +107,7 @@ impl<Ctx: WorkerCtx> Clone for RecoveryManagementDefault<Ctx> {
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
             rpc: self.rpc.clone(),
+            worker_activator: self.worker_activator.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -204,6 +199,12 @@ impl<Ctx: WorkerCtx> HasSchedulerService for RecoveryManagementDefault<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasWorkerActivator for RecoveryManagementDefault<Ctx> {
+    fn worker_activator(&self) -> Arc<dyn worker_activator::WorkerActivator + Send + Sync> {
+        self.worker_activator.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasOplogService for RecoveryManagementDefault<Ctx> {
     fn oplog_service(&self) -> Arc<dyn oplog::OplogService + Send + Sync> {
         self.oplog_service.clone()
@@ -249,6 +250,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
@@ -271,6 +273,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             golem_config,
             recovery_override: None,
             rpc,
+            worker_activator,
             extra_deps,
         }
     }
@@ -322,6 +325,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             golem_config,
             recovery_override: Some(Arc::new(recovery_override)),
             rpc,
+            worker_activator,
             extra_deps,
         }
     }
@@ -582,7 +586,7 @@ mod tests {
     use crate::services::active_workers::ActiveWorkers;
     use crate::services::blob_store::BlobStoreService;
     use crate::services::golem_config::GolemConfig;
-    use crate::services::invocation_key::InvocationKeyService;
+    use crate::services::invocation_key::{InvocationKeyService, LookupResult};
     use crate::services::invocation_queue::InvocationQueue;
     use crate::services::key_value::KeyValueService;
     use crate::services::promise::PromiseService;
@@ -694,6 +698,14 @@ mod tests {
             _key: &InvocationKey,
             _vals: Result<Vec<Value>, GolemError>,
         ) {
+            unimplemented!()
+        }
+
+        fn generate_new_invocation_key(&mut self) -> InvocationKey {
+            unimplemented!()
+        }
+
+        fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult {
             unimplemented!()
         }
     }

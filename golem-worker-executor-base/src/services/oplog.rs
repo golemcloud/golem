@@ -58,6 +58,11 @@ pub trait Oplog {
     /// Returns true if the maximum possible number of replicas is reached within the timeout,
     /// otherwise false.
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool;
+
+    async fn add_and_commit(&self, entry: OplogEntry) {
+        self.add(entry).await;
+        self.commit().await;
+    }
 }
 
 #[derive(Clone, Debug)]

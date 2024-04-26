@@ -40,17 +40,19 @@ use crate::services::{worker_enumeration, HasAll, HasInvocationQueue, HasOplog};
 use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
     ExternalOperations, InvocationHooks, InvocationManagement, IoCapturing, PublicWorkerIo,
-    StatusManagement, WorkerCtx,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use cap_std::ambient_authority;
 use golem_common::config::RetryConfig;
-use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
+use golem_common::model::oplog::{
+    OplogEntry, SnapshotSource, UpdateDescription, WrappedFunctionType,
+};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, FailedUpdateRecord, InvocationKey,
+    AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord, InvocationKey,
     SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
@@ -307,10 +309,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .last_known_status()
             .clone();
 
-        status.deleted_regions = self.state.deleted_regions.clone();
+        let mut deleted_regions = self.state.deleted_regions.clone();
+        let (pending_updates, extra_deleted_regions) =
+            self.public_state.invocation_queue().pending_updates();
+        deleted_regions.extend_with(extra_deleted_regions);
+
+        status.deleted_regions = deleted_regions;
         status.overridden_retry_config = self.state.overridden_retry_policy.clone();
         status.pending_invocations = self.public_state.invocation_queue().pending_invocations();
-        status.pending_updates = self.public_state.invocation_queue().pending_updates();
+        status.pending_updates = pending_updates;
         status.oplog_idx = self.state.oplog.current_oplog_index().await;
         f(&mut status);
         self.state
@@ -327,6 +334,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn update_pending_invocations(&self) {
+        self.update_worker_status(|_| {}).await;
+    }
+
+    pub async fn update_pending_updates(&self) {
         self.update_worker_status(|_| {}).await;
     }
 
@@ -354,57 +365,126 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
         self.state.rpc.clone()
     }
+}
 
+impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
     /// Records the result of an automatic update, if any was active, and returns whether the worker
     /// should be restarted to retry recovering without the pending update.
-    pub async fn finalize_automatic_update(&mut self, result: &Result<(), GolemError>) -> bool {
-        let pending_update = self.public_state.invocation_queue.pop_pending_update();
+    pub async fn finalize_pending_update(
+        result: &Result<(), GolemError>,
+        instance: &Instance,
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+    ) -> bool {
+        let public_state = store.as_context().data().durable_ctx().public_state.clone();
+        let worker_id = store.as_context().data().worker_id().clone();
+        let pending_update = public_state.invocation_queue.pop_pending_update();
         match pending_update {
             Some(pending_update) => match result {
                 Ok(_) => {
-                    let target_version = *pending_update.description.target_version();
-                    info!(
-                        "Automatic update to {} finished successfully for {}",
-                        target_version, self.worker_id
-                    );
-                    let entry = OplogEntry::successful_update(target_version);
-                    let timestamp = entry.timestamp();
-                    self.public_state.oplog.add(entry).await;
-                    self.public_state.oplog.commit().await;
-                    self.update_worker_status(|status| {
-                        status.component_version = target_version;
-                        status.successful_updates.push(SuccessfulUpdateRecord {
-                            timestamp,
-                            target_version,
-                        })
-                    })
-                    .await;
-                    false
+                    if let UpdateDescription::SnapshotBased { source, .. } =
+                        &pending_update.description
+                    {
+                        match source {
+                            SnapshotSource::Inline(data) => {
+                                let invocation_key = store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .durable_ctx_mut()
+                                    .generate_new_invocation_key();
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .durable_ctx_mut()
+                                    .set_current_invocation_key(invocation_key.clone())
+                                    .await;
+
+                                let _ = invoke_worker(
+                                    "golem:api/load-snapshot@0.2.0/load".to_string(),
+                                    vec![Value::List(
+                                        data.into_iter().map(|b| Value::U8(*b)).collect(),
+                                    )],
+                                    store,
+                                    instance,
+                                    CallingConvention::Component,
+                                    true,
+                                )
+                                .await;
+                                let result = store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .lookup_invocation_result(&invocation_key);
+                                let target_version = *pending_update.description.target_version();
+
+                                let failed = match result {
+                                    LookupResult::Complete(Err(error)) => Some(format!(
+                                        "Manual update failed to load snapshot: {error}"
+                                    )),
+                                    LookupResult::Complete(Ok(value)) => {
+                                        if value.len() == 1 {
+                                            match &value[0] {
+                                                Value::Result(Err(Some(boxed_error_value))) => {
+                                                    match &**boxed_error_value {
+                                                        Value::String(error) =>
+                                                            Some(format!("Manual update failed to load snapshot: {error}")),
+                                                        _ =>
+                                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                                    }
+                                                }
+                                                _ => None
+                                            }
+                                        } else {
+                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                        }
+                                    }
+                                    _ => None,
+                                };
+
+                                if let Some(error) = failed {
+                                    store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .on_worker_update_failed(target_version, Some(error))
+                                        .await;
+                                    true
+                                } else {
+                                    store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .on_worker_update_succeeded(target_version)
+                                        .await;
+                                    false
+                                }
+                            }
+                            SnapshotSource::BlobStore { .. } => {
+                                panic!("Snapshot-based updates using the blob store are not supported yet")
+                            }
+                        }
+                    } else {
+                        let target_version = *pending_update.description.target_version();
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .on_worker_update_succeeded(target_version)
+                            .await;
+                        false
+                    }
                 }
                 Err(error) => {
                     let target_version = *pending_update.description.target_version();
 
-                    warn!(
-                        "Automatic update to {} failed for {}: {}",
-                        target_version, self.worker_id, error
-                    );
-                    let entry = OplogEntry::failed_update(target_version, Some(error.to_string()));
-                    let timestamp = entry.timestamp();
-                    self.public_state.oplog.add(entry).await;
-                    self.public_state.oplog.commit().await;
-                    self.update_worker_status(|status| {
-                        status.failed_updates.push(FailedUpdateRecord {
-                            timestamp,
+                    store
+                        .as_context_mut()
+                        .data_mut()
+                        .on_worker_update_failed(
                             target_version,
-                            details: Some(error.to_string()),
-                        })
-                    })
-                    .await;
+                            Some(format!("Automatic update failed: {error}")),
+                        )
+                        .await;
                     true
                 }
             },
             None => {
-                debug!("No pending updates to finalize for {}", self.worker_id);
+                debug!("No pending updates to finalize for {}", worker_id);
                 false
             }
         }
@@ -435,6 +515,18 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
         vals: Result<Vec<Value>, GolemError>,
     ) {
         self.state.confirm_invocation_key(key, vals).await
+    }
+
+    fn generate_new_invocation_key(&mut self) -> InvocationKey {
+        self.state
+            .invocation_key_service
+            .generate_key(&self.worker_id)
+    }
+
+    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult {
+        self.state
+            .invocation_key_service
+            .lookup_key(&self.worker_id, key)
     }
 }
 
@@ -481,6 +573,10 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         self.update_pending_invocations().await
     }
 
+    async fn update_pending_updates(&self) {
+        self.update_pending_invocations().await
+    }
+
     async fn deactivate(&self) {
         debug!("deactivating worker {}", self.worker_id);
         self.state.active_workers.remove(&self.worker_id);
@@ -514,8 +610,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )
         });
 
-        self.state.oplog.add(oplog_entry).await;
-        self.state.oplog.commit().await;
+        self.state.oplog.add_and_commit(oplog_entry).await;
         Ok(())
     }
 
@@ -532,8 +627,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             };
 
             if let Some(entry) = needs_commit {
-                self.state.oplog.add(entry).await;
-                self.state.oplog.commit().await;
+                self.state.oplog.add_and_commit(entry).await;
             }
         }
 
@@ -588,8 +682,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     panic!("could not encode function result for {full_function_name}: {err}")
                 });
 
-            self.state.oplog.add(oplog_entry).await;
-            self.state.oplog.commit().await;
+            self.state.oplog.add_and_commit(oplog_entry).await;
         } else {
             let response = self
                 .state
@@ -633,6 +726,52 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
 
     fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
         self.state.borrow(resource_id)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
+    async fn on_worker_update_failed(
+        &self,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    ) {
+        let entry = OplogEntry::failed_update(target_version, details.clone());
+        let timestamp = entry.timestamp();
+        self.public_state.oplog.add_and_commit(entry).await;
+        self.update_worker_status(|status| {
+            status.failed_updates.push(FailedUpdateRecord {
+                timestamp,
+                target_version,
+                details: details.clone(),
+            })
+        })
+        .await;
+
+        warn!(
+            "Worker {} failed to update to {}: {}, update attempt aborted",
+            self.worker_id,
+            target_version,
+            details.unwrap_or_else(|| "?".to_string())
+        );
+    }
+
+    async fn on_worker_update_succeeded(&self, target_version: ComponentVersion) {
+        info!(
+            "Worker update to {} finished successfully for {}",
+            target_version, self.worker_id
+        );
+        let entry = OplogEntry::successful_update(target_version);
+        let timestamp = entry.timestamp();
+        self.public_state.oplog.add_and_commit(entry).await;
+        self.update_worker_status(|status| {
+            status.component_version = target_version;
+            status.successful_updates.push(SuccessfulUpdateRecord {
+                timestamp,
+                target_version,
+            })
+        })
+        .await;
     }
 }
 
@@ -682,6 +821,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         debug!("Starting prepare_instance for {worker_id}");
         let start = Instant::now();
         let mut count = 0;
+
+        // Handle the case when recovery immediately starts in a deleted region
+        // (for example due to a manual update)
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .state
+            .get_out_of_deleted_region();
+
         let result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay();
 
@@ -744,12 +893,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         record_resume_worker(start.elapsed());
         record_number_of_replayed_functions(count);
 
-        let retry = store
-            .as_context_mut()
-            .data_mut()
-            .durable_ctx_mut()
-            .finalize_automatic_update(&result)
-            .await;
+        let retry = Self::finalize_pending_update(&result, instance, store).await;
 
         if retry {
             debug!("Retrying prepare_instance for {worker_id} after failed update attempt");
@@ -895,8 +1039,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             && self.persistence_level != PersistenceLevel::PersistNothing
         {
             if self.is_live() {
-                self.oplog.add(OplogEntry::begin_remote_write()).await;
-                self.oplog.commit().await;
+                self.oplog
+                    .add_and_commit(OplogEntry::begin_remote_write())
+                    .await;
                 Ok(begin_index)
             } else {
                 let _ = crate::get_oplog_entry!(self, OplogEntry::BeginRemoteWrite)?;
@@ -965,32 +1110,42 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         !self.is_live()
     }
 
+    fn get_out_of_deleted_region(&mut self) -> bool {
+        if self.is_replay() {
+            let update_next_deleted_region = match &self.next_deleted_region {
+                Some(region) if region.start == self.replay_idx => {
+                    let target = region.end + 1;
+                    debug!(
+                        "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
+                        self.worker_id, self.replay_idx, target, self.replay_target
+                    );
+                    self.replay_idx = target;
+                    true
+                }
+                _ => false,
+            };
+
+            if update_next_deleted_region {
+                self.next_deleted_region = self
+                    .deleted_regions
+                    .find_next_deleted_region(self.replay_idx);
+            }
+
+            update_next_deleted_region
+        } else {
+            false
+        }
+    }
+
     async fn get_oplog_entry(&mut self) -> OplogEntry {
         assert!(self.is_replay());
 
         let oplog_entries = self.read_oplog(self.replay_idx, 1).await;
         let oplog_entry = oplog_entries[0].clone();
 
-        let update_next_deleted_region = match &self.next_deleted_region {
-            Some(region) if region.start == self.replay_idx => {
-                let target = region.end + 1;
-                debug!(
-                    "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
-                    self.worker_id, self.replay_idx, target, self.replay_target
-                );
-                self.replay_idx = target;
-                true
-            }
-            _ => {
-                self.replay_idx += 1;
-                false
-            }
-        };
-
-        if update_next_deleted_region {
-            self.next_deleted_region = self
-                .deleted_regions
-                .find_next_deleted_region(self.replay_idx);
+        if !self.get_out_of_deleted_region() {
+            // No jump happened, increment replay index
+            self.replay_idx += 1;
         }
 
         oplog_entry

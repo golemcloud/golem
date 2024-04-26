@@ -16,11 +16,12 @@ use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, UriBackConversion};
 use crate::services::{
     active_workers, blob_store, component, golem_config, invocation_key, key_value, oplog, promise,
-    recovery, scheduler, shard, shard_manager, worker, worker_enumeration, HasActiveWorkers,
-    HasBlobStoreService, HasComponentService, HasConfig, HasExtraDeps, HasInvocationKeyService,
-    HasKeyValueService, HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardService, HasWasmtimeEngine,
-    HasWorkerEnumerationService, HasWorkerService,
+    recovery, scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration,
+    HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasExtraDeps,
+    HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
+    HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
+    HasWorkerService,
 };
 use crate::worker::{invoke, invoke_and_await, Worker};
 use crate::workerctx::WorkerCtx;
@@ -344,6 +345,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
     recovery_management: Arc<Mutex<Option<Arc<dyn recovery::RecoveryManagement + Send + Sync>>>>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
+    worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -369,6 +371,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             oplog_service: self.oplog_service.clone(),
             recovery_management: self.recovery_management.clone(),
             scheduler_service: self.scheduler_service.clone(),
+            worker_activator: self.worker_activator.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -495,6 +498,12 @@ impl<Ctx: WorkerCtx> HasShardService for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasWorkerActivator for DirectWorkerInvocationRpc<Ctx> {
+    fn worker_activator(&self) -> Arc<dyn worker_activator::WorkerActivator + Send + Sync> {
+        self.worker_activator.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     pub fn new(
         remote_rpc: Arc<RemoteInvocationRpc>,
@@ -519,6 +528,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
+        worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -541,6 +551,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             oplog_service,
             recovery_management: Arc::new(Mutex::new(None)),
             scheduler_service,
+            worker_activator,
             extra_deps,
         }
     }

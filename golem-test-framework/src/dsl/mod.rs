@@ -146,6 +146,7 @@ pub trait TestDsl {
     async fn interrupt(&self, worker_id: &WorkerId);
     async fn simulated_crash(&self, worker_id: &WorkerId);
     async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
+    async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
 }
 
 #[async_trait]
@@ -695,6 +696,27 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             _ => panic!("Failed to update worker: unknown error"),
         }
     }
+
+    async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion) {
+        let response = self
+            .worker_service()
+            .update_worker(UpdateWorkerRequest {
+                worker_id: Some(worker_id.clone().into()),
+                target_version,
+                mode: UpdateMode::Manual.into(),
+            })
+            .await;
+
+        match response {
+            UpdateWorkerResponse {
+                result: Some(update_worker_response::Result::Success(_)),
+            } => {}
+            UpdateWorkerResponse {
+                result: Some(update_worker_response::Result::Error(error)),
+            } => panic!("Failed to update worker: {error:?}"),
+            _ => panic!("Failed to update worker: unknown error"),
+        }
+    }
 }
 
 pub fn stdout_event(s: &str) -> LogEvent {
@@ -904,6 +926,7 @@ pub fn to_worker_metadata(
                             .expect("no timestamp on update record")
                             .clone()
                             .into(),
+                        oplog_index: 0,
                         description: UpdateDescription::Automatic {
                             target_version: u.target_version,
                         },

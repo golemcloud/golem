@@ -16,8 +16,8 @@ use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 
 use golem_common::model::{
-    AccountId, ComponentId, InvocationKey, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    AccountId, ComponentId, ComponentVersion, InvocationKey, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
@@ -36,7 +36,7 @@ use golem_worker_executor_base::model::{
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
-use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
+use golem_worker_executor_base::services::invocation_key::{InvocationKeyService, LookupResult};
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
 use golem_worker_executor_base::services::promise::PromiseService;
@@ -49,11 +49,11 @@ use golem_worker_executor_base::services::shard_manager::ShardManagerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::{worker_enumeration, All, HasAll};
+use golem_worker_executor_base::services::{All, HasAll};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
-    StatusManagement, WorkerCtx,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor_base::Bootstrap;
 
@@ -461,6 +461,14 @@ impl InvocationManagement for TestWorkerCtx {
     ) {
         self.durable_ctx.confirm_invocation_key(key, vals).await
     }
+
+    fn generate_new_invocation_key(&mut self) -> InvocationKey {
+        self.durable_ctx.generate_new_invocation_key()
+    }
+
+    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult {
+        self.durable_ctx.lookup_invocation_result(key)
+    }
 }
 
 #[async_trait]
@@ -500,6 +508,10 @@ impl StatusManagement for TestWorkerCtx {
 
     async fn update_pending_invocations(&self) {
         self.durable_ctx.update_pending_invocations().await
+    }
+
+    async fn update_pending_updates(&self) {
+        self.durable_ctx.update_pending_updates().await
     }
 
     async fn deactivate(&self) {
@@ -565,6 +577,25 @@ impl ResourceStore for TestWorkerCtx {
     }
 }
 
+#[async_trait]
+impl UpdateManagement for TestWorkerCtx {
+    async fn on_worker_update_failed(
+        &self,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    ) {
+        self.durable_ctx
+            .on_worker_update_failed(target_version, details)
+            .await
+    }
+
+    async fn on_worker_update_succeeded(&self, target_version: ComponentVersion) {
+        self.durable_ctx
+            .on_worker_update_succeeded(target_version)
+            .await
+    }
+}
+
 struct ServerBootstrap {}
 
 #[async_trait]
@@ -577,9 +608,7 @@ impl WorkerCtx for TestWorkerCtx {
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
-        >,
+        worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
@@ -692,7 +721,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        _worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
@@ -722,6 +751,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             blob_store_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
+            worker_activator.clone(),
             (),
         ));
         let recovery_management = Arc::new(RecoveryManagementDefault::new(
@@ -740,6 +770,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             key_value_service.clone(),
             blob_store_service.clone(),
             rpc.clone(),
+            worker_activator.clone(),
             golem_config.clone(),
             (),
         ));
@@ -765,6 +796,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             recovery_management,
             rpc,
             scheduler_service,
+            worker_activator,
             (),
         ))
     }

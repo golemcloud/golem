@@ -131,6 +131,25 @@ impl DeletedRegions {
         self.regions = builder.build().regions;
     }
 
+    /// Extends this set of regions with the regions from another set
+    pub fn extend_with(&mut self, other: DeletedRegions) {
+        if !other.is_empty() {
+            let mut builder = DeletedRegionsBuilder::from_regions(self.regions.clone().into_values());
+            for (_, region) in &self.regions {
+                builder.add(region.clone());
+            }
+            for region in other.into_regions() {
+                builder.add(region);
+            }
+
+            self.regions = builder.build().regions;
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.regions.is_empty()
+    }
+
     /// Returns the list of deleted regions
     pub fn regions(&self) -> Values<'_, u64, OplogRegion> {
         self.regions.values()

@@ -210,6 +210,23 @@ interface host {
     generate-idempotency-key: func() -> uuid;
 }
 
+/// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
+/// when the new component incompatible with the old one.
+interface save-snapshot {
+  /// Saves the component's state into a user-defined snapshot
+  save: func() -> list<u8>;
+}
+
+/// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
+/// when the new component incompatible with the old one.
+interface load-snapshot {
+  /// Tries to load a user-defined snapshot, setting up the worker's state based on it.
+  /// The function can return with a failure to indicate that the update is not possible.
+  load: func(bytes: list<u8>) -> result<_, string>;
+}
+
 world golem-host {
     import host;
+    import save-snapshot;
+    import load-snapshot;
 }

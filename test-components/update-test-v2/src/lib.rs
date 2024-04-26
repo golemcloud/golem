@@ -3,6 +3,8 @@ mod bindings;
 use std::cell::RefCell;
 use std::thread::sleep;
 use std::time::Duration;
+use bytes::BufMut;
+use crate::bindings::exports::golem::api::save_snapshot;
 use crate::bindings::exports::golem::component::api::*;
 
 struct State {
@@ -49,5 +51,13 @@ impl Guest for Component {
     // New function added
     fn f4() -> u64 {
         11
+    }
+}
+
+impl save_snapshot::Guest for Component {
+    fn save() -> Vec<u8> {
+        let mut result = Vec::new();
+        result.put_u64(Component::f2());
+        result
     }
 }
