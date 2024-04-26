@@ -21,13 +21,19 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
+use wasmtime::Store;
 
 use crate::invocation::invoke_worker;
+use crate::services::invocation_key::LookupResult;
 use crate::services::oplog::Oplog;
+use crate::services::worker_activator::WorkerActivator;
 use crate::services::HasOplog;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::{OplogEntry, TimestampedUpdateDescription, UpdateDescription};
+use golem_common::model::oplog::{
+    OplogEntry, SnapshotSource, TimestampedUpdateDescription, UpdateDescription,
+};
+use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     CallingConvention, ComponentVersion, InvocationKey, TimestampedWorkerInvocation, WorkerId,
     WorkerInvocation,
@@ -45,6 +51,7 @@ use golem_common::model::{
 pub struct InvocationQueue<Ctx: WorkerCtx> {
     worker_id: WorkerId,
     oplog: Arc<dyn Oplog + Send + Sync>,
+    worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
     pending_updates: Arc<RwLock<VecDeque<TimestampedUpdateDescription>>>,
     running: Arc<Mutex<Option<RunningInvocationQueue<Ctx>>>>,
@@ -54,6 +61,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
     pub fn new(
         worker_id: WorkerId,
         oplog: Arc<dyn Oplog + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         initial_pending_invocations: &[TimestampedWorkerInvocation],
         initial_pending_updates: &[TimestampedUpdateDescription],
     ) -> Self {
@@ -67,16 +75,22 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         InvocationQueue {
             worker_id,
             oplog,
+            worker_activator,
             queue,
             pending_updates,
             running: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub async fn attach(&self, worker: Arc<Worker<Ctx>>) {
-        let mut running = self.running.lock().await;
+    pub async fn attach(this: Arc<InvocationQueue<Ctx>>, worker: Arc<Worker<Ctx>>) {
+        let mut running = this.running.lock().await;
         assert!(running.is_none());
-        *running = Some(RunningInvocationQueue::new(worker, self.queue.clone()));
+        *running = Some(RunningInvocationQueue::new(
+            worker,
+            this.queue.clone(),
+            Arc::downgrade(&this),
+            this.worker_activator.clone(),
+        ));
     }
 
     pub async fn detach(&self) {
@@ -131,8 +145,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
                     .write()
                     .unwrap()
                     .push_back(timestamped_invocation);
-                self.oplog.add(entry).await;
-                self.oplog.commit().await;
+                self.oplog.add_and_commit(entry).await;
             }
         }
     }
@@ -145,14 +158,14 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         let entry = OplogEntry::pending_update(update_description.clone());
         let timestamped_update = TimestampedUpdateDescription {
             timestamp: entry.timestamp(),
+            oplog_index: self.oplog.current_oplog_index().await,
             description: update_description,
         };
         self.pending_updates
             .write()
             .unwrap()
             .push_back(timestamped_update);
-        self.oplog.add(entry).await;
-        self.oplog.commit().await;
+        self.oplog.add_and_commit(entry).await;
     }
 
     /// Enqueues a manual update.
@@ -179,8 +192,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
                     .write()
                     .unwrap()
                     .push_back(timestamped_invocation);
-                self.oplog.add(entry).await;
-                self.oplog.commit().await;
+                self.oplog.add_and_commit(entry).await;
             }
         }
     }
@@ -189,8 +201,19 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         self.queue.read().unwrap().iter().cloned().collect()
     }
 
-    pub fn pending_updates(&self) -> VecDeque<TimestampedUpdateDescription> {
-        self.pending_updates.read().unwrap().clone()
+    pub fn pending_updates(&self) -> (VecDeque<TimestampedUpdateDescription>, DeletedRegions) {
+        let pending_updates = self.pending_updates.read().unwrap().clone();
+        let mut deleted_regions = DeletedRegionsBuilder::new();
+        if let Some(TimestampedUpdateDescription {
+            oplog_index,
+            description: UpdateDescription::SnapshotBased { .. },
+            ..
+        }) = pending_updates.front()
+        {
+            deleted_regions.add(OplogRegion::from_range(1..=*oplog_index));
+        }
+
+        (pending_updates, deleted_regions.build())
     }
 
     pub fn pop_pending_update(&self) -> Option<TimestampedUpdateDescription> {
@@ -209,6 +232,8 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
     pub fn new(
         worker: Arc<Worker<Ctx>>,
         queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
+        parent: Weak<InvocationQueue<Ctx>>,
+        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     ) -> Self {
         let worker_id = worker.metadata.worker_id.clone();
 
@@ -228,6 +253,8 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                 active_clone,
                 worker_clone,
                 worker_id,
+                parent,
+                worker_activator,
             )
             .await;
         });
@@ -274,8 +301,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                     worker.metadata.worker_id
                 );
                 // The worker is currently busy, so we write the pending worker invocation to the oplog
-                worker.public_state.oplog().add(entry).await;
-                worker.public_state.oplog().commit().await;
+                worker.public_state.oplog().add_and_commit(entry).await;
             }
         }
         self.queue
@@ -290,6 +316,8 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
         active: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
         worker: Weak<Worker<Ctx>>,
         worker_id: WorkerId,
+        parent: Weak<InvocationQueue<Ctx>>,
+        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     ) {
         debug!("Invocation queue loop for {worker_id} started");
 
@@ -333,9 +361,65 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                         )
                         .await;
                     }
-                    WorkerInvocation::ManualUpdate { target_version: _ } => {
-                        // TODO: invoke snapshot save function, write pending update oplog entry and deactivate the worker
-                        todo!()
+                    WorkerInvocation::ManualUpdate { target_version } => {
+                        let invocation_key = {
+                            let ctx = store.data_mut();
+                            let invocation_key = ctx.generate_new_invocation_key();
+                            ctx.set_current_invocation_key(invocation_key.clone()).await;
+                            invocation_key
+                        };
+                        store.data_mut().begin_call_snapshotting_function();
+                        let _ = invoke_worker(
+                            "golem:api/save-snapshot@0.2.0/save".to_string(),
+                            vec![],
+                            store,
+                            instance,
+                            CallingConvention::Component,
+                            true,
+                        )
+                        .await;
+                        store.data_mut().end_call_snapshotting_function();
+                        let result = store.data_mut().lookup_invocation_result(&invocation_key);
+                        match result {
+                            LookupResult::Invalid => {}
+                            LookupResult::Pending => {}
+                            LookupResult::Interrupted => {}
+                            LookupResult::Complete(Ok(result)) => {
+                                if let Some(parent) = parent.upgrade() {
+                                    if let Some(bytes) = Self::decode_snapshot_result(result) {
+                                        // Enqueue the update
+                                        parent
+                                            .enqueue_update(UpdateDescription::SnapshotBased {
+                                                target_version,
+                                                source: SnapshotSource::Inline(bytes),
+                                            })
+                                            .await;
+
+                                        // Make sure to update the pending updates queue
+                                        store.data_mut().update_pending_updates().await;
+
+                                        // Reactivate the worker in the background
+                                        worker_activator.reactivate_worker(&worker_id).await;
+
+                                        // Stop processing the queue to avoid race conditions
+                                        break;
+                                    } else {
+                                        Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store)
+                                            .await;
+                                    }
+                                } else {
+                                    panic!("Parent invocation queue was unexpectedly dropped")
+                                }
+                            }
+                            LookupResult::Complete(Err(error)) => {
+                                Self::fail_update(
+                                    target_version,
+                                    format!("failed to get a snapshot for manual update: {error}"),
+                                    store,
+                                )
+                                .await;
+                            }
+                        }
                     }
                 }
             } else {
@@ -346,5 +430,33 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
             }
         }
         debug!("Invocation queue loop for {worker_id} finished");
+    }
+
+    async fn fail_update(target_version: ComponentVersion, error: String, store: &mut Store<Ctx>) {
+        store
+            .data_mut()
+            .on_worker_update_failed(target_version, Some(error))
+            .await;
+    }
+
+    /// Attempts to interpret the save snapshot result as a byte vector
+    fn decode_snapshot_result(values: Vec<Value>) -> Option<Vec<u8>> {
+        if values.len() == 1 {
+            if let Value::List(bytes) = &values[0] {
+                let mut result = Vec::new();
+                for value in bytes {
+                    if let Value::U8(byte) = value {
+                        result.push(*byte);
+                    } else {
+                        return None;
+                    }
+                }
+                Some(result)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }

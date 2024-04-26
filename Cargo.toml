@@ -46,6 +46,8 @@ exclude = [
     "test-components/stdio-cc",
     "test-components/update-test-v1",
     "test-components/update-test-v2",
+    "test-components/update-test-v3",
+    "test-components/update-test-v4",
     "test-components/variant-service",
     "test-components/write-stderr",
     "test-components/write-stdout",

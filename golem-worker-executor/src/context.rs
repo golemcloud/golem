@@ -19,8 +19,8 @@ use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    AccountId, CallingConvention, ComponentVersion, InvocationKey, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -34,7 +34,7 @@ use golem_worker_executor_base::model::{
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
+use golem_worker_executor_base::services::invocation_key::{InvocationKeyService, LookupResult};
 use golem_worker_executor_base::services::invocation_queue::InvocationQueue;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
@@ -47,7 +47,7 @@ use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::{worker_enumeration, HasAll};
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
-    StatusManagement, WorkerCtx,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
@@ -168,6 +168,14 @@ impl InvocationManagement for Context {
     ) {
         self.durable_ctx.confirm_invocation_key(key, vals).await
     }
+
+    fn generate_new_invocation_key(&mut self) -> InvocationKey {
+        self.durable_ctx.generate_new_invocation_key()
+    }
+
+    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult {
+        self.durable_ctx.lookup_invocation_result(key)
+    }
 }
 
 #[async_trait]
@@ -207,6 +215,10 @@ impl StatusManagement for Context {
 
     async fn update_pending_invocations(&self) {
         self.durable_ctx.update_pending_invocations().await
+    }
+
+    async fn update_pending_updates(&self) {
+        self.durable_ctx.update_pending_updates().await
     }
 
     async fn deactivate(&self) {
@@ -249,6 +261,33 @@ impl InvocationHooks for Context {
     ) -> Result<Option<Vec<Value>>, Error> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
+            .await
+    }
+}
+
+#[async_trait]
+impl UpdateManagement for Context {
+    fn begin_call_snapshotting_function(&mut self) {
+        self.durable_ctx.begin_call_snapshotting_function()
+    }
+
+    fn end_call_snapshotting_function(&mut self) {
+        self.durable_ctx.end_call_snapshotting_function()
+    }
+
+    async fn on_worker_update_failed(
+        &self,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    ) {
+        self.durable_ctx
+            .on_worker_update_failed(target_version, details)
+            .await
+    }
+
+    async fn on_worker_update_succeeded(&self, target_version: ComponentVersion) {
+        self.durable_ctx
+            .on_worker_update_succeeded(target_version)
             .await
     }
 }

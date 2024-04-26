@@ -16,6 +16,8 @@ use std::sync::Arc;
 #[cfg(any(feature = "mocks", test))]
 use std::time::Duration;
 
+use crate::services::worker_activator::WorkerActivator;
+
 use tokio::runtime::Handle;
 
 use crate::workerctx::WorkerCtx;
@@ -129,6 +131,10 @@ pub trait HasOplog {
     fn oplog(&self) -> Arc<dyn oplog::Oplog + Send + Sync>;
 }
 
+pub trait HasWorkerActivator {
+    fn worker_activator(&self) -> Arc<dyn WorkerActivator + Send + Sync>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -146,6 +152,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasRecoveryManagement
     + HasRpc
     + HasSchedulerService
+    + HasWorkerActivator
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -168,6 +175,7 @@ impl<
             + HasRecoveryManagement
             + HasRpc
             + HasSchedulerService
+            + HasWorkerActivator
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -197,6 +205,7 @@ pub struct All<Ctx: WorkerCtx> {
     recovery_management: Arc<dyn recovery::RecoveryManagement + Send + Sync>,
     rpc: Arc<dyn rpc::Rpc + Send + Sync>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
+    worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -222,12 +231,14 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             recovery_management: self.recovery_management.clone(),
             rpc: self.rpc.clone(),
             scheduler_service: self.scheduler_service.clone(),
+            worker_activator: self.worker_activator.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
 }
 
 impl<Ctx: WorkerCtx> All<Ctx> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
         engine: Arc<wasmtime::Engine>,
@@ -252,6 +263,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         recovery_management: Arc<dyn recovery::RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn rpc::Rpc + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -274,6 +286,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             recovery_management,
             rpc,
             scheduler_service,
+            worker_activator,
             extra_deps,
         }
     }
@@ -306,6 +319,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let recovery_management = Arc::new(recovery::RecoveryManagementMock::new());
         let rpc = Arc::new(rpc::RpcMock::new());
         let scheduler_service = Arc::new(scheduler::SchedulerServiceMock::new());
+        let worker_activator = Arc::new(worker_activator::WorkerActivatorMock::new());
         Self {
             active_workers,
             engine,
@@ -326,6 +340,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             recovery_management,
             rpc,
             scheduler_service,
+            worker_activator,
             extra_deps: mocked_extra_deps,
         }
     }
@@ -458,6 +473,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasRpc for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasSchedulerService for T {
     fn scheduler_service(&self) -> Arc<dyn scheduler::SchedulerService + Send + Sync> {
         self.all().scheduler_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerActivator for T {
+    fn worker_activator(&self) -> Arc<dyn WorkerActivator + Send + Sync> {
+        self.all().worker_activator.clone()
     }
 }
 

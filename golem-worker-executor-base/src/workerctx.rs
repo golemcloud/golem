@@ -18,8 +18,8 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    AccountId, CallingConvention, ComponentVersion, InvocationKey, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
@@ -32,7 +32,7 @@ use crate::model::{
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
-use crate::services::invocation_key::InvocationKeyService;
+use crate::services::invocation_key::{InvocationKeyService, LookupResult};
 use crate::services::invocation_queue::InvocationQueue;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
@@ -56,6 +56,7 @@ pub trait WorkerCtx:
     + InvocationHooks
     + ExternalOperations<Self>
     + ResourceStore
+    + UpdateManagement
     + Send
     + Sync
     + Sized
@@ -195,6 +196,12 @@ pub trait InvocationManagement {
         key: &InvocationKey,
         vals: Result<Vec<Value>, GolemError>,
     );
+
+    /// Sets the invocation key associated with the current invocation to a fresh key
+    fn generate_new_invocation_key(&mut self) -> InvocationKey;
+
+    /// Gets the result associated with an invocation key of the worker
+    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult;
 }
 
 /// The IoCapturing interface of a worker context is used by the Stdio calling convention to
@@ -236,6 +243,9 @@ pub trait StatusManagement {
 
     /// Update the pending invocations of the worker
     async fn update_pending_invocations(&self);
+
+    /// Update the pending updates of the worker
+    async fn update_pending_updates(&self);
 
     /// Called when a worker is getting deactivated
     async fn deactivate(&self);
@@ -282,6 +292,25 @@ pub trait InvocationHooks {
         consumed_fuel: i64,
         output: Vec<Value>,
     ) -> Result<Option<Vec<Value>>, anyhow::Error>;
+}
+
+#[async_trait]
+pub trait UpdateManagement {
+    /// Marks the beginning of a snapshot function call. This can be used to disabled persistence
+    fn begin_call_snapshotting_function(&mut self);
+
+    /// Marks the end of a snapshot function call. This can be used to re-enable persistence
+    fn end_call_snapshotting_function(&mut self);
+
+    /// Called when an update attempt has failed
+    async fn on_worker_update_failed(
+        &self,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    );
+
+    /// Called when an update attempt succeeded
+    async fn on_worker_update_succeeded(&self, target_version: ComponentVersion);
 }
 
 /// Operations not requiring an active worker context, but still depending on the

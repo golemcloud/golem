@@ -869,8 +869,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             // with an update.
                             worker_status.status = WorkerStatus::Retrying;
                         }
-                        worker_status.pending_updates =
+                        let mut deleted_regions = worker_status.deleted_regions.clone();
+                        let (pending_updates, extra_deleted_regions) =
                             pending_worker.invocation_queue.pending_updates();
+                        deleted_regions.set_override(extra_deleted_regions);
+                        worker_status.pending_updates = pending_updates;
+                        worker_status.deleted_regions = deleted_regions;
                         self.worker_service()
                             .update_status(&worker_id, &worker_status)
                             .await;
@@ -899,6 +903,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .await;
 
                         worker.set_interrupting(InterruptKind::Restart);
+                        self.active_workers().remove(&worker_id);
                     }
                 }
             }

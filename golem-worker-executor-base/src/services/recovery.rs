@@ -20,10 +20,10 @@ use crate::model::{InterruptKind, LastError, TrapType};
 use crate::services::rpc::Rpc;
 use crate::services::{
     active_workers, blob_store, component, golem_config, invocation_key, key_value, oplog, promise,
-    scheduler, worker, worker_enumeration, HasActiveWorkers, HasAll, HasBlobStoreService,
-    HasComponentService, HasConfig, HasExtraDeps, HasInvocationKeyService, HasKeyValueService,
-    HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasWasmtimeEngine,
+    scheduler, worker, worker_activator, worker_enumeration, HasActiveWorkers, HasAll,
+    HasBlobStoreService, HasComponentService, HasConfig, HasExtraDeps, HasInvocationKeyService,
+    HasKeyValueService, HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasWasmtimeEngine, HasWorkerActivator,
     HasWorkerEnumerationService, HasWorkerService,
 };
 use crate::worker::Worker;
@@ -89,6 +89,7 @@ pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
     rpc: Arc<dyn Rpc + Send + Sync>,
+    worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -113,6 +114,7 @@ impl<Ctx: WorkerCtx> Clone for RecoveryManagementDefault<Ctx> {
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
             rpc: self.rpc.clone(),
+            worker_activator: self.worker_activator.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -204,6 +206,12 @@ impl<Ctx: WorkerCtx> HasSchedulerService for RecoveryManagementDefault<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasWorkerActivator for RecoveryManagementDefault<Ctx> {
+    fn worker_activator(&self) -> Arc<dyn worker_activator::WorkerActivator + Send + Sync> {
+        self.worker_activator.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasOplogService for RecoveryManagementDefault<Ctx> {
     fn oplog_service(&self) -> Arc<dyn oplog::OplogService + Send + Sync> {
         self.oplog_service.clone()
@@ -249,6 +257,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
@@ -271,6 +280,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             golem_config,
             recovery_override: None,
             rpc,
+            worker_activator,
             extra_deps,
         }
     }
@@ -297,6 +307,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
         recovery_override: F,
     ) -> Self
@@ -322,6 +333,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             golem_config,
             recovery_override: Some(Arc::new(recovery_override)),
             rpc,
+            worker_activator,
             extra_deps,
         }
     }
@@ -582,7 +594,7 @@ mod tests {
     use crate::services::active_workers::ActiveWorkers;
     use crate::services::blob_store::BlobStoreService;
     use crate::services::golem_config::GolemConfig;
-    use crate::services::invocation_key::InvocationKeyService;
+    use crate::services::invocation_key::{InvocationKeyService, LookupResult};
     use crate::services::invocation_queue::InvocationQueue;
     use crate::services::key_value::KeyValueService;
     use crate::services::promise::PromiseService;
@@ -592,11 +604,11 @@ mod tests {
         worker_enumeration, All, HasAll, HasBlobStoreService, HasComponentService, HasConfig,
         HasExtraDeps, HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasOplog,
         HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasWasmtimeEngine,
-        HasWorkerEnumerationService, HasWorkerService,
+        HasWorkerActivator, HasWorkerEnumerationService, HasWorkerService,
     };
     use crate::workerctx::{
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
-        PublicWorkerIo, StatusManagement, WorkerCtx,
+        PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
     };
     use anyhow::Error;
     use async_trait::async_trait;
@@ -604,8 +616,8 @@ mod tests {
     use golem_common::config::RetryConfig;
     use golem_common::model::oplog::WorkerError;
     use golem_common::model::{
-        AccountId, CallingConvention, ComponentId, InvocationKey, WorkerId, WorkerMetadata,
-        WorkerStatus, WorkerStatusRecord,
+        AccountId, CallingConvention, ComponentId, ComponentVersion, InvocationKey, WorkerId,
+        WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use golem_wasm_rpc::wasmtime::ResourceStore;
     use golem_wasm_rpc::{Uri, Value};
@@ -696,6 +708,14 @@ mod tests {
         ) {
             unimplemented!()
         }
+
+        fn generate_new_invocation_key(&mut self) -> InvocationKey {
+            unimplemented!()
+        }
+
+        fn lookup_invocation_result(&self, _key: &InvocationKey) -> LookupResult {
+            unimplemented!()
+        }
     }
 
     #[async_trait]
@@ -735,6 +755,10 @@ mod tests {
             unimplemented!()
         }
 
+        async fn update_pending_updates(&self) {
+            unimplemented!()
+        }
+
         async fn deactivate(&self) {
             unimplemented!()
         }
@@ -769,6 +793,29 @@ mod tests {
             _consumed_fuel: i64,
             _output: Vec<Value>,
         ) -> Result<Option<Vec<Value>>, Error> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait]
+    impl UpdateManagement for EmptyContext {
+        fn begin_call_snapshotting_function(&mut self) {
+            unimplemented!()
+        }
+
+        fn end_call_snapshotting_function(&mut self) {
+            unimplemented!()
+        }
+
+        async fn on_worker_update_failed(
+            &self,
+            _target_version: ComponentVersion,
+            _details: Option<String>,
+        ) {
+            unimplemented!()
+        }
+
+        async fn on_worker_update_succeeded(&self, _target_version: ComponentVersion) {
             unimplemented!()
         }
     }
@@ -956,6 +1003,7 @@ mod tests {
             deps.blob_store_service(),
             deps.config(),
             deps.rpc(),
+            deps.worker_activator(),
             (),
             recovery_fn,
         )
