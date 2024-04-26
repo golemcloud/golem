@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::rdb::{assert_connection, DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use crate::components::{DOCKER, NETWORK};
+use std::time::Duration;
 use testcontainers::{Container, RunnableImage};
 use tracing::info;
 
@@ -51,7 +52,8 @@ impl DockerPostgresRdb {
         };
 
         let host_port = container.get_host_port_ipv4(Self::DEFAULT_PORT);
-        assert_connection("localhost", host_port).await;
+
+        wait_for_startup("localhost", host_port, Duration::from_secs(30)).await;
 
         Self {
             container,

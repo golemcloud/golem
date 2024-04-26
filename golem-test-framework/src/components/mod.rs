@@ -92,7 +92,11 @@ impl ChildProcessLogger {
     }
 }
 
-async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str) {
+async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str, timeout: Duration) {
+    info!(
+        "Waiting for {name} start on host {host}:{grpc_port}, timeout: {}s",
+        timeout.as_secs()
+    );
     let start = Instant::now();
     loop {
         let success =
@@ -118,7 +122,7 @@ async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str) {
         if success {
             break;
         } else {
-            if start.elapsed().as_secs() > 90 {
+            if start.elapsed() > timeout {
                 panic!("Failed to verify that {name} is running");
             }
             tokio::time::sleep(Duration::from_secs(2)).await;

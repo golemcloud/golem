@@ -20,6 +20,8 @@ use k8s_openapi::api::networking::v1::Ingress;
 use kube::api::{DeleteParams, PostParams};
 use kube::{Api, Client};
 use serde_json::json;
+use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::time::Duration;
 use tokio::process::{Child, Command};
 use tracing::{debug, error, info};
@@ -34,10 +36,17 @@ impl Default for K8sNamespace {
     }
 }
 
+impl Display for K8sNamespace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum K8sRoutingType {
     Minikube,
-    Ingress,
+    Service,
+    AlbIngress,
 }
 
 pub type K8sPod = AsyncDropper<ManagedPod>;
@@ -117,6 +126,7 @@ impl AsyncDrop for ManagedService {
 pub enum ManagedRouting {
     Minikube { child: Option<Child> },
     Ingress(ManagedIngress),
+    Service,
 }
 
 impl ManagedRouting {
@@ -125,6 +135,9 @@ impl ManagedRouting {
     }
     pub fn ingress<S: Into<String>>(name: S, namespace: &K8sNamespace) -> ManagedRouting {
         ManagedRouting::Ingress(ManagedIngress::new(name, namespace))
+    }
+    pub fn service() -> ManagedRouting {
+        ManagedRouting::Service
     }
 }
 
@@ -224,7 +237,12 @@ impl Routing {
     ) -> Routing {
         match k8s_routing_type {
             K8sRoutingType::Minikube => Self::create_minikube_tunnel(service_name, namespace).await,
-            K8sRoutingType::Ingress => Self::create_ingress(service_name, port, namespace).await,
+            K8sRoutingType::Service => {
+                Self::create_service_route(service_name, port, namespace).await
+            }
+            K8sRoutingType::AlbIngress => {
+                Self::create_alb_ingress(service_name, port, namespace).await
+            }
         }
     }
 
@@ -241,8 +259,12 @@ impl Routing {
         }
     }
 
-    async fn create_ingress(service_name: &str, port: u16, namespace: &K8sNamespace) -> Routing {
-        info!("Creating ingress for service {service_name}:{port} in {namespace:?}");
+    async fn create_alb_ingress(
+        service_name: &str,
+        port: u16,
+        namespace: &K8sNamespace,
+    ) -> Routing {
+        info!("Creating alb ingress for service {service_name}:{port} in {namespace}");
         let ingresses: Api<Ingress> =
             Api::namespaced(Client::try_default().await.unwrap(), &namespace.0);
 
@@ -293,12 +315,35 @@ impl Routing {
             .await
             .expect("Failed to create ingress");
 
+        let routing = AsyncDropper::new(ManagedRouting::ingress(service_name, namespace));
+
         let hostname = Self::wait_for_load_balancer(&ingresses, service_name).await;
 
         Routing {
             hostname,
             port: 80,
-            routing: AsyncDropper::new(ManagedRouting::ingress(service_name, namespace)),
+            routing,
+        }
+    }
+
+    async fn create_service_route(
+        service_name: &str,
+        port: u16,
+        namespace: &K8sNamespace,
+    ) -> Routing {
+        info!("Creating route for service {service_name}:{port} in {namespace}");
+
+        let service: Api<Service> =
+            Api::namespaced(Client::try_default().await.unwrap(), &namespace.0);
+
+        let hostname = Self::wait_for_service_load_balancer(&service, service_name).await;
+
+        let routing = AsyncDropper::new(ManagedRouting::service());
+
+        Routing {
+            hostname,
+            port,
+            routing,
         }
     }
 
@@ -321,6 +366,42 @@ impl Routing {
             .status
             .as_ref()
             .ok_or(anyhow!("No ingress status for {service_name}"))?
+            .load_balancer
+            .as_ref()
+            .ok_or(anyhow!("No load balancer for {service_name}"))?
+            .ingress
+            .as_ref()
+            .ok_or(anyhow!("No ingress for {service_name}"))?
+            .first()
+            .as_ref()
+            .ok_or(anyhow!("Empty ingress for {service_name}"))?
+            .hostname
+            .as_ref()
+            .ok_or(anyhow!("No ingress hostname for {service_name}"))?
+            .to_string();
+
+        Ok(hostname)
+    }
+
+    async fn wait_for_service_load_balancer(service: &Api<Service>, name: &str) -> String {
+        loop {
+            let s = service.get(name).await.expect("Failed to get ingresses");
+
+            match Self::service_hostname(&s, name) {
+                Ok(hostname) => return hostname,
+                Err(e) => {
+                    error!("Can't get hostname for {name}: {e:?}");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
+
+    fn service_hostname(service: &Service, service_name: &str) -> anyhow::Result<String> {
+        let hostname = service
+            .status
+            .as_ref()
+            .ok_or(anyhow!("No service status for {service_name}"))?
             .load_balancer
             .as_ref()
             .ok_or(anyhow!("No load balancer for {service_name}"))?
@@ -439,4 +520,21 @@ impl Routing {
             break (Url::parse(any_res).expect("Failed to parse url"), None);
         }
     }
+}
+
+pub fn aws_nlb_service_annotations() -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    map.insert(
+        "service.beta.kubernetes.io/aws-load-balancer-type".to_string(),
+        "external".to_string(),
+    );
+    map.insert(
+        "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type".to_string(),
+        "ip".to_string(),
+    );
+    map.insert(
+        "service.beta.kubernetes.io/aws-load-balancer-scheme".to_string(),
+        "internet-facing".to_string(),
+    );
+    map
 }
