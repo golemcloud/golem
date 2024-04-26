@@ -66,7 +66,7 @@ enum Command {
 
         /// The new component's name
         #[arg(short, long)]
-        component_name: golem_examples::model::TemplateName,
+        component_name: golem_examples::model::ComponentName,
 
         /// The package name of the generated component (in namespace:name format)
         #[arg(short, long)]
