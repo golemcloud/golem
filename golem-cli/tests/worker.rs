@@ -734,7 +734,15 @@ fn worker_update(
     ),
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
-    let component_id = make_component(deps, &format!("{name} worker_update"), &cli)?.component_id;
+    let component_v1 = deps.component_directory().join("update-test-v1.wasm");
+    let component: ComponentView = cli.run(&[
+        "component",
+        "add",
+        &cfg.arg('c', "component-name"),
+        &format!("{name} worker_update"),
+        component_v1.to_str().unwrap(),
+    ])?;
+    let component_id = component.component_id;
     let worker_name = format!("{name}_worker_update");
 
     let workers_list = || -> Result<WorkersMetadataResponse, Failed> {
@@ -757,6 +765,15 @@ fn worker_update(
         &component_id,
     ])?;
     let original_updates = workers_list()?.workers[0].updates.len();
+    let component_v2 = deps.component_directory().join("update-test-v2.wasm");
+    let component: ComponentView = cli.run(&[
+        "component",
+        "update",
+        &cfg.arg('c', "component-name"),
+        &format!("{name} worker_update"),
+        component_v2.to_str().unwrap(),
+    ])?;
+    let component_id = component.component_id;
 
     cli.run_unit(&[
         "worker",
@@ -771,10 +788,10 @@ fn worker_update(
         "1",
     ])?;
     let worker_updates_after_update = workers_list()?.workers[0].updates[0].clone();
-    let target_version = if let UpdateRecord::PendingUpdate(pu) = worker_updates_after_update {
-        pu.target_version
-    } else {
-        0
+    let target_version = match worker_updates_after_update {
+        UpdateRecord::PendingUpdate(pu) => pu.target_version,
+        UpdateRecord::SuccessfulUpdate(su) => su.target_version,
+        UpdateRecord::FailedUpdate(_) => panic!("Update failed"),
     };
 
     assert_eq!(original_updates, 0);
