@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tracing::info;
 use tracing::Level;
@@ -106,7 +107,7 @@ impl SpawnedShardManager {
             &mut child,
         );
 
-        wait_for_startup("localhost", grpc_port).await;
+        wait_for_startup("localhost", grpc_port, Duration::from_secs(90)).await;
 
         (child, logger)
     }

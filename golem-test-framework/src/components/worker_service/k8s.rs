@@ -28,6 +28,7 @@ use kube::api::PostParams;
 use kube::{Api, Client};
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{info, Level};
 
@@ -54,6 +55,8 @@ impl K8sWorkerService {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting Golem Worker Service pod");
 
@@ -124,7 +127,7 @@ impl K8sWorkerService {
         let _res_pod = pods.create(&pp, &pod).await.expect("Failed to create pod");
         let managed_pod = AsyncDropper::new(ManagedPod::new(Self::NAME, namespace));
 
-        let service: Service = serde_json::from_value(json!({
+        let mut service: Service = serde_json::from_value(json!({
             "apiVersion": "v1",
             "kind": "Service",
             "metadata": {
@@ -157,6 +160,7 @@ impl K8sWorkerService {
             }
         }))
         .expect("Failed to deserialize service definition");
+        service.metadata.annotations = service_annotations;
 
         let _res_srv = services
             .create(&pp, &service)
@@ -171,7 +175,7 @@ impl K8sWorkerService {
             routing: managed_routing,
         } = Routing::create(Self::NAME, Self::GRPC_PORT, namespace, routing_type).await;
 
-        wait_for_startup(&local_host, local_port).await;
+        wait_for_startup(&local_host, local_port, timeout).await;
 
         info!("Golem Worker Service pod started");
 

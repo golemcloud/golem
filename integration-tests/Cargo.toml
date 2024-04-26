@@ -41,3 +41,15 @@ path = "src/benchmarks/simple_worker_echo.rs"
 [[bin]]
 name = "benchmark_suspend_worker"
 path = "src/benchmarks/suspend_worker.rs"
+
+[[bin]]
+name = "benchmark_cold_start_small"
+path = "src/benchmarks/cold_start_small.rs"
+
+[[bin]]
+name = "benchmark_cold_start_medium"
+path = "src/benchmarks/cold_start_medium.rs"
+
+[[bin]]
+name = "benchmark_cold_start_large"
+path = "src/benchmarks/cold_start_large.rs"
