@@ -17,17 +17,10 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use golem_wasm_rpc::Value;
 
-use golem_common::model::WorkerId;
-use golem_test_framework::config::{CliParams, CliTestDependencies, TestDependencies};
+use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder};
 use golem_test_framework::dsl::TestDsl;
-use integration_tests::benchmarks::run_benchmark;
-
-#[derive(Clone)]
-struct Context {
-    deps: CliTestDependencies,
-    worker_ids: Vec<WorkerId>,
-}
+use integration_tests::benchmarks::{run_benchmark, setup, Context};
 
 struct SuspendWorkerLatency {
     config: CliParams,
@@ -46,22 +39,7 @@ impl Benchmark for SuspendWorkerLatency {
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        // Initialize infrastructure
-        let deps = CliTestDependencies::new(self.config.clone()).await;
-
-        // Upload test component
-        let component_id = deps.store_component("clocks").await;
-        let mut worker_ids = Vec::new();
-
-        // Create 'size' workers
-        for i in 0..self.config.benchmark_config.size {
-            let worker_id = deps
-                .start_worker(&component_id, &format!("worker-{i}"))
-                .await;
-            worker_ids.push(worker_id);
-        }
-
-        Self::IterationContext { deps, worker_ids }
+        setup(self.config.clone(), "clocks", true).await
     }
 
     async fn warmup(&self, context: &Self::IterationContext) {

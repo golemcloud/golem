@@ -39,7 +39,7 @@ impl Benchmark for SimpleWorkerEcho {
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.config.clone(), "option-service").await
+        setup(self.config.clone(), "option-service", true).await
     }
 
     async fn warmup(&self, context: &Self::IterationContext) {

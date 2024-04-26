@@ -28,23 +28,71 @@ pub struct Context {
     pub worker_ids: Vec<WorkerId>,
 }
 
-pub async fn setup(config: CliParams, component_name: &str) -> Context {
+pub async fn setup_with(
+    size: usize,
+    component_name: &str,
+    start_workers: bool,
+    deps: CliTestDependencies,
+) -> Context {
     // Initialize infrastructure
-    let deps = CliTestDependencies::new(config.clone()).await;
 
     // Upload test component
     let component_id = deps.store_component(component_name).await;
     let mut worker_ids = Vec::new();
 
     // Create 'size' workers
-    for i in 0..config.benchmark_config.size {
-        let worker_id = deps
-            .start_worker(&component_id, &format!("worker-{i}"))
-            .await;
+    for i in 0..size {
+        let worker_name = format!("worker-{i}");
+        let worker_id = if start_workers {
+            deps.start_worker(&component_id, &worker_name).await
+        } else {
+            WorkerId {
+                component_id: component_id.clone(),
+                worker_name,
+            }
+        };
+
         worker_ids.push(worker_id);
     }
 
     Context { deps, worker_ids }
+}
+
+pub async fn setup(config: CliParams, component_name: &str, start_workers: bool) -> Context {
+    // Initialize infrastructure
+    let deps = CliTestDependencies::new(config.clone()).await;
+
+    setup_with(
+        config.benchmark_config.size,
+        component_name,
+        start_workers,
+        deps,
+    )
+    .await
+}
+
+pub async fn warmup_echo(context: &Context) {
+    let mut fibers = Vec::new();
+    for worker_id in &context.worker_ids {
+        let context_clone = context.clone();
+        let worker_id_clone = worker_id.clone();
+        let fiber = tokio::task::spawn(async move {
+            context_clone
+                .deps
+                .invoke_and_await(
+                    &worker_id_clone,
+                    "golem:it/api/echo",
+                    vec![Value::String("hello".to_string())],
+                )
+                .await
+                .expect("invoke_and_await failed");
+        });
+        fibers.push(fiber);
+    }
+
+    for fiber in fibers {
+        fiber.await.expect("fiber failed");
+    }
 }
 
 pub async fn run_echo(length: usize, context: &Context, recorder: BenchmarkRecorder) {

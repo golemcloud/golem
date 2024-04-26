@@ -12,22 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::SystemTime;
-
 use async_trait::async_trait;
-use golem_wasm_rpc::Value;
 
-use golem_common::model::WorkerId;
-use golem_test_framework::config::{CliParams, CliTestDependencies, TestDependencies};
+use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder};
-use golem_test_framework::dsl::TestDsl;
-use integration_tests::benchmarks::run_benchmark;
-
-#[derive(Clone)]
-struct Context {
-    deps: CliTestDependencies,
-    worker_ids: Vec<WorkerId>,
-}
+use integration_tests::benchmarks::{run_benchmark, run_echo, setup, warmup_echo, Context};
 
 struct WorkerLatencySmall {
     config: CliParams,
@@ -46,80 +35,15 @@ impl Benchmark for WorkerLatencySmall {
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        // Initialize infrastructure
-        let deps = CliTestDependencies::new(self.config.clone()).await;
-
-        // Upload test component
-        let component_id = deps.store_component("rust-echo").await;
-        let mut worker_ids = Vec::new();
-
-        // Create 'size' workers
-        for i in 0..self.config.benchmark_config.size {
-            let worker_id = deps
-                .start_worker(&component_id, &format!("worker-{i}"))
-                .await;
-            worker_ids.push(worker_id);
-        }
-
-        Self::IterationContext { deps, worker_ids }
+        setup(self.config.clone(), "rust-echo", true).await
     }
 
     async fn warmup(&self, context: &Self::IterationContext) {
-        // Invoke each worker a few times in parallel
-        let mut fibers = Vec::new();
-        for worker_id in &context.worker_ids {
-            let context_clone = context.clone();
-            let worker_id_clone = worker_id.clone();
-            let fiber = tokio::task::spawn(async move {
-                context_clone
-                    .deps
-                    .invoke_and_await(
-                        &worker_id_clone,
-                        "golem:it/api/echo",
-                        vec![Value::String("hello".to_string())],
-                    )
-                    .await
-                    .expect("invoke_and_await failed");
-            });
-            fibers.push(fiber);
-        }
-
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
-        }
+        warmup_echo(context).await
     }
 
     async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
-        // Invoke each worker a 'length' times in parallel and record the duration
-        let mut fibers = Vec::new();
-        for (n, worker_id) in context.worker_ids.iter().enumerate() {
-            let context_clone = context.clone();
-            let worker_id_clone = worker_id.clone();
-            let recorder_clone = recorder.clone();
-            let length = self.config.benchmark_config.length;
-            let fiber = tokio::task::spawn(async move {
-                for _ in 0..length {
-                    let start = SystemTime::now();
-                    context_clone
-                        .deps
-                        .invoke_and_await(
-                            &worker_id_clone,
-                            "golem:it/api/echo",
-                            vec![Value::String("hello".to_string())],
-                        )
-                        .await
-                        .expect("invoke_and_await failed");
-                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"invocation".to_string(), elapsed);
-                    recorder_clone.duration(&format!("worker-{n}"), elapsed);
-                }
-            });
-            fibers.push(fiber);
-        }
-
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
-        }
+        run_echo(self.config.benchmark_config.length, context, recorder).await
     }
 
     async fn cleanup_iteration(&self, context: Self::IterationContext) {

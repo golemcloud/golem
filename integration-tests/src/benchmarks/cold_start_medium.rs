@@ -35,13 +35,14 @@ impl Benchmark for ColdStartEchoMedium {
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.config.clone(), "js-echo").await
+        setup(self.config.clone(), "js-echo", false).await
     }
 
     async fn warmup(&self, _: &Self::IterationContext) {}
 
     async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
-        run_echo(self.config.benchmark_config.length, context, recorder).await
+        // config.benchmark_config.length is not used, we want to have ony one invocation per worker in this benchmark
+        run_echo(1, context, recorder).await
     }
 
     async fn cleanup_iteration(&self, context: Self::IterationContext) {
