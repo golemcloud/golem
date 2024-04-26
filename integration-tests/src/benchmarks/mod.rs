@@ -17,7 +17,7 @@ use std::time::SystemTime;
 use clap::Parser;
 use golem_wasm_rpc::Value;
 
-use golem_common::model::WorkerId;
+use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::config::{CliParams, CliTestDependencies};
 use golem_test_framework::dsl::benchmark::{BenchmarkApi, BenchmarkRecorder};
 use golem_test_framework::dsl::TestDsl;
@@ -26,6 +26,18 @@ use golem_test_framework::dsl::TestDsl;
 pub struct Context {
     pub deps: CliTestDependencies,
     pub worker_ids: Vec<WorkerId>,
+}
+
+pub fn get_worker_ids(size: usize, component_id: &ComponentId, prefix: &str) -> Vec<WorkerId> {
+    let mut worker_ids = Vec::new();
+    for i in 0..size {
+        let worker_name = format!("{prefix}-{i}");
+        worker_ids.push(WorkerId {
+            component_id: component_id.clone(),
+            worker_name,
+        });
+    }
+    worker_ids
 }
 
 pub async fn setup_with(
@@ -38,24 +50,22 @@ pub async fn setup_with(
 
     // Upload test component
     let component_id = deps.store_component(component_name).await;
-    let mut worker_ids = Vec::new();
-
     // Create 'size' workers
-    for i in 0..size {
-        let worker_name = format!("worker-{i}");
-        let worker_id = if start_workers {
-            deps.start_worker(&component_id, &worker_name).await
-        } else {
-            WorkerId {
-                component_id: component_id.clone(),
-                worker_name,
-            }
-        };
+    let worker_ids = get_worker_ids(size, &component_id, "worker");
 
-        worker_ids.push(worker_id);
+    if start_workers {
+        start(worker_ids.clone(), deps.clone()).await
     }
 
     Context { deps, worker_ids }
+}
+
+pub async fn start(worker_ids: Vec<WorkerId>, deps: CliTestDependencies) {
+    for worker_id in worker_ids {
+        let _ = deps
+            .start_worker(&worker_id.component_id, &worker_id.worker_name)
+            .await;
+    }
 }
 
 pub async fn setup(config: CliParams, component_name: &str, start_workers: bool) -> Context {
