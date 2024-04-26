@@ -76,7 +76,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        _worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
     ) -> anyhow::Result<All<Context>> {
@@ -108,6 +108,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             blob_store_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
+            worker_activator.clone(),
             additional_deps.clone(),
         ));
         let recovery_management = Arc::new(RecoveryManagementDefault::new(
@@ -126,6 +127,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             key_value_service.clone(),
             blob_store_service.clone(),
             rpc.clone(),
+            worker_activator.clone(),
             golem_config.clone(),
             additional_deps.clone(),
         ));
@@ -151,6 +153,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             recovery_management,
             rpc,
             scheduler_service,
+            worker_activator.clone(),
             additional_deps,
         ))
     }

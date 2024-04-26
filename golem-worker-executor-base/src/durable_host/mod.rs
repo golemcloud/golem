@@ -209,6 +209,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         open_function_table: HashMap::new(),
                         replay_idx: 1,
                         replay_target: oplog_size,
+                        snapshotting_mode: None,
                     },
                     temp_dir,
                     execution_status,
@@ -312,7 +313,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut deleted_regions = self.state.deleted_regions.clone();
         let (pending_updates, extra_deleted_regions) =
             self.public_state.invocation_queue().pending_updates();
-        deleted_regions.extend_with(extra_deleted_regions);
+        deleted_regions.set_override(extra_deleted_regions);
 
         status.deleted_regions = deleted_regions;
         status.overridden_retry_config = self.state.overridden_retry_policy.clone();
@@ -398,17 +399,23 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     .set_current_invocation_key(invocation_key.clone())
                                     .await;
 
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .begin_call_snapshotting_function();
                                 let _ = invoke_worker(
                                     "golem:api/load-snapshot@0.2.0/load".to_string(),
-                                    vec![Value::List(
-                                        data.into_iter().map(|b| Value::U8(*b)).collect(),
-                                    )],
+                                    vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
                                     store,
                                     instance,
                                     CallingConvention::Component,
                                     true,
                                 )
                                 .await;
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .end_call_snapshotting_function();
                                 let result = store
                                     .as_context_mut()
                                     .data_mut()
@@ -591,26 +598,28 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         function_input: &Vec<Value>,
         calling_convention: Option<CallingConvention>,
     ) -> anyhow::Result<()> {
-        let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
-            .iter()
-            .map(|value| value.clone().into())
-            .collect();
-        let oplog_entry = OplogEntry::exported_function_invoked(
-            full_function_name.to_string(),
-            &proto_function_input,
-            self.get_current_invocation_key().await.ok_or(anyhow!(
-                "No active invocation key is associated with the worker"
-            ))?,
-            calling_convention,
-        )
-        .unwrap_or_else(|err| {
-            panic!(
-                "could not encode function input for {full_function_name} on {}: {err}",
-                self.worker_id()
+        if self.state.snapshotting_mode.is_none() {
+            let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
+                .iter()
+                .map(|value| value.clone().into())
+                .collect();
+            let oplog_entry = OplogEntry::exported_function_invoked(
+                full_function_name.to_string(),
+                &proto_function_input,
+                self.get_current_invocation_key().await.ok_or(anyhow!(
+                    "No active invocation key is associated with the worker"
+                ))?,
+                calling_convention,
             )
-        });
+            .unwrap_or_else(|err| {
+                panic!(
+                    "could not encode function input for {full_function_name} on {}: {err}",
+                    self.worker_id()
+                )
+            });
 
-        self.state.oplog.add_and_commit(oplog_entry).await;
+            self.state.oplog.add_and_commit(oplog_entry).await;
+        }
         Ok(())
     }
 
@@ -675,14 +684,19 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let is_live_after = self.state.is_live();
 
         if is_live_after {
-            let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
-                output.iter().map(|value| value.clone().into()).collect();
-            let oplog_entry = OplogEntry::exported_function_completed(&proto_output, consumed_fuel)
-                .unwrap_or_else(|err| {
-                    panic!("could not encode function result for {full_function_name}: {err}")
-                });
+            if self.state.snapshotting_mode.is_none() {
+                let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
+                    output.iter().map(|value| value.clone().into()).collect();
+                let oplog_entry =
+                    OplogEntry::exported_function_completed(&proto_output, consumed_fuel)
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "could not encode function result for {full_function_name}: {err}"
+                            )
+                        });
 
-            self.state.oplog.add_and_commit(oplog_entry).await;
+                self.state.oplog.add_and_commit(oplog_entry).await;
+            }
         } else {
             let response = self
                 .state
@@ -731,6 +745,24 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
+    fn begin_call_snapshotting_function(&mut self) {
+        // While calling a snapshotting function (load/save), we completely turn off persistence
+        // In addition to the user-controllable persistence level we also skip writing the
+        // oplog entries marking the exported function call.
+        let previous_level = self.state.persistence_level.clone();
+        self.state.snapshotting_mode = Some(previous_level);
+        self.state.persistence_level = PersistenceLevel::PersistNothing;
+    }
+
+    fn end_call_snapshotting_function(&mut self) {
+        // Restoring the state of persistence after calling a snapshotting function
+        self.state.persistence_level = self
+            .state
+            .snapshotting_mode
+            .take()
+            .expect("Not in snapshotting mode");
+    }
+
     async fn on_worker_update_failed(
         &self,
         target_version: ComponentVersion,
@@ -1026,6 +1058,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     open_function_table: HashMap<u32, u64>,
     replay_target: u64,
     replay_idx: u64,
+    snapshotting_mode: Option<PersistenceLevel>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {

@@ -102,7 +102,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let component_id = worker_id.component_id.clone();
 
             loop {
-                info!("##### {:?}", worker_metadata.last_known_status); // TODO: remove
                 let component_version = worker_metadata
                     .last_known_status
                     .pending_updates
@@ -934,8 +933,13 @@ where
             last_known.overridden_retry_config.clone(),
             &new_entries,
         );
-        let mut deleted_regions =
-            calculate_deleted_regions(last_known.deleted_regions, &new_entries);
+
+        let mut initial_deleted_regions = last_known.deleted_regions;
+        if initial_deleted_regions.is_overridden() {
+            initial_deleted_regions.drop_override();
+        }
+
+        let mut deleted_regions = calculate_deleted_regions(initial_deleted_regions, &new_entries);
         let pending_invocations =
             calculate_pending_invocations(last_known.pending_invocations, &new_entries);
         let (pending_updates, failed_updates, successful_updates, component_version) =
@@ -948,14 +952,18 @@ where
                 &new_entries,
             );
 
+        debug!("deleted regions before: {deleted_regions:?}");
         if let Some(TimestampedUpdateDescription {
             oplog_index,
             description: UpdateDescription::SnapshotBased { .. },
             ..
         }) = pending_updates.front()
         {
-            deleted_regions.add(OplogRegion::from_range(1..=*oplog_index));
+            deleted_regions.set_override(DeletedRegions::from_regions(vec![
+                OplogRegion::from_range(1..=*oplog_index),
+            ]));
         }
+        debug!("deleted regions after: {deleted_regions:?}");
 
         Ok(WorkerStatusRecord {
             oplog_idx: last_oplog_index,
@@ -1157,7 +1165,7 @@ fn calculate_update_fields(
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
     initial_version: u64,
     start_index: OplogIndex,
-    entries: &Vec<OplogEntry>,
+    entries: &[OplogEntry],
 ) -> (
     VecDeque<TimestampedUpdateDescription>,
     Vec<FailedUpdateRecord>,

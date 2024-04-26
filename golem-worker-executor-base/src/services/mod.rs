@@ -16,7 +16,7 @@ use std::sync::Arc;
 #[cfg(any(feature = "mocks", test))]
 use std::time::Duration;
 
-use crate::services::worker_activator::{WorkerActivator};
+use crate::services::worker_activator::WorkerActivator;
 
 use tokio::runtime::Handle;
 
@@ -238,6 +238,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> All<Ctx> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
         engine: Arc<wasmtime::Engine>,

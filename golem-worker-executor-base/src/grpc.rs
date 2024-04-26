@@ -870,8 +870,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             worker_status.status = WorkerStatus::Retrying;
                         }
                         let mut deleted_regions = worker_status.deleted_regions.clone();
-                        let (pending_updates, extra_deleted_regions) = pending_worker.invocation_queue.pending_updates();
-                        deleted_regions.extend_with(extra_deleted_regions);
+                        let (pending_updates, extra_deleted_regions) =
+                            pending_worker.invocation_queue.pending_updates();
+                        deleted_regions.set_override(extra_deleted_regions);
                         worker_status.pending_updates = pending_updates;
                         worker_status.deleted_regions = deleted_regions;
                         self.worker_service()

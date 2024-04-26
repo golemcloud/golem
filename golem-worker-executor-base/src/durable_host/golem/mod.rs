@@ -245,7 +245,10 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
             // Write an oplog entry with the new jump and then restart the worker
             self.state.deleted_regions.add(jump.clone());
-            self.state.oplog.add_and_commit(OplogEntry::jump(jump)).await;
+            self.state
+                .oplog
+                .add_and_commit(OplogEntry::jump(jump))
+                .await;
 
             debug!(
                 "Interrupting live execution of {} for jumping from {jump_source} to {jump_target}",
@@ -328,7 +331,10 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                         end: self.state.replay_target + 1, // skipping the Jump entry too
                     };
                     self.state.deleted_regions.add(deleted_region.clone());
-                    self.state.oplog.add_and_commit(OplogEntry::jump(deleted_region)).await;
+                    self.state
+                        .oplog
+                        .add_and_commit(OplogEntry::jump(deleted_region))
+                        .await;
                 }
             }
         }

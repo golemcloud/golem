@@ -368,6 +368,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                             ctx.set_current_invocation_key(invocation_key.clone()).await;
                             invocation_key
                         };
+                        store.data_mut().begin_call_snapshotting_function();
                         let _ = invoke_worker(
                             "golem:api/save-snapshot@0.2.0/save".to_string(),
                             vec![],
@@ -377,6 +378,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                             true,
                         )
                         .await;
+                        store.data_mut().end_call_snapshotting_function();
                         let result = store.data_mut().lookup_invocation_result(&invocation_key);
                         match result {
                             LookupResult::Invalid => {}
@@ -402,7 +404,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                                         // Stop processing the queue to avoid race conditions
                                         break;
                                     } else {
-                                        Self::fail_update(target_version, format!("failed to get a snapshot for manual update: invalid snapshot result"), store)
+                                        Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store)
                                             .await;
                                     }
                                 } else {

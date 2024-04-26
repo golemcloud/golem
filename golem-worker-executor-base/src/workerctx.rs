@@ -17,7 +17,10 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::{AccountId, CallingConvention, ComponentVersion, InvocationKey, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord};
+use golem_common::model::{
+    AccountId, CallingConvention, ComponentVersion, InvocationKey, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
+};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
@@ -293,8 +296,18 @@ pub trait InvocationHooks {
 
 #[async_trait]
 pub trait UpdateManagement {
+    /// Marks the beginning of a snapshot function call. This can be used to disabled persistence
+    fn begin_call_snapshotting_function(&mut self);
+
+    /// Marks the end of a snapshot function call. This can be used to re-enable persistence
+    fn end_call_snapshotting_function(&mut self);
+
     /// Called when an update attempt has failed
-    async fn on_worker_update_failed(&self, target_version: ComponentVersion, details: Option<String>);
+    async fn on_worker_update_failed(
+        &self,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    );
 
     /// Called when an update attempt succeeded
     async fn on_worker_update_succeeded(&self, target_version: ComponentVersion);

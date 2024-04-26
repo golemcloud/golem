@@ -579,6 +579,14 @@ impl ResourceStore for TestWorkerCtx {
 
 #[async_trait]
 impl UpdateManagement for TestWorkerCtx {
+    fn begin_call_snapshotting_function(&mut self) {
+        self.durable_ctx.begin_call_snapshotting_function()
+    }
+
+    fn end_call_snapshotting_function(&mut self) {
+        self.durable_ctx.end_call_snapshotting_function()
+    }
+
     async fn on_worker_update_failed(
         &self,
         target_version: ComponentVersion,
