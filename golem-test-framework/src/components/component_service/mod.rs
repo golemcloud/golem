@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use create_component_request::Data;
@@ -256,8 +257,8 @@ async fn new_client(host: &str, grpc_port: u16) -> ComponentServiceClient<Channe
         .expect("Failed to connect to golem-component-service")
 }
 
-async fn wait_for_startup(host: &str, grpc_port: u16) {
-    wait_for_startup_grpc(host, grpc_port, "golem-component-service").await
+async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
+    wait_for_startup_grpc(host, grpc_port, "golem-component-service", timeout).await
 }
 
 fn env_vars(

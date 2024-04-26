@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::components::component_service::ComponentService;
 use crate::components::shard_manager::ShardManager;
@@ -132,7 +133,7 @@ impl SpawnedWorkerExecutor {
             &mut child,
         );
 
-        wait_for_startup("localhost", grpc_port).await;
+        wait_for_startup("localhost", grpc_port, Duration::from_secs(90)).await;
 
         (child, logger)
     }
