@@ -53,3 +53,16 @@ path = "src/benchmarks/cold_start_medium.rs"
 [[bin]]
 name = "benchmark_cold_start_large"
 path = "src/benchmarks/cold_start_large.rs"
+
+[[bin]]
+name = "benchmark_latency_small"
+path = "src/benchmarks/latency_small.rs"
+
+[[bin]]
+name = "benchmark_latency_medium"
+path = "src/benchmarks/latency_medium.rs"
+
+[[bin]]
+name = "benchmark_latency_large"
+path = "src/benchmarks/latency_large.rs"
+

@@ -29,16 +29,16 @@ struct Context {
     worker_ids: Vec<WorkerId>,
 }
 
-struct SuspendWorkerLatency {
+struct WorkerLatencyLarge {
     config: CliParams,
 }
 
 #[async_trait]
-impl Benchmark for SuspendWorkerLatency {
+impl Benchmark for WorkerLatencyLarge {
     type IterationContext = Context;
 
     fn name() -> &'static str {
-        "suspend"
+        "latency-large"
     }
 
     async fn create(config: CliParams) -> Self {
@@ -50,7 +50,7 @@ impl Benchmark for SuspendWorkerLatency {
         let deps = CliTestDependencies::new(self.config.clone()).await;
 
         // Upload test component
-        let component_id = deps.store_component("rust-echo").await;
+        let component_id = deps.store_component("py-echo").await;
         let mut worker_ids = Vec::new();
 
         // Create 'size' workers
@@ -73,7 +73,11 @@ impl Benchmark for SuspendWorkerLatency {
             let fiber = tokio::task::spawn(async move {
                 context_clone
                     .deps
-                    .invoke_and_await(&worker_id_clone, "sleep-for", vec![Value::F64(1.0)])
+                    .invoke_and_await(
+                        &worker_id_clone,
+                        "golem:it/api/echo",
+                        vec![Value::String("hello".to_string())],
+                    )
                     .await
                     .expect("invoke_and_await failed");
             });
@@ -98,7 +102,11 @@ impl Benchmark for SuspendWorkerLatency {
                     let start = SystemTime::now();
                     context_clone
                         .deps
-                        .invoke_and_await(&worker_id_clone, "sleep-for", vec![Value::F64(10.0)])
+                        .invoke_and_await(
+                            &worker_id_clone,
+                            "golem:it/api/echo",
+                            vec![Value::String("hello".to_string())],
+                        )
                         .await
                         .expect("invoke_and_await failed");
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
@@ -121,5 +129,5 @@ impl Benchmark for SuspendWorkerLatency {
 
 #[tokio::main]
 async fn main() {
-    run_benchmark::<SuspendWorkerLatency>().await;
+    run_benchmark::<WorkerLatencyLarge>().await;
 }
