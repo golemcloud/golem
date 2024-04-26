@@ -50,7 +50,7 @@ impl Benchmark for SuspendWorkerLatency {
         let deps = CliTestDependencies::new(self.config.clone()).await;
 
         // Upload test component
-        let component_id = deps.store_component("rust-echo").await;
+        let component_id = deps.store_component("clocks").await;
         let mut worker_ids = Vec::new();
 
         // Create 'size' workers
