@@ -1,0 +1,31 @@
+[package]
+name = "update-test-v3"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+opt-level = 's'
+strip = true
+
+[dependencies]
+bytes = "1.6.0"
+wit-bindgen = { version = "0.17.0", default-features = false, features = ["realloc"] }
+
+[package.metadata.component.target]
+path = "wit"
+
+[package.metadata.component.target.dependencies]
+"golem:api" = { path = "wit/deps/golem" }
+"golem:rpc" = { path = "wit/deps/wasm-rpc" }
+"wasi:clocks" = { path = "wit/deps/clocks" }
+"wasi:io" = { path = "wit/deps/io" }
+"wasi:http" = { path = "wit/deps/http" }
+"wasi:random" = { path = "wit/deps/random" }
+"wasi:cli" = { path = "wit/deps/cli" }
+"wasi:filesystem" = { path = "wit/deps/filesystem" }
+"wasi:sockets" = { path = "wit/deps/sockets" }
