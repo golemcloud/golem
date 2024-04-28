@@ -53,7 +53,7 @@ impl Benchmark for ColdStartEchoMedium {
     }
 
     async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
-        // config.benchmark_config.length is not used, we want to have ony one invocation per worker in this benchmark
+        // config.benchmark_config.length is not used, we want to have only one invocation per worker in this benchmark
         run_echo(1, context, recorder).await
     }
 
