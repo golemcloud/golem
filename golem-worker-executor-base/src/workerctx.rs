@@ -89,6 +89,7 @@ pub trait WorkerCtx:
     /// - `config`: The shared worker configuration
     /// - `worker_config`: Configuration for this specific worker
     /// - `execution_status`: Lock created to store the execution status
+    #[allow(clippy::too_many_arguments)]
     async fn create(
         worker_id: WorkerId,
         account_id: AccountId,
