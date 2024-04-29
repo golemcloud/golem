@@ -314,3 +314,23 @@ impl FromStr for PathBufOrStdin {
         }
     }
 }
+
+#[derive(Clone, PartialEq, Eq, Debug, Display)]
+pub enum WorkerUpdateMode {
+    Automatic,
+    Manual,
+}
+
+impl FromStr for WorkerUpdateMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auto" => Ok(WorkerUpdateMode::Automatic),
+            "manual" => Ok(WorkerUpdateMode::Manual),
+            _ => Err(format!(
+                "Unknown mode: {s}. Expected one of \"auto\", \"manual\""
+            )),
+        }
+    }
+}

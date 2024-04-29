@@ -33,7 +33,7 @@ use crate::model::text::WorkerAddView;
 use crate::model::wave::type_to_analysed;
 use crate::model::{
     ComponentId, ComponentIdOrName, Format, GolemError, GolemResult, InvocationKey,
-    JsonValueParser, WorkerName,
+    JsonValueParser, WorkerName, WorkerUpdateMode,
 };
 use crate::parse_key_val;
 
@@ -230,6 +230,25 @@ pub enum WorkerSubcommand {
         /// Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
         #[arg(short, long)]
         precise: Option<bool>,
+    },
+    /// Updates a worker
+    #[command()]
+    Update {
+        /// The Golem component of the worker, identified by either its name or its component ID
+        #[command(flatten)]
+        component_id_or_name: ComponentIdOrName,
+
+        /// Name of the worker to update
+        #[arg(short, long)]
+        worker_name: WorkerName,
+
+        /// Update mode - auto or manual
+        #[arg(short, long)]
+        mode: WorkerUpdateMode,
+
+        /// The new version of the updated worker
+        #[arg(short = 't', long)]
+        target_version: u64,
     },
 }
 
@@ -674,6 +693,20 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
                         cursor: None,
                     })))
                 }
+            }
+            WorkerSubcommand::Update {
+                component_id_or_name,
+                worker_name,
+                target_version,
+                mode,
+            } => {
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
+                let _ = self
+                    .client
+                    .update(worker_name, component_id, mode, target_version)
+                    .await?;
+
+                Ok(GolemResult::Str("Updated".to_string()))
             }
         }
     }
