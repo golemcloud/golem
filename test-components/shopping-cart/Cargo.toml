@@ -21,3 +21,9 @@ wit-bindgen = { version = "0.16.0", default-features = false, features = ["reall
 path = "wit"
 
 [package.metadata.component.dependencies]
+
+[package.metadata.component.target.dependencies]
+"golem:api" = { path = "wit/deps/golem" }
+"golem:rpc" = { path = "wit/deps/wasm-rpc" }
+"wasi:clocks" = { path = "wit/deps/clocks" }
+"wasi:io" = { path = "wit/deps/io" }
