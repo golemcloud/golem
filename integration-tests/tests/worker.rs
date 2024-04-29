@@ -28,6 +28,7 @@ use golem_common::model::{
 use rand::seq::IteratorRandom;
 use std::time::{Duration, SystemTime};
 use tokio::time::sleep;
+use tracing::log::info;
 use warp::http::{Response, StatusCode};
 use warp::hyper::Body;
 use warp::Filter;
@@ -403,4 +404,35 @@ async fn get_running_workers() {
 
     check!(found_worker_ids2.len() == workers_count);
     check!(found_worker_ids2.eq(&worker_ids));
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn auto_update_on_idle() {
+    let component_id = DEPS.store_component("update-test-v1").await;
+    let worker_id = DEPS
+        .start_worker(&component_id, "auto_update_on_idle")
+        .await;
+    let _ = DEPS.log_output(&worker_id).await;
+
+    let target_version = DEPS.update_component(&component_id, "update-test-v2").await;
+    info!("Updated component to version {target_version}");
+
+    DEPS.auto_update_worker(&worker_id, target_version).await;
+
+    let result = DEPS
+        .invoke_and_await(&worker_id, "golem:component/api/f2", vec![])
+        .await
+        .unwrap();
+
+    info!("result: {:?}", result);
+    let metadata = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+
+    // Expectation: the worker has no history so the update succeeds and then calling f2 returns
+    // the current state which is 0
+    check!(result[0] == Value::U64(0));
+    check!(metadata.last_known_status.component_version == target_version);
+    check!(metadata.last_known_status.pending_updates.is_empty());
+    check!(metadata.last_known_status.failed_updates.is_empty());
+    check!(metadata.last_known_status.successful_updates.len() == 1);
 }
