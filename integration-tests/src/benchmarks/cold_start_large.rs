@@ -13,10 +13,13 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use golem_common::model::WorkerId;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder};
-use integration_tests::benchmarks::{run_benchmark, run_echo, setup, Context};
+use integration_tests::benchmarks::{
+    get_worker_ids, run_benchmark, run_echo, setup, start, Context,
+};
 
 struct ColdStartEchoLarge {
     config: CliParams,
@@ -35,13 +38,23 @@ impl Benchmark for ColdStartEchoLarge {
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.config.clone(), "py-echo").await
+        setup(self.config.clone(), "py-echo", false).await
     }
 
-    async fn warmup(&self, _: &Self::IterationContext) {}
+    async fn warmup(&self, context: &Self::IterationContext) {
+        // warmup with other workers
+        if let Some(WorkerId { component_id, .. }) = context.worker_ids.clone().first() {
+            start(
+                get_worker_ids(context.worker_ids.len(), component_id, "warmup-worker"),
+                context.deps.clone(),
+            )
+            .await
+        }
+    }
 
     async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
-        run_echo(self.config.benchmark_config.length, context, recorder).await
+        // config.benchmark_config.length is not used, we want to have only one invocation per worker in this benchmark
+        run_echo(1, context, recorder).await
     }
 
     async fn cleanup_iteration(&self, context: Self::IterationContext) {

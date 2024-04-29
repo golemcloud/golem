@@ -13,24 +13,21 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::model::WorkerId;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder};
-use integration_tests::benchmarks::{
-    get_worker_ids, run_benchmark, run_echo, setup, start, Context,
-};
+use integration_tests::benchmarks::{run_benchmark, run_echo, setup, warmup_echo, Context};
 
-struct ColdStartEchoMedium {
+struct WorkerLatencyLarge {
     config: CliParams,
 }
 
 #[async_trait]
-impl Benchmark for ColdStartEchoMedium {
+impl Benchmark for WorkerLatencyLarge {
     type IterationContext = Context;
 
     fn name() -> &'static str {
-        "cold-start-medium"
+        "latency-large"
     }
 
     async fn create(config: CliParams) -> Self {
@@ -38,23 +35,15 @@ impl Benchmark for ColdStartEchoMedium {
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.config.clone(), "js-echo", false).await
+        setup(self.config.clone(), "py-echo", true).await
     }
 
     async fn warmup(&self, context: &Self::IterationContext) {
-        // warmup with other workers
-        if let Some(WorkerId { component_id, .. }) = context.worker_ids.clone().first() {
-            start(
-                get_worker_ids(context.worker_ids.len(), component_id, "warmup-worker"),
-                context.deps.clone(),
-            )
-            .await
-        }
+        warmup_echo(context).await
     }
 
     async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
-        // config.benchmark_config.length is not used, we want to have only one invocation per worker in this benchmark
-        run_echo(1, context, recorder).await
+        run_echo(self.config.benchmark_config.length, context, recorder).await
     }
 
     async fn cleanup_iteration(&self, context: Self::IterationContext) {
@@ -64,5 +53,5 @@ impl Benchmark for ColdStartEchoMedium {
 
 #[tokio::main]
 async fn main() {
-    run_benchmark::<ColdStartEchoMedium>().await;
+    run_benchmark::<WorkerLatencyLarge>().await;
 }
