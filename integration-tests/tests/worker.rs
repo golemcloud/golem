@@ -199,7 +199,7 @@ async fn get_workers() {
 
     for i in 0..workers_count {
         let worker_id = DEPS
-            .start_worker(&component_id, &format!("shopping-cart-test-{}", i))
+            .start_worker(&component_id, &format!("get-workers-test-{}", i))
             .await;
 
         worker_ids.insert(worker_id);
@@ -254,9 +254,19 @@ async fn get_workers() {
 
     let count = workers_count / 5;
 
+    let filter = Some(WorkerFilter::new_name(
+        StringFilterComparator::Like,
+        "get-workers-test-".to_string(),
+    ));
     while found_worker_ids.len() < workers_count && cursor.is_some() {
         let (cursor1, values1) = DEPS
-            .get_workers_metadata(&component_id, None, cursor.unwrap(), count as u64, true)
+            .get_workers_metadata(
+                &component_id,
+                filter.clone(),
+                cursor.unwrap(),
+                count as u64,
+                true,
+            )
             .await;
 
         check!(values1.len() > 0); // Each page should contain at least one element, but it is not guaranteed that it has count elements
@@ -270,7 +280,7 @@ async fn get_workers() {
 
     if let Some(cursor) = cursor {
         let (_, values) = DEPS
-            .get_workers_metadata(&component_id, None, cursor, workers_count as u64, true)
+            .get_workers_metadata(&component_id, filter, cursor, workers_count as u64, true)
             .await;
         check!(values.len() == 0);
     }
