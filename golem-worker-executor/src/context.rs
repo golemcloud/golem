@@ -44,6 +44,7 @@ use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
+use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{worker_enumeration, HasAll};
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
@@ -315,6 +316,7 @@ impl WorkerCtx for Context {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -337,6 +339,7 @@ impl WorkerCtx for Context {
             scheduler_service,
             recovery_management,
             rpc,
+            worker_proxy,
             config,
             worker_config,
             execution_status,
@@ -365,6 +368,10 @@ impl WorkerCtx for Context {
 
     fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
         self.durable_ctx.rpc()
+    }
+
+    fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+        self.durable_ctx.worker_proxy()
     }
 }
 

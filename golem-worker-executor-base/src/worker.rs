@@ -146,6 +146,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     this.scheduler_service(),
                     this.recovery_management(),
                     this.rpc(),
+                    this.worker_proxy(),
                     this.extra_deps(),
                     this.config(),
                     WorkerConfig::new(

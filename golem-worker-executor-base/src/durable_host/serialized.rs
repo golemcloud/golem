@@ -14,6 +14,7 @@
 
 use crate::error::GolemError;
 use crate::services::rpc::RpcError;
+use crate::services::worker_proxy::WorkerProxyError;
 use anyhow::anyhow;
 use bincode::{Decode, Encode};
 use std::ops::Add;
@@ -85,6 +86,7 @@ pub enum SerializableError {
     Golem { error: GolemError },
     SocketError { code: u8 },
     Rpc { error: RpcError },
+    WorkerProxy { error: WorkerProxyError },
 }
 
 fn get_fs_error_code(value: &filesystem::types::ErrorCode) -> u8 {
@@ -273,6 +275,7 @@ impl From<SerializableError> for anyhow::Error {
                 }
             }
             SerializableError::Rpc { error } => anyhow!(error),
+            SerializableError::WorkerProxy { error } => anyhow!(error),
         }
     }
 }
@@ -297,6 +300,7 @@ impl From<SerializableError> for FsError {
                 FsError::trap(anyhow)
             }
             SerializableError::Rpc { error } => FsError::trap(anyhow!(error)),
+            SerializableError::WorkerProxy { error } => FsError::trap(anyhow!(error)),
         }
     }
 }
@@ -329,6 +333,7 @@ impl From<SerializableError> for GolemError {
                 GolemError::unknown(anyhow.to_string())
             }
             SerializableError::Rpc { error } => GolemError::unknown(error.to_string()),
+            SerializableError::WorkerProxy { error } => GolemError::unknown(error.to_string()),
         }
     }
 }
@@ -369,6 +374,7 @@ impl From<SerializableError> for SocketError {
                 }
             }
             SerializableError::Rpc { error } => SocketError::trap(anyhow!(error)),
+            SerializableError::WorkerProxy { error } => SocketError::trap(anyhow!(error)),
         }
     }
 }
@@ -401,6 +407,41 @@ impl From<SerializableError> for RpcError {
                 }
             }
             SerializableError::Rpc { error } => error,
+            SerializableError::WorkerProxy { error } => RpcError::ProtocolError {
+                details: error.to_string(),
+            },
+        }
+    }
+}
+
+impl From<&WorkerProxyError> for SerializableError {
+    fn from(value: &WorkerProxyError) -> Self {
+        Self::WorkerProxy {
+            error: value.clone(),
+        }
+    }
+}
+
+impl From<SerializableError> for WorkerProxyError {
+    fn from(value: SerializableError) -> Self {
+        match value {
+            SerializableError::Generic { message } => {
+                WorkerProxyError::InternalError(GolemError::unknown(message))
+            }
+            SerializableError::FsError { .. } => {
+                let anyhow: anyhow::Error = value.into();
+                WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
+            }
+            SerializableError::Golem { error } => WorkerProxyError::InternalError(error),
+            SerializableError::SocketError { .. } => {
+                let anyhow: anyhow::Error = value.into();
+                WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
+            }
+            SerializableError::Rpc { .. } => {
+                let anyhow: anyhow::Error = value.into();
+                WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
+            }
+            SerializableError::WorkerProxy { error } => error,
         }
     }
 }

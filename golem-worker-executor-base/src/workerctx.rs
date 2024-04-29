@@ -42,6 +42,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasInvocationQueue, HasOplog};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
@@ -83,6 +84,7 @@ pub trait WorkerCtx:
     /// - `scheduler_service`: The scheduler implementation responsible for waking up suspended workers
     /// - `recovery_management`: The service for deciding if a worker should be recovered
     /// - `rpc`: The RPC implementation used for worker to worker communication
+    /// - `worker_proyx`: Access to the worker proxy above the worker executor cluster
     /// - `extra_deps`: Extra dependencies that are required by this specific worker context
     /// - `config`: The shared worker configuration
     /// - `worker_config`: Configuration for this specific worker
@@ -106,6 +108,7 @@ pub trait WorkerCtx:
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -131,6 +134,10 @@ pub trait WorkerCtx:
 
     /// Gets the worker-executor's WASM RPC implementation
     fn rpc(&self) -> Arc<dyn Rpc + Send + Sync>;
+
+    /// Gets an interface to the worker-proxy which can direct calls to other worker executors
+    /// in the cluster
+    fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync>;
 }
 
 /// The fuel management interface of a worker context is responsible for borrowing and returning
