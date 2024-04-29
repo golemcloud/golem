@@ -20,11 +20,12 @@ use crate::model::{InterruptKind, LastError, TrapType};
 use crate::services::rpc::Rpc;
 use crate::services::{
     active_workers, blob_store, component, golem_config, invocation_key, key_value, oplog, promise,
-    scheduler, worker, worker_activator, worker_enumeration, HasActiveWorkers, HasAll,
-    HasBlobStoreService, HasComponentService, HasConfig, HasExtraDeps, HasInvocationKeyService,
-    HasKeyValueService, HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasWasmtimeEngine, HasWorkerActivator,
-    HasWorkerEnumerationService, HasWorkerService,
+    scheduler, worker, worker_activator, worker_enumeration, worker_proxy, HasActiveWorkers,
+    HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasExtraDeps,
+    HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
+    HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy,
+    HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -90,6 +91,7 @@ pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
     rpc: Arc<dyn Rpc + Send + Sync>,
     worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
+    worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -115,6 +117,7 @@ impl<Ctx: WorkerCtx> Clone for RecoveryManagementDefault<Ctx> {
             blob_store_service: self.blob_store_service.clone(),
             rpc: self.rpc.clone(),
             worker_activator: self.worker_activator.clone(),
+            worker_proxy: self.worker_proxy.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -212,6 +215,12 @@ impl<Ctx: WorkerCtx> HasWorkerActivator for RecoveryManagementDefault<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasWorkerProxy for RecoveryManagementDefault<Ctx> {
+    fn worker_proxy(&self) -> Arc<dyn worker_proxy::WorkerProxy + Send + Sync> {
+        self.worker_proxy.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasOplogService for RecoveryManagementDefault<Ctx> {
     fn oplog_service(&self) -> Arc<dyn oplog::OplogService + Send + Sync> {
         self.oplog_service.clone()
@@ -258,6 +267,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
+        worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
@@ -281,6 +291,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             recovery_override: None,
             rpc,
             worker_activator,
+            worker_proxy,
             extra_deps,
         }
     }
@@ -308,6 +319,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         golem_config: Arc<golem_config::GolemConfig>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
+        worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
         recovery_override: F,
     ) -> Self
@@ -334,6 +346,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             recovery_override: Some(Arc::new(recovery_override)),
             rpc,
             worker_activator,
+            worker_proxy,
             extra_deps,
         }
     }
@@ -604,7 +617,7 @@ mod tests {
         worker_enumeration, All, HasAll, HasBlobStoreService, HasComponentService, HasConfig,
         HasExtraDeps, HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasOplog,
         HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasWasmtimeEngine,
-        HasWorkerActivator, HasWorkerEnumerationService, HasWorkerService,
+        HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
     };
     use crate::workerctx::{
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
@@ -631,11 +644,13 @@ mod tests {
     use crate::services::rpc::Rpc;
     use crate::services::scheduler;
     use crate::services::scheduler::SchedulerService;
+    use crate::services::worker_proxy::WorkerProxy;
 
     struct EmptyContext {
         worker_id: WorkerId,
         public_state: EmptyPublicState,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     }
 
     #[derive(Clone)]
@@ -900,6 +915,7 @@ mod tests {
             _scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
             _recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
             rpc: Arc<dyn Rpc + Send + Sync>,
+            worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
             _extra_deps: Self::ExtraDeps,
             _config: Arc<GolemConfig>,
             _worker_config: WorkerConfig,
@@ -909,6 +925,7 @@ mod tests {
                 worker_id: create_test_id(),
                 public_state: EmptyPublicState,
                 rpc,
+                worker_proxy,
             })
         }
 
@@ -930,6 +947,10 @@ mod tests {
 
         fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
             self.rpc.clone()
+        }
+
+        fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+            self.worker_proxy.clone()
         }
     }
 
@@ -1004,6 +1025,7 @@ mod tests {
             deps.config(),
             deps.rpc(),
             deps.worker_activator(),
+            deps.worker_proxy(),
             (),
             recovery_fn,
         )

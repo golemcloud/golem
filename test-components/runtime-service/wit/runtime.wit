@@ -3,6 +3,9 @@ package golem:it;
 interface api {
   use golem:api/host@0.2.0.{
            component-id,
+           worker-id,
+           component-version,
+           update-mode,
            worker-any-filter,
            worker-metadata
   };
@@ -14,6 +17,7 @@ interface api {
   idempotence-flag: func(enabled: bool) -> ();
   persist-nothing: func() -> ();
   get-workers: func(component-id: component-id, filter: option<worker-any-filter>, precise: bool) -> list<worker-metadata>;
+  update-worker: func(worker-id: worker-id, component-version: component-version, update-mode: update-mode) -> ();
 }
 
 world runtime-service {

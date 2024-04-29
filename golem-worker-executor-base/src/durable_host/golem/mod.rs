@@ -30,7 +30,7 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::preview2::golem::api::host::{
-    HostGetWorkers, OplogIndex, PersistenceLevel, RetryPolicy,
+    ComponentVersion, HostGetWorkers, OplogIndex, PersistenceLevel, RetryPolicy, UpdateMode,
 };
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
@@ -433,6 +433,37 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         )
         .await?;
         Ok(uuid.into())
+    }
+
+    async fn update_worker(
+        &mut self,
+        worker_id: golem::api::host::WorkerId,
+        target_version: ComponentVersion,
+        mode: UpdateMode,
+    ) -> anyhow::Result<()> {
+        record_host_function_call("golem::api", "update_worker");
+
+        let worker_id: WorkerId = worker_id.into();
+        let mode = match mode {
+            UpdateMode::Automatic => golem_api_grpc::proto::golem::worker::UpdateMode::Automatic,
+            UpdateMode::SnapshotBased => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
+        };
+        Durability::<Ctx, (), SerializableError>::wrap(
+            self,
+            WrappedFunctionType::WriteRemote,
+            "golem::api::update-worker",
+            |ctx| {
+                Box::pin(async move {
+                    ctx.state
+                        .worker_proxy
+                        .update(&worker_id, target_version, mode, &ctx.state.account_id)
+                        .await
+                })
+            },
+        )
+        .await?;
+
+        Ok(())
     }
 }
 

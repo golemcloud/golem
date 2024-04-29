@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::ComponentService;
+use crate::components::component_service::{AddComponentError, ComponentService};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 
@@ -36,27 +36,38 @@ impl FileSystemComponentService {
 #[async_trait]
 impl ComponentService for FileSystemComponentService {
     async fn get_or_add_component(&self, local_path: &Path) -> ComponentId {
-        self.add_component(local_path).await
+        self.add_component(local_path)
+            .await
+            .expect("Failed to add component")
     }
 
-    async fn add_component(&self, local_path: &Path) -> ComponentId {
+    async fn add_component(&self, local_path: &Path) -> Result<ComponentId, AddComponentError> {
         let uuid = Uuid::new_v4();
 
         let target_dir = &self.root;
         debug!("Local component store: {target_dir:?}");
         if !target_dir.exists() {
-            std::fs::create_dir_all(target_dir)
-                .expect("Failed to create component store directory");
+            std::fs::create_dir_all(target_dir).map_err(|err| {
+                AddComponentError::Other(format!(
+                    "Failed to create component store directory: {err}"
+                ))
+            })?;
         }
 
         if !local_path.exists() {
-            panic!("Source file does not exist: {local_path:?}");
+            return Err(AddComponentError::Other(format!(
+                "Source file does not exist: {local_path:?}"
+            )));
         }
 
-        let _ = std::fs::copy(local_path, target_dir.join(format!("{uuid}-0.wasm")))
-            .expect("Failed to copy WASM to the local component store");
+        let _ =
+            std::fs::copy(local_path, target_dir.join(format!("{uuid}-0.wasm"))).map_err(|err| {
+                AddComponentError::Other(format!(
+                    "Failed to copy WASM to the local component store: {err}"
+                ))
+            });
 
-        ComponentId(uuid)
+        Ok(ComponentId(uuid))
     }
 
     async fn update_component(&self, component_id: &ComponentId, local_path: &Path) -> u64 {

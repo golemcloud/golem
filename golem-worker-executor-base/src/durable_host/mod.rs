@@ -95,6 +95,7 @@ pub mod wasm_rpc;
 
 mod durability;
 use crate::services::invocation_queue::InvocationQueue;
+use crate::services::worker_proxy::WorkerProxy;
 pub use durability::*;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
@@ -130,6 +131,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -197,6 +199,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         active_workers: active_workers.clone(),
                         recovery_management,
                         rpc,
+                        worker_proxy,
                         resources: HashMap::new(),
                         last_resource_id: 0,
                         deleted_regions: worker_config.deleted_regions.clone(),
@@ -365,6 +368,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
         self.state.rpc.clone()
+    }
+
+    pub fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+        self.state.worker_proxy.clone()
     }
 }
 
@@ -1048,6 +1055,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     active_workers: Arc<ActiveWorkers<Ctx>>,
     recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
     rpc: Arc<dyn Rpc + Send + Sync>,
+    worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     resources: HashMap<u64, ResourceAny>,
     last_resource_id: u64,
     deleted_regions: DeletedRegions,
