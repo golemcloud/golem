@@ -282,7 +282,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .update_worker(authorised_grpc_request(
                 UpdateWorkerRequest {
                     worker_id: Some(worker_id.clone().into()),
-                    target_version: target_version,
+                    target_version,
                     mode: mode as i32,
                 },
                 &self.access_token,
@@ -304,6 +304,12 @@ impl WorkerProxy for RemoteWorkerProxy {
 pub struct WorkerProxyMock {}
 
 #[cfg(any(feature = "mocks", test))]
+impl Default for WorkerProxyMock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WorkerProxyMock {
     pub fn new() -> Self {
         Self {}
