@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,11 +22,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use create_component_request::Data;
 use golem_api_grpc::proto::golem::component::{
-    create_component_request, create_component_response, get_component_metadata_response,
-    get_components_response, update_component_request, update_component_response,
-    CreateComponentRequest, CreateComponentRequestChunk, CreateComponentRequestHeader,
-    GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest,
-    UpdateComponentRequestChunk, UpdateComponentRequestHeader,
+    component_error, create_component_request, create_component_response,
+    get_component_metadata_response, get_components_response, update_component_request,
+    update_component_response, CreateComponentRequest, CreateComponentRequestChunk,
+    CreateComponentRequestHeader, GetComponentsRequest, GetLatestComponentRequest,
+    UpdateComponentRequest, UpdateComponentRequestChunk, UpdateComponentRequestHeader,
 };
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -50,49 +52,68 @@ pub trait ComponentService {
     }
 
     async fn get_or_add_component(&self, local_path: &Path) -> ComponentId {
-        let file_name = local_path.file_name().unwrap().to_string_lossy();
-        let mut client = self.client().await;
-        let response = client
-            .get_components(GetComponentsRequest {
-                project_id: None,
-                component_name: Some(file_name.to_string()),
-            })
-            .await
-            .expect("Failed to call get-components")
-            .into_inner();
+        let mut retries = 3;
+        loop {
+            let file_name = local_path.file_name().unwrap().to_string_lossy();
+            let mut client = self.client().await;
+            let response = client
+                .get_components(GetComponentsRequest {
+                    project_id: None,
+                    component_name: Some(file_name.to_string()),
+                })
+                .await
+                .expect("Failed to call get-components")
+                .into_inner();
 
-        match response.result {
-            None => {
-                panic!("Missing response from golem-component-service for get-components")
-            }
-            Some(get_components_response::Result::Success(result)) => {
-                let latest = result
-                    .components
-                    .into_iter()
-                    .max_by_key(|t| t.versioned_component_id.as_ref().unwrap().version);
-                match latest {
-                    Some(component) => component
-                        .versioned_component_id
-                        .expect("versioned_component_id field is missing")
-                        .component_id
-                        .expect("component_id field is missing")
-                        .try_into()
-                        .expect("component_id has unexpected format"),
-                    None => self.add_component(local_path).await,
+            match response.result {
+                None => {
+                    panic!("Missing response from golem-component-service for get-components")
                 }
-            }
-            Some(get_components_response::Result::Error(error)) => {
-                panic!("Failed to get components from golem-component-service: {error:?}");
+                Some(get_components_response::Result::Success(result)) => {
+                    let latest = result
+                        .components
+                        .into_iter()
+                        .max_by_key(|t| t.versioned_component_id.as_ref().unwrap().version);
+                    match latest {
+                        Some(component) => {
+                            break component
+                                .versioned_component_id
+                                .expect("versioned_component_id field is missing")
+                                .component_id
+                                .expect("component_id field is missing")
+                                .try_into()
+                                .expect("component_id has unexpected format")
+                        }
+                        None => match self.add_component(local_path).await {
+                            Ok(component_id) => break component_id,
+                            Err(AddComponentError::AlreadyExists) => {
+                                if retries > 0 {
+                                    info!("Component got created in parallel, retrying get_or_add_component");
+                                    retries -= 1;
+                                    continue;
+                                } else {
+                                    panic!("Component already exists in golem-component-service");
+                                }
+                            }
+                            Err(AddComponentError::Other(message)) => {
+                                panic!("Failed to add component: {message}");
+                            }
+                        },
+                    }
+                }
+                Some(get_components_response::Result::Error(error)) => {
+                    panic!("Failed to get components from golem-component-service: {error:?}");
+                }
             }
         }
     }
 
-    async fn add_component(&self, local_path: &Path) -> ComponentId {
+    async fn add_component(&self, local_path: &Path) -> Result<ComponentId, AddComponentError> {
         let mut client = self.client().await;
         let file_name = local_path.file_name().unwrap().to_string_lossy();
-        let mut file = File::open(local_path)
-            .await
-            .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
+        let mut file = File::open(local_path).await.map_err(|_| {
+            AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
+        })?;
 
         let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
             data: Some(Data::Header(CreateComponentRequestHeader {
@@ -104,10 +125,9 @@ pub trait ComponentService {
         loop {
             let mut buffer = [0; 4096];
 
-            let n = file
-                .read(&mut buffer)
-                .await
-                .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
+            let n = file.read(&mut buffer).await.map_err(|_| {
+                AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
+            })?;
 
             if n == 0 {
                 break;
@@ -122,27 +142,44 @@ pub trait ComponentService {
         let response = client
             .create_component(tokio_stream::iter(chunks))
             .await
-            .expect("Failed to create component")
+            .map_err(|status| {
+                AddComponentError::Other(format!("Failed to call create_component: {status:?}"))
+            })?
             .into_inner();
         match response.result {
-            None => {
-                panic!("Missing response from golem-component-service for create-component")
-            }
+            None => Err(AddComponentError::Other(
+                "Missing response from golem-component-service for create-component".to_string(),
+            )),
             Some(create_component_response::Result::Success(component)) => {
                 info!("Created component {component:?}");
-                component
+                Ok(component
                     .protected_component_id
-                    .unwrap()
+                    .ok_or(AddComponentError::Other(
+                        "Missing protected_component_id field".to_string(),
+                    ))?
                     .versioned_component_id
-                    .unwrap()
+                    .ok_or(AddComponentError::Other(
+                        "Missing versioned_component_id field".to_string(),
+                    ))?
                     .component_id
-                    .unwrap()
+                    .ok_or(AddComponentError::Other(
+                        "Missing component_id field".to_string(),
+                    ))?
                     .try_into()
-                    .unwrap()
+                    .map_err(|error| {
+                        AddComponentError::Other(format!(
+                            "component_id has unexpected format: {error}"
+                        ))
+                    })?)
             }
-            Some(create_component_response::Result::Error(error)) => {
-                panic!("Failed to create component in golem-component-service: {error:?}");
-            }
+            Some(create_component_response::Result::Error(error)) => match error.error {
+                Some(component_error::Error::AlreadyExists(_)) => {
+                    Err(AddComponentError::AlreadyExists)
+                }
+                _ => Err(AddComponentError::Other(format!(
+                    "Failed to create component in golem-component-service: {error:?}"
+                ))),
+            },
         }
     }
 
@@ -283,4 +320,21 @@ fn env_vars(
         HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
     vars.extend(rdb.info().env().clone());
     vars
+}
+
+#[derive(Debug)]
+pub enum AddComponentError {
+    AlreadyExists,
+    Other(String),
+}
+
+impl Error for AddComponentError {}
+
+impl Display for AddComponentError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AddComponentError::AlreadyExists => write!(f, "Component already exists"),
+            AddComponentError::Other(message) => write!(f, "{message}"),
+        }
+    }
 }
