@@ -1,0 +1,10 @@
+package golem:component;
+
+interface api {
+  add: func(value: u64);
+  get: func() -> u64;
+}
+
+world golem-rust-tests {
+  export api;
+}
