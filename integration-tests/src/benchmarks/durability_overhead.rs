@@ -75,28 +75,32 @@ impl Benchmark for DurabilityOverhead {
     }
 
     async fn warmup(&self, context: &Self::IterationContext) {
-        // Invoke each worker a few times in parallel
-        let mut fibers = Vec::new();
-        for worker_id in &context.durable_worker_ids.clone() {
-            let context_clone = context.clone();
-            let worker_id_clone = worker_id.clone();
-            let fiber = tokio::task::spawn(async move {
-                context_clone
-                    .deps
-                    .invoke_and_await(
-                        &worker_id_clone,
-                        "golem:it/api/initialize-cart",
-                        vec![Value::String(worker_id_clone.worker_name.clone())],
-                    )
-                    .await
-                    .expect("initialize-cart invoke_and_await failed");
-            });
-            fibers.push(fiber);
+        async fn initialize(worker_ids: Vec<WorkerId>, context: &Context) {
+            // Invoke each worker a few times in parallel
+            let mut fibers = Vec::new();
+            for worker_id in worker_ids.clone() {
+                let context_clone = context.clone();
+                let worker_id_clone = worker_id.clone();
+                let fiber = tokio::task::spawn(async move {
+                    context_clone
+                        .deps
+                        .invoke_and_await(
+                            &worker_id_clone,
+                            "golem:it/api/initialize-cart",
+                            vec![Value::String(worker_id_clone.worker_name.clone())],
+                        )
+                        .await
+                        .expect("initialize-cart invoke_and_await failed");
+                });
+                fibers.push(fiber);
+            }
+
+            for fiber in fibers {
+                fiber.await.expect("fiber failed");
+            }
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
-        }
+        initialize(context.durable_worker_ids.clone(), context).await;
 
         let mut fibers = Vec::new();
         for worker_id in &context.not_durable_worker_ids.clone() {
@@ -116,27 +120,7 @@ impl Benchmark for DurabilityOverhead {
             fiber.await.expect("fiber failed");
         }
 
-        let mut fibers = Vec::new();
-        for worker_id in &context.not_durable_worker_ids.clone() {
-            let context_clone = context.clone();
-            let worker_id_clone = worker_id.clone();
-            let fiber = tokio::task::spawn(async move {
-                context_clone
-                    .deps
-                    .invoke_and_await(
-                        &worker_id_clone,
-                        "golem:it/api/initialize-cart",
-                        vec![Value::String(worker_id_clone.worker_name.clone())],
-                    )
-                    .await
-                    .expect("initialize-cart invoke_and_await failed");
-            });
-            fibers.push(fiber);
-        }
-
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
-        }
+        initialize(context.not_durable_worker_ids.clone(), context).await;
     }
 
     async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
