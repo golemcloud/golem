@@ -310,6 +310,7 @@ impl Default for WorkerProxyMock {
     }
 }
 
+#[cfg(any(feature = "mocks", test))]
 impl WorkerProxyMock {
     pub fn new() -> Self {
         Self {}
