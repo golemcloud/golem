@@ -264,6 +264,7 @@ mod test {
             id: ApiDefinitionId("test".to_string()),
             version: ApiVersion("1.0".to_string()),
             routes: vec![],
+            draft: false,
         };
 
         let response = client
@@ -292,6 +293,7 @@ mod test {
             id: ApiDefinitionId("test".to_string()),
             version: ApiVersion("42.0".to_string()),
             routes: vec![],
+            draft: false,
         };
 
         let response = client
@@ -315,6 +317,7 @@ mod test {
             id: ApiDefinitionId("test".to_string()),
             version: ApiVersion("1.0".to_string()),
             routes: vec![],
+            draft: false,
         };
         let response = client
             .post("/v1/api/definitions")
@@ -327,6 +330,7 @@ mod test {
             id: ApiDefinitionId("test".to_string()),
             version: ApiVersion("2.0".to_string()),
             routes: vec![],
+            draft: false,
         };
         let response = client
             .post("/v1/api/definitions")

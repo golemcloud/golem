@@ -2479,10 +2479,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Route'
+        draft:
+          type: boolean
       required:
       - id
       - version
       - routes
+      - draft
     InterruptResponse:
       type: object
     InvocationKey:

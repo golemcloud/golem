@@ -30,6 +30,8 @@ pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub routes: Vec<Route>,
+    #[serde(default)]
+    pub draft: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -76,6 +78,7 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for HttpApiDefiniti
             id: value.id,
             version: value.version,
             routes,
+            draft: value.draft,
         })
     }
 }
@@ -95,6 +98,7 @@ impl TryInto<crate::api_definition::http::HttpApiDefinition> for HttpApiDefiniti
             id: self.id,
             version: self.version,
             routes,
+            draft: self.draft,
         })
     }
 }
@@ -212,6 +216,7 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinit
             definition: Some(grpc_apidefinition::api_definition::Definition::Http(
                 definition,
             )),
+            draft: value.draft,
         };
 
         Ok(result)
@@ -236,6 +241,7 @@ impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http:
             id: crate::api_definition::ApiDefinitionId(id.value),
             version: crate::api_definition::ApiVersion(value.version),
             routes,
+            draft: value.draft,
         };
 
         Ok(result)
