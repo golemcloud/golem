@@ -1,0 +1,24 @@
+[package]
+name = "golem-rust-tests"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+opt-level = 's'
+strip = true
+
+[dependencies]
+golem-rust = { version = "0.2.2" }
+golem-rust-macro = { version = "0.2.2" }
+reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-apr-2024", features = ["json"] }
+wit-bindgen = { version = "=0.17.0", default-features = false, features = ["realloc"] }
+
+[package.metadata.component.target]
+path = "wit"
+
+[package.metadata.component.target.dependencies]

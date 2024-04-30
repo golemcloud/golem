@@ -12,7 +12,7 @@ opt-level = 's'
 strip = true
 
 [dependencies]
-wit-bindgen = { version = "0.16.0", default-features = false, features = ["realloc"] }
+wit-bindgen = { version = "0.17.0", default-features = false, features = ["realloc"] }
 time = { version = "0.3.21", features = ["formatting"] }
 
 [package.metadata.component]

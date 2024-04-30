@@ -1,0 +1,16 @@
+package golem:it;
+
+interface api {
+  fail-with-custom-max-retries: func(max-retries: u64) -> ();
+  explicit-commit: func(replicas: u8) -> ();
+  atomic-region: func() -> ();
+  idempotence-flag: func(enabled: bool) -> ();
+  persist-nothing: func() -> ();
+
+  fallible-transaction-test: func() -> u64;
+  infallible-transaction-test: func() -> u64;
+}
+
+world golem-rust-tests {
+  export api;
+}
