@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 golem-rust-macro = { path = "../golem-rust-macro", version = "0.0.0", optional = true }
 uuid = { version = "1.8.0", features = ["v4"], optional = true }
-wit-bindgen = { version = "0.17.0", default-features = false, features = ["realloc"] }
+wit-bindgen = { version = "=0.17.0", default-features = false, features = ["realloc"] }
 
 [features]
 default = ["macro", "uuid"]
@@ -31,3 +31,11 @@ path = "wit"
 "golem:rpc" = { path = "wit/deps/wasm-rpc" }
 "wasi:clocks" = { path = "wit/deps/clocks" }
 "wasi:io" = { path = "wit/deps/io" }
+"wasi:http" = { path = "wit/deps/http" }
+"wasi:random" = { path = "wit/deps/random" }
+"wasi:cli" = { path = "wit/deps/cli" }
+"wasi:filesystem" = { path = "wit/deps/filesystem" }
+"wasi:sockets" = { path = "wit/deps/sockets" }
+"wasi:blobstore" = { path = "wit/deps/blobstore" }
+"wasi:keyvalue" = { path = "wit/deps/keyvalue" }
+"wasi:logging" = { path = "wit/deps/logging" }

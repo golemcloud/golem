@@ -479,6 +479,17 @@ mod macro_tests {
         Ok(())
     }
 
+    #[golem_operation(compensation=test_compensation_4)]
+    fn test_operation_4(input: u64) -> Result<(), String> {
+        println!("Op input: {input}");
+        Ok(())
+    }
+
+    fn test_compensation_4(_: (), input: u64) -> Result<(), String> {
+        println!("Compensation for operation with single input {input}");
+        Ok(())
+    }
+
     // Not a real test, just verifying that the code compiles
     #[test]
     #[ignore]
@@ -487,6 +498,8 @@ mod macro_tests {
             println!("Executing the annotated function as an operation directly");
             tx.test_operation(1, 0.1)?;
             tx.test_operation_2(1, 0.1)?;
+            tx.test_operation_3("test".to_string())?;
+            tx.test_operation_4(1)?;
 
             Ok(11)
         });

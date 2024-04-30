@@ -2042,6 +2042,1467 @@ pub mod golem {
             }
           }
           pub mod wasi {
+            pub mod blobstore {
+              
+              #[allow(clippy::all)]
+              pub mod types {
+                #[used]
+                #[doc(hidden)]
+                #[cfg(target_arch = "wasm32")]
+                static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                pub type InputStream = super::super::super::wasi::io::streams::InputStream;
+                pub type OutputStream = super::super::super::wasi::io::streams::OutputStream;
+                /// name of a container, a collection of objects.
+                /// The container name may be any valid UTF-8 string.
+                pub type ContainerName = wit_bindgen::rt::string::String;
+                /// name of an object within a container
+                /// The object name may be any valid UTF-8 string.
+                pub type ObjectName = wit_bindgen::rt::string::String;
+                /// TODO: define timestamp to include seconds since
+                /// Unix epoch and nanoseconds
+                /// https://github.com/WebAssembly/wasi-blob-store/issues/7
+                pub type Timestamp = u64;
+                /// size of an object, in bytes
+                pub type ObjectSize = u64;
+                pub type Error = wit_bindgen::rt::string::String;
+                /// information about a container
+                #[derive(Clone)]
+                pub struct ContainerMetadata {
+                  /// the container's name
+                  pub name: ContainerName,
+                  /// date and time container was created
+                  pub created_at: Timestamp,
+                }
+                impl ::core::fmt::Debug for ContainerMetadata {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ContainerMetadata").field("name", &self.name).field("created-at", &self.created_at).finish()
+                  }
+                }
+                /// information about an object
+                #[derive(Clone)]
+                pub struct ObjectMetadata {
+                  /// the object's name
+                  pub name: ObjectName,
+                  /// the object's parent container
+                  pub container: ContainerName,
+                  /// date and time the object was created
+                  pub created_at: Timestamp,
+                  /// size of the object, in bytes
+                  pub size: ObjectSize,
+                }
+                impl ::core::fmt::Debug for ObjectMetadata {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ObjectMetadata").field("name", &self.name).field("container", &self.container).field("created-at", &self.created_at).field("size", &self.size).finish()
+                  }
+                }
+                /// identifier for an object that includes its container name
+                #[derive(Clone)]
+                pub struct ObjectId {
+                  pub container: ContainerName,
+                  pub object: ObjectName,
+                }
+                impl ::core::fmt::Debug for ObjectId {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ObjectId").field("container", &self.container).field("object", &self.object).finish()
+                  }
+                }
+                /// A data is the data stored in a data blob. The value can be of any type
+                /// that can be represented in a byte array. It provides a way to write the value
+                /// to the output-stream defined in the `wasi-io` interface.
+                /// Soon: switch to `resource value { ... }`
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingValue{
+                  handle: wit_bindgen::rt::Resource<OutgoingValue>,
+                }
+                
+                impl OutgoingValue{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for OutgoingValue{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:blobstore/types")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]outgoing-value"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// A incoming-value is a wrapper around a value. It provides a way to read the value
+                /// from the input-stream defined in the `wasi-io` interface.
+                /// 
+                /// The incoming-value provides two ways to consume the value:
+                /// 1. `incoming-value-consume-sync` consumes the value synchronously and returns the
+                /// value as a list of bytes.
+                /// 2. `incoming-value-consume-async` consumes the value asynchronously and returns the
+                /// value as an input-stream.
+                /// Soon: switch to `resource incoming-value { ... }`
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingValue{
+                  handle: wit_bindgen::rt::Resource<IncomingValue>,
+                }
+                
+                impl IncomingValue{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for IncomingValue{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:blobstore/types")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]incoming-value"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                pub type IncomingValueAsyncBody = InputStream;
+                pub type IncomingValueSyncBody = wit_bindgen::rt::vec::Vec::<u8>;
+                impl OutgoingValue {
+                  #[allow(unused_unsafe, clippy::all)]
+                  pub fn new_outgoing_value() -> OutgoingValue{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/types")]
+                      extern "C" {
+                        #[link_name = "[static]outgoing-value.new-outgoing-value"]
+                        fn wit_import() -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import() -> i32{ unreachable!() }
+                      let ret = wit_import();
+                      OutgoingValue::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl OutgoingValue {
+                  #[allow(unused_unsafe, clippy::all)]
+                  pub fn outgoing_value_write_body(&self,) -> Result<OutputStream,()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/types")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-value.outgoing-value-write-body"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            super::super::super::wasi::io::streams::OutputStream::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl IncomingValue {
+                  #[allow(unused_unsafe, clippy::all)]
+                  pub fn incoming_value_consume_sync(&self,) -> Result<IncomingValueSyncBody,Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/types")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-value.incoming-value-consume-sync"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            
+                            Vec::from_raw_parts(l2 as *mut _, len4, len4)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l5 = *((ptr0 + 4) as *const i32);
+                            let l6 = *((ptr0 + 8) as *const i32);
+                            let len7 = l6 as usize;
+                            let bytes7 = Vec::from_raw_parts(l5 as *mut _, len7, len7);
+                            
+                            wit_bindgen::rt::string_lift(bytes7)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl IncomingValue {
+                  #[allow(unused_unsafe, clippy::all)]
+                  pub fn incoming_value_consume_async(&self,) -> Result<IncomingValueAsyncBody,Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/types")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-value.incoming-value-consume-async"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            super::super::super::wasi::io::streams::InputStream::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = *((ptr0 + 4) as *const i32);
+                            let l4 = *((ptr0 + 8) as *const i32);
+                            let len5 = l4 as usize;
+                            let bytes5 = Vec::from_raw_parts(l3 as *mut _, len5, len5);
+                            
+                            wit_bindgen::rt::string_lift(bytes5)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl IncomingValue {
+                  #[allow(unused_unsafe, clippy::all)]
+                  pub fn size(&self,) -> u64{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/types")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-value.size"]
+                        fn wit_import(_: i32, ) -> i64;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i64{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32);
+                      ret as u64
+                    }
+                  }
+                }
+                
+              }
+              
+              
+              #[allow(clippy::all)]
+              pub mod container {
+                #[used]
+                #[doc(hidden)]
+                #[cfg(target_arch = "wasm32")]
+                static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                pub type ContainerMetadata = super::super::super::wasi::blobstore::types::ContainerMetadata;
+                pub type Error = super::super::super::wasi::blobstore::types::Error;
+                pub type IncomingValue = super::super::super::wasi::blobstore::types::IncomingValue;
+                pub type ObjectMetadata = super::super::super::wasi::blobstore::types::ObjectMetadata;
+                pub type ObjectName = super::super::super::wasi::blobstore::types::ObjectName;
+                pub type OutgoingValue = super::super::super::wasi::blobstore::types::OutgoingValue;
+                /// this defines the `container` resource
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct Container{
+                  handle: wit_bindgen::rt::Resource<Container>,
+                }
+                
+                impl Container{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for Container{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]container"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// this defines the `stream-object-names` resource which is a representation of stream<object-name>
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct StreamObjectNames{
+                  handle: wit_bindgen::rt::Resource<StreamObjectNames>,
+                }
+                
+                impl StreamObjectNames{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for StreamObjectNames{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]stream-object-names"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                impl Container {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// returns container name
+                  pub fn name(&self,) -> Result<wit_bindgen::rt::string::String,Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]container.name"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            let bytes4 = Vec::from_raw_parts(l2 as *mut _, len4, len4);
+                            
+                            wit_bindgen::rt::string_lift(bytes4)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l5 = *((ptr0 + 4) as *const i32);
+                            let l6 = *((ptr0 + 8) as *const i32);
+                            let len7 = l6 as usize;
+                            let bytes7 = Vec::from_raw_parts(l5 as *mut _, len7, len7);
+                            
+                            wit_bindgen::rt::string_lift(bytes7)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Container {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// returns container metadata
+                  pub fn info(&self,) -> Result<ContainerMetadata,Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 24]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]container.info"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 8) as *const i32);
+                            let l3 = *((ptr0 + 12) as *const i32);
+                            let len4 = l3 as usize;
+                            let bytes4 = Vec::from_raw_parts(l2 as *mut _, len4, len4);
+                            let l5 = *((ptr0 + 16) as *const i64);
+                            
+                            super::super::super::wasi::blobstore::types::ContainerMetadata{
+                              name: wit_bindgen::rt::string_lift(bytes4),
+                              created_at: l5 as u64,
+                            }
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l6 = *((ptr0 + 8) as *const i32);
+                            let l7 = *((ptr0 + 12) as *const i32);
+                            let len8 = l7 as usize;
+                            let bytes8 = Vec::from_raw_parts(l6 as *mut _, len8, len8);
+                            
+                            wit_bindgen::rt::string_lift(bytes8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Container {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// retrieves an object or portion of an object, as a resource.
+                  /// Start and end offsets are inclusive.
+                  /// Once a data-blob resource has been created, the underlying bytes are held by the blobstore service for the lifetime
+                  /// of the data-blob resource, even if the object they came from is later deleted.
+                  pub fn get_data(&self,name: &ObjectName,start: u64,end: u64,) -> Result<IncomingValue,Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = name;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]container.get-data"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i64, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i64, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, wit_bindgen::rt::as_i64(start), wit_bindgen::rt::as_i64(end), ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = {
+                            let l3 = *((ptr1 + 4) as *const i32);
+                            
+                            super::super::super::wasi::blobstore::types::IncomingValue::from_handle(l3 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l4 = *((ptr1 + 4) as *const i32);
+                            let l5 = *((ptr1 + 8) as *const i32);
+                            let len6 = l5 as usize;
+                            let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                            
+                            wit_bindgen::rt::string_lift(bytes6)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Container {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// creates or replaces an object with the data blob.
+                  pub fn write_data(&self,name: &ObjectName,data: &OutgoingValue,) -> Result<(),Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = name;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]container.write-data"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, (data).handle() as i32, ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = *((ptr1 + 4) as *const i32);
+                            let l4 = *((ptr1 + 8) as *const i32);
+                            let len5 = l4 as usize;
+                            let bytes5 = Vec::from_raw_parts(l3 as *mut _, len5, len5);
+                            
+                            wit_bindgen::rt::string_lift(bytes5)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Container {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// returns list of objects in the container. Order is undefined.
+                  pub fn list_objects(&self,) -> Result<StreamObjectNames,Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]container.list-objects"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            StreamObjectNames::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = *((ptr0 + 4) as *const i32);
+                            let l4 = *((ptr0 + 8) as *const i32);
+                            let len5 = l4 as usize;
+                            let bytes5 = Vec::from_raw_parts(l3 as *mut _, len5, len5);
+                            
+                            wit_bindgen::rt::string_lift(bytes5)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Container {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// deletes object.
+                  /// does not return error if object did not exist.
+                  pub fn delete_object(&self,name: &ObjectName,) -> Result<(),Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = name;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]container.delete-object"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = *((ptr1 + 4) as *const i32);
+                            let l4 = *((ptr1 + 8) as *const i32);
+                            let len5 = l4 as usize;
+                            let bytes5 = Vec::from_raw_parts(l3 as *mut _, len5, len5);
+                            
+                            wit_bindgen::rt::string_lift(bytes5)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Container {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// deletes multiple objects in the container
+                  pub fn delete_objects(&self,names: &[ObjectName],) -> Result<(),Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec1 = names;
+                      let len1 = vec1.len() as i32;
+                      let layout1 = alloc::Layout::from_size_align_unchecked(vec1.len() * 8, 4);
+                      let result1 = if layout1.size() != 0
+                      {
+                        let ptr = alloc::alloc(layout1);
+                        if ptr.is_null()
+                        {
+                          alloc::handle_alloc_error(layout1);
+                        }
+                        ptr
+                      }else {{
+                        ::core::ptr::null_mut()
+                      }};
+                      for (i, e) in vec1.into_iter().enumerate() {
+                        let base = result1 as i32 + (i as i32) * 8;
+                        {
+                          let vec0 = e;
+                          let ptr0 = vec0.as_ptr() as i32;
+                          let len0 = vec0.len() as i32;
+                          *((base + 4) as *mut i32) = len0;
+                          *((base + 0) as *mut i32) = ptr0;
+                        }
+                      }
+                      let ptr2 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]container.delete-objects"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, result1 as i32, len1, ptr2);
+                      let l3 = i32::from(*((ptr2 + 0) as *const u8));
+                      if layout1.size() != 0 {
+                        alloc::dealloc(result1, layout1);
+                      }
+                      match l3 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l4 = *((ptr2 + 4) as *const i32);
+                            let l5 = *((ptr2 + 8) as *const i32);
+                            let len6 = l5 as usize;
+                            let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                            
+                            wit_bindgen::rt::string_lift(bytes6)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Container {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// returns true if the object exists in this container
+                  pub fn has_object(&self,name: &ObjectName,) -> Result<bool,Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = name;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]container.has-object"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr1 + 4) as *const u8));
+                            
+                            wit_bindgen::rt::bool_lift(l3 as u8)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l4 = *((ptr1 + 4) as *const i32);
+                            let l5 = *((ptr1 + 8) as *const i32);
+                            let len6 = l5 as usize;
+                            let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                            
+                            wit_bindgen::rt::string_lift(bytes6)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Container {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// returns metadata for the object
+                  pub fn object_info(&self,name: &ObjectName,) -> Result<ObjectMetadata,Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 40]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = name;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]container.object-info"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = {
+                            let l3 = *((ptr1 + 8) as *const i32);
+                            let l4 = *((ptr1 + 12) as *const i32);
+                            let len5 = l4 as usize;
+                            let bytes5 = Vec::from_raw_parts(l3 as *mut _, len5, len5);
+                            let l6 = *((ptr1 + 16) as *const i32);
+                            let l7 = *((ptr1 + 20) as *const i32);
+                            let len8 = l7 as usize;
+                            let bytes8 = Vec::from_raw_parts(l6 as *mut _, len8, len8);
+                            let l9 = *((ptr1 + 24) as *const i64);
+                            let l10 = *((ptr1 + 32) as *const i64);
+                            
+                            super::super::super::wasi::blobstore::types::ObjectMetadata{
+                              name: wit_bindgen::rt::string_lift(bytes5),
+                              container: wit_bindgen::rt::string_lift(bytes8),
+                              created_at: l9 as u64,
+                              size: l10 as u64,
+                            }
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l11 = *((ptr1 + 8) as *const i32);
+                            let l12 = *((ptr1 + 12) as *const i32);
+                            let len13 = l12 as usize;
+                            let bytes13 = Vec::from_raw_parts(l11 as *mut _, len13, len13);
+                            
+                            wit_bindgen::rt::string_lift(bytes13)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Container {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// removes all objects within the container, leaving the container empty.
+                  pub fn clear(&self,) -> Result<(),Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]container.clear"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            let bytes4 = Vec::from_raw_parts(l2 as *mut _, len4, len4);
+                            
+                            wit_bindgen::rt::string_lift(bytes4)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl StreamObjectNames {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// reads the next number of objects from the stream
+                  /// 
+                  /// This function returns the list of objects read, and a boolean indicating if the end of the stream was reached.
+                  pub fn read_stream_object_names(&self,len: u64,) -> Result<(wit_bindgen::rt::vec::Vec::<ObjectName>,bool,),Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 16]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]stream-object-names.read-stream-object-names"]
+                        fn wit_import(_: i32, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(len), ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let base7 = l2;
+                            let len7 = l3;
+                            let mut result7 = Vec::with_capacity(len7 as usize);
+                            for i in 0..len7 {
+                              let base = base7 + i * 8;
+                              let e7 = {
+                                let l4 = *((base + 0) as *const i32);
+                                let l5 = *((base + 4) as *const i32);
+                                let len6 = l5 as usize;
+                                let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                                
+                                wit_bindgen::rt::string_lift(bytes6)
+                              };
+                              result7.push(e7);
+                            }
+                            wit_bindgen::rt::dealloc(base7, (len7 as usize) * 8, 4);
+                            let l8 = i32::from(*((ptr0 + 12) as *const u8));
+                            
+                            (result7, wit_bindgen::rt::bool_lift(l8 as u8))
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l9 = *((ptr0 + 4) as *const i32);
+                            let l10 = *((ptr0 + 8) as *const i32);
+                            let len11 = l10 as usize;
+                            let bytes11 = Vec::from_raw_parts(l9 as *mut _, len11, len11);
+                            
+                            wit_bindgen::rt::string_lift(bytes11)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl StreamObjectNames {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// skip the next number of objects in the stream
+                  /// 
+                  /// This function returns the number of objects skipped, and a boolean indicating if the end of the stream was reached.
+                  pub fn skip_stream_object_names(&self,num: u64,) -> Result<(u64,bool,),Error>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 24]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:blobstore/container")]
+                      extern "C" {
+                        #[link_name = "[method]stream-object-names.skip-stream-object-names"]
+                        fn wit_import(_: i32, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(num), ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 8) as *const i64);
+                            let l3 = i32::from(*((ptr0 + 16) as *const u8));
+                            
+                            (l2 as u64, wit_bindgen::rt::bool_lift(l3 as u8))
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l4 = *((ptr0 + 8) as *const i32);
+                            let l5 = *((ptr0 + 12) as *const i32);
+                            let len6 = l5 as usize;
+                            let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                            
+                            wit_bindgen::rt::string_lift(bytes6)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                
+              }
+              
+              
+              #[allow(clippy::all)]
+              pub mod blobstore {
+                #[used]
+                #[doc(hidden)]
+                #[cfg(target_arch = "wasm32")]
+                static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                pub type Container = super::super::super::wasi::blobstore::container::Container;
+                pub type Error = super::super::super::wasi::blobstore::types::Error;
+                pub type ContainerName = super::super::super::wasi::blobstore::types::ContainerName;
+                pub type ObjectId = super::super::super::wasi::blobstore::types::ObjectId;
+                #[allow(unused_unsafe, clippy::all)]
+                /// creates a new empty container
+                pub fn create_container(name: &ContainerName,) -> Result<Container,Error>{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(4))]
+                    struct RetArea([u8; 12]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let vec0 = name;
+                    let ptr0 = vec0.as_ptr() as i32;
+                    let len0 = vec0.len() as i32;
+                    let ptr1 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                      #[link_name = "create-container"]
+                      fn wit_import(_: i32, _: i32, _: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: i32, _: i32, ){ unreachable!() }
+                    wit_import(ptr0, len0, ptr1);
+                    let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                    match l2 {
+                      0 => {
+                        let e = {
+                          let l3 = *((ptr1 + 4) as *const i32);
+                          
+                          super::super::super::wasi::blobstore::container::Container::from_handle(l3 as u32)
+                        };
+                        Ok(e)
+                      }
+                      1 => {
+                        let e = {
+                          let l4 = *((ptr1 + 4) as *const i32);
+                          let l5 = *((ptr1 + 8) as *const i32);
+                          let len6 = l5 as usize;
+                          let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                          
+                          wit_bindgen::rt::string_lift(bytes6)
+                        };
+                        Err(e)
+                      }
+                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                    }
+                  }
+                }
+                #[allow(unused_unsafe, clippy::all)]
+                /// retrieves a container by name
+                pub fn get_container(name: &ContainerName,) -> Result<Container,Error>{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(4))]
+                    struct RetArea([u8; 12]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let vec0 = name;
+                    let ptr0 = vec0.as_ptr() as i32;
+                    let len0 = vec0.len() as i32;
+                    let ptr1 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                      #[link_name = "get-container"]
+                      fn wit_import(_: i32, _: i32, _: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: i32, _: i32, ){ unreachable!() }
+                    wit_import(ptr0, len0, ptr1);
+                    let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                    match l2 {
+                      0 => {
+                        let e = {
+                          let l3 = *((ptr1 + 4) as *const i32);
+                          
+                          super::super::super::wasi::blobstore::container::Container::from_handle(l3 as u32)
+                        };
+                        Ok(e)
+                      }
+                      1 => {
+                        let e = {
+                          let l4 = *((ptr1 + 4) as *const i32);
+                          let l5 = *((ptr1 + 8) as *const i32);
+                          let len6 = l5 as usize;
+                          let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                          
+                          wit_bindgen::rt::string_lift(bytes6)
+                        };
+                        Err(e)
+                      }
+                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                    }
+                  }
+                }
+                #[allow(unused_unsafe, clippy::all)]
+                /// deletes a container and all objects within it
+                pub fn delete_container(name: &ContainerName,) -> Result<(),Error>{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(4))]
+                    struct RetArea([u8; 12]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let vec0 = name;
+                    let ptr0 = vec0.as_ptr() as i32;
+                    let len0 = vec0.len() as i32;
+                    let ptr1 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                      #[link_name = "delete-container"]
+                      fn wit_import(_: i32, _: i32, _: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: i32, _: i32, ){ unreachable!() }
+                    wit_import(ptr0, len0, ptr1);
+                    let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                    match l2 {
+                      0 => {
+                        let e = ();
+                        Ok(e)
+                      }
+                      1 => {
+                        let e = {
+                          let l3 = *((ptr1 + 4) as *const i32);
+                          let l4 = *((ptr1 + 8) as *const i32);
+                          let len5 = l4 as usize;
+                          let bytes5 = Vec::from_raw_parts(l3 as *mut _, len5, len5);
+                          
+                          wit_bindgen::rt::string_lift(bytes5)
+                        };
+                        Err(e)
+                      }
+                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                    }
+                  }
+                }
+                #[allow(unused_unsafe, clippy::all)]
+                /// returns true if the container exists
+                pub fn container_exists(name: &ContainerName,) -> Result<bool,Error>{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(4))]
+                    struct RetArea([u8; 12]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let vec0 = name;
+                    let ptr0 = vec0.as_ptr() as i32;
+                    let len0 = vec0.len() as i32;
+                    let ptr1 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                      #[link_name = "container-exists"]
+                      fn wit_import(_: i32, _: i32, _: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: i32, _: i32, ){ unreachable!() }
+                    wit_import(ptr0, len0, ptr1);
+                    let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                    match l2 {
+                      0 => {
+                        let e = {
+                          let l3 = i32::from(*((ptr1 + 4) as *const u8));
+                          
+                          wit_bindgen::rt::bool_lift(l3 as u8)
+                        };
+                        Ok(e)
+                      }
+                      1 => {
+                        let e = {
+                          let l4 = *((ptr1 + 4) as *const i32);
+                          let l5 = *((ptr1 + 8) as *const i32);
+                          let len6 = l5 as usize;
+                          let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                          
+                          wit_bindgen::rt::string_lift(bytes6)
+                        };
+                        Err(e)
+                      }
+                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                    }
+                  }
+                }
+                #[allow(unused_unsafe, clippy::all)]
+                /// copies (duplicates) an object, to the same or a different container.
+                /// returns an error if the target container does not exist.
+                /// overwrites destination object if it already existed.
+                pub fn copy_object(src: &ObjectId,dest: &ObjectId,) -> Result<(),Error>{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(4))]
+                    struct RetArea([u8; 12]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let super::super::super::wasi::blobstore::types::ObjectId{ container:container0, object:object0, } = src;
+                    let vec1 = container0;
+                    let ptr1 = vec1.as_ptr() as i32;
+                    let len1 = vec1.len() as i32;
+                    let vec2 = object0;
+                    let ptr2 = vec2.as_ptr() as i32;
+                    let len2 = vec2.len() as i32;
+                    let super::super::super::wasi::blobstore::types::ObjectId{ container:container3, object:object3, } = dest;
+                    let vec4 = container3;
+                    let ptr4 = vec4.as_ptr() as i32;
+                    let len4 = vec4.len() as i32;
+                    let vec5 = object3;
+                    let ptr5 = vec5.as_ptr() as i32;
+                    let len5 = vec5.len() as i32;
+                    let ptr6 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                      #[link_name = "copy-object"]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                    wit_import(ptr1, len1, ptr2, len2, ptr4, len4, ptr5, len5, ptr6);
+                    let l7 = i32::from(*((ptr6 + 0) as *const u8));
+                    match l7 {
+                      0 => {
+                        let e = ();
+                        Ok(e)
+                      }
+                      1 => {
+                        let e = {
+                          let l8 = *((ptr6 + 4) as *const i32);
+                          let l9 = *((ptr6 + 8) as *const i32);
+                          let len10 = l9 as usize;
+                          let bytes10 = Vec::from_raw_parts(l8 as *mut _, len10, len10);
+                          
+                          wit_bindgen::rt::string_lift(bytes10)
+                        };
+                        Err(e)
+                      }
+                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                    }
+                  }
+                }
+                #[allow(unused_unsafe, clippy::all)]
+                /// moves or renames an object, to the same or a different container
+                /// returns an error if the destination container does not exist.
+                /// overwrites destination object if it already existed.
+                pub fn move_object(src: &ObjectId,dest: &ObjectId,) -> Result<(),Error>{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(4))]
+                    struct RetArea([u8; 12]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let super::super::super::wasi::blobstore::types::ObjectId{ container:container0, object:object0, } = src;
+                    let vec1 = container0;
+                    let ptr1 = vec1.as_ptr() as i32;
+                    let len1 = vec1.len() as i32;
+                    let vec2 = object0;
+                    let ptr2 = vec2.as_ptr() as i32;
+                    let len2 = vec2.len() as i32;
+                    let super::super::super::wasi::blobstore::types::ObjectId{ container:container3, object:object3, } = dest;
+                    let vec4 = container3;
+                    let ptr4 = vec4.as_ptr() as i32;
+                    let len4 = vec4.len() as i32;
+                    let vec5 = object3;
+                    let ptr5 = vec5.as_ptr() as i32;
+                    let len5 = vec5.len() as i32;
+                    let ptr6 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:blobstore/blobstore")]
+                    extern "C" {
+                      #[link_name = "move-object"]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                    wit_import(ptr1, len1, ptr2, len2, ptr4, len4, ptr5, len5, ptr6);
+                    let l7 = i32::from(*((ptr6 + 0) as *const u8));
+                    match l7 {
+                      0 => {
+                        let e = ();
+                        Ok(e)
+                      }
+                      1 => {
+                        let e = {
+                          let l8 = *((ptr6 + 4) as *const i32);
+                          let l9 = *((ptr6 + 8) as *const i32);
+                          let len10 = l9 as usize;
+                          let bytes10 = Vec::from_raw_parts(l8 as *mut _, len10, len10);
+                          
+                          wit_bindgen::rt::string_lift(bytes10)
+                        };
+                        Err(e)
+                      }
+                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                    }
+                  }
+                }
+                
+              }
+              
+            }
             pub mod clocks {
               
               #[allow(clippy::all)]
@@ -2146,6 +3607,8556 @@ pub mod golem {
                     fn wit_import(_: i64, ) -> i32{ unreachable!() }
                     let ret = wit_import(wit_bindgen::rt::as_i64(when));
                     super::super::super::wasi::io::poll::Pollable::from_handle(ret as u32)
+                  }
+                }
+                
+              }
+              
+              
+              #[allow(clippy::all)]
+              pub mod wall_clock {
+                #[used]
+                #[doc(hidden)]
+                #[cfg(target_arch = "wasm32")]
+                static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                /// A time and date in seconds plus nanoseconds.
+                #[repr(C)]
+                #[derive(Clone, Copy)]
+                pub struct Datetime {
+                  pub seconds: u64,
+                  pub nanoseconds: u32,
+                }
+                impl ::core::fmt::Debug for Datetime {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("Datetime").field("seconds", &self.seconds).field("nanoseconds", &self.nanoseconds).finish()
+                  }
+                }
+                #[allow(unused_unsafe, clippy::all)]
+                /// Read the current value of the clock.
+                /// 
+                /// This clock is not monotonic, therefore calling this function repeatedly
+                /// will not necessarily produce a sequence of non-decreasing values.
+                /// 
+                /// The returned timestamps represent the number of seconds since
+                /// 1970-01-01T00:00:00Z, also known as [POSIX's Seconds Since the Epoch],
+                /// also known as [Unix Time].
+                /// 
+                /// The nanoseconds field of the output is always less than 1000000000.
+                /// 
+                /// [POSIX's Seconds Since the Epoch]: https://pubs.opengroup.org/onlinepubs/9699919799/xrat/V4_xbd_chap04.html#tag_21_04_16
+                /// [Unix Time]: https://en.wikipedia.org/wiki/Unix_time
+                pub fn now() -> Datetime{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(8))]
+                    struct RetArea([u8; 16]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let ptr0 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:clocks/wall-clock@0.2.0")]
+                    extern "C" {
+                      #[link_name = "now"]
+                      fn wit_import(_: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, ){ unreachable!() }
+                    wit_import(ptr0);
+                    let l1 = *((ptr0 + 0) as *const i64);
+                    let l2 = *((ptr0 + 8) as *const i32);
+                    Datetime{
+                      seconds: l1 as u64,
+                      nanoseconds: l2 as u32,
+                    }
+                  }
+                }
+                #[allow(unused_unsafe, clippy::all)]
+                /// Query the resolution of the clock.
+                /// 
+                /// The nanoseconds field of the output is always less than 1000000000.
+                pub fn resolution() -> Datetime{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(8))]
+                    struct RetArea([u8; 16]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let ptr0 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:clocks/wall-clock@0.2.0")]
+                    extern "C" {
+                      #[link_name = "resolution"]
+                      fn wit_import(_: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, ){ unreachable!() }
+                    wit_import(ptr0);
+                    let l1 = *((ptr0 + 0) as *const i64);
+                    let l2 = *((ptr0 + 8) as *const i32);
+                    Datetime{
+                      seconds: l1 as u64,
+                      nanoseconds: l2 as u32,
+                    }
+                  }
+                }
+                
+              }
+              
+            }
+            pub mod filesystem {
+              
+              #[allow(clippy::all)]
+              pub mod types {
+                #[used]
+                #[doc(hidden)]
+                #[cfg(target_arch = "wasm32")]
+                static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                pub type InputStream = super::super::super::wasi::io::streams::InputStream;
+                pub type OutputStream = super::super::super::wasi::io::streams::OutputStream;
+                pub type Error = super::super::super::wasi::io::streams::Error;
+                pub type Datetime = super::super::super::wasi::clocks::wall_clock::Datetime;
+                /// File size or length of a region within a file.
+                pub type Filesize = u64;
+                /// The type of a filesystem object referenced by a descriptor.
+                /// 
+                /// Note: This was called `filetype` in earlier versions of WASI.
+                #[repr(u8)]
+                #[derive(Clone, Copy, Eq, PartialEq)]
+                pub enum DescriptorType {
+                  /// The type of the descriptor or file is unknown or is different from
+                  /// any of the other types specified.
+                  Unknown,
+                  /// The descriptor refers to a block device inode.
+                  BlockDevice,
+                  /// The descriptor refers to a character device inode.
+                  CharacterDevice,
+                  /// The descriptor refers to a directory inode.
+                  Directory,
+                  /// The descriptor refers to a named pipe.
+                  Fifo,
+                  /// The file refers to a symbolic link inode.
+                  SymbolicLink,
+                  /// The descriptor refers to a regular file inode.
+                  RegularFile,
+                  /// The descriptor refers to a socket.
+                  Socket,
+                }
+                impl ::core::fmt::Debug for DescriptorType {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                      DescriptorType::Unknown => {
+                        f.debug_tuple("DescriptorType::Unknown").finish()
+                      }
+                      DescriptorType::BlockDevice => {
+                        f.debug_tuple("DescriptorType::BlockDevice").finish()
+                      }
+                      DescriptorType::CharacterDevice => {
+                        f.debug_tuple("DescriptorType::CharacterDevice").finish()
+                      }
+                      DescriptorType::Directory => {
+                        f.debug_tuple("DescriptorType::Directory").finish()
+                      }
+                      DescriptorType::Fifo => {
+                        f.debug_tuple("DescriptorType::Fifo").finish()
+                      }
+                      DescriptorType::SymbolicLink => {
+                        f.debug_tuple("DescriptorType::SymbolicLink").finish()
+                      }
+                      DescriptorType::RegularFile => {
+                        f.debug_tuple("DescriptorType::RegularFile").finish()
+                      }
+                      DescriptorType::Socket => {
+                        f.debug_tuple("DescriptorType::Socket").finish()
+                      }
+                    }
+                  }
+                }
+                
+                impl DescriptorType{
+                  pub(crate) unsafe fn _lift(val: u8) -> DescriptorType{
+                    if !cfg!(debug_assertions) {
+                      return ::core::mem::transmute(val);
+                    }
+                    
+                    match val {
+                      0 => DescriptorType::Unknown,
+                      1 => DescriptorType::BlockDevice,
+                      2 => DescriptorType::CharacterDevice,
+                      3 => DescriptorType::Directory,
+                      4 => DescriptorType::Fifo,
+                      5 => DescriptorType::SymbolicLink,
+                      6 => DescriptorType::RegularFile,
+                      7 => DescriptorType::Socket,
+                      
+                      _ => panic!("invalid enum discriminant"),
+                    }
+                  }
+                }
+                
+                wit_bindgen::bitflags::bitflags! {
+                  /// Descriptor flags.
+                  /// 
+                  /// Note: This was called `fdflags` in earlier versions of WASI.
+                  #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+                  pub struct DescriptorFlags: u8 {
+                    /// Read mode: Data can be read.
+                    const READ = 1 << 0;
+                    /// Write mode: Data can be written to.
+                    const WRITE = 1 << 1;
+                    /// Request that writes be performed according to synchronized I/O file
+                    /// integrity completion. The data stored in the file and the file's
+                    /// metadata are synchronized. This is similar to `O_SYNC` in POSIX.
+                    /// 
+                    /// The precise semantics of this operation have not yet been defined for
+                    /// WASI. At this time, it should be interpreted as a request, and not a
+                    /// requirement.
+                    const FILE_INTEGRITY_SYNC = 1 << 2;
+                    /// Request that writes be performed according to synchronized I/O data
+                    /// integrity completion. Only the data stored in the file is
+                    /// synchronized. This is similar to `O_DSYNC` in POSIX.
+                    /// 
+                    /// The precise semantics of this operation have not yet been defined for
+                    /// WASI. At this time, it should be interpreted as a request, and not a
+                    /// requirement.
+                    const DATA_INTEGRITY_SYNC = 1 << 3;
+                    /// Requests that reads be performed at the same level of integrety
+                    /// requested for writes. This is similar to `O_RSYNC` in POSIX.
+                    /// 
+                    /// The precise semantics of this operation have not yet been defined for
+                    /// WASI. At this time, it should be interpreted as a request, and not a
+                    /// requirement.
+                    const REQUESTED_WRITE_SYNC = 1 << 4;
+                    /// Mutating directories mode: Directory contents may be mutated.
+                    /// 
+                    /// When this flag is unset on a descriptor, operations using the
+                    /// descriptor which would create, rename, delete, modify the data or
+                    /// metadata of filesystem objects, or obtain another handle which
+                    /// would permit any of those, shall fail with `error-code::read-only` if
+                    /// they would otherwise succeed.
+                    /// 
+                    /// This may only be set on directories.
+                    const MUTATE_DIRECTORY = 1 << 5;
+                  }
+                }
+                wit_bindgen::bitflags::bitflags! {
+                  /// Flags determining the method of how paths are resolved.
+                  #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+                  pub struct PathFlags: u8 {
+                    /// As long as the resolved path corresponds to a symbolic link, it is
+                    /// expanded.
+                    const SYMLINK_FOLLOW = 1 << 0;
+                  }
+                }
+                wit_bindgen::bitflags::bitflags! {
+                  /// Open flags used by `open-at`.
+                  #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+                  pub struct OpenFlags: u8 {
+                    /// Create file if it does not exist, similar to `O_CREAT` in POSIX.
+                    const CREATE = 1 << 0;
+                    /// Fail if not a directory, similar to `O_DIRECTORY` in POSIX.
+                    const DIRECTORY = 1 << 1;
+                    /// Fail if file already exists, similar to `O_EXCL` in POSIX.
+                    const EXCLUSIVE = 1 << 2;
+                    /// Truncate file to size 0, similar to `O_TRUNC` in POSIX.
+                    const TRUNCATE = 1 << 3;
+                  }
+                }
+                /// Number of hard links to an inode.
+                pub type LinkCount = u64;
+                /// File attributes.
+                /// 
+                /// Note: This was called `filestat` in earlier versions of WASI.
+                #[repr(C)]
+                #[derive(Clone, Copy)]
+                pub struct DescriptorStat {
+                  /// File type.
+                  pub type_: DescriptorType,
+                  /// Number of hard links to the file.
+                  pub link_count: LinkCount,
+                  /// For regular files, the file size in bytes. For symbolic links, the
+                  /// length in bytes of the pathname contained in the symbolic link.
+                  pub size: Filesize,
+                  /// Last data access timestamp.
+                  /// 
+                  /// If the `option` is none, the platform doesn't maintain an access
+                  /// timestamp for this file.
+                  pub data_access_timestamp: Option<Datetime>,
+                  /// Last data modification timestamp.
+                  /// 
+                  /// If the `option` is none, the platform doesn't maintain a
+                  /// modification timestamp for this file.
+                  pub data_modification_timestamp: Option<Datetime>,
+                  /// Last file status-change timestamp.
+                  /// 
+                  /// If the `option` is none, the platform doesn't maintain a
+                  /// status-change timestamp for this file.
+                  pub status_change_timestamp: Option<Datetime>,
+                }
+                impl ::core::fmt::Debug for DescriptorStat {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("DescriptorStat").field("type", &self.type_).field("link-count", &self.link_count).field("size", &self.size).field("data-access-timestamp", &self.data_access_timestamp).field("data-modification-timestamp", &self.data_modification_timestamp).field("status-change-timestamp", &self.status_change_timestamp).finish()
+                  }
+                }
+                /// When setting a timestamp, this gives the value to set it to.
+                #[derive(Clone, Copy)]
+                pub enum NewTimestamp{
+                  /// Leave the timestamp set to its previous value.
+                  NoChange,
+                  /// Set the timestamp to the current time of the system clock associated
+                  /// with the filesystem.
+                  Now,
+                  /// Set the timestamp to the given value.
+                  Timestamp(Datetime),
+                }
+                impl ::core::fmt::Debug for NewTimestamp {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                      NewTimestamp::NoChange => {
+                        f.debug_tuple("NewTimestamp::NoChange").finish()
+                      }
+                      NewTimestamp::Now => {
+                        f.debug_tuple("NewTimestamp::Now").finish()
+                      }
+                      NewTimestamp::Timestamp(e) => {
+                        f.debug_tuple("NewTimestamp::Timestamp").field(e).finish()
+                      }
+                    }
+                  }
+                }
+                /// A directory entry.
+                #[derive(Clone)]
+                pub struct DirectoryEntry {
+                  /// The type of the file referred to by this directory entry.
+                  pub type_: DescriptorType,
+                  /// The name of the object.
+                  pub name: wit_bindgen::rt::string::String,
+                }
+                impl ::core::fmt::Debug for DirectoryEntry {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("DirectoryEntry").field("type", &self.type_).field("name", &self.name).finish()
+                  }
+                }
+                /// Error codes returned by functions, similar to `errno` in POSIX.
+                /// Not all of these error codes are returned by the functions provided by this
+                /// API; some are used in higher-level library layers, and others are provided
+                /// merely for alignment with POSIX.
+                #[repr(u8)]
+                #[derive(Clone, Copy, Eq, PartialEq)]
+                pub enum ErrorCode {
+                  /// Permission denied, similar to `EACCES` in POSIX.
+                  Access,
+                  /// Resource unavailable, or operation would block, similar to `EAGAIN` and `EWOULDBLOCK` in POSIX.
+                  WouldBlock,
+                  /// Connection already in progress, similar to `EALREADY` in POSIX.
+                  Already,
+                  /// Bad descriptor, similar to `EBADF` in POSIX.
+                  BadDescriptor,
+                  /// Device or resource busy, similar to `EBUSY` in POSIX.
+                  Busy,
+                  /// Resource deadlock would occur, similar to `EDEADLK` in POSIX.
+                  Deadlock,
+                  /// Storage quota exceeded, similar to `EDQUOT` in POSIX.
+                  Quota,
+                  /// File exists, similar to `EEXIST` in POSIX.
+                  Exist,
+                  /// File too large, similar to `EFBIG` in POSIX.
+                  FileTooLarge,
+                  /// Illegal byte sequence, similar to `EILSEQ` in POSIX.
+                  IllegalByteSequence,
+                  /// Operation in progress, similar to `EINPROGRESS` in POSIX.
+                  InProgress,
+                  /// Interrupted function, similar to `EINTR` in POSIX.
+                  Interrupted,
+                  /// Invalid argument, similar to `EINVAL` in POSIX.
+                  Invalid,
+                  /// I/O error, similar to `EIO` in POSIX.
+                  Io,
+                  /// Is a directory, similar to `EISDIR` in POSIX.
+                  IsDirectory,
+                  /// Too many levels of symbolic links, similar to `ELOOP` in POSIX.
+                  Loop,
+                  /// Too many links, similar to `EMLINK` in POSIX.
+                  TooManyLinks,
+                  /// Message too large, similar to `EMSGSIZE` in POSIX.
+                  MessageSize,
+                  /// Filename too long, similar to `ENAMETOOLONG` in POSIX.
+                  NameTooLong,
+                  /// No such device, similar to `ENODEV` in POSIX.
+                  NoDevice,
+                  /// No such file or directory, similar to `ENOENT` in POSIX.
+                  NoEntry,
+                  /// No locks available, similar to `ENOLCK` in POSIX.
+                  NoLock,
+                  /// Not enough space, similar to `ENOMEM` in POSIX.
+                  InsufficientMemory,
+                  /// No space left on device, similar to `ENOSPC` in POSIX.
+                  InsufficientSpace,
+                  /// Not a directory or a symbolic link to a directory, similar to `ENOTDIR` in POSIX.
+                  NotDirectory,
+                  /// Directory not empty, similar to `ENOTEMPTY` in POSIX.
+                  NotEmpty,
+                  /// State not recoverable, similar to `ENOTRECOVERABLE` in POSIX.
+                  NotRecoverable,
+                  /// Not supported, similar to `ENOTSUP` and `ENOSYS` in POSIX.
+                  Unsupported,
+                  /// Inappropriate I/O control operation, similar to `ENOTTY` in POSIX.
+                  NoTty,
+                  /// No such device or address, similar to `ENXIO` in POSIX.
+                  NoSuchDevice,
+                  /// Value too large to be stored in data type, similar to `EOVERFLOW` in POSIX.
+                  Overflow,
+                  /// Operation not permitted, similar to `EPERM` in POSIX.
+                  NotPermitted,
+                  /// Broken pipe, similar to `EPIPE` in POSIX.
+                  Pipe,
+                  /// Read-only file system, similar to `EROFS` in POSIX.
+                  ReadOnly,
+                  /// Invalid seek, similar to `ESPIPE` in POSIX.
+                  InvalidSeek,
+                  /// Text file busy, similar to `ETXTBSY` in POSIX.
+                  TextFileBusy,
+                  /// Cross-device link, similar to `EXDEV` in POSIX.
+                  CrossDevice,
+                }
+                impl ErrorCode{
+                  pub fn name(&self) -> &'static str {
+                    match self {
+                      ErrorCode::Access => "access",
+                      ErrorCode::WouldBlock => "would-block",
+                      ErrorCode::Already => "already",
+                      ErrorCode::BadDescriptor => "bad-descriptor",
+                      ErrorCode::Busy => "busy",
+                      ErrorCode::Deadlock => "deadlock",
+                      ErrorCode::Quota => "quota",
+                      ErrorCode::Exist => "exist",
+                      ErrorCode::FileTooLarge => "file-too-large",
+                      ErrorCode::IllegalByteSequence => "illegal-byte-sequence",
+                      ErrorCode::InProgress => "in-progress",
+                      ErrorCode::Interrupted => "interrupted",
+                      ErrorCode::Invalid => "invalid",
+                      ErrorCode::Io => "io",
+                      ErrorCode::IsDirectory => "is-directory",
+                      ErrorCode::Loop => "loop",
+                      ErrorCode::TooManyLinks => "too-many-links",
+                      ErrorCode::MessageSize => "message-size",
+                      ErrorCode::NameTooLong => "name-too-long",
+                      ErrorCode::NoDevice => "no-device",
+                      ErrorCode::NoEntry => "no-entry",
+                      ErrorCode::NoLock => "no-lock",
+                      ErrorCode::InsufficientMemory => "insufficient-memory",
+                      ErrorCode::InsufficientSpace => "insufficient-space",
+                      ErrorCode::NotDirectory => "not-directory",
+                      ErrorCode::NotEmpty => "not-empty",
+                      ErrorCode::NotRecoverable => "not-recoverable",
+                      ErrorCode::Unsupported => "unsupported",
+                      ErrorCode::NoTty => "no-tty",
+                      ErrorCode::NoSuchDevice => "no-such-device",
+                      ErrorCode::Overflow => "overflow",
+                      ErrorCode::NotPermitted => "not-permitted",
+                      ErrorCode::Pipe => "pipe",
+                      ErrorCode::ReadOnly => "read-only",
+                      ErrorCode::InvalidSeek => "invalid-seek",
+                      ErrorCode::TextFileBusy => "text-file-busy",
+                      ErrorCode::CrossDevice => "cross-device",
+                    }
+                  }
+                  pub fn message(&self) -> &'static str {
+                    match self {
+                      ErrorCode::Access => "Permission denied, similar to `EACCES` in POSIX.",
+                      ErrorCode::WouldBlock => "Resource unavailable, or operation would block, similar to `EAGAIN` and `EWOULDBLOCK` in POSIX.",
+                      ErrorCode::Already => "Connection already in progress, similar to `EALREADY` in POSIX.",
+                      ErrorCode::BadDescriptor => "Bad descriptor, similar to `EBADF` in POSIX.",
+                      ErrorCode::Busy => "Device or resource busy, similar to `EBUSY` in POSIX.",
+                      ErrorCode::Deadlock => "Resource deadlock would occur, similar to `EDEADLK` in POSIX.",
+                      ErrorCode::Quota => "Storage quota exceeded, similar to `EDQUOT` in POSIX.",
+                      ErrorCode::Exist => "File exists, similar to `EEXIST` in POSIX.",
+                      ErrorCode::FileTooLarge => "File too large, similar to `EFBIG` in POSIX.",
+                      ErrorCode::IllegalByteSequence => "Illegal byte sequence, similar to `EILSEQ` in POSIX.",
+                      ErrorCode::InProgress => "Operation in progress, similar to `EINPROGRESS` in POSIX.",
+                      ErrorCode::Interrupted => "Interrupted function, similar to `EINTR` in POSIX.",
+                      ErrorCode::Invalid => "Invalid argument, similar to `EINVAL` in POSIX.",
+                      ErrorCode::Io => "I/O error, similar to `EIO` in POSIX.",
+                      ErrorCode::IsDirectory => "Is a directory, similar to `EISDIR` in POSIX.",
+                      ErrorCode::Loop => "Too many levels of symbolic links, similar to `ELOOP` in POSIX.",
+                      ErrorCode::TooManyLinks => "Too many links, similar to `EMLINK` in POSIX.",
+                      ErrorCode::MessageSize => "Message too large, similar to `EMSGSIZE` in POSIX.",
+                      ErrorCode::NameTooLong => "Filename too long, similar to `ENAMETOOLONG` in POSIX.",
+                      ErrorCode::NoDevice => "No such device, similar to `ENODEV` in POSIX.",
+                      ErrorCode::NoEntry => "No such file or directory, similar to `ENOENT` in POSIX.",
+                      ErrorCode::NoLock => "No locks available, similar to `ENOLCK` in POSIX.",
+                      ErrorCode::InsufficientMemory => "Not enough space, similar to `ENOMEM` in POSIX.",
+                      ErrorCode::InsufficientSpace => "No space left on device, similar to `ENOSPC` in POSIX.",
+                      ErrorCode::NotDirectory => "Not a directory or a symbolic link to a directory, similar to `ENOTDIR` in POSIX.",
+                      ErrorCode::NotEmpty => "Directory not empty, similar to `ENOTEMPTY` in POSIX.",
+                      ErrorCode::NotRecoverable => "State not recoverable, similar to `ENOTRECOVERABLE` in POSIX.",
+                      ErrorCode::Unsupported => "Not supported, similar to `ENOTSUP` and `ENOSYS` in POSIX.",
+                      ErrorCode::NoTty => "Inappropriate I/O control operation, similar to `ENOTTY` in POSIX.",
+                      ErrorCode::NoSuchDevice => "No such device or address, similar to `ENXIO` in POSIX.",
+                      ErrorCode::Overflow => "Value too large to be stored in data type, similar to `EOVERFLOW` in POSIX.",
+                      ErrorCode::NotPermitted => "Operation not permitted, similar to `EPERM` in POSIX.",
+                      ErrorCode::Pipe => "Broken pipe, similar to `EPIPE` in POSIX.",
+                      ErrorCode::ReadOnly => "Read-only file system, similar to `EROFS` in POSIX.",
+                      ErrorCode::InvalidSeek => "Invalid seek, similar to `ESPIPE` in POSIX.",
+                      ErrorCode::TextFileBusy => "Text file busy, similar to `ETXTBSY` in POSIX.",
+                      ErrorCode::CrossDevice => "Cross-device link, similar to `EXDEV` in POSIX.",
+                    }
+                  }
+                }
+                impl ::core::fmt::Debug for ErrorCode{
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("ErrorCode")
+                    .field("code", &(*self as i32))
+                    .field("name", &self.name())
+                    .field("message", &self.message())
+                    .finish()
+                  }
+                }
+                impl ::core::fmt::Display for ErrorCode{
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    write!(f, "{} (error {})", self.name(), *self as i32)
+                  }
+                }
+                
+                impl std::error::Error for ErrorCode{}
+                
+                impl ErrorCode{
+                  pub(crate) unsafe fn _lift(val: u8) -> ErrorCode{
+                    if !cfg!(debug_assertions) {
+                      return ::core::mem::transmute(val);
+                    }
+                    
+                    match val {
+                      0 => ErrorCode::Access,
+                      1 => ErrorCode::WouldBlock,
+                      2 => ErrorCode::Already,
+                      3 => ErrorCode::BadDescriptor,
+                      4 => ErrorCode::Busy,
+                      5 => ErrorCode::Deadlock,
+                      6 => ErrorCode::Quota,
+                      7 => ErrorCode::Exist,
+                      8 => ErrorCode::FileTooLarge,
+                      9 => ErrorCode::IllegalByteSequence,
+                      10 => ErrorCode::InProgress,
+                      11 => ErrorCode::Interrupted,
+                      12 => ErrorCode::Invalid,
+                      13 => ErrorCode::Io,
+                      14 => ErrorCode::IsDirectory,
+                      15 => ErrorCode::Loop,
+                      16 => ErrorCode::TooManyLinks,
+                      17 => ErrorCode::MessageSize,
+                      18 => ErrorCode::NameTooLong,
+                      19 => ErrorCode::NoDevice,
+                      20 => ErrorCode::NoEntry,
+                      21 => ErrorCode::NoLock,
+                      22 => ErrorCode::InsufficientMemory,
+                      23 => ErrorCode::InsufficientSpace,
+                      24 => ErrorCode::NotDirectory,
+                      25 => ErrorCode::NotEmpty,
+                      26 => ErrorCode::NotRecoverable,
+                      27 => ErrorCode::Unsupported,
+                      28 => ErrorCode::NoTty,
+                      29 => ErrorCode::NoSuchDevice,
+                      30 => ErrorCode::Overflow,
+                      31 => ErrorCode::NotPermitted,
+                      32 => ErrorCode::Pipe,
+                      33 => ErrorCode::ReadOnly,
+                      34 => ErrorCode::InvalidSeek,
+                      35 => ErrorCode::TextFileBusy,
+                      36 => ErrorCode::CrossDevice,
+                      
+                      _ => panic!("invalid enum discriminant"),
+                    }
+                  }
+                }
+                
+                /// File or memory access pattern advisory information.
+                #[repr(u8)]
+                #[derive(Clone, Copy, Eq, PartialEq)]
+                pub enum Advice {
+                  /// The application has no advice to give on its behavior with respect
+                  /// to the specified data.
+                  Normal,
+                  /// The application expects to access the specified data sequentially
+                  /// from lower offsets to higher offsets.
+                  Sequential,
+                  /// The application expects to access the specified data in a random
+                  /// order.
+                  Random,
+                  /// The application expects to access the specified data in the near
+                  /// future.
+                  WillNeed,
+                  /// The application expects that it will not access the specified data
+                  /// in the near future.
+                  DontNeed,
+                  /// The application expects to access the specified data once and then
+                  /// not reuse it thereafter.
+                  NoReuse,
+                }
+                impl ::core::fmt::Debug for Advice {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                      Advice::Normal => {
+                        f.debug_tuple("Advice::Normal").finish()
+                      }
+                      Advice::Sequential => {
+                        f.debug_tuple("Advice::Sequential").finish()
+                      }
+                      Advice::Random => {
+                        f.debug_tuple("Advice::Random").finish()
+                      }
+                      Advice::WillNeed => {
+                        f.debug_tuple("Advice::WillNeed").finish()
+                      }
+                      Advice::DontNeed => {
+                        f.debug_tuple("Advice::DontNeed").finish()
+                      }
+                      Advice::NoReuse => {
+                        f.debug_tuple("Advice::NoReuse").finish()
+                      }
+                    }
+                  }
+                }
+                
+                impl Advice{
+                  pub(crate) unsafe fn _lift(val: u8) -> Advice{
+                    if !cfg!(debug_assertions) {
+                      return ::core::mem::transmute(val);
+                    }
+                    
+                    match val {
+                      0 => Advice::Normal,
+                      1 => Advice::Sequential,
+                      2 => Advice::Random,
+                      3 => Advice::WillNeed,
+                      4 => Advice::DontNeed,
+                      5 => Advice::NoReuse,
+                      
+                      _ => panic!("invalid enum discriminant"),
+                    }
+                  }
+                }
+                
+                /// A 128-bit hash value, split into parts because wasm doesn't have a
+                /// 128-bit integer type.
+                #[repr(C)]
+                #[derive(Clone, Copy)]
+                pub struct MetadataHashValue {
+                  /// 64 bits of a 128-bit hash value.
+                  pub lower: u64,
+                  /// Another 64 bits of a 128-bit hash value.
+                  pub upper: u64,
+                }
+                impl ::core::fmt::Debug for MetadataHashValue {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("MetadataHashValue").field("lower", &self.lower).field("upper", &self.upper).finish()
+                  }
+                }
+                /// A descriptor is a reference to a filesystem object, which may be a file,
+                /// directory, named pipe, special file, or other object on which filesystem
+                /// calls may be made.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct Descriptor{
+                  handle: wit_bindgen::rt::Resource<Descriptor>,
+                }
+                
+                impl Descriptor{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for Descriptor{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]descriptor"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// A stream of directory entries.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct DirectoryEntryStream{
+                  handle: wit_bindgen::rt::Resource<DirectoryEntryStream>,
+                }
+                
+                impl DirectoryEntryStream{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for DirectoryEntryStream{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]directory-entry-stream"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Return a stream for reading from a file, if available.
+                  /// 
+                  /// May fail with an error-code describing why the file cannot be read.
+                  /// 
+                  /// Multiple read, write, and append streams may be active on the same open
+                  /// file and they do not interfere with each other.
+                  /// 
+                  /// Note: This allows using `read-stream`, which is similar to `read` in POSIX.
+                  pub fn read_via_stream(&self,offset: Filesize,) -> Result<InputStream,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.read-via-stream"]
+                        fn wit_import(_: i32, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(offset), ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            super::super::super::wasi::io::streams::InputStream::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr0 + 4) as *const u8));
+                            
+                            ErrorCode::_lift(l3 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Return a stream for writing to a file, if available.
+                  /// 
+                  /// May fail with an error-code describing why the file cannot be written.
+                  /// 
+                  /// Note: This allows using `write-stream`, which is similar to `write` in
+                  /// POSIX.
+                  pub fn write_via_stream(&self,offset: Filesize,) -> Result<OutputStream,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.write-via-stream"]
+                        fn wit_import(_: i32, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(offset), ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            super::super::super::wasi::io::streams::OutputStream::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr0 + 4) as *const u8));
+                            
+                            ErrorCode::_lift(l3 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Return a stream for appending to a file, if available.
+                  /// 
+                  /// May fail with an error-code describing why the file cannot be appended.
+                  /// 
+                  /// Note: This allows using `write-stream`, which is similar to `write` with
+                  /// `O_APPEND` in in POSIX.
+                  pub fn append_via_stream(&self,) -> Result<OutputStream,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.append-via-stream"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            super::super::super::wasi::io::streams::OutputStream::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr0 + 4) as *const u8));
+                            
+                            ErrorCode::_lift(l3 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Provide file advisory information on a descriptor.
+                  /// 
+                  /// This is similar to `posix_fadvise` in POSIX.
+                  pub fn advise(&self,offset: Filesize,length: Filesize,advice: Advice,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.advise"]
+                        fn wit_import(_: i32, _: i64, _: i64, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i64, _: i64, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(offset), wit_bindgen::rt::as_i64(length), advice.clone() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l2 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Synchronize the data of a file to disk.
+                  /// 
+                  /// This function succeeds with no effect if the file descriptor is not
+                  /// opened for writing.
+                  /// 
+                  /// Note: This is similar to `fdatasync` in POSIX.
+                  pub fn sync_data(&self,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.sync-data"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l2 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Get flags associated with a descriptor.
+                  /// 
+                  /// Note: This returns similar flags to `fcntl(fd, F_GETFL)` in POSIX.
+                  /// 
+                  /// Note: This returns the value that was the `fs_flags` value returned
+                  /// from `fdstat_get` in earlier versions of WASI.
+                  pub fn get_flags(&self,) -> Result<DescriptorFlags,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.get-flags"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 1) as *const u8));
+                            
+                            DescriptorFlags::empty() | DescriptorFlags::from_bits_retain(((l2 as u8) << 0) as _)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr0 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l3 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Get the dynamic type of a descriptor.
+                  /// 
+                  /// Note: This returns the same value as the `type` field of the `fd-stat`
+                  /// returned by `stat`, `stat-at` and similar.
+                  /// 
+                  /// Note: This returns similar flags to the `st_mode & S_IFMT` value provided
+                  /// by `fstat` in POSIX.
+                  /// 
+                  /// Note: This returns the value that was the `fs_filetype` value returned
+                  /// from `fdstat_get` in earlier versions of WASI.
+                  pub fn get_type(&self,) -> Result<DescriptorType,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.get-type"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 1) as *const u8));
+                            
+                            DescriptorType::_lift(l2 as u8)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr0 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l3 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Adjust the size of an open file. If this increases the file's size, the
+                  /// extra bytes are filled with zeros.
+                  /// 
+                  /// Note: This was called `fd_filestat_set_size` in earlier versions of WASI.
+                  pub fn set_size(&self,size: Filesize,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.set-size"]
+                        fn wit_import(_: i32, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(size), ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l2 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Adjust the timestamps of an open file or directory.
+                  /// 
+                  /// Note: This is similar to `futimens` in POSIX.
+                  /// 
+                  /// Note: This was called `fd_filestat_set_times` in earlier versions of WASI.
+                  pub fn set_times(&self,data_access_timestamp: NewTimestamp,data_modification_timestamp: NewTimestamp,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let (result1_0,result1_1,result1_2,) = match data_access_timestamp {
+                        NewTimestamp::NoChange=> {
+                          (0i32, 0i64, 0i32)
+                        }
+                        NewTimestamp::Now=> {
+                          (1i32, 0i64, 0i32)
+                        }
+                        NewTimestamp::Timestamp(e) => {
+                          let super::super::super::wasi::clocks::wall_clock::Datetime{ seconds:seconds0, nanoseconds:nanoseconds0, } = e;
+                          
+                          (2i32, wit_bindgen::rt::as_i64(seconds0), wit_bindgen::rt::as_i32(nanoseconds0))
+                        },
+                      };
+                      let (result3_0,result3_1,result3_2,) = match data_modification_timestamp {
+                        NewTimestamp::NoChange=> {
+                          (0i32, 0i64, 0i32)
+                        }
+                        NewTimestamp::Now=> {
+                          (1i32, 0i64, 0i32)
+                        }
+                        NewTimestamp::Timestamp(e) => {
+                          let super::super::super::wasi::clocks::wall_clock::Datetime{ seconds:seconds2, nanoseconds:nanoseconds2, } = e;
+                          
+                          (2i32, wit_bindgen::rt::as_i64(seconds2), wit_bindgen::rt::as_i32(nanoseconds2))
+                        },
+                      };
+                      let ptr4 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.set-times"]
+                        fn wit_import(_: i32, _: i32, _: i64, _: i32, _: i32, _: i64, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i64, _: i32, _: i32, _: i64, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, result1_0, result1_1, result1_2, result3_0, result3_1, result3_2, ptr4);
+                      let l5 = i32::from(*((ptr4 + 0) as *const u8));
+                      match l5 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l6 = i32::from(*((ptr4 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l6 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Read from a descriptor, without using and updating the descriptor's offset.
+                  /// 
+                  /// This function returns a list of bytes containing the data that was
+                  /// read, along with a bool which, when true, indicates that the end of the
+                  /// file was reached. The returned list will contain up to `length` bytes; it
+                  /// may return fewer than requested, if the end of the file is reached or
+                  /// if the I/O operation is interrupted.
+                  /// 
+                  /// In the future, this may change to return a `stream<u8, error-code>`.
+                  /// 
+                  /// Note: This is similar to `pread` in POSIX.
+                  pub fn read(&self,length: Filesize,offset: Filesize,) -> Result<(wit_bindgen::rt::vec::Vec::<u8>,bool,),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 16]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.read"]
+                        fn wit_import(_: i32, _: i64, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i64, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(length), wit_bindgen::rt::as_i64(offset), ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            let l5 = i32::from(*((ptr0 + 12) as *const u8));
+                            
+                            (Vec::from_raw_parts(l2 as *mut _, len4, len4), wit_bindgen::rt::bool_lift(l5 as u8))
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l6 = i32::from(*((ptr0 + 4) as *const u8));
+                            
+                            ErrorCode::_lift(l6 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Write to a descriptor, without using and updating the descriptor's offset.
+                  /// 
+                  /// It is valid to write past the end of a file; the file is extended to the
+                  /// extent of the write, with bytes between the previous end and the start of
+                  /// the write set to zero.
+                  /// 
+                  /// In the future, this may change to take a `stream<u8, error-code>`.
+                  /// 
+                  /// Note: This is similar to `pwrite` in POSIX.
+                  pub fn write(&self,buffer: &[u8],offset: Filesize,) -> Result<Filesize,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 16]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = buffer;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.write"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, wit_bindgen::rt::as_i64(offset), ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = {
+                            let l3 = *((ptr1 + 8) as *const i64);
+                            
+                            l3 as u64
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l4 = i32::from(*((ptr1 + 8) as *const u8));
+                            
+                            ErrorCode::_lift(l4 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Read directory entries from a directory.
+                  /// 
+                  /// On filesystems where directories contain entries referring to themselves
+                  /// and their parents, often named `.` and `..` respectively, these entries
+                  /// are omitted.
+                  /// 
+                  /// This always returns a new stream which starts at the beginning of the
+                  /// directory. Multiple streams may be active on the same directory, and they
+                  /// do not interfere with each other.
+                  pub fn read_directory(&self,) -> Result<DirectoryEntryStream,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.read-directory"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            DirectoryEntryStream::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr0 + 4) as *const u8));
+                            
+                            ErrorCode::_lift(l3 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Synchronize the data and metadata of a file to disk.
+                  /// 
+                  /// This function succeeds with no effect if the file descriptor is not
+                  /// opened for writing.
+                  /// 
+                  /// Note: This is similar to `fsync` in POSIX.
+                  pub fn sync(&self,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.sync"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l2 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Create a directory.
+                  /// 
+                  /// Note: This is similar to `mkdirat` in POSIX.
+                  pub fn create_directory_at(&self,path: &str,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = path;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.create-directory-at"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr1 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l3 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Return the attributes of an open file or directory.
+                  /// 
+                  /// Note: This is similar to `fstat` in POSIX, except that it does not return
+                  /// device and inode information. For testing whether two descriptors refer to
+                  /// the same underlying filesystem object, use `is-same-object`. To obtain
+                  /// additional data that can be used do determine whether a file has been
+                  /// modified, use `metadata-hash`.
+                  /// 
+                  /// Note: This was called `fd_filestat_get` in earlier versions of WASI.
+                  pub fn stat(&self,) -> Result<DescriptorStat,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 104]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.stat"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 8) as *const u8));
+                            let l3 = *((ptr0 + 16) as *const i64);
+                            let l4 = *((ptr0 + 24) as *const i64);
+                            let l5 = i32::from(*((ptr0 + 32) as *const u8));
+                            let l8 = i32::from(*((ptr0 + 56) as *const u8));
+                            let l11 = i32::from(*((ptr0 + 80) as *const u8));
+                            
+                            DescriptorStat{
+                              type_: DescriptorType::_lift(l2 as u8),
+                              link_count: l3 as u64,
+                              size: l4 as u64,
+                              data_access_timestamp: match l5 {
+                                0 => None,
+                                1 => {
+                                  let e = {
+                                    let l6 = *((ptr0 + 40) as *const i64);
+                                    let l7 = *((ptr0 + 48) as *const i32);
+                                    
+                                    super::super::super::wasi::clocks::wall_clock::Datetime{
+                                      seconds: l6 as u64,
+                                      nanoseconds: l7 as u32,
+                                    }
+                                  };
+                                  Some(e)
+                                }
+                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                              },
+                              data_modification_timestamp: match l8 {
+                                0 => None,
+                                1 => {
+                                  let e = {
+                                    let l9 = *((ptr0 + 64) as *const i64);
+                                    let l10 = *((ptr0 + 72) as *const i32);
+                                    
+                                    super::super::super::wasi::clocks::wall_clock::Datetime{
+                                      seconds: l9 as u64,
+                                      nanoseconds: l10 as u32,
+                                    }
+                                  };
+                                  Some(e)
+                                }
+                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                              },
+                              status_change_timestamp: match l11 {
+                                0 => None,
+                                1 => {
+                                  let e = {
+                                    let l12 = *((ptr0 + 88) as *const i64);
+                                    let l13 = *((ptr0 + 96) as *const i32);
+                                    
+                                    super::super::super::wasi::clocks::wall_clock::Datetime{
+                                      seconds: l12 as u64,
+                                      nanoseconds: l13 as u32,
+                                    }
+                                  };
+                                  Some(e)
+                                }
+                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                              },
+                            }
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l14 = i32::from(*((ptr0 + 8) as *const u8));
+                            
+                            ErrorCode::_lift(l14 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Return the attributes of a file or directory.
+                  /// 
+                  /// Note: This is similar to `fstatat` in POSIX, except that it does not
+                  /// return device and inode information. See the `stat` description for a
+                  /// discussion of alternatives.
+                  /// 
+                  /// Note: This was called `path_filestat_get` in earlier versions of WASI.
+                  pub fn stat_at(&self,path_flags: PathFlags,path: &str,) -> Result<DescriptorStat,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 104]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let flags0 = path_flags;
+                      let vec1 = path;
+                      let ptr1 = vec1.as_ptr() as i32;
+                      let len1 = vec1.len() as i32;
+                      let ptr2 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.stat-at"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, (flags0.bits() >> 0) as i32, ptr1, len1, ptr2);
+                      let l3 = i32::from(*((ptr2 + 0) as *const u8));
+                      match l3 {
+                        0 => {
+                          let e = {
+                            let l4 = i32::from(*((ptr2 + 8) as *const u8));
+                            let l5 = *((ptr2 + 16) as *const i64);
+                            let l6 = *((ptr2 + 24) as *const i64);
+                            let l7 = i32::from(*((ptr2 + 32) as *const u8));
+                            let l10 = i32::from(*((ptr2 + 56) as *const u8));
+                            let l13 = i32::from(*((ptr2 + 80) as *const u8));
+                            
+                            DescriptorStat{
+                              type_: DescriptorType::_lift(l4 as u8),
+                              link_count: l5 as u64,
+                              size: l6 as u64,
+                              data_access_timestamp: match l7 {
+                                0 => None,
+                                1 => {
+                                  let e = {
+                                    let l8 = *((ptr2 + 40) as *const i64);
+                                    let l9 = *((ptr2 + 48) as *const i32);
+                                    
+                                    super::super::super::wasi::clocks::wall_clock::Datetime{
+                                      seconds: l8 as u64,
+                                      nanoseconds: l9 as u32,
+                                    }
+                                  };
+                                  Some(e)
+                                }
+                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                              },
+                              data_modification_timestamp: match l10 {
+                                0 => None,
+                                1 => {
+                                  let e = {
+                                    let l11 = *((ptr2 + 64) as *const i64);
+                                    let l12 = *((ptr2 + 72) as *const i32);
+                                    
+                                    super::super::super::wasi::clocks::wall_clock::Datetime{
+                                      seconds: l11 as u64,
+                                      nanoseconds: l12 as u32,
+                                    }
+                                  };
+                                  Some(e)
+                                }
+                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                              },
+                              status_change_timestamp: match l13 {
+                                0 => None,
+                                1 => {
+                                  let e = {
+                                    let l14 = *((ptr2 + 88) as *const i64);
+                                    let l15 = *((ptr2 + 96) as *const i32);
+                                    
+                                    super::super::super::wasi::clocks::wall_clock::Datetime{
+                                      seconds: l14 as u64,
+                                      nanoseconds: l15 as u32,
+                                    }
+                                  };
+                                  Some(e)
+                                }
+                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                              },
+                            }
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l16 = i32::from(*((ptr2 + 8) as *const u8));
+                            
+                            ErrorCode::_lift(l16 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Adjust the timestamps of a file or directory.
+                  /// 
+                  /// Note: This is similar to `utimensat` in POSIX.
+                  /// 
+                  /// Note: This was called `path_filestat_set_times` in earlier versions of
+                  /// WASI.
+                  pub fn set_times_at(&self,path_flags: PathFlags,path: &str,data_access_timestamp: NewTimestamp,data_modification_timestamp: NewTimestamp,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let flags0 = path_flags;
+                      let vec1 = path;
+                      let ptr1 = vec1.as_ptr() as i32;
+                      let len1 = vec1.len() as i32;
+                      let (result3_0,result3_1,result3_2,) = match data_access_timestamp {
+                        NewTimestamp::NoChange=> {
+                          (0i32, 0i64, 0i32)
+                        }
+                        NewTimestamp::Now=> {
+                          (1i32, 0i64, 0i32)
+                        }
+                        NewTimestamp::Timestamp(e) => {
+                          let super::super::super::wasi::clocks::wall_clock::Datetime{ seconds:seconds2, nanoseconds:nanoseconds2, } = e;
+                          
+                          (2i32, wit_bindgen::rt::as_i64(seconds2), wit_bindgen::rt::as_i32(nanoseconds2))
+                        },
+                      };
+                      let (result5_0,result5_1,result5_2,) = match data_modification_timestamp {
+                        NewTimestamp::NoChange=> {
+                          (0i32, 0i64, 0i32)
+                        }
+                        NewTimestamp::Now=> {
+                          (1i32, 0i64, 0i32)
+                        }
+                        NewTimestamp::Timestamp(e) => {
+                          let super::super::super::wasi::clocks::wall_clock::Datetime{ seconds:seconds4, nanoseconds:nanoseconds4, } = e;
+                          
+                          (2i32, wit_bindgen::rt::as_i64(seconds4), wit_bindgen::rt::as_i32(nanoseconds4))
+                        },
+                      };
+                      let ptr6 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.set-times-at"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i64, _: i32, _: i32, _: i64, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i64, _: i32, _: i32, _: i64, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, (flags0.bits() >> 0) as i32, ptr1, len1, result3_0, result3_1, result3_2, result5_0, result5_1, result5_2, ptr6);
+                      let l7 = i32::from(*((ptr6 + 0) as *const u8));
+                      match l7 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l8 = i32::from(*((ptr6 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l8 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Create a hard link.
+                  /// 
+                  /// Note: This is similar to `linkat` in POSIX.
+                  pub fn link_at(&self,old_path_flags: PathFlags,old_path: &str,new_descriptor: &Descriptor,new_path: &str,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let flags0 = old_path_flags;
+                      let vec1 = old_path;
+                      let ptr1 = vec1.as_ptr() as i32;
+                      let len1 = vec1.len() as i32;
+                      let vec2 = new_path;
+                      let ptr2 = vec2.as_ptr() as i32;
+                      let len2 = vec2.len() as i32;
+                      let ptr3 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.link-at"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, (flags0.bits() >> 0) as i32, ptr1, len1, (new_descriptor).handle() as i32, ptr2, len2, ptr3);
+                      let l4 = i32::from(*((ptr3 + 0) as *const u8));
+                      match l4 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l5 = i32::from(*((ptr3 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l5 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Open a file or directory.
+                  /// 
+                  /// The returned descriptor is not guaranteed to be the lowest-numbered
+                  /// descriptor not currently open/ it is randomized to prevent applications
+                  /// from depending on making assumptions about indexes, since this is
+                  /// error-prone in multi-threaded contexts. The returned descriptor is
+                  /// guaranteed to be less than 2**31.
+                  /// 
+                  /// If `flags` contains `descriptor-flags::mutate-directory`, and the base
+                  /// descriptor doesn't have `descriptor-flags::mutate-directory` set,
+                  /// `open-at` fails with `error-code::read-only`.
+                  /// 
+                  /// If `flags` contains `write` or `mutate-directory`, or `open-flags`
+                  /// contains `truncate` or `create`, and the base descriptor doesn't have
+                  /// `descriptor-flags::mutate-directory` set, `open-at` fails with
+                  /// `error-code::read-only`.
+                  /// 
+                  /// Note: This is similar to `openat` in POSIX.
+                  pub fn open_at(&self,path_flags: PathFlags,path: &str,open_flags: OpenFlags,flags: DescriptorFlags,) -> Result<Descriptor,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let flags0 = path_flags;
+                      let vec1 = path;
+                      let ptr1 = vec1.as_ptr() as i32;
+                      let len1 = vec1.len() as i32;
+                      let flags2 = open_flags;
+                      let flags3 = flags;
+                      let ptr4 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.open-at"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, (flags0.bits() >> 0) as i32, ptr1, len1, (flags2.bits() >> 0) as i32, (flags3.bits() >> 0) as i32, ptr4);
+                      let l5 = i32::from(*((ptr4 + 0) as *const u8));
+                      match l5 {
+                        0 => {
+                          let e = {
+                            let l6 = *((ptr4 + 4) as *const i32);
+                            
+                            Descriptor::from_handle(l6 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l7 = i32::from(*((ptr4 + 4) as *const u8));
+                            
+                            ErrorCode::_lift(l7 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Read the contents of a symbolic link.
+                  /// 
+                  /// If the contents contain an absolute or rooted path in the underlying
+                  /// filesystem, this function fails with `error-code::not-permitted`.
+                  /// 
+                  /// Note: This is similar to `readlinkat` in POSIX.
+                  pub fn readlink_at(&self,path: &str,) -> Result<wit_bindgen::rt::string::String,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = path;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.readlink-at"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = {
+                            let l3 = *((ptr1 + 4) as *const i32);
+                            let l4 = *((ptr1 + 8) as *const i32);
+                            let len5 = l4 as usize;
+                            let bytes5 = Vec::from_raw_parts(l3 as *mut _, len5, len5);
+                            
+                            wit_bindgen::rt::string_lift(bytes5)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l6 = i32::from(*((ptr1 + 4) as *const u8));
+                            
+                            ErrorCode::_lift(l6 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Remove a directory.
+                  /// 
+                  /// Return `error-code::not-empty` if the directory is not empty.
+                  /// 
+                  /// Note: This is similar to `unlinkat(fd, path, AT_REMOVEDIR)` in POSIX.
+                  pub fn remove_directory_at(&self,path: &str,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = path;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.remove-directory-at"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr1 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l3 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Rename a filesystem object.
+                  /// 
+                  /// Note: This is similar to `renameat` in POSIX.
+                  pub fn rename_at(&self,old_path: &str,new_descriptor: &Descriptor,new_path: &str,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = old_path;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let vec1 = new_path;
+                      let ptr1 = vec1.as_ptr() as i32;
+                      let len1 = vec1.len() as i32;
+                      let ptr2 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.rename-at"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, (new_descriptor).handle() as i32, ptr1, len1, ptr2);
+                      let l3 = i32::from(*((ptr2 + 0) as *const u8));
+                      match l3 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l4 = i32::from(*((ptr2 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l4 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Create a symbolic link (also known as a "symlink").
+                  /// 
+                  /// If `old-path` starts with `/`, the function fails with
+                  /// `error-code::not-permitted`.
+                  /// 
+                  /// Note: This is similar to `symlinkat` in POSIX.
+                  pub fn symlink_at(&self,old_path: &str,new_path: &str,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = old_path;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let vec1 = new_path;
+                      let ptr1 = vec1.as_ptr() as i32;
+                      let len1 = vec1.len() as i32;
+                      let ptr2 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.symlink-at"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1, len1, ptr2);
+                      let l3 = i32::from(*((ptr2 + 0) as *const u8));
+                      match l3 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l4 = i32::from(*((ptr2 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l4 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Unlink a filesystem object that is not a directory.
+                  /// 
+                  /// Return `error-code::is-directory` if the path refers to a directory.
+                  /// Note: This is similar to `unlinkat(fd, path, 0)` in POSIX.
+                  pub fn unlink_file_at(&self,path: &str,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = path;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.unlink-file-at"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr1 + 1) as *const u8));
+                            
+                            ErrorCode::_lift(l3 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Test whether two descriptors refer to the same filesystem object.
+                  /// 
+                  /// In POSIX, this corresponds to testing whether the two descriptors have the
+                  /// same device (`st_dev`) and inode (`st_ino` or `d_ino`) numbers.
+                  /// wasi-filesystem does not expose device and inode numbers, so this function
+                  /// may be used instead.
+                  pub fn is_same_object(&self,other: &Descriptor,) -> bool{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.is-same-object"]
+                        fn wit_import(_: i32, _: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32, (other).handle() as i32);
+                      wit_bindgen::rt::bool_lift(ret as u8)
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Return a hash of the metadata associated with a filesystem object referred
+                  /// to by a descriptor.
+                  /// 
+                  /// This returns a hash of the last-modification timestamp and file size, and
+                  /// may also include the inode number, device number, birth timestamp, and
+                  /// other metadata fields that may change when the file is modified or
+                  /// replaced. It may also include a secret value chosen by the
+                  /// implementation and not otherwise exposed.
+                  /// 
+                  /// Implementations are encourated to provide the following properties:
+                  /// 
+                  /// - If the file is not modified or replaced, the computed hash value should
+                  /// usually not change.
+                  /// - If the object is modified or replaced, the computed hash value should
+                  /// usually change.
+                  /// - The inputs to the hash should not be easily computable from the
+                  /// computed hash.
+                  /// 
+                  /// However, none of these is required.
+                  pub fn metadata_hash(&self,) -> Result<MetadataHashValue,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 24]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.metadata-hash"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 8) as *const i64);
+                            let l3 = *((ptr0 + 16) as *const i64);
+                            
+                            MetadataHashValue{
+                              lower: l2 as u64,
+                              upper: l3 as u64,
+                            }
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l4 = i32::from(*((ptr0 + 8) as *const u8));
+                            
+                            ErrorCode::_lift(l4 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Descriptor {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Return a hash of the metadata associated with a filesystem object referred
+                  /// to by a directory descriptor and a relative path.
+                  /// 
+                  /// This performs the same hash computation as `metadata-hash`.
+                  pub fn metadata_hash_at(&self,path_flags: PathFlags,path: &str,) -> Result<MetadataHashValue,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 24]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let flags0 = path_flags;
+                      let vec1 = path;
+                      let ptr1 = vec1.as_ptr() as i32;
+                      let len1 = vec1.len() as i32;
+                      let ptr2 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]descriptor.metadata-hash-at"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, (flags0.bits() >> 0) as i32, ptr1, len1, ptr2);
+                      let l3 = i32::from(*((ptr2 + 0) as *const u8));
+                      match l3 {
+                        0 => {
+                          let e = {
+                            let l4 = *((ptr2 + 8) as *const i64);
+                            let l5 = *((ptr2 + 16) as *const i64);
+                            
+                            MetadataHashValue{
+                              lower: l4 as u64,
+                              upper: l5 as u64,
+                            }
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l6 = i32::from(*((ptr2 + 8) as *const u8));
+                            
+                            ErrorCode::_lift(l6 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl DirectoryEntryStream {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Read a single directory entry from a `directory-entry-stream`.
+                  pub fn read_directory_entry(&self,) -> Result<Option<DirectoryEntry>,ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 20]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]directory-entry-stream.read-directory-entry"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 4) as *const u8));
+                            
+                            match l2 {
+                              0 => None,
+                              1 => {
+                                let e = {
+                                  let l3 = i32::from(*((ptr0 + 8) as *const u8));
+                                  let l4 = *((ptr0 + 12) as *const i32);
+                                  let l5 = *((ptr0 + 16) as *const i32);
+                                  let len6 = l5 as usize;
+                                  let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                                  
+                                  DirectoryEntry{
+                                    type_: DescriptorType::_lift(l3 as u8),
+                                    name: wit_bindgen::rt::string_lift(bytes6),
+                                  }
+                                };
+                                Some(e)
+                              }
+                              _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                            }
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l7 = i32::from(*((ptr0 + 4) as *const u8));
+                            
+                            ErrorCode::_lift(l7 as u8)
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                #[allow(unused_unsafe, clippy::all)]
+                /// Attempts to extract a filesystem-related `error-code` from the stream
+                /// `error` provided.
+                /// 
+                /// Stream operations which return `stream-error::last-operation-failed`
+                /// have a payload with more information about the operation that failed.
+                /// This payload can be passed through to this function to see if there's
+                /// filesystem-related information about the error to return.
+                /// 
+                /// Note that this function is fallible because not all stream-related
+                /// errors are filesystem-related errors.
+                pub fn filesystem_error_code(err: &Error,) -> Option<ErrorCode>{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(1))]
+                    struct RetArea([u8; 2]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let ptr0 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:filesystem/types@0.2.0")]
+                    extern "C" {
+                      #[link_name = "filesystem-error-code"]
+                      fn wit_import(_: i32, _: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                    wit_import((err).handle() as i32, ptr0);
+                    let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                    match l1 {
+                      0 => None,
+                      1 => {
+                        let e = {
+                          let l2 = i32::from(*((ptr0 + 1) as *const u8));
+                          
+                          ErrorCode::_lift(l2 as u8)
+                        };
+                        Some(e)
+                      }
+                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                    }
+                  }
+                }
+                
+              }
+              
+              
+              #[allow(clippy::all)]
+              pub mod preopens {
+                #[used]
+                #[doc(hidden)]
+                #[cfg(target_arch = "wasm32")]
+                static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                pub type Descriptor = super::super::super::wasi::filesystem::types::Descriptor;
+                #[allow(unused_unsafe, clippy::all)]
+                /// Return the set of preopened directories, and their path.
+                pub fn get_directories() -> wit_bindgen::rt::vec::Vec::<(Descriptor,wit_bindgen::rt::string::String,)>{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(4))]
+                    struct RetArea([u8; 8]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let ptr0 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:filesystem/preopens@0.2.0")]
+                    extern "C" {
+                      #[link_name = "get-directories"]
+                      fn wit_import(_: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, ){ unreachable!() }
+                    wit_import(ptr0);
+                    let l1 = *((ptr0 + 0) as *const i32);
+                    let l2 = *((ptr0 + 4) as *const i32);
+                    let base7 = l1;
+                    let len7 = l2;
+                    let mut result7 = Vec::with_capacity(len7 as usize);
+                    for i in 0..len7 {
+                      let base = base7 + i * 12;
+                      let e7 = {
+                        let l3 = *((base + 0) as *const i32);
+                        let l4 = *((base + 4) as *const i32);
+                        let l5 = *((base + 8) as *const i32);
+                        let len6 = l5 as usize;
+                        let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                        
+                        (super::super::super::wasi::filesystem::types::Descriptor::from_handle(l3 as u32), wit_bindgen::rt::string_lift(bytes6))
+                      };
+                      result7.push(e7);
+                    }
+                    wit_bindgen::rt::dealloc(base7, (len7 as usize) * 12, 4);
+                    result7
+                  }
+                }
+                
+              }
+              
+            }
+            pub mod http {
+              
+              #[allow(clippy::all)]
+              pub mod types {
+                #[used]
+                #[doc(hidden)]
+                #[cfg(target_arch = "wasm32")]
+                static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                pub type Duration = super::super::super::wasi::clocks::monotonic_clock::Duration;
+                pub type InputStream = super::super::super::wasi::io::streams::InputStream;
+                pub type OutputStream = super::super::super::wasi::io::streams::OutputStream;
+                pub type IoError = super::super::super::wasi::io::error::Error;
+                pub type Pollable = super::super::super::wasi::io::poll::Pollable;
+                /// This type corresponds to HTTP standard Methods.
+                #[derive(Clone)]
+                pub enum Method{
+                  Get,
+                  Head,
+                  Post,
+                  Put,
+                  Delete,
+                  Connect,
+                  Options,
+                  Trace,
+                  Patch,
+                  Other(wit_bindgen::rt::string::String),
+                }
+                impl ::core::fmt::Debug for Method {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                      Method::Get => {
+                        f.debug_tuple("Method::Get").finish()
+                      }
+                      Method::Head => {
+                        f.debug_tuple("Method::Head").finish()
+                      }
+                      Method::Post => {
+                        f.debug_tuple("Method::Post").finish()
+                      }
+                      Method::Put => {
+                        f.debug_tuple("Method::Put").finish()
+                      }
+                      Method::Delete => {
+                        f.debug_tuple("Method::Delete").finish()
+                      }
+                      Method::Connect => {
+                        f.debug_tuple("Method::Connect").finish()
+                      }
+                      Method::Options => {
+                        f.debug_tuple("Method::Options").finish()
+                      }
+                      Method::Trace => {
+                        f.debug_tuple("Method::Trace").finish()
+                      }
+                      Method::Patch => {
+                        f.debug_tuple("Method::Patch").finish()
+                      }
+                      Method::Other(e) => {
+                        f.debug_tuple("Method::Other").field(e).finish()
+                      }
+                    }
+                  }
+                }
+                /// This type corresponds to HTTP standard Related Schemes.
+                #[derive(Clone)]
+                pub enum Scheme{
+                  Http,
+                  Https,
+                  Other(wit_bindgen::rt::string::String),
+                }
+                impl ::core::fmt::Debug for Scheme {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                      Scheme::Http => {
+                        f.debug_tuple("Scheme::Http").finish()
+                      }
+                      Scheme::Https => {
+                        f.debug_tuple("Scheme::Https").finish()
+                      }
+                      Scheme::Other(e) => {
+                        f.debug_tuple("Scheme::Other").field(e).finish()
+                      }
+                    }
+                  }
+                }
+                /// Defines the case payload type for `DNS-error` above:
+                #[derive(Clone)]
+                pub struct DnsErrorPayload {
+                  pub rcode: Option<wit_bindgen::rt::string::String>,
+                  pub info_code: Option<u16>,
+                }
+                impl ::core::fmt::Debug for DnsErrorPayload {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("DnsErrorPayload").field("rcode", &self.rcode).field("info-code", &self.info_code).finish()
+                  }
+                }
+                /// Defines the case payload type for `TLS-alert-received` above:
+                #[derive(Clone)]
+                pub struct TlsAlertReceivedPayload {
+                  pub alert_id: Option<u8>,
+                  pub alert_message: Option<wit_bindgen::rt::string::String>,
+                }
+                impl ::core::fmt::Debug for TlsAlertReceivedPayload {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("TlsAlertReceivedPayload").field("alert-id", &self.alert_id).field("alert-message", &self.alert_message).finish()
+                  }
+                }
+                /// Defines the case payload type for `HTTP-response-{header,trailer}-size` above:
+                #[derive(Clone)]
+                pub struct FieldSizePayload {
+                  pub field_name: Option<wit_bindgen::rt::string::String>,
+                  pub field_size: Option<u32>,
+                }
+                impl ::core::fmt::Debug for FieldSizePayload {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct("FieldSizePayload").field("field-name", &self.field_name).field("field-size", &self.field_size).finish()
+                  }
+                }
+                /// These cases are inspired by the IANA HTTP Proxy Error Types:
+                /// https://www.iana.org/assignments/http-proxy-status/http-proxy-status.xhtml#table-http-proxy-error-types
+                #[derive(Clone)]
+                pub enum ErrorCode{
+                  DnsTimeout,
+                  DnsError(DnsErrorPayload),
+                  DestinationNotFound,
+                  DestinationUnavailable,
+                  DestinationIpProhibited,
+                  DestinationIpUnroutable,
+                  ConnectionRefused,
+                  ConnectionTerminated,
+                  ConnectionTimeout,
+                  ConnectionReadTimeout,
+                  ConnectionWriteTimeout,
+                  ConnectionLimitReached,
+                  TlsProtocolError,
+                  TlsCertificateError,
+                  TlsAlertReceived(TlsAlertReceivedPayload),
+                  HttpRequestDenied,
+                  HttpRequestLengthRequired,
+                  HttpRequestBodySize(Option<u64>),
+                  HttpRequestMethodInvalid,
+                  HttpRequestUriInvalid,
+                  HttpRequestUriTooLong,
+                  HttpRequestHeaderSectionSize(Option<u32>),
+                  HttpRequestHeaderSize(Option<FieldSizePayload>),
+                  HttpRequestTrailerSectionSize(Option<u32>),
+                  HttpRequestTrailerSize(FieldSizePayload),
+                  HttpResponseIncomplete,
+                  HttpResponseHeaderSectionSize(Option<u32>),
+                  HttpResponseHeaderSize(FieldSizePayload),
+                  HttpResponseBodySize(Option<u64>),
+                  HttpResponseTrailerSectionSize(Option<u32>),
+                  HttpResponseTrailerSize(FieldSizePayload),
+                  HttpResponseTransferCoding(Option<wit_bindgen::rt::string::String>),
+                  HttpResponseContentCoding(Option<wit_bindgen::rt::string::String>),
+                  HttpResponseTimeout,
+                  HttpUpgradeFailed,
+                  HttpProtocolError,
+                  LoopDetected,
+                  ConfigurationError,
+                  /// This is a catch-all error for anything that doesn't fit cleanly into a
+                  /// more specific case. It also includes an optional string for an
+                  /// unstructured description of the error. Users should not depend on the
+                  /// string for diagnosing errors, as it's not required to be consistent
+                  /// between implementations.
+                  InternalError(Option<wit_bindgen::rt::string::String>),
+                }
+                impl ::core::fmt::Debug for ErrorCode {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                      ErrorCode::DnsTimeout => {
+                        f.debug_tuple("ErrorCode::DnsTimeout").finish()
+                      }
+                      ErrorCode::DnsError(e) => {
+                        f.debug_tuple("ErrorCode::DnsError").field(e).finish()
+                      }
+                      ErrorCode::DestinationNotFound => {
+                        f.debug_tuple("ErrorCode::DestinationNotFound").finish()
+                      }
+                      ErrorCode::DestinationUnavailable => {
+                        f.debug_tuple("ErrorCode::DestinationUnavailable").finish()
+                      }
+                      ErrorCode::DestinationIpProhibited => {
+                        f.debug_tuple("ErrorCode::DestinationIpProhibited").finish()
+                      }
+                      ErrorCode::DestinationIpUnroutable => {
+                        f.debug_tuple("ErrorCode::DestinationIpUnroutable").finish()
+                      }
+                      ErrorCode::ConnectionRefused => {
+                        f.debug_tuple("ErrorCode::ConnectionRefused").finish()
+                      }
+                      ErrorCode::ConnectionTerminated => {
+                        f.debug_tuple("ErrorCode::ConnectionTerminated").finish()
+                      }
+                      ErrorCode::ConnectionTimeout => {
+                        f.debug_tuple("ErrorCode::ConnectionTimeout").finish()
+                      }
+                      ErrorCode::ConnectionReadTimeout => {
+                        f.debug_tuple("ErrorCode::ConnectionReadTimeout").finish()
+                      }
+                      ErrorCode::ConnectionWriteTimeout => {
+                        f.debug_tuple("ErrorCode::ConnectionWriteTimeout").finish()
+                      }
+                      ErrorCode::ConnectionLimitReached => {
+                        f.debug_tuple("ErrorCode::ConnectionLimitReached").finish()
+                      }
+                      ErrorCode::TlsProtocolError => {
+                        f.debug_tuple("ErrorCode::TlsProtocolError").finish()
+                      }
+                      ErrorCode::TlsCertificateError => {
+                        f.debug_tuple("ErrorCode::TlsCertificateError").finish()
+                      }
+                      ErrorCode::TlsAlertReceived(e) => {
+                        f.debug_tuple("ErrorCode::TlsAlertReceived").field(e).finish()
+                      }
+                      ErrorCode::HttpRequestDenied => {
+                        f.debug_tuple("ErrorCode::HttpRequestDenied").finish()
+                      }
+                      ErrorCode::HttpRequestLengthRequired => {
+                        f.debug_tuple("ErrorCode::HttpRequestLengthRequired").finish()
+                      }
+                      ErrorCode::HttpRequestBodySize(e) => {
+                        f.debug_tuple("ErrorCode::HttpRequestBodySize").field(e).finish()
+                      }
+                      ErrorCode::HttpRequestMethodInvalid => {
+                        f.debug_tuple("ErrorCode::HttpRequestMethodInvalid").finish()
+                      }
+                      ErrorCode::HttpRequestUriInvalid => {
+                        f.debug_tuple("ErrorCode::HttpRequestUriInvalid").finish()
+                      }
+                      ErrorCode::HttpRequestUriTooLong => {
+                        f.debug_tuple("ErrorCode::HttpRequestUriTooLong").finish()
+                      }
+                      ErrorCode::HttpRequestHeaderSectionSize(e) => {
+                        f.debug_tuple("ErrorCode::HttpRequestHeaderSectionSize").field(e).finish()
+                      }
+                      ErrorCode::HttpRequestHeaderSize(e) => {
+                        f.debug_tuple("ErrorCode::HttpRequestHeaderSize").field(e).finish()
+                      }
+                      ErrorCode::HttpRequestTrailerSectionSize(e) => {
+                        f.debug_tuple("ErrorCode::HttpRequestTrailerSectionSize").field(e).finish()
+                      }
+                      ErrorCode::HttpRequestTrailerSize(e) => {
+                        f.debug_tuple("ErrorCode::HttpRequestTrailerSize").field(e).finish()
+                      }
+                      ErrorCode::HttpResponseIncomplete => {
+                        f.debug_tuple("ErrorCode::HttpResponseIncomplete").finish()
+                      }
+                      ErrorCode::HttpResponseHeaderSectionSize(e) => {
+                        f.debug_tuple("ErrorCode::HttpResponseHeaderSectionSize").field(e).finish()
+                      }
+                      ErrorCode::HttpResponseHeaderSize(e) => {
+                        f.debug_tuple("ErrorCode::HttpResponseHeaderSize").field(e).finish()
+                      }
+                      ErrorCode::HttpResponseBodySize(e) => {
+                        f.debug_tuple("ErrorCode::HttpResponseBodySize").field(e).finish()
+                      }
+                      ErrorCode::HttpResponseTrailerSectionSize(e) => {
+                        f.debug_tuple("ErrorCode::HttpResponseTrailerSectionSize").field(e).finish()
+                      }
+                      ErrorCode::HttpResponseTrailerSize(e) => {
+                        f.debug_tuple("ErrorCode::HttpResponseTrailerSize").field(e).finish()
+                      }
+                      ErrorCode::HttpResponseTransferCoding(e) => {
+                        f.debug_tuple("ErrorCode::HttpResponseTransferCoding").field(e).finish()
+                      }
+                      ErrorCode::HttpResponseContentCoding(e) => {
+                        f.debug_tuple("ErrorCode::HttpResponseContentCoding").field(e).finish()
+                      }
+                      ErrorCode::HttpResponseTimeout => {
+                        f.debug_tuple("ErrorCode::HttpResponseTimeout").finish()
+                      }
+                      ErrorCode::HttpUpgradeFailed => {
+                        f.debug_tuple("ErrorCode::HttpUpgradeFailed").finish()
+                      }
+                      ErrorCode::HttpProtocolError => {
+                        f.debug_tuple("ErrorCode::HttpProtocolError").finish()
+                      }
+                      ErrorCode::LoopDetected => {
+                        f.debug_tuple("ErrorCode::LoopDetected").finish()
+                      }
+                      ErrorCode::ConfigurationError => {
+                        f.debug_tuple("ErrorCode::ConfigurationError").finish()
+                      }
+                      ErrorCode::InternalError(e) => {
+                        f.debug_tuple("ErrorCode::InternalError").field(e).finish()
+                      }
+                    }
+                  }
+                }
+                impl ::core::fmt::Display for ErrorCode {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                  }
+                }
+                
+                impl std::error::Error for ErrorCode {}
+                /// This type enumerates the different kinds of errors that may occur when
+                /// setting or appending to a `fields` resource.
+                #[derive(Clone, Copy)]
+                pub enum HeaderError{
+                  /// This error indicates that a `field-key` or `field-value` was
+                  /// syntactically invalid when used with an operation that sets headers in a
+                  /// `fields`.
+                  InvalidSyntax,
+                  /// This error indicates that a forbidden `field-key` was used when trying
+                  /// to set a header in a `fields`.
+                  Forbidden,
+                  /// This error indicates that the operation on the `fields` was not
+                  /// permitted because the fields are immutable.
+                  Immutable,
+                }
+                impl ::core::fmt::Debug for HeaderError {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                      HeaderError::InvalidSyntax => {
+                        f.debug_tuple("HeaderError::InvalidSyntax").finish()
+                      }
+                      HeaderError::Forbidden => {
+                        f.debug_tuple("HeaderError::Forbidden").finish()
+                      }
+                      HeaderError::Immutable => {
+                        f.debug_tuple("HeaderError::Immutable").finish()
+                      }
+                    }
+                  }
+                }
+                impl ::core::fmt::Display for HeaderError {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                  }
+                }
+                
+                impl std::error::Error for HeaderError {}
+                /// Field keys are always strings.
+                pub type FieldKey = wit_bindgen::rt::string::String;
+                /// Field values should always be ASCII strings. However, in
+                /// reality, HTTP implementations often have to interpret malformed values,
+                /// so they are provided as a list of bytes.
+                pub type FieldValue = wit_bindgen::rt::vec::Vec::<u8>;
+                /// This following block defines the `fields` resource which corresponds to
+                /// HTTP standard Fields. Fields are a common representation used for both
+                /// Headers and Trailers.
+                /// 
+                /// A `fields` may be mutable or immutable. A `fields` created using the
+                /// constructor, `from-list`, or `clone` will be mutable, but a `fields`
+                /// resource given by other means (including, but not limited to,
+                /// `incoming-request.headers`, `outgoing-request.headers`) might be be
+                /// immutable. In an immutable fields, the `set`, `append`, and `delete`
+                /// operations will fail with `header-error.immutable`.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct Fields{
+                  handle: wit_bindgen::rt::Resource<Fields>,
+                }
+                
+                impl Fields{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for Fields{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]fields"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// Headers is an alias for Fields.
+                pub type Headers = Fields;
+                /// Trailers is an alias for Fields.
+                pub type Trailers = Fields;
+                /// Represents an incoming HTTP Request.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingRequest{
+                  handle: wit_bindgen::rt::Resource<IncomingRequest>,
+                }
+                
+                impl IncomingRequest{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for IncomingRequest{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]incoming-request"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// Represents an outgoing HTTP Request.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingRequest{
+                  handle: wit_bindgen::rt::Resource<OutgoingRequest>,
+                }
+                
+                impl OutgoingRequest{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for OutgoingRequest{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]outgoing-request"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// Parameters for making an HTTP Request. Each of these parameters is
+                /// currently an optional timeout applicable to the transport layer of the
+                /// HTTP protocol.
+                /// 
+                /// These timeouts are separate from any the user may use to bound a
+                /// blocking call to `wasi:io/poll.poll`.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct RequestOptions{
+                  handle: wit_bindgen::rt::Resource<RequestOptions>,
+                }
+                
+                impl RequestOptions{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for RequestOptions{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]request-options"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// Represents the ability to send an HTTP Response.
+                /// 
+                /// This resource is used by the `wasi:http/incoming-handler` interface to
+                /// allow a Response to be sent corresponding to the Request provided as the
+                /// other argument to `incoming-handler.handle`.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct ResponseOutparam{
+                  handle: wit_bindgen::rt::Resource<ResponseOutparam>,
+                }
+                
+                impl ResponseOutparam{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for ResponseOutparam{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]response-outparam"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// This type corresponds to the HTTP standard Status Code.
+                pub type StatusCode = u16;
+                /// Represents an incoming HTTP Response.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingResponse{
+                  handle: wit_bindgen::rt::Resource<IncomingResponse>,
+                }
+                
+                impl IncomingResponse{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for IncomingResponse{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]incoming-response"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// Represents an incoming HTTP Request or Response's Body.
+                /// 
+                /// A body has both its contents - a stream of bytes - and a (possibly
+                /// empty) set of trailers, indicating that the full contents of the
+                /// body have been received. This resource represents the contents as
+                /// an `input-stream` and the delivery of trailers as a `future-trailers`,
+                /// and ensures that the user of this interface may only be consuming either
+                /// the body contents or waiting on trailers at any given time.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct IncomingBody{
+                  handle: wit_bindgen::rt::Resource<IncomingBody>,
+                }
+                
+                impl IncomingBody{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for IncomingBody{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]incoming-body"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// Represents a future which may eventaully return trailers, or an error.
+                /// 
+                /// In the case that the incoming HTTP Request or Response did not have any
+                /// trailers, this future will resolve to the empty set of trailers once the
+                /// complete Request or Response body has been received.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureTrailers{
+                  handle: wit_bindgen::rt::Resource<FutureTrailers>,
+                }
+                
+                impl FutureTrailers{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for FutureTrailers{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]future-trailers"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// Represents an outgoing HTTP Response.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingResponse{
+                  handle: wit_bindgen::rt::Resource<OutgoingResponse>,
+                }
+                
+                impl OutgoingResponse{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for OutgoingResponse{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]outgoing-response"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// Represents an outgoing HTTP Request or Response's Body.
+                /// 
+                /// A body has both its contents - a stream of bytes - and a (possibly
+                /// empty) set of trailers, inducating the full contents of the body
+                /// have been sent. This resource represents the contents as an
+                /// `output-stream` child resource, and the completion of the body (with
+                /// optional trailers) with a static function that consumes the
+                /// `outgoing-body` resource, and ensures that the user of this interface
+                /// may not write to the body contents after the body has been finished.
+                /// 
+                /// If the user code drops this resource, as opposed to calling the static
+                /// method `finish`, the implementation should treat the body as incomplete,
+                /// and that an error has occured. The implementation should propogate this
+                /// error to the HTTP protocol by whatever means it has available,
+                /// including: corrupting the body on the wire, aborting the associated
+                /// Request, or sending a late status code for the Response.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutgoingBody{
+                  handle: wit_bindgen::rt::Resource<OutgoingBody>,
+                }
+                
+                impl OutgoingBody{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for OutgoingBody{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]outgoing-body"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// Represents a future which may eventaully return an incoming HTTP
+                /// Response, or an error.
+                /// 
+                /// This resource is returned by the `wasi:http/outgoing-handler` interface to
+                /// provide the HTTP Response corresponding to the sent Request.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureIncomingResponse{
+                  handle: wit_bindgen::rt::Resource<FutureIncomingResponse>,
+                }
+                
+                impl FutureIncomingResponse{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for FutureIncomingResponse{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]future-incoming-response"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                #[allow(unused_unsafe, clippy::all)]
+                /// Attempts to extract a http-related `error` from the wasi:io `error`
+                /// provided.
+                /// 
+                /// Stream operations which return
+                /// `wasi:io/stream/stream-error::last-operation-failed` have a payload of
+                /// type `wasi:io/error/error` with more information about the operation
+                /// that failed. This payload can be passed through to this function to see
+                /// if there's http-related information about the error to return.
+                /// 
+                /// Note that this function is fallible because not all io-errors are
+                /// http-related errors.
+                pub fn http_error_code(err: &IoError,) -> Option<ErrorCode>{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(8))]
+                    struct RetArea([u8; 40]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let ptr0 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                    extern "C" {
+                      #[link_name = "http-error-code"]
+                      fn wit_import(_: i32, _: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                    wit_import((err).handle() as i32, ptr0);
+                    let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                    match l1 {
+                      0 => None,
+                      1 => {
+                        let e = {
+                          let l2 = i32::from(*((ptr0 + 8) as *const u8));
+                          let v64 = match l2 {
+                            0 => {
+                              ErrorCode::DnsTimeout
+                            }
+                            1 => {
+                              let e64 = {
+                                let l3 = i32::from(*((ptr0 + 16) as *const u8));
+                                let l7 = i32::from(*((ptr0 + 28) as *const u8));
+                                
+                                DnsErrorPayload{
+                                  rcode: match l3 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l4 = *((ptr0 + 20) as *const i32);
+                                        let l5 = *((ptr0 + 24) as *const i32);
+                                        let len6 = l5 as usize;
+                                        let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes6)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                  info_code: match l7 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l8 = i32::from(*((ptr0 + 30) as *const u16));
+                                        
+                                        l8 as u16
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                }
+                              };
+                              ErrorCode::DnsError(e64)
+                            }
+                            2 => {
+                              ErrorCode::DestinationNotFound
+                            }
+                            3 => {
+                              ErrorCode::DestinationUnavailable
+                            }
+                            4 => {
+                              ErrorCode::DestinationIpProhibited
+                            }
+                            5 => {
+                              ErrorCode::DestinationIpUnroutable
+                            }
+                            6 => {
+                              ErrorCode::ConnectionRefused
+                            }
+                            7 => {
+                              ErrorCode::ConnectionTerminated
+                            }
+                            8 => {
+                              ErrorCode::ConnectionTimeout
+                            }
+                            9 => {
+                              ErrorCode::ConnectionReadTimeout
+                            }
+                            10 => {
+                              ErrorCode::ConnectionWriteTimeout
+                            }
+                            11 => {
+                              ErrorCode::ConnectionLimitReached
+                            }
+                            12 => {
+                              ErrorCode::TlsProtocolError
+                            }
+                            13 => {
+                              ErrorCode::TlsCertificateError
+                            }
+                            14 => {
+                              let e64 = {
+                                let l9 = i32::from(*((ptr0 + 16) as *const u8));
+                                let l11 = i32::from(*((ptr0 + 20) as *const u8));
+                                
+                                TlsAlertReceivedPayload{
+                                  alert_id: match l9 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l10 = i32::from(*((ptr0 + 17) as *const u8));
+                                        
+                                        l10 as u8
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                  alert_message: match l11 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l12 = *((ptr0 + 24) as *const i32);
+                                        let l13 = *((ptr0 + 28) as *const i32);
+                                        let len14 = l13 as usize;
+                                        let bytes14 = Vec::from_raw_parts(l12 as *mut _, len14, len14);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes14)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                }
+                              };
+                              ErrorCode::TlsAlertReceived(e64)
+                            }
+                            15 => {
+                              ErrorCode::HttpRequestDenied
+                            }
+                            16 => {
+                              ErrorCode::HttpRequestLengthRequired
+                            }
+                            17 => {
+                              let e64 = {
+                                let l15 = i32::from(*((ptr0 + 16) as *const u8));
+                                
+                                match l15 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l16 = *((ptr0 + 24) as *const i64);
+                                      
+                                      l16 as u64
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              ErrorCode::HttpRequestBodySize(e64)
+                            }
+                            18 => {
+                              ErrorCode::HttpRequestMethodInvalid
+                            }
+                            19 => {
+                              ErrorCode::HttpRequestUriInvalid
+                            }
+                            20 => {
+                              ErrorCode::HttpRequestUriTooLong
+                            }
+                            21 => {
+                              let e64 = {
+                                let l17 = i32::from(*((ptr0 + 16) as *const u8));
+                                
+                                match l17 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l18 = *((ptr0 + 20) as *const i32);
+                                      
+                                      l18 as u32
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              ErrorCode::HttpRequestHeaderSectionSize(e64)
+                            }
+                            22 => {
+                              let e64 = {
+                                let l19 = i32::from(*((ptr0 + 16) as *const u8));
+                                
+                                match l19 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l20 = i32::from(*((ptr0 + 20) as *const u8));
+                                      let l24 = i32::from(*((ptr0 + 32) as *const u8));
+                                      
+                                      FieldSizePayload{
+                                        field_name: match l20 {
+                                          0 => None,
+                                          1 => {
+                                            let e = {
+                                              let l21 = *((ptr0 + 24) as *const i32);
+                                              let l22 = *((ptr0 + 28) as *const i32);
+                                              let len23 = l22 as usize;
+                                              let bytes23 = Vec::from_raw_parts(l21 as *mut _, len23, len23);
+                                              
+                                              wit_bindgen::rt::string_lift(bytes23)
+                                            };
+                                            Some(e)
+                                          }
+                                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                        },
+                                        field_size: match l24 {
+                                          0 => None,
+                                          1 => {
+                                            let e = {
+                                              let l25 = *((ptr0 + 36) as *const i32);
+                                              
+                                              l25 as u32
+                                            };
+                                            Some(e)
+                                          }
+                                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                        },
+                                      }
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              ErrorCode::HttpRequestHeaderSize(e64)
+                            }
+                            23 => {
+                              let e64 = {
+                                let l26 = i32::from(*((ptr0 + 16) as *const u8));
+                                
+                                match l26 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l27 = *((ptr0 + 20) as *const i32);
+                                      
+                                      l27 as u32
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              ErrorCode::HttpRequestTrailerSectionSize(e64)
+                            }
+                            24 => {
+                              let e64 = {
+                                let l28 = i32::from(*((ptr0 + 16) as *const u8));
+                                let l32 = i32::from(*((ptr0 + 28) as *const u8));
+                                
+                                FieldSizePayload{
+                                  field_name: match l28 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l29 = *((ptr0 + 20) as *const i32);
+                                        let l30 = *((ptr0 + 24) as *const i32);
+                                        let len31 = l30 as usize;
+                                        let bytes31 = Vec::from_raw_parts(l29 as *mut _, len31, len31);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes31)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                  field_size: match l32 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l33 = *((ptr0 + 32) as *const i32);
+                                        
+                                        l33 as u32
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                }
+                              };
+                              ErrorCode::HttpRequestTrailerSize(e64)
+                            }
+                            25 => {
+                              ErrorCode::HttpResponseIncomplete
+                            }
+                            26 => {
+                              let e64 = {
+                                let l34 = i32::from(*((ptr0 + 16) as *const u8));
+                                
+                                match l34 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l35 = *((ptr0 + 20) as *const i32);
+                                      
+                                      l35 as u32
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              ErrorCode::HttpResponseHeaderSectionSize(e64)
+                            }
+                            27 => {
+                              let e64 = {
+                                let l36 = i32::from(*((ptr0 + 16) as *const u8));
+                                let l40 = i32::from(*((ptr0 + 28) as *const u8));
+                                
+                                FieldSizePayload{
+                                  field_name: match l36 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l37 = *((ptr0 + 20) as *const i32);
+                                        let l38 = *((ptr0 + 24) as *const i32);
+                                        let len39 = l38 as usize;
+                                        let bytes39 = Vec::from_raw_parts(l37 as *mut _, len39, len39);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes39)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                  field_size: match l40 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l41 = *((ptr0 + 32) as *const i32);
+                                        
+                                        l41 as u32
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                }
+                              };
+                              ErrorCode::HttpResponseHeaderSize(e64)
+                            }
+                            28 => {
+                              let e64 = {
+                                let l42 = i32::from(*((ptr0 + 16) as *const u8));
+                                
+                                match l42 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l43 = *((ptr0 + 24) as *const i64);
+                                      
+                                      l43 as u64
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              ErrorCode::HttpResponseBodySize(e64)
+                            }
+                            29 => {
+                              let e64 = {
+                                let l44 = i32::from(*((ptr0 + 16) as *const u8));
+                                
+                                match l44 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l45 = *((ptr0 + 20) as *const i32);
+                                      
+                                      l45 as u32
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              ErrorCode::HttpResponseTrailerSectionSize(e64)
+                            }
+                            30 => {
+                              let e64 = {
+                                let l46 = i32::from(*((ptr0 + 16) as *const u8));
+                                let l50 = i32::from(*((ptr0 + 28) as *const u8));
+                                
+                                FieldSizePayload{
+                                  field_name: match l46 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l47 = *((ptr0 + 20) as *const i32);
+                                        let l48 = *((ptr0 + 24) as *const i32);
+                                        let len49 = l48 as usize;
+                                        let bytes49 = Vec::from_raw_parts(l47 as *mut _, len49, len49);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes49)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                  field_size: match l50 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l51 = *((ptr0 + 32) as *const i32);
+                                        
+                                        l51 as u32
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                }
+                              };
+                              ErrorCode::HttpResponseTrailerSize(e64)
+                            }
+                            31 => {
+                              let e64 = {
+                                let l52 = i32::from(*((ptr0 + 16) as *const u8));
+                                
+                                match l52 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l53 = *((ptr0 + 20) as *const i32);
+                                      let l54 = *((ptr0 + 24) as *const i32);
+                                      let len55 = l54 as usize;
+                                      let bytes55 = Vec::from_raw_parts(l53 as *mut _, len55, len55);
+                                      
+                                      wit_bindgen::rt::string_lift(bytes55)
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              ErrorCode::HttpResponseTransferCoding(e64)
+                            }
+                            32 => {
+                              let e64 = {
+                                let l56 = i32::from(*((ptr0 + 16) as *const u8));
+                                
+                                match l56 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l57 = *((ptr0 + 20) as *const i32);
+                                      let l58 = *((ptr0 + 24) as *const i32);
+                                      let len59 = l58 as usize;
+                                      let bytes59 = Vec::from_raw_parts(l57 as *mut _, len59, len59);
+                                      
+                                      wit_bindgen::rt::string_lift(bytes59)
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              ErrorCode::HttpResponseContentCoding(e64)
+                            }
+                            33 => {
+                              ErrorCode::HttpResponseTimeout
+                            }
+                            34 => {
+                              ErrorCode::HttpUpgradeFailed
+                            }
+                            35 => {
+                              ErrorCode::HttpProtocolError
+                            }
+                            36 => {
+                              ErrorCode::LoopDetected
+                            }
+                            37 => {
+                              ErrorCode::ConfigurationError
+                            }
+                            n => {
+                              debug_assert_eq!(n, 38, "invalid enum discriminant");
+                              let e64 = {
+                                let l60 = i32::from(*((ptr0 + 16) as *const u8));
+                                
+                                match l60 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l61 = *((ptr0 + 20) as *const i32);
+                                      let l62 = *((ptr0 + 24) as *const i32);
+                                      let len63 = l62 as usize;
+                                      let bytes63 = Vec::from_raw_parts(l61 as *mut _, len63, len63);
+                                      
+                                      wit_bindgen::rt::string_lift(bytes63)
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              ErrorCode::InternalError(e64)
+                            }
+                          };
+                          
+                          v64
+                        };
+                        Some(e)
+                      }
+                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                    }
+                  }
+                }
+                impl Fields {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Construct an empty HTTP Fields.
+                  /// 
+                  /// The resulting `fields` is mutable.
+                  pub fn new() -> Self{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[constructor]fields"]
+                        fn wit_import() -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import() -> i32{ unreachable!() }
+                      let ret = wit_import();
+                      Fields::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl Fields {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Construct an HTTP Fields.
+                  /// 
+                  /// The resulting `fields` is mutable.
+                  /// 
+                  /// The list represents each key-value pair in the Fields. Keys
+                  /// which have multiple values are represented by multiple entries in this
+                  /// list with the same key.
+                  /// 
+                  /// The tuple is a pair of the field key, represented as a string, and
+                  /// Value, represented as a list of bytes. In a valid Fields, all keys
+                  /// and values are valid UTF-8 strings. However, values are not always
+                  /// well-formed, so they are represented as a raw list of bytes.
+                  /// 
+                  /// An error result will be returned if any header or value was
+                  /// syntactically invalid, or if a header was forbidden.
+                  pub fn from_list(entries: &[(FieldKey,FieldValue,)],) -> Result<Fields,HeaderError>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec3 = entries;
+                      let len3 = vec3.len() as i32;
+                      let layout3 = alloc::Layout::from_size_align_unchecked(vec3.len() * 16, 4);
+                      let result3 = if layout3.size() != 0
+                      {
+                        let ptr = alloc::alloc(layout3);
+                        if ptr.is_null()
+                        {
+                          alloc::handle_alloc_error(layout3);
+                        }
+                        ptr
+                      }else {{
+                        ::core::ptr::null_mut()
+                      }};
+                      for (i, e) in vec3.into_iter().enumerate() {
+                        let base = result3 as i32 + (i as i32) * 16;
+                        {
+                          let (t0_0, t0_1, ) = e;
+                          let vec1 = t0_0;
+                          let ptr1 = vec1.as_ptr() as i32;
+                          let len1 = vec1.len() as i32;
+                          *((base + 4) as *mut i32) = len1;
+                          *((base + 0) as *mut i32) = ptr1;
+                          let vec2 = t0_1;
+                          let ptr2 = vec2.as_ptr() as i32;
+                          let len2 = vec2.len() as i32;
+                          *((base + 12) as *mut i32) = len2;
+                          *((base + 8) as *mut i32) = ptr2;
+                        }
+                      }
+                      let ptr4 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[static]fields.from-list"]
+                        fn wit_import(_: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import(result3 as i32, len3, ptr4);
+                      let l5 = i32::from(*((ptr4 + 0) as *const u8));
+                      if layout3.size() != 0 {
+                        alloc::dealloc(result3, layout3);
+                      }
+                      match l5 {
+                        0 => {
+                          let e = {
+                            let l6 = *((ptr4 + 4) as *const i32);
+                            
+                            Fields::from_handle(l6 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l7 = i32::from(*((ptr4 + 4) as *const u8));
+                            let v8 = match l7 {
+                              0 => {
+                                HeaderError::InvalidSyntax
+                              }
+                              1 => {
+                                HeaderError::Forbidden
+                              }
+                              n => {
+                                debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                HeaderError::Immutable
+                              }
+                            };
+                            
+                            v8
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Fields {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Get all of the values corresponding to a key. If the key is not present
+                  /// in this `fields`, an empty list is returned. However, if the key is
+                  /// present but empty, this is represented by a list with one or more
+                  /// empty field-values present.
+                  pub fn get(&self,name: &FieldKey,) -> wit_bindgen::rt::vec::Vec::<FieldValue>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = name;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]fields.get"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                      let l2 = *((ptr1 + 0) as *const i32);
+                      let l3 = *((ptr1 + 4) as *const i32);
+                      let base7 = l2;
+                      let len7 = l3;
+                      let mut result7 = Vec::with_capacity(len7 as usize);
+                      for i in 0..len7 {
+                        let base = base7 + i * 8;
+                        let e7 = {
+                          let l4 = *((base + 0) as *const i32);
+                          let l5 = *((base + 4) as *const i32);
+                          let len6 = l5 as usize;
+                          
+                          Vec::from_raw_parts(l4 as *mut _, len6, len6)
+                        };
+                        result7.push(e7);
+                      }
+                      wit_bindgen::rt::dealloc(base7, (len7 as usize) * 8, 4);
+                      result7
+                    }
+                  }
+                }
+                impl Fields {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns `true` when the key is present in this `fields`. If the key is
+                  /// syntactically invalid, `false` is returned.
+                  pub fn has(&self,name: &FieldKey,) -> bool{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      let vec0 = name;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]fields.has"]
+                        fn wit_import(_: i32, _: i32, _: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32, ptr0, len0);
+                      wit_bindgen::rt::bool_lift(ret as u8)
+                    }
+                  }
+                }
+                impl Fields {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Set all of the values for a key. Clears any existing values for that
+                  /// key, if they have been set.
+                  /// 
+                  /// Fails with `header-error.immutable` if the `fields` are immutable.
+                  pub fn set(&self,name: &FieldKey,value: &[FieldValue],) -> Result<(),HeaderError>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = name;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let vec2 = value;
+                      let len2 = vec2.len() as i32;
+                      let layout2 = alloc::Layout::from_size_align_unchecked(vec2.len() * 8, 4);
+                      let result2 = if layout2.size() != 0
+                      {
+                        let ptr = alloc::alloc(layout2);
+                        if ptr.is_null()
+                        {
+                          alloc::handle_alloc_error(layout2);
+                        }
+                        ptr
+                      }else {{
+                        ::core::ptr::null_mut()
+                      }};
+                      for (i, e) in vec2.into_iter().enumerate() {
+                        let base = result2 as i32 + (i as i32) * 8;
+                        {
+                          let vec1 = e;
+                          let ptr1 = vec1.as_ptr() as i32;
+                          let len1 = vec1.len() as i32;
+                          *((base + 4) as *mut i32) = len1;
+                          *((base + 0) as *mut i32) = ptr1;
+                        }
+                      }
+                      let ptr3 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]fields.set"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, result2 as i32, len2, ptr3);
+                      let l4 = i32::from(*((ptr3 + 0) as *const u8));
+                      if layout2.size() != 0 {
+                        alloc::dealloc(result2, layout2);
+                      }
+                      match l4 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l5 = i32::from(*((ptr3 + 1) as *const u8));
+                            let v6 = match l5 {
+                              0 => {
+                                HeaderError::InvalidSyntax
+                              }
+                              1 => {
+                                HeaderError::Forbidden
+                              }
+                              n => {
+                                debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                HeaderError::Immutable
+                              }
+                            };
+                            
+                            v6
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Fields {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Delete all values for a key. Does nothing if no values for the key
+                  /// exist.
+                  /// 
+                  /// Fails with `header-error.immutable` if the `fields` are immutable.
+                  pub fn delete(&self,name: &FieldKey,) -> Result<(),HeaderError>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = name;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]fields.delete"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr1 + 1) as *const u8));
+                            let v4 = match l3 {
+                              0 => {
+                                HeaderError::InvalidSyntax
+                              }
+                              1 => {
+                                HeaderError::Forbidden
+                              }
+                              n => {
+                                debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                HeaderError::Immutable
+                              }
+                            };
+                            
+                            v4
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Fields {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Append a value for a key. Does not change or delete any existing
+                  /// values for that key.
+                  /// 
+                  /// Fails with `header-error.immutable` if the `fields` are immutable.
+                  pub fn append(&self,name: &FieldKey,value: &FieldValue,) -> Result<(),HeaderError>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(1))]
+                      struct RetArea([u8; 2]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = name;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let vec1 = value;
+                      let ptr1 = vec1.as_ptr() as i32;
+                      let len1 = vec1.len() as i32;
+                      let ptr2 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]fields.append"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1, len1, ptr2);
+                      let l3 = i32::from(*((ptr2 + 0) as *const u8));
+                      match l3 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l4 = i32::from(*((ptr2 + 1) as *const u8));
+                            let v5 = match l4 {
+                              0 => {
+                                HeaderError::InvalidSyntax
+                              }
+                              1 => {
+                                HeaderError::Forbidden
+                              }
+                              n => {
+                                debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                HeaderError::Immutable
+                              }
+                            };
+                            
+                            v5
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl Fields {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Retrieve the full set of keys and values in the Fields. Like the
+                  /// constructor, the list represents each key-value pair.
+                  /// 
+                  /// The outer list represents each key-value pair in the Fields. Keys
+                  /// which have multiple values are represented by multiple entries in this
+                  /// list with the same key.
+                  pub fn entries(&self,) -> wit_bindgen::rt::vec::Vec::<(FieldKey,FieldValue,)>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]fields.entries"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = *((ptr0 + 0) as *const i32);
+                      let l2 = *((ptr0 + 4) as *const i32);
+                      let base9 = l1;
+                      let len9 = l2;
+                      let mut result9 = Vec::with_capacity(len9 as usize);
+                      for i in 0..len9 {
+                        let base = base9 + i * 16;
+                        let e9 = {
+                          let l3 = *((base + 0) as *const i32);
+                          let l4 = *((base + 4) as *const i32);
+                          let len5 = l4 as usize;
+                          let bytes5 = Vec::from_raw_parts(l3 as *mut _, len5, len5);
+                          let l6 = *((base + 8) as *const i32);
+                          let l7 = *((base + 12) as *const i32);
+                          let len8 = l7 as usize;
+                          
+                          (wit_bindgen::rt::string_lift(bytes5), Vec::from_raw_parts(l6 as *mut _, len8, len8))
+                        };
+                        result9.push(e9);
+                      }
+                      wit_bindgen::rt::dealloc(base9, (len9 as usize) * 16, 4);
+                      result9
+                    }
+                  }
+                }
+                impl Fields {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Make a deep copy of the Fields. Equivelant in behavior to calling the
+                  /// `fields` constructor on the return value of `entries`. The resulting
+                  /// `fields` is mutable.
+                  pub fn clone(&self,) -> Fields{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]fields.clone"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32);
+                      Fields::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl IncomingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the method of the incoming request.
+                  pub fn method(&self,) -> Method{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-request.method"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      let v5 = match l1 {
+                        0 => {
+                          Method::Get
+                        }
+                        1 => {
+                          Method::Head
+                        }
+                        2 => {
+                          Method::Post
+                        }
+                        3 => {
+                          Method::Put
+                        }
+                        4 => {
+                          Method::Delete
+                        }
+                        5 => {
+                          Method::Connect
+                        }
+                        6 => {
+                          Method::Options
+                        }
+                        7 => {
+                          Method::Trace
+                        }
+                        8 => {
+                          Method::Patch
+                        }
+                        n => {
+                          debug_assert_eq!(n, 9, "invalid enum discriminant");
+                          let e5 = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            let bytes4 = Vec::from_raw_parts(l2 as *mut _, len4, len4);
+                            
+                            wit_bindgen::rt::string_lift(bytes4)
+                          };
+                          Method::Other(e5)
+                        }
+                      };
+                      v5
+                    }
+                  }
+                }
+                impl IncomingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the path with query parameters from the request, as a string.
+                  pub fn path_with_query(&self,) -> Option<wit_bindgen::rt::string::String>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-request.path-with-query"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => None,
+                        1 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            let bytes4 = Vec::from_raw_parts(l2 as *mut _, len4, len4);
+                            
+                            wit_bindgen::rt::string_lift(bytes4)
+                          };
+                          Some(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl IncomingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the protocol scheme from the request.
+                  pub fn scheme(&self,) -> Option<Scheme>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 16]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-request.scheme"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => None,
+                        1 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 4) as *const u8));
+                            let v6 = match l2 {
+                              0 => {
+                                Scheme::Http
+                              }
+                              1 => {
+                                Scheme::Https
+                              }
+                              n => {
+                                debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                let e6 = {
+                                  let l3 = *((ptr0 + 8) as *const i32);
+                                  let l4 = *((ptr0 + 12) as *const i32);
+                                  let len5 = l4 as usize;
+                                  let bytes5 = Vec::from_raw_parts(l3 as *mut _, len5, len5);
+                                  
+                                  wit_bindgen::rt::string_lift(bytes5)
+                                };
+                                Scheme::Other(e6)
+                              }
+                            };
+                            
+                            v6
+                          };
+                          Some(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl IncomingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the authority from the request, if it was present.
+                  pub fn authority(&self,) -> Option<wit_bindgen::rt::string::String>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-request.authority"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => None,
+                        1 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            let bytes4 = Vec::from_raw_parts(l2 as *mut _, len4, len4);
+                            
+                            wit_bindgen::rt::string_lift(bytes4)
+                          };
+                          Some(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl IncomingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Get the `headers` associated with the request.
+                  /// 
+                  /// The returned `headers` resource is immutable: `set`, `append`, and
+                  /// `delete` operations will fail with `header-error.immutable`.
+                  /// 
+                  /// The `headers` returned are a child resource: it must be dropped before
+                  /// the parent `incoming-request` is dropped. Dropping this
+                  /// `incoming-request` before all children are dropped will trap.
+                  pub fn headers(&self,) -> Headers{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-request.headers"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32);
+                      Fields::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl IncomingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Gives the `incoming-body` associated with this request. Will only
+                  /// return success at most once, and subsequent calls will return error.
+                  pub fn consume(&self,) -> Result<IncomingBody,()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-request.consume"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            IncomingBody::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Construct a new `outgoing-request` with a default `method` of `GET`, and
+                  /// `none` values for `path-with-query`, `scheme`, and `authority`.
+                  /// 
+                  /// * `headers` is the HTTP Headers for the Request.
+                  /// 
+                  /// It is possible to construct, or manipulate with the accessor functions
+                  /// below, an `outgoing-request` with an invalid combination of `scheme`
+                  /// and `authority`, or `headers` which are not permitted to be sent.
+                  /// It is the obligation of the `outgoing-handler.handle` implementation
+                  /// to reject invalid constructions of `outgoing-request`.
+                  pub fn new(headers: Headers,) -> Self{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[constructor]outgoing-request"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((headers).into_handle() as i32);
+                      OutgoingRequest::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl OutgoingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the resource corresponding to the outgoing Body for this
+                  /// Request.
+                  /// 
+                  /// Returns success on the first call: the `outgoing-body` resource for
+                  /// this `outgoing-request` can be retrieved at most once. Subsequent
+                  /// calls will return error.
+                  pub fn body(&self,) -> Result<OutgoingBody,()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-request.body"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            OutgoingBody::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Get the Method for the Request.
+                  pub fn method(&self,) -> Method{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-request.method"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      let v5 = match l1 {
+                        0 => {
+                          Method::Get
+                        }
+                        1 => {
+                          Method::Head
+                        }
+                        2 => {
+                          Method::Post
+                        }
+                        3 => {
+                          Method::Put
+                        }
+                        4 => {
+                          Method::Delete
+                        }
+                        5 => {
+                          Method::Connect
+                        }
+                        6 => {
+                          Method::Options
+                        }
+                        7 => {
+                          Method::Trace
+                        }
+                        8 => {
+                          Method::Patch
+                        }
+                        n => {
+                          debug_assert_eq!(n, 9, "invalid enum discriminant");
+                          let e5 = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            let bytes4 = Vec::from_raw_parts(l2 as *mut _, len4, len4);
+                            
+                            wit_bindgen::rt::string_lift(bytes4)
+                          };
+                          Method::Other(e5)
+                        }
+                      };
+                      v5
+                    }
+                  }
+                }
+                impl OutgoingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Set the Method for the Request. Fails if the string present in a
+                  /// `method.other` argument is not a syntactically valid method.
+                  pub fn set_method(&self,method: &Method,) -> Result<(),()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      let (result1_0,result1_1,result1_2,) = match method {
+                        Method::Get=> {
+                          (0i32, 0i32, 0i32)
+                        }
+                        Method::Head=> {
+                          (1i32, 0i32, 0i32)
+                        }
+                        Method::Post=> {
+                          (2i32, 0i32, 0i32)
+                        }
+                        Method::Put=> {
+                          (3i32, 0i32, 0i32)
+                        }
+                        Method::Delete=> {
+                          (4i32, 0i32, 0i32)
+                        }
+                        Method::Connect=> {
+                          (5i32, 0i32, 0i32)
+                        }
+                        Method::Options=> {
+                          (6i32, 0i32, 0i32)
+                        }
+                        Method::Trace=> {
+                          (7i32, 0i32, 0i32)
+                        }
+                        Method::Patch=> {
+                          (8i32, 0i32, 0i32)
+                        }
+                        Method::Other(e) => {
+                          let vec0 = e;
+                          let ptr0 = vec0.as_ptr() as i32;
+                          let len0 = vec0.len() as i32;
+                          
+                          (9i32, ptr0, len0)
+                        },
+                      };
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-request.set-method"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32, result1_0, result1_1, result1_2);
+                      match ret {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Get the combination of the HTTP Path and Query for the Request.
+                  /// When `none`, this represents an empty Path and empty Query.
+                  pub fn path_with_query(&self,) -> Option<wit_bindgen::rt::string::String>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-request.path-with-query"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => None,
+                        1 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            let bytes4 = Vec::from_raw_parts(l2 as *mut _, len4, len4);
+                            
+                            wit_bindgen::rt::string_lift(bytes4)
+                          };
+                          Some(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Set the combination of the HTTP Path and Query for the Request.
+                  /// When `none`, this represents an empty Path and empty Query. Fails is the
+                  /// string given is not a syntactically valid path and query uri component.
+                  pub fn set_path_with_query(&self,path_with_query: Option<&str>,) -> Result<(),()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      let (result1_0,result1_1,result1_2,) = match path_with_query {
+                        Some(e) => {
+                          let vec0 = e;
+                          let ptr0 = vec0.as_ptr() as i32;
+                          let len0 = vec0.len() as i32;
+                          
+                          (1i32, ptr0, len0)
+                        },
+                        None => {
+                          (0i32, 0i32, 0i32)
+                        },
+                      };
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-request.set-path-with-query"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32, result1_0, result1_1, result1_2);
+                      match ret {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Get the HTTP Related Scheme for the Request. When `none`, the
+                  /// implementation may choose an appropriate default scheme.
+                  pub fn scheme(&self,) -> Option<Scheme>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 16]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-request.scheme"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => None,
+                        1 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 4) as *const u8));
+                            let v6 = match l2 {
+                              0 => {
+                                Scheme::Http
+                              }
+                              1 => {
+                                Scheme::Https
+                              }
+                              n => {
+                                debug_assert_eq!(n, 2, "invalid enum discriminant");
+                                let e6 = {
+                                  let l3 = *((ptr0 + 8) as *const i32);
+                                  let l4 = *((ptr0 + 12) as *const i32);
+                                  let len5 = l4 as usize;
+                                  let bytes5 = Vec::from_raw_parts(l3 as *mut _, len5, len5);
+                                  
+                                  wit_bindgen::rt::string_lift(bytes5)
+                                };
+                                Scheme::Other(e6)
+                              }
+                            };
+                            
+                            v6
+                          };
+                          Some(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Set the HTTP Related Scheme for the Request. When `none`, the
+                  /// implementation may choose an appropriate default scheme. Fails if the
+                  /// string given is not a syntactically valid uri scheme.
+                  pub fn set_scheme(&self,scheme: Option<&Scheme>,) -> Result<(),()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      let (result2_0,result2_1,result2_2,result2_3,) = match scheme {
+                        Some(e) => {
+                          let (result1_0,result1_1,result1_2,) = match e {
+                            Scheme::Http=> {
+                              (0i32, 0i32, 0i32)
+                            }
+                            Scheme::Https=> {
+                              (1i32, 0i32, 0i32)
+                            }
+                            Scheme::Other(e) => {
+                              let vec0 = e;
+                              let ptr0 = vec0.as_ptr() as i32;
+                              let len0 = vec0.len() as i32;
+                              
+                              (2i32, ptr0, len0)
+                            },
+                          };
+                          
+                          (1i32, result1_0, result1_1, result1_2)
+                        },
+                        None => {
+                          (0i32, 0i32, 0i32, 0i32)
+                        },
+                      };
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-request.set-scheme"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32, result2_0, result2_1, result2_2, result2_3);
+                      match ret {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Get the HTTP Authority for the Request. A value of `none` may be used
+                  /// with Related Schemes which do not require an Authority. The HTTP and
+                  /// HTTPS schemes always require an authority.
+                  pub fn authority(&self,) -> Option<wit_bindgen::rt::string::String>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-request.authority"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => None,
+                        1 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            let bytes4 = Vec::from_raw_parts(l2 as *mut _, len4, len4);
+                            
+                            wit_bindgen::rt::string_lift(bytes4)
+                          };
+                          Some(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Set the HTTP Authority for the Request. A value of `none` may be used
+                  /// with Related Schemes which do not require an Authority. The HTTP and
+                  /// HTTPS schemes always require an authority. Fails if the string given is
+                  /// not a syntactically valid uri authority.
+                  pub fn set_authority(&self,authority: Option<&str>,) -> Result<(),()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      let (result1_0,result1_1,result1_2,) = match authority {
+                        Some(e) => {
+                          let vec0 = e;
+                          let ptr0 = vec0.as_ptr() as i32;
+                          let len0 = vec0.len() as i32;
+                          
+                          (1i32, ptr0, len0)
+                        },
+                        None => {
+                          (0i32, 0i32, 0i32)
+                        },
+                      };
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-request.set-authority"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32, result1_0, result1_1, result1_2);
+                      match ret {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingRequest {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Get the headers associated with the Request.
+                  /// 
+                  /// The returned `headers` resource is immutable: `set`, `append`, and
+                  /// `delete` operations will fail with `header-error.immutable`.
+                  /// 
+                  /// This headers resource is a child: it must be dropped before the parent
+                  /// `outgoing-request` is dropped, or its ownership is transfered to
+                  /// another component by e.g. `outgoing-handler.handle`.
+                  pub fn headers(&self,) -> Headers{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-request.headers"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32);
+                      Fields::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl RequestOptions {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Construct a default `request-options` value.
+                  pub fn new() -> Self{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[constructor]request-options"]
+                        fn wit_import() -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import() -> i32{ unreachable!() }
+                      let ret = wit_import();
+                      RequestOptions::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl RequestOptions {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// The timeout for the initial connect to the HTTP Server.
+                  pub fn connect_timeout(&self,) -> Option<Duration>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 16]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]request-options.connect-timeout"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => None,
+                        1 => {
+                          let e = {
+                            let l2 = *((ptr0 + 8) as *const i64);
+                            
+                            l2 as u64
+                          };
+                          Some(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl RequestOptions {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Set the timeout for the initial connect to the HTTP Server. An error
+                  /// return value indicates that this timeout is not supported.
+                  pub fn set_connect_timeout(&self,duration: Option<Duration>,) -> Result<(),()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      let (result0_0,result0_1,) = match duration {
+                        Some(e) => (1i32, wit_bindgen::rt::as_i64(e)),
+                        None => {
+                          (0i32, 0i64)
+                        },
+                      };
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]request-options.set-connect-timeout"]
+                        fn wit_import(_: i32, _: i32, _: i64, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i64, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32, result0_0, result0_1);
+                      match ret {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl RequestOptions {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// The timeout for receiving the first byte of the Response body.
+                  pub fn first_byte_timeout(&self,) -> Option<Duration>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 16]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]request-options.first-byte-timeout"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => None,
+                        1 => {
+                          let e = {
+                            let l2 = *((ptr0 + 8) as *const i64);
+                            
+                            l2 as u64
+                          };
+                          Some(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl RequestOptions {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Set the timeout for receiving the first byte of the Response body. An
+                  /// error return value indicates that this timeout is not supported.
+                  pub fn set_first_byte_timeout(&self,duration: Option<Duration>,) -> Result<(),()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      let (result0_0,result0_1,) = match duration {
+                        Some(e) => (1i32, wit_bindgen::rt::as_i64(e)),
+                        None => {
+                          (0i32, 0i64)
+                        },
+                      };
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]request-options.set-first-byte-timeout"]
+                        fn wit_import(_: i32, _: i32, _: i64, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i64, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32, result0_0, result0_1);
+                      match ret {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl RequestOptions {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// The timeout for receiving subsequent chunks of bytes in the Response
+                  /// body stream.
+                  pub fn between_bytes_timeout(&self,) -> Option<Duration>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 16]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]request-options.between-bytes-timeout"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => None,
+                        1 => {
+                          let e = {
+                            let l2 = *((ptr0 + 8) as *const i64);
+                            
+                            l2 as u64
+                          };
+                          Some(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl RequestOptions {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Set the timeout for receiving subsequent chunks of bytes in the Response
+                  /// body stream. An error return value indicates that this timeout is not
+                  /// supported.
+                  pub fn set_between_bytes_timeout(&self,duration: Option<Duration>,) -> Result<(),()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      let (result0_0,result0_1,) = match duration {
+                        Some(e) => (1i32, wit_bindgen::rt::as_i64(e)),
+                        None => {
+                          (0i32, 0i64)
+                        },
+                      };
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]request-options.set-between-bytes-timeout"]
+                        fn wit_import(_: i32, _: i32, _: i64, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i64, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32, result0_0, result0_1);
+                      match ret {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl ResponseOutparam {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Set the value of the `response-outparam` to either send a response,
+                  /// or indicate an error.
+                  /// 
+                  /// This method consumes the `response-outparam` to ensure that it is
+                  /// called at most once. If it is never called, the implementation
+                  /// will respond with an error.
+                  /// 
+                  /// The user may provide an `error` to `response` to allow the
+                  /// implementation determine how to respond with an HTTP error response.
+                  pub fn set(param: ResponseOutparam,response: Result<OutgoingResponse,&ErrorCode>,){
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      let (result38_0,result38_1,result38_2,result38_3,result38_4,result38_5,result38_6,result38_7,) = match response {
+                        Ok(e) => { (0i32, (e).into_handle() as i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32) },
+                        Err(e) => { {
+                          let (result37_0,result37_1,result37_2,result37_3,result37_4,result37_5,result37_6,) = match e {
+                            ErrorCode::DnsTimeout=> {
+                              (0i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::DnsError(e) => {
+                              let DnsErrorPayload{ rcode:rcode0, info_code:info_code0, } = e;
+                              let (result2_0,result2_1,result2_2,) = match rcode0 {
+                                Some(e) => {
+                                  let vec1 = e;
+                                  let ptr1 = vec1.as_ptr() as i32;
+                                  let len1 = vec1.len() as i32;
+                                  
+                                  (1i32, ptr1, len1)
+                                },
+                                None => {
+                                  (0i32, 0i32, 0i32)
+                                },
+                              };let (result3_0,result3_1,) = match info_code0 {
+                                Some(e) => (1i32, wit_bindgen::rt::as_i32(e)),
+                                None => {
+                                  (0i32, 0i32)
+                                },
+                              };
+                              (1i32, result2_0, i64::from(result2_1), result2_2, result3_0, result3_1, 0i32)
+                            },
+                            ErrorCode::DestinationNotFound=> {
+                              (2i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::DestinationUnavailable=> {
+                              (3i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::DestinationIpProhibited=> {
+                              (4i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::DestinationIpUnroutable=> {
+                              (5i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::ConnectionRefused=> {
+                              (6i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::ConnectionTerminated=> {
+                              (7i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::ConnectionTimeout=> {
+                              (8i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::ConnectionReadTimeout=> {
+                              (9i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::ConnectionWriteTimeout=> {
+                              (10i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::ConnectionLimitReached=> {
+                              (11i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::TlsProtocolError=> {
+                              (12i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::TlsCertificateError=> {
+                              (13i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::TlsAlertReceived(e) => {
+                              let TlsAlertReceivedPayload{ alert_id:alert_id4, alert_message:alert_message4, } = e;
+                              let (result5_0,result5_1,) = match alert_id4 {
+                                Some(e) => (1i32, wit_bindgen::rt::as_i32(e)),
+                                None => {
+                                  (0i32, 0i32)
+                                },
+                              };let (result7_0,result7_1,result7_2,) = match alert_message4 {
+                                Some(e) => {
+                                  let vec6 = e;
+                                  let ptr6 = vec6.as_ptr() as i32;
+                                  let len6 = vec6.len() as i32;
+                                  
+                                  (1i32, ptr6, len6)
+                                },
+                                None => {
+                                  (0i32, 0i32, 0i32)
+                                },
+                              };
+                              (14i32, result5_0, i64::from(result5_1), result7_0, result7_1, result7_2, 0i32)
+                            },
+                            ErrorCode::HttpRequestDenied=> {
+                              (15i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::HttpRequestLengthRequired=> {
+                              (16i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::HttpRequestBodySize(e) => {
+                              let (result8_0,result8_1,) = match e {
+                                Some(e) => (1i32, wit_bindgen::rt::as_i64(e)),
+                                None => {
+                                  (0i32, 0i64)
+                                },
+                              };
+                              (17i32, result8_0, result8_1, 0i32, 0i32, 0i32, 0i32)
+                            },
+                            ErrorCode::HttpRequestMethodInvalid=> {
+                              (18i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::HttpRequestUriInvalid=> {
+                              (19i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::HttpRequestUriTooLong=> {
+                              (20i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::HttpRequestHeaderSectionSize(e) => {
+                              let (result9_0,result9_1,) = match e {
+                                Some(e) => (1i32, wit_bindgen::rt::as_i32(e)),
+                                None => {
+                                  (0i32, 0i32)
+                                },
+                              };
+                              (21i32, result9_0, i64::from(result9_1), 0i32, 0i32, 0i32, 0i32)
+                            },
+                            ErrorCode::HttpRequestHeaderSize(e) => {
+                              let (result14_0,result14_1,result14_2,result14_3,result14_4,result14_5,) = match e {
+                                Some(e) => {
+                                  let FieldSizePayload{ field_name:field_name10, field_size:field_size10, } = e;
+                                  let (result12_0,result12_1,result12_2,) = match field_name10 {
+                                    Some(e) => {
+                                      let vec11 = e;
+                                      let ptr11 = vec11.as_ptr() as i32;
+                                      let len11 = vec11.len() as i32;
+                                      
+                                      (1i32, ptr11, len11)
+                                    },
+                                    None => {
+                                      (0i32, 0i32, 0i32)
+                                    },
+                                  };let (result13_0,result13_1,) = match field_size10 {
+                                    Some(e) => (1i32, wit_bindgen::rt::as_i32(e)),
+                                    None => {
+                                      (0i32, 0i32)
+                                    },
+                                  };
+                                  (1i32, result12_0, result12_1, result12_2, result13_0, result13_1)
+                                },
+                                None => {
+                                  (0i32, 0i32, 0i32, 0i32, 0i32, 0i32)
+                                },
+                              };
+                              (22i32, result14_0, i64::from(result14_1), result14_2, result14_3, result14_4, result14_5)
+                            },
+                            ErrorCode::HttpRequestTrailerSectionSize(e) => {
+                              let (result15_0,result15_1,) = match e {
+                                Some(e) => (1i32, wit_bindgen::rt::as_i32(e)),
+                                None => {
+                                  (0i32, 0i32)
+                                },
+                              };
+                              (23i32, result15_0, i64::from(result15_1), 0i32, 0i32, 0i32, 0i32)
+                            },
+                            ErrorCode::HttpRequestTrailerSize(e) => {
+                              let FieldSizePayload{ field_name:field_name16, field_size:field_size16, } = e;
+                              let (result18_0,result18_1,result18_2,) = match field_name16 {
+                                Some(e) => {
+                                  let vec17 = e;
+                                  let ptr17 = vec17.as_ptr() as i32;
+                                  let len17 = vec17.len() as i32;
+                                  
+                                  (1i32, ptr17, len17)
+                                },
+                                None => {
+                                  (0i32, 0i32, 0i32)
+                                },
+                              };let (result19_0,result19_1,) = match field_size16 {
+                                Some(e) => (1i32, wit_bindgen::rt::as_i32(e)),
+                                None => {
+                                  (0i32, 0i32)
+                                },
+                              };
+                              (24i32, result18_0, i64::from(result18_1), result18_2, result19_0, result19_1, 0i32)
+                            },
+                            ErrorCode::HttpResponseIncomplete=> {
+                              (25i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::HttpResponseHeaderSectionSize(e) => {
+                              let (result20_0,result20_1,) = match e {
+                                Some(e) => (1i32, wit_bindgen::rt::as_i32(e)),
+                                None => {
+                                  (0i32, 0i32)
+                                },
+                              };
+                              (26i32, result20_0, i64::from(result20_1), 0i32, 0i32, 0i32, 0i32)
+                            },
+                            ErrorCode::HttpResponseHeaderSize(e) => {
+                              let FieldSizePayload{ field_name:field_name21, field_size:field_size21, } = e;
+                              let (result23_0,result23_1,result23_2,) = match field_name21 {
+                                Some(e) => {
+                                  let vec22 = e;
+                                  let ptr22 = vec22.as_ptr() as i32;
+                                  let len22 = vec22.len() as i32;
+                                  
+                                  (1i32, ptr22, len22)
+                                },
+                                None => {
+                                  (0i32, 0i32, 0i32)
+                                },
+                              };let (result24_0,result24_1,) = match field_size21 {
+                                Some(e) => (1i32, wit_bindgen::rt::as_i32(e)),
+                                None => {
+                                  (0i32, 0i32)
+                                },
+                              };
+                              (27i32, result23_0, i64::from(result23_1), result23_2, result24_0, result24_1, 0i32)
+                            },
+                            ErrorCode::HttpResponseBodySize(e) => {
+                              let (result25_0,result25_1,) = match e {
+                                Some(e) => (1i32, wit_bindgen::rt::as_i64(e)),
+                                None => {
+                                  (0i32, 0i64)
+                                },
+                              };
+                              (28i32, result25_0, result25_1, 0i32, 0i32, 0i32, 0i32)
+                            },
+                            ErrorCode::HttpResponseTrailerSectionSize(e) => {
+                              let (result26_0,result26_1,) = match e {
+                                Some(e) => (1i32, wit_bindgen::rt::as_i32(e)),
+                                None => {
+                                  (0i32, 0i32)
+                                },
+                              };
+                              (29i32, result26_0, i64::from(result26_1), 0i32, 0i32, 0i32, 0i32)
+                            },
+                            ErrorCode::HttpResponseTrailerSize(e) => {
+                              let FieldSizePayload{ field_name:field_name27, field_size:field_size27, } = e;
+                              let (result29_0,result29_1,result29_2,) = match field_name27 {
+                                Some(e) => {
+                                  let vec28 = e;
+                                  let ptr28 = vec28.as_ptr() as i32;
+                                  let len28 = vec28.len() as i32;
+                                  
+                                  (1i32, ptr28, len28)
+                                },
+                                None => {
+                                  (0i32, 0i32, 0i32)
+                                },
+                              };let (result30_0,result30_1,) = match field_size27 {
+                                Some(e) => (1i32, wit_bindgen::rt::as_i32(e)),
+                                None => {
+                                  (0i32, 0i32)
+                                },
+                              };
+                              (30i32, result29_0, i64::from(result29_1), result29_2, result30_0, result30_1, 0i32)
+                            },
+                            ErrorCode::HttpResponseTransferCoding(e) => {
+                              let (result32_0,result32_1,result32_2,) = match e {
+                                Some(e) => {
+                                  let vec31 = e;
+                                  let ptr31 = vec31.as_ptr() as i32;
+                                  let len31 = vec31.len() as i32;
+                                  
+                                  (1i32, ptr31, len31)
+                                },
+                                None => {
+                                  (0i32, 0i32, 0i32)
+                                },
+                              };
+                              (31i32, result32_0, i64::from(result32_1), result32_2, 0i32, 0i32, 0i32)
+                            },
+                            ErrorCode::HttpResponseContentCoding(e) => {
+                              let (result34_0,result34_1,result34_2,) = match e {
+                                Some(e) => {
+                                  let vec33 = e;
+                                  let ptr33 = vec33.as_ptr() as i32;
+                                  let len33 = vec33.len() as i32;
+                                  
+                                  (1i32, ptr33, len33)
+                                },
+                                None => {
+                                  (0i32, 0i32, 0i32)
+                                },
+                              };
+                              (32i32, result34_0, i64::from(result34_1), result34_2, 0i32, 0i32, 0i32)
+                            },
+                            ErrorCode::HttpResponseTimeout=> {
+                              (33i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::HttpUpgradeFailed=> {
+                              (34i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::HttpProtocolError=> {
+                              (35i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::LoopDetected=> {
+                              (36i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::ConfigurationError=> {
+                              (37i32, 0i32, 0i64, 0i32, 0i32, 0i32, 0i32)
+                            }
+                            ErrorCode::InternalError(e) => {
+                              let (result36_0,result36_1,result36_2,) = match e {
+                                Some(e) => {
+                                  let vec35 = e;
+                                  let ptr35 = vec35.as_ptr() as i32;
+                                  let len35 = vec35.len() as i32;
+                                  
+                                  (1i32, ptr35, len35)
+                                },
+                                None => {
+                                  (0i32, 0i32, 0i32)
+                                },
+                              };
+                              (38i32, result36_0, i64::from(result36_1), result36_2, 0i32, 0i32, 0i32)
+                            },
+                          };
+                          
+                          (1i32, result37_0, result37_1, result37_2, result37_3, result37_4, result37_5, result37_6)
+                        } },
+                      };
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[static]response-outparam.set"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i64, _: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i64, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((param).into_handle() as i32, result38_0, result38_1, result38_2, result38_3, result38_4, result38_5, result38_6, result38_7);
+                    }
+                  }
+                }
+                impl IncomingResponse {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the status code from the incoming response.
+                  pub fn status(&self,) -> StatusCode{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-response.status"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32);
+                      ret as u16
+                    }
+                  }
+                }
+                impl IncomingResponse {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the headers from the incoming response.
+                  /// 
+                  /// The returned `headers` resource is immutable: `set`, `append`, and
+                  /// `delete` operations will fail with `header-error.immutable`.
+                  /// 
+                  /// This headers resource is a child: it must be dropped before the parent
+                  /// `incoming-response` is dropped.
+                  pub fn headers(&self,) -> Headers{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-response.headers"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32);
+                      Fields::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl IncomingResponse {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the incoming body. May be called at most once. Returns error
+                  /// if called additional times.
+                  pub fn consume(&self,) -> Result<IncomingBody,()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-response.consume"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            IncomingBody::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl IncomingBody {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the contents of the body, as a stream of bytes.
+                  /// 
+                  /// Returns success on first call: the stream representing the contents
+                  /// can be retrieved at most once. Subsequent calls will return error.
+                  /// 
+                  /// The returned `input-stream` resource is a child: it must be dropped
+                  /// before the parent `incoming-body` is dropped, or consumed by
+                  /// `incoming-body.finish`.
+                  /// 
+                  /// This invariant ensures that the implementation can determine whether
+                  /// the user is consuming the contents of the body, waiting on the
+                  /// `future-trailers` to be ready, or neither. This allows for network
+                  /// backpressure is to be applied when the user is consuming the body,
+                  /// and for that backpressure to not inhibit delivery of the trailers if
+                  /// the user does not read the entire body.
+                  pub fn stream(&self,) -> Result<InputStream,()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]incoming-body.stream"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            super::super::super::wasi::io::streams::InputStream::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl IncomingBody {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Takes ownership of `incoming-body`, and returns a `future-trailers`.
+                  /// This function will trap if the `input-stream` child is still alive.
+                  pub fn finish(this: IncomingBody,) -> FutureTrailers{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[static]incoming-body.finish"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((this).into_handle() as i32);
+                      FutureTrailers::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl FutureTrailers {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns a pollable which becomes ready when either the trailers have
+                  /// been received, or an error has occured. When this pollable is ready,
+                  /// the `get` method will return `some`.
+                  pub fn subscribe(&self,) -> Pollable{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]future-trailers.subscribe"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32);
+                      super::super::super::wasi::io::poll::Pollable::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl FutureTrailers {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the contents of the trailers, or an error which occured,
+                  /// once the future is ready.
+                  /// 
+                  /// The outer `option` represents future readiness. Users can wait on this
+                  /// `option` to become `some` using the `subscribe` method.
+                  /// 
+                  /// The outer `result` is used to retrieve the trailers or error at most
+                  /// once. It will be success on the first call in which the outer option
+                  /// is `some`, and error on subsequent calls.
+                  /// 
+                  /// The inner `result` represents that either the HTTP Request or Response
+                  /// body, as well as any trailers, were received successfully, or that an
+                  /// error occured receiving them. The optional `trailers` indicates whether
+                  /// or not trailers were present in the body.
+                  /// 
+                  /// When some `trailers` are returned by this method, the `trailers`
+                  /// resource is immutable, and a child. Use of the `set`, `append`, or
+                  /// `delete` methods will return an error, and the resource must be
+                  /// dropped before the parent `future-trailers` is dropped.
+                  pub fn get(&self,) -> Option<Result<Result<Option<Trailers>,ErrorCode>,()>>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 56]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]future-trailers.get"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => None,
+                        1 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 8) as *const u8));
+                            
+                            match l2 {
+                              0 => {
+                                let e = {
+                                  let l3 = i32::from(*((ptr0 + 16) as *const u8));
+                                  
+                                  match l3 {
+                                    0 => {
+                                      let e = {
+                                        let l4 = i32::from(*((ptr0 + 24) as *const u8));
+                                        
+                                        match l4 {
+                                          0 => None,
+                                          1 => {
+                                            let e = {
+                                              let l5 = *((ptr0 + 28) as *const i32);
+                                              
+                                              Fields::from_handle(l5 as u32)
+                                            };
+                                            Some(e)
+                                          }
+                                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                        }
+                                      };
+                                      Ok(e)
+                                    }
+                                    1 => {
+                                      let e = {
+                                        let l6 = i32::from(*((ptr0 + 24) as *const u8));
+                                        let v68 = match l6 {
+                                          0 => {
+                                            ErrorCode::DnsTimeout
+                                          }
+                                          1 => {
+                                            let e68 = {
+                                              let l7 = i32::from(*((ptr0 + 32) as *const u8));
+                                              let l11 = i32::from(*((ptr0 + 44) as *const u8));
+                                              
+                                              DnsErrorPayload{
+                                                rcode: match l7 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l8 = *((ptr0 + 36) as *const i32);
+                                                      let l9 = *((ptr0 + 40) as *const i32);
+                                                      let len10 = l9 as usize;
+                                                      let bytes10 = Vec::from_raw_parts(l8 as *mut _, len10, len10);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes10)
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                                info_code: match l11 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l12 = i32::from(*((ptr0 + 46) as *const u16));
+                                                      
+                                                      l12 as u16
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                              }
+                                            };
+                                            ErrorCode::DnsError(e68)
+                                          }
+                                          2 => {
+                                            ErrorCode::DestinationNotFound
+                                          }
+                                          3 => {
+                                            ErrorCode::DestinationUnavailable
+                                          }
+                                          4 => {
+                                            ErrorCode::DestinationIpProhibited
+                                          }
+                                          5 => {
+                                            ErrorCode::DestinationIpUnroutable
+                                          }
+                                          6 => {
+                                            ErrorCode::ConnectionRefused
+                                          }
+                                          7 => {
+                                            ErrorCode::ConnectionTerminated
+                                          }
+                                          8 => {
+                                            ErrorCode::ConnectionTimeout
+                                          }
+                                          9 => {
+                                            ErrorCode::ConnectionReadTimeout
+                                          }
+                                          10 => {
+                                            ErrorCode::ConnectionWriteTimeout
+                                          }
+                                          11 => {
+                                            ErrorCode::ConnectionLimitReached
+                                          }
+                                          12 => {
+                                            ErrorCode::TlsProtocolError
+                                          }
+                                          13 => {
+                                            ErrorCode::TlsCertificateError
+                                          }
+                                          14 => {
+                                            let e68 = {
+                                              let l13 = i32::from(*((ptr0 + 32) as *const u8));
+                                              let l15 = i32::from(*((ptr0 + 36) as *const u8));
+                                              
+                                              TlsAlertReceivedPayload{
+                                                alert_id: match l13 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l14 = i32::from(*((ptr0 + 33) as *const u8));
+                                                      
+                                                      l14 as u8
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                                alert_message: match l15 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l16 = *((ptr0 + 40) as *const i32);
+                                                      let l17 = *((ptr0 + 44) as *const i32);
+                                                      let len18 = l17 as usize;
+                                                      let bytes18 = Vec::from_raw_parts(l16 as *mut _, len18, len18);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes18)
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                              }
+                                            };
+                                            ErrorCode::TlsAlertReceived(e68)
+                                          }
+                                          15 => {
+                                            ErrorCode::HttpRequestDenied
+                                          }
+                                          16 => {
+                                            ErrorCode::HttpRequestLengthRequired
+                                          }
+                                          17 => {
+                                            let e68 = {
+                                              let l19 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l19 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l20 = *((ptr0 + 40) as *const i64);
+                                                    
+                                                    l20 as u64
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpRequestBodySize(e68)
+                                          }
+                                          18 => {
+                                            ErrorCode::HttpRequestMethodInvalid
+                                          }
+                                          19 => {
+                                            ErrorCode::HttpRequestUriInvalid
+                                          }
+                                          20 => {
+                                            ErrorCode::HttpRequestUriTooLong
+                                          }
+                                          21 => {
+                                            let e68 = {
+                                              let l21 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l21 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l22 = *((ptr0 + 36) as *const i32);
+                                                    
+                                                    l22 as u32
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpRequestHeaderSectionSize(e68)
+                                          }
+                                          22 => {
+                                            let e68 = {
+                                              let l23 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l23 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l24 = i32::from(*((ptr0 + 36) as *const u8));
+                                                    let l28 = i32::from(*((ptr0 + 48) as *const u8));
+                                                    
+                                                    FieldSizePayload{
+                                                      field_name: match l24 {
+                                                        0 => None,
+                                                        1 => {
+                                                          let e = {
+                                                            let l25 = *((ptr0 + 40) as *const i32);
+                                                            let l26 = *((ptr0 + 44) as *const i32);
+                                                            let len27 = l26 as usize;
+                                                            let bytes27 = Vec::from_raw_parts(l25 as *mut _, len27, len27);
+                                                            
+                                                            wit_bindgen::rt::string_lift(bytes27)
+                                                          };
+                                                          Some(e)
+                                                        }
+                                                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                      },
+                                                      field_size: match l28 {
+                                                        0 => None,
+                                                        1 => {
+                                                          let e = {
+                                                            let l29 = *((ptr0 + 52) as *const i32);
+                                                            
+                                                            l29 as u32
+                                                          };
+                                                          Some(e)
+                                                        }
+                                                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                      },
+                                                    }
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpRequestHeaderSize(e68)
+                                          }
+                                          23 => {
+                                            let e68 = {
+                                              let l30 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l30 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l31 = *((ptr0 + 36) as *const i32);
+                                                    
+                                                    l31 as u32
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpRequestTrailerSectionSize(e68)
+                                          }
+                                          24 => {
+                                            let e68 = {
+                                              let l32 = i32::from(*((ptr0 + 32) as *const u8));
+                                              let l36 = i32::from(*((ptr0 + 44) as *const u8));
+                                              
+                                              FieldSizePayload{
+                                                field_name: match l32 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l33 = *((ptr0 + 36) as *const i32);
+                                                      let l34 = *((ptr0 + 40) as *const i32);
+                                                      let len35 = l34 as usize;
+                                                      let bytes35 = Vec::from_raw_parts(l33 as *mut _, len35, len35);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes35)
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l36 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l37 = *((ptr0 + 48) as *const i32);
+                                                      
+                                                      l37 as u32
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                              }
+                                            };
+                                            ErrorCode::HttpRequestTrailerSize(e68)
+                                          }
+                                          25 => {
+                                            ErrorCode::HttpResponseIncomplete
+                                          }
+                                          26 => {
+                                            let e68 = {
+                                              let l38 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l38 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l39 = *((ptr0 + 36) as *const i32);
+                                                    
+                                                    l39 as u32
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseHeaderSectionSize(e68)
+                                          }
+                                          27 => {
+                                            let e68 = {
+                                              let l40 = i32::from(*((ptr0 + 32) as *const u8));
+                                              let l44 = i32::from(*((ptr0 + 44) as *const u8));
+                                              
+                                              FieldSizePayload{
+                                                field_name: match l40 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l41 = *((ptr0 + 36) as *const i32);
+                                                      let l42 = *((ptr0 + 40) as *const i32);
+                                                      let len43 = l42 as usize;
+                                                      let bytes43 = Vec::from_raw_parts(l41 as *mut _, len43, len43);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes43)
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l44 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l45 = *((ptr0 + 48) as *const i32);
+                                                      
+                                                      l45 as u32
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseHeaderSize(e68)
+                                          }
+                                          28 => {
+                                            let e68 = {
+                                              let l46 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l46 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l47 = *((ptr0 + 40) as *const i64);
+                                                    
+                                                    l47 as u64
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseBodySize(e68)
+                                          }
+                                          29 => {
+                                            let e68 = {
+                                              let l48 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l48 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l49 = *((ptr0 + 36) as *const i32);
+                                                    
+                                                    l49 as u32
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseTrailerSectionSize(e68)
+                                          }
+                                          30 => {
+                                            let e68 = {
+                                              let l50 = i32::from(*((ptr0 + 32) as *const u8));
+                                              let l54 = i32::from(*((ptr0 + 44) as *const u8));
+                                              
+                                              FieldSizePayload{
+                                                field_name: match l50 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l51 = *((ptr0 + 36) as *const i32);
+                                                      let l52 = *((ptr0 + 40) as *const i32);
+                                                      let len53 = l52 as usize;
+                                                      let bytes53 = Vec::from_raw_parts(l51 as *mut _, len53, len53);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes53)
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l54 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l55 = *((ptr0 + 48) as *const i32);
+                                                      
+                                                      l55 as u32
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseTrailerSize(e68)
+                                          }
+                                          31 => {
+                                            let e68 = {
+                                              let l56 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l56 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l57 = *((ptr0 + 36) as *const i32);
+                                                    let l58 = *((ptr0 + 40) as *const i32);
+                                                    let len59 = l58 as usize;
+                                                    let bytes59 = Vec::from_raw_parts(l57 as *mut _, len59, len59);
+                                                    
+                                                    wit_bindgen::rt::string_lift(bytes59)
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseTransferCoding(e68)
+                                          }
+                                          32 => {
+                                            let e68 = {
+                                              let l60 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l60 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l61 = *((ptr0 + 36) as *const i32);
+                                                    let l62 = *((ptr0 + 40) as *const i32);
+                                                    let len63 = l62 as usize;
+                                                    let bytes63 = Vec::from_raw_parts(l61 as *mut _, len63, len63);
+                                                    
+                                                    wit_bindgen::rt::string_lift(bytes63)
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseContentCoding(e68)
+                                          }
+                                          33 => {
+                                            ErrorCode::HttpResponseTimeout
+                                          }
+                                          34 => {
+                                            ErrorCode::HttpUpgradeFailed
+                                          }
+                                          35 => {
+                                            ErrorCode::HttpProtocolError
+                                          }
+                                          36 => {
+                                            ErrorCode::LoopDetected
+                                          }
+                                          37 => {
+                                            ErrorCode::ConfigurationError
+                                          }
+                                          n => {
+                                            debug_assert_eq!(n, 38, "invalid enum discriminant");
+                                            let e68 = {
+                                              let l64 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l64 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l65 = *((ptr0 + 36) as *const i32);
+                                                    let l66 = *((ptr0 + 40) as *const i32);
+                                                    let len67 = l66 as usize;
+                                                    let bytes67 = Vec::from_raw_parts(l65 as *mut _, len67, len67);
+                                                    
+                                                    wit_bindgen::rt::string_lift(bytes67)
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::InternalError(e68)
+                                          }
+                                        };
+                                        
+                                        v68
+                                      };
+                                      Err(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                Ok(e)
+                              }
+                              1 => {
+                                let e = ();
+                                Err(e)
+                              }
+                              _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                            }
+                          };
+                          Some(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingResponse {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Construct an `outgoing-response`, with a default `status-code` of `200`.
+                  /// If a different `status-code` is needed, it must be set via the
+                  /// `set-status-code` method.
+                  /// 
+                  /// * `headers` is the HTTP Headers for the Response.
+                  pub fn new(headers: Headers,) -> Self{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[constructor]outgoing-response"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((headers).into_handle() as i32);
+                      OutgoingResponse::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl OutgoingResponse {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Get the HTTP Status Code for the Response.
+                  pub fn status_code(&self,) -> StatusCode{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-response.status-code"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32);
+                      ret as u16
+                    }
+                  }
+                }
+                impl OutgoingResponse {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Set the HTTP Status Code for the Response. Fails if the status-code
+                  /// given is not a valid http status code.
+                  pub fn set_status_code(&self,status_code: StatusCode,) -> Result<(),()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-response.set-status-code"]
+                        fn wit_import(_: i32, _: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32, wit_bindgen::rt::as_i32(status_code));
+                      match ret {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingResponse {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Get the headers associated with the Request.
+                  /// 
+                  /// The returned `headers` resource is immutable: `set`, `append`, and
+                  /// `delete` operations will fail with `header-error.immutable`.
+                  /// 
+                  /// This headers resource is a child: it must be dropped before the parent
+                  /// `outgoing-request` is dropped, or its ownership is transfered to
+                  /// another component by e.g. `outgoing-handler.handle`.
+                  pub fn headers(&self,) -> Headers{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-response.headers"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32);
+                      Fields::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl OutgoingResponse {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the resource corresponding to the outgoing Body for this Response.
+                  /// 
+                  /// Returns success on the first call: the `outgoing-body` resource for
+                  /// this `outgoing-response` can be retrieved at most once. Subsequent
+                  /// calls will return error.
+                  pub fn body(&self,) -> Result<OutgoingBody,()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-response.body"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            OutgoingBody::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingBody {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns a stream for writing the body contents.
+                  /// 
+                  /// The returned `output-stream` is a child resource: it must be dropped
+                  /// before the parent `outgoing-body` resource is dropped (or finished),
+                  /// otherwise the `outgoing-body` drop or `finish` will trap.
+                  /// 
+                  /// Returns success on the first call: the `output-stream` resource for
+                  /// this `outgoing-body` may be retrieved at most once. Subsequent calls
+                  /// will return error.
+                  pub fn write(&self,) -> Result<OutputStream,()>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]outgoing-body.write"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            
+                            super::super::super::wasi::io::streams::OutputStream::from_handle(l2 as u32)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = ();
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutgoingBody {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Finalize an outgoing body, optionally providing trailers. This must be
+                  /// called to signal that the response is complete. If the `outgoing-body`
+                  /// is dropped without calling `outgoing-body.finalize`, the implementation
+                  /// should treat the body as corrupted.
+                  /// 
+                  /// Fails if the body's `outgoing-request` or `outgoing-response` was
+                  /// constructed with a Content-Length header, and the contents written
+                  /// to the body (via `write`) does not match the value given in the
+                  /// Content-Length.
+                  pub fn finish(this: OutgoingBody,trailers: Option<Trailers>,) -> Result<(),ErrorCode>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 40]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let (result0_0,result0_1,) = match trailers {
+                        Some(e) => (1i32, (e).into_handle() as i32),
+                        None => {
+                          (0i32, 0i32)
+                        },
+                      };let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[static]outgoing-body.finish"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((this).into_handle() as i32, result0_0, result0_1, ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr1 + 8) as *const u8));
+                            let v65 = match l3 {
+                              0 => {
+                                ErrorCode::DnsTimeout
+                              }
+                              1 => {
+                                let e65 = {
+                                  let l4 = i32::from(*((ptr1 + 16) as *const u8));
+                                  let l8 = i32::from(*((ptr1 + 28) as *const u8));
+                                  
+                                  DnsErrorPayload{
+                                    rcode: match l4 {
+                                      0 => None,
+                                      1 => {
+                                        let e = {
+                                          let l5 = *((ptr1 + 20) as *const i32);
+                                          let l6 = *((ptr1 + 24) as *const i32);
+                                          let len7 = l6 as usize;
+                                          let bytes7 = Vec::from_raw_parts(l5 as *mut _, len7, len7);
+                                          
+                                          wit_bindgen::rt::string_lift(bytes7)
+                                        };
+                                        Some(e)
+                                      }
+                                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                    },
+                                    info_code: match l8 {
+                                      0 => None,
+                                      1 => {
+                                        let e = {
+                                          let l9 = i32::from(*((ptr1 + 30) as *const u16));
+                                          
+                                          l9 as u16
+                                        };
+                                        Some(e)
+                                      }
+                                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                    },
+                                  }
+                                };
+                                ErrorCode::DnsError(e65)
+                              }
+                              2 => {
+                                ErrorCode::DestinationNotFound
+                              }
+                              3 => {
+                                ErrorCode::DestinationUnavailable
+                              }
+                              4 => {
+                                ErrorCode::DestinationIpProhibited
+                              }
+                              5 => {
+                                ErrorCode::DestinationIpUnroutable
+                              }
+                              6 => {
+                                ErrorCode::ConnectionRefused
+                              }
+                              7 => {
+                                ErrorCode::ConnectionTerminated
+                              }
+                              8 => {
+                                ErrorCode::ConnectionTimeout
+                              }
+                              9 => {
+                                ErrorCode::ConnectionReadTimeout
+                              }
+                              10 => {
+                                ErrorCode::ConnectionWriteTimeout
+                              }
+                              11 => {
+                                ErrorCode::ConnectionLimitReached
+                              }
+                              12 => {
+                                ErrorCode::TlsProtocolError
+                              }
+                              13 => {
+                                ErrorCode::TlsCertificateError
+                              }
+                              14 => {
+                                let e65 = {
+                                  let l10 = i32::from(*((ptr1 + 16) as *const u8));
+                                  let l12 = i32::from(*((ptr1 + 20) as *const u8));
+                                  
+                                  TlsAlertReceivedPayload{
+                                    alert_id: match l10 {
+                                      0 => None,
+                                      1 => {
+                                        let e = {
+                                          let l11 = i32::from(*((ptr1 + 17) as *const u8));
+                                          
+                                          l11 as u8
+                                        };
+                                        Some(e)
+                                      }
+                                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                    },
+                                    alert_message: match l12 {
+                                      0 => None,
+                                      1 => {
+                                        let e = {
+                                          let l13 = *((ptr1 + 24) as *const i32);
+                                          let l14 = *((ptr1 + 28) as *const i32);
+                                          let len15 = l14 as usize;
+                                          let bytes15 = Vec::from_raw_parts(l13 as *mut _, len15, len15);
+                                          
+                                          wit_bindgen::rt::string_lift(bytes15)
+                                        };
+                                        Some(e)
+                                      }
+                                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                    },
+                                  }
+                                };
+                                ErrorCode::TlsAlertReceived(e65)
+                              }
+                              15 => {
+                                ErrorCode::HttpRequestDenied
+                              }
+                              16 => {
+                                ErrorCode::HttpRequestLengthRequired
+                              }
+                              17 => {
+                                let e65 = {
+                                  let l16 = i32::from(*((ptr1 + 16) as *const u8));
+                                  
+                                  match l16 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l17 = *((ptr1 + 24) as *const i64);
+                                        
+                                        l17 as u64
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                ErrorCode::HttpRequestBodySize(e65)
+                              }
+                              18 => {
+                                ErrorCode::HttpRequestMethodInvalid
+                              }
+                              19 => {
+                                ErrorCode::HttpRequestUriInvalid
+                              }
+                              20 => {
+                                ErrorCode::HttpRequestUriTooLong
+                              }
+                              21 => {
+                                let e65 = {
+                                  let l18 = i32::from(*((ptr1 + 16) as *const u8));
+                                  
+                                  match l18 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l19 = *((ptr1 + 20) as *const i32);
+                                        
+                                        l19 as u32
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                ErrorCode::HttpRequestHeaderSectionSize(e65)
+                              }
+                              22 => {
+                                let e65 = {
+                                  let l20 = i32::from(*((ptr1 + 16) as *const u8));
+                                  
+                                  match l20 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l21 = i32::from(*((ptr1 + 20) as *const u8));
+                                        let l25 = i32::from(*((ptr1 + 32) as *const u8));
+                                        
+                                        FieldSizePayload{
+                                          field_name: match l21 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l22 = *((ptr1 + 24) as *const i32);
+                                                let l23 = *((ptr1 + 28) as *const i32);
+                                                let len24 = l23 as usize;
+                                                let bytes24 = Vec::from_raw_parts(l22 as *mut _, len24, len24);
+                                                
+                                                wit_bindgen::rt::string_lift(bytes24)
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                          },
+                                          field_size: match l25 {
+                                            0 => None,
+                                            1 => {
+                                              let e = {
+                                                let l26 = *((ptr1 + 36) as *const i32);
+                                                
+                                                l26 as u32
+                                              };
+                                              Some(e)
+                                            }
+                                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                          },
+                                        }
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                ErrorCode::HttpRequestHeaderSize(e65)
+                              }
+                              23 => {
+                                let e65 = {
+                                  let l27 = i32::from(*((ptr1 + 16) as *const u8));
+                                  
+                                  match l27 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l28 = *((ptr1 + 20) as *const i32);
+                                        
+                                        l28 as u32
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                ErrorCode::HttpRequestTrailerSectionSize(e65)
+                              }
+                              24 => {
+                                let e65 = {
+                                  let l29 = i32::from(*((ptr1 + 16) as *const u8));
+                                  let l33 = i32::from(*((ptr1 + 28) as *const u8));
+                                  
+                                  FieldSizePayload{
+                                    field_name: match l29 {
+                                      0 => None,
+                                      1 => {
+                                        let e = {
+                                          let l30 = *((ptr1 + 20) as *const i32);
+                                          let l31 = *((ptr1 + 24) as *const i32);
+                                          let len32 = l31 as usize;
+                                          let bytes32 = Vec::from_raw_parts(l30 as *mut _, len32, len32);
+                                          
+                                          wit_bindgen::rt::string_lift(bytes32)
+                                        };
+                                        Some(e)
+                                      }
+                                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                    },
+                                    field_size: match l33 {
+                                      0 => None,
+                                      1 => {
+                                        let e = {
+                                          let l34 = *((ptr1 + 32) as *const i32);
+                                          
+                                          l34 as u32
+                                        };
+                                        Some(e)
+                                      }
+                                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                    },
+                                  }
+                                };
+                                ErrorCode::HttpRequestTrailerSize(e65)
+                              }
+                              25 => {
+                                ErrorCode::HttpResponseIncomplete
+                              }
+                              26 => {
+                                let e65 = {
+                                  let l35 = i32::from(*((ptr1 + 16) as *const u8));
+                                  
+                                  match l35 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l36 = *((ptr1 + 20) as *const i32);
+                                        
+                                        l36 as u32
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                ErrorCode::HttpResponseHeaderSectionSize(e65)
+                              }
+                              27 => {
+                                let e65 = {
+                                  let l37 = i32::from(*((ptr1 + 16) as *const u8));
+                                  let l41 = i32::from(*((ptr1 + 28) as *const u8));
+                                  
+                                  FieldSizePayload{
+                                    field_name: match l37 {
+                                      0 => None,
+                                      1 => {
+                                        let e = {
+                                          let l38 = *((ptr1 + 20) as *const i32);
+                                          let l39 = *((ptr1 + 24) as *const i32);
+                                          let len40 = l39 as usize;
+                                          let bytes40 = Vec::from_raw_parts(l38 as *mut _, len40, len40);
+                                          
+                                          wit_bindgen::rt::string_lift(bytes40)
+                                        };
+                                        Some(e)
+                                      }
+                                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                    },
+                                    field_size: match l41 {
+                                      0 => None,
+                                      1 => {
+                                        let e = {
+                                          let l42 = *((ptr1 + 32) as *const i32);
+                                          
+                                          l42 as u32
+                                        };
+                                        Some(e)
+                                      }
+                                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                    },
+                                  }
+                                };
+                                ErrorCode::HttpResponseHeaderSize(e65)
+                              }
+                              28 => {
+                                let e65 = {
+                                  let l43 = i32::from(*((ptr1 + 16) as *const u8));
+                                  
+                                  match l43 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l44 = *((ptr1 + 24) as *const i64);
+                                        
+                                        l44 as u64
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                ErrorCode::HttpResponseBodySize(e65)
+                              }
+                              29 => {
+                                let e65 = {
+                                  let l45 = i32::from(*((ptr1 + 16) as *const u8));
+                                  
+                                  match l45 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l46 = *((ptr1 + 20) as *const i32);
+                                        
+                                        l46 as u32
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                ErrorCode::HttpResponseTrailerSectionSize(e65)
+                              }
+                              30 => {
+                                let e65 = {
+                                  let l47 = i32::from(*((ptr1 + 16) as *const u8));
+                                  let l51 = i32::from(*((ptr1 + 28) as *const u8));
+                                  
+                                  FieldSizePayload{
+                                    field_name: match l47 {
+                                      0 => None,
+                                      1 => {
+                                        let e = {
+                                          let l48 = *((ptr1 + 20) as *const i32);
+                                          let l49 = *((ptr1 + 24) as *const i32);
+                                          let len50 = l49 as usize;
+                                          let bytes50 = Vec::from_raw_parts(l48 as *mut _, len50, len50);
+                                          
+                                          wit_bindgen::rt::string_lift(bytes50)
+                                        };
+                                        Some(e)
+                                      }
+                                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                    },
+                                    field_size: match l51 {
+                                      0 => None,
+                                      1 => {
+                                        let e = {
+                                          let l52 = *((ptr1 + 32) as *const i32);
+                                          
+                                          l52 as u32
+                                        };
+                                        Some(e)
+                                      }
+                                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                    },
+                                  }
+                                };
+                                ErrorCode::HttpResponseTrailerSize(e65)
+                              }
+                              31 => {
+                                let e65 = {
+                                  let l53 = i32::from(*((ptr1 + 16) as *const u8));
+                                  
+                                  match l53 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l54 = *((ptr1 + 20) as *const i32);
+                                        let l55 = *((ptr1 + 24) as *const i32);
+                                        let len56 = l55 as usize;
+                                        let bytes56 = Vec::from_raw_parts(l54 as *mut _, len56, len56);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes56)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                ErrorCode::HttpResponseTransferCoding(e65)
+                              }
+                              32 => {
+                                let e65 = {
+                                  let l57 = i32::from(*((ptr1 + 16) as *const u8));
+                                  
+                                  match l57 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l58 = *((ptr1 + 20) as *const i32);
+                                        let l59 = *((ptr1 + 24) as *const i32);
+                                        let len60 = l59 as usize;
+                                        let bytes60 = Vec::from_raw_parts(l58 as *mut _, len60, len60);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes60)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                ErrorCode::HttpResponseContentCoding(e65)
+                              }
+                              33 => {
+                                ErrorCode::HttpResponseTimeout
+                              }
+                              34 => {
+                                ErrorCode::HttpUpgradeFailed
+                              }
+                              35 => {
+                                ErrorCode::HttpProtocolError
+                              }
+                              36 => {
+                                ErrorCode::LoopDetected
+                              }
+                              37 => {
+                                ErrorCode::ConfigurationError
+                              }
+                              n => {
+                                debug_assert_eq!(n, 38, "invalid enum discriminant");
+                                let e65 = {
+                                  let l61 = i32::from(*((ptr1 + 16) as *const u8));
+                                  
+                                  match l61 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l62 = *((ptr1 + 20) as *const i32);
+                                        let l63 = *((ptr1 + 24) as *const i32);
+                                        let len64 = l63 as usize;
+                                        let bytes64 = Vec::from_raw_parts(l62 as *mut _, len64, len64);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes64)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                ErrorCode::InternalError(e65)
+                              }
+                            };
+                            
+                            v65
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl FutureIncomingResponse {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns a pollable which becomes ready when either the Response has
+                  /// been received, or an error has occured. When this pollable is ready,
+                  /// the `get` method will return `some`.
+                  pub fn subscribe(&self,) -> Pollable{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]future-incoming-response.subscribe"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32);
+                      super::super::super::wasi::io::poll::Pollable::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl FutureIncomingResponse {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns the incoming HTTP Response, or an error, once one is ready.
+                  /// 
+                  /// The outer `option` represents future readiness. Users can wait on this
+                  /// `option` to become `some` using the `subscribe` method.
+                  /// 
+                  /// The outer `result` is used to retrieve the response or error at most
+                  /// once. It will be success on the first call in which the outer option
+                  /// is `some`, and error on subsequent calls.
+                  /// 
+                  /// The inner `result` represents that either the incoming HTTP Response
+                  /// status and headers have recieved successfully, or that an error
+                  /// occured. Errors may also occur while consuming the response body,
+                  /// but those will be reported by the `incoming-body` and its
+                  /// `output-stream` child.
+                  pub fn get(&self,) -> Option<Result<Result<IncomingResponse,ErrorCode>,()>>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 56]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:http/types@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]future-incoming-response.get"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => None,
+                        1 => {
+                          let e = {
+                            let l2 = i32::from(*((ptr0 + 8) as *const u8));
+                            
+                            match l2 {
+                              0 => {
+                                let e = {
+                                  let l3 = i32::from(*((ptr0 + 16) as *const u8));
+                                  
+                                  match l3 {
+                                    0 => {
+                                      let e = {
+                                        let l4 = *((ptr0 + 24) as *const i32);
+                                        
+                                        IncomingResponse::from_handle(l4 as u32)
+                                      };
+                                      Ok(e)
+                                    }
+                                    1 => {
+                                      let e = {
+                                        let l5 = i32::from(*((ptr0 + 24) as *const u8));
+                                        let v67 = match l5 {
+                                          0 => {
+                                            ErrorCode::DnsTimeout
+                                          }
+                                          1 => {
+                                            let e67 = {
+                                              let l6 = i32::from(*((ptr0 + 32) as *const u8));
+                                              let l10 = i32::from(*((ptr0 + 44) as *const u8));
+                                              
+                                              DnsErrorPayload{
+                                                rcode: match l6 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l7 = *((ptr0 + 36) as *const i32);
+                                                      let l8 = *((ptr0 + 40) as *const i32);
+                                                      let len9 = l8 as usize;
+                                                      let bytes9 = Vec::from_raw_parts(l7 as *mut _, len9, len9);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes9)
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                                info_code: match l10 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l11 = i32::from(*((ptr0 + 46) as *const u16));
+                                                      
+                                                      l11 as u16
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                              }
+                                            };
+                                            ErrorCode::DnsError(e67)
+                                          }
+                                          2 => {
+                                            ErrorCode::DestinationNotFound
+                                          }
+                                          3 => {
+                                            ErrorCode::DestinationUnavailable
+                                          }
+                                          4 => {
+                                            ErrorCode::DestinationIpProhibited
+                                          }
+                                          5 => {
+                                            ErrorCode::DestinationIpUnroutable
+                                          }
+                                          6 => {
+                                            ErrorCode::ConnectionRefused
+                                          }
+                                          7 => {
+                                            ErrorCode::ConnectionTerminated
+                                          }
+                                          8 => {
+                                            ErrorCode::ConnectionTimeout
+                                          }
+                                          9 => {
+                                            ErrorCode::ConnectionReadTimeout
+                                          }
+                                          10 => {
+                                            ErrorCode::ConnectionWriteTimeout
+                                          }
+                                          11 => {
+                                            ErrorCode::ConnectionLimitReached
+                                          }
+                                          12 => {
+                                            ErrorCode::TlsProtocolError
+                                          }
+                                          13 => {
+                                            ErrorCode::TlsCertificateError
+                                          }
+                                          14 => {
+                                            let e67 = {
+                                              let l12 = i32::from(*((ptr0 + 32) as *const u8));
+                                              let l14 = i32::from(*((ptr0 + 36) as *const u8));
+                                              
+                                              TlsAlertReceivedPayload{
+                                                alert_id: match l12 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l13 = i32::from(*((ptr0 + 33) as *const u8));
+                                                      
+                                                      l13 as u8
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                                alert_message: match l14 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l15 = *((ptr0 + 40) as *const i32);
+                                                      let l16 = *((ptr0 + 44) as *const i32);
+                                                      let len17 = l16 as usize;
+                                                      let bytes17 = Vec::from_raw_parts(l15 as *mut _, len17, len17);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes17)
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                              }
+                                            };
+                                            ErrorCode::TlsAlertReceived(e67)
+                                          }
+                                          15 => {
+                                            ErrorCode::HttpRequestDenied
+                                          }
+                                          16 => {
+                                            ErrorCode::HttpRequestLengthRequired
+                                          }
+                                          17 => {
+                                            let e67 = {
+                                              let l18 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l18 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l19 = *((ptr0 + 40) as *const i64);
+                                                    
+                                                    l19 as u64
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpRequestBodySize(e67)
+                                          }
+                                          18 => {
+                                            ErrorCode::HttpRequestMethodInvalid
+                                          }
+                                          19 => {
+                                            ErrorCode::HttpRequestUriInvalid
+                                          }
+                                          20 => {
+                                            ErrorCode::HttpRequestUriTooLong
+                                          }
+                                          21 => {
+                                            let e67 = {
+                                              let l20 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l20 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l21 = *((ptr0 + 36) as *const i32);
+                                                    
+                                                    l21 as u32
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpRequestHeaderSectionSize(e67)
+                                          }
+                                          22 => {
+                                            let e67 = {
+                                              let l22 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l22 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l23 = i32::from(*((ptr0 + 36) as *const u8));
+                                                    let l27 = i32::from(*((ptr0 + 48) as *const u8));
+                                                    
+                                                    FieldSizePayload{
+                                                      field_name: match l23 {
+                                                        0 => None,
+                                                        1 => {
+                                                          let e = {
+                                                            let l24 = *((ptr0 + 40) as *const i32);
+                                                            let l25 = *((ptr0 + 44) as *const i32);
+                                                            let len26 = l25 as usize;
+                                                            let bytes26 = Vec::from_raw_parts(l24 as *mut _, len26, len26);
+                                                            
+                                                            wit_bindgen::rt::string_lift(bytes26)
+                                                          };
+                                                          Some(e)
+                                                        }
+                                                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                      },
+                                                      field_size: match l27 {
+                                                        0 => None,
+                                                        1 => {
+                                                          let e = {
+                                                            let l28 = *((ptr0 + 52) as *const i32);
+                                                            
+                                                            l28 as u32
+                                                          };
+                                                          Some(e)
+                                                        }
+                                                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                      },
+                                                    }
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpRequestHeaderSize(e67)
+                                          }
+                                          23 => {
+                                            let e67 = {
+                                              let l29 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l29 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l30 = *((ptr0 + 36) as *const i32);
+                                                    
+                                                    l30 as u32
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpRequestTrailerSectionSize(e67)
+                                          }
+                                          24 => {
+                                            let e67 = {
+                                              let l31 = i32::from(*((ptr0 + 32) as *const u8));
+                                              let l35 = i32::from(*((ptr0 + 44) as *const u8));
+                                              
+                                              FieldSizePayload{
+                                                field_name: match l31 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l32 = *((ptr0 + 36) as *const i32);
+                                                      let l33 = *((ptr0 + 40) as *const i32);
+                                                      let len34 = l33 as usize;
+                                                      let bytes34 = Vec::from_raw_parts(l32 as *mut _, len34, len34);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes34)
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l35 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l36 = *((ptr0 + 48) as *const i32);
+                                                      
+                                                      l36 as u32
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                              }
+                                            };
+                                            ErrorCode::HttpRequestTrailerSize(e67)
+                                          }
+                                          25 => {
+                                            ErrorCode::HttpResponseIncomplete
+                                          }
+                                          26 => {
+                                            let e67 = {
+                                              let l37 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l37 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l38 = *((ptr0 + 36) as *const i32);
+                                                    
+                                                    l38 as u32
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseHeaderSectionSize(e67)
+                                          }
+                                          27 => {
+                                            let e67 = {
+                                              let l39 = i32::from(*((ptr0 + 32) as *const u8));
+                                              let l43 = i32::from(*((ptr0 + 44) as *const u8));
+                                              
+                                              FieldSizePayload{
+                                                field_name: match l39 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l40 = *((ptr0 + 36) as *const i32);
+                                                      let l41 = *((ptr0 + 40) as *const i32);
+                                                      let len42 = l41 as usize;
+                                                      let bytes42 = Vec::from_raw_parts(l40 as *mut _, len42, len42);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes42)
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l43 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l44 = *((ptr0 + 48) as *const i32);
+                                                      
+                                                      l44 as u32
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseHeaderSize(e67)
+                                          }
+                                          28 => {
+                                            let e67 = {
+                                              let l45 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l45 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l46 = *((ptr0 + 40) as *const i64);
+                                                    
+                                                    l46 as u64
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseBodySize(e67)
+                                          }
+                                          29 => {
+                                            let e67 = {
+                                              let l47 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l47 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l48 = *((ptr0 + 36) as *const i32);
+                                                    
+                                                    l48 as u32
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseTrailerSectionSize(e67)
+                                          }
+                                          30 => {
+                                            let e67 = {
+                                              let l49 = i32::from(*((ptr0 + 32) as *const u8));
+                                              let l53 = i32::from(*((ptr0 + 44) as *const u8));
+                                              
+                                              FieldSizePayload{
+                                                field_name: match l49 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l50 = *((ptr0 + 36) as *const i32);
+                                                      let l51 = *((ptr0 + 40) as *const i32);
+                                                      let len52 = l51 as usize;
+                                                      let bytes52 = Vec::from_raw_parts(l50 as *mut _, len52, len52);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes52)
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                                field_size: match l53 {
+                                                  0 => None,
+                                                  1 => {
+                                                    let e = {
+                                                      let l54 = *((ptr0 + 48) as *const i32);
+                                                      
+                                                      l54 as u32
+                                                    };
+                                                    Some(e)
+                                                  }
+                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                },
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseTrailerSize(e67)
+                                          }
+                                          31 => {
+                                            let e67 = {
+                                              let l55 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l55 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l56 = *((ptr0 + 36) as *const i32);
+                                                    let l57 = *((ptr0 + 40) as *const i32);
+                                                    let len58 = l57 as usize;
+                                                    let bytes58 = Vec::from_raw_parts(l56 as *mut _, len58, len58);
+                                                    
+                                                    wit_bindgen::rt::string_lift(bytes58)
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseTransferCoding(e67)
+                                          }
+                                          32 => {
+                                            let e67 = {
+                                              let l59 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l59 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l60 = *((ptr0 + 36) as *const i32);
+                                                    let l61 = *((ptr0 + 40) as *const i32);
+                                                    let len62 = l61 as usize;
+                                                    let bytes62 = Vec::from_raw_parts(l60 as *mut _, len62, len62);
+                                                    
+                                                    wit_bindgen::rt::string_lift(bytes62)
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::HttpResponseContentCoding(e67)
+                                          }
+                                          33 => {
+                                            ErrorCode::HttpResponseTimeout
+                                          }
+                                          34 => {
+                                            ErrorCode::HttpUpgradeFailed
+                                          }
+                                          35 => {
+                                            ErrorCode::HttpProtocolError
+                                          }
+                                          36 => {
+                                            ErrorCode::LoopDetected
+                                          }
+                                          37 => {
+                                            ErrorCode::ConfigurationError
+                                          }
+                                          n => {
+                                            debug_assert_eq!(n, 38, "invalid enum discriminant");
+                                            let e67 = {
+                                              let l63 = i32::from(*((ptr0 + 32) as *const u8));
+                                              
+                                              match l63 {
+                                                0 => None,
+                                                1 => {
+                                                  let e = {
+                                                    let l64 = *((ptr0 + 36) as *const i32);
+                                                    let l65 = *((ptr0 + 40) as *const i32);
+                                                    let len66 = l65 as usize;
+                                                    let bytes66 = Vec::from_raw_parts(l64 as *mut _, len66, len66);
+                                                    
+                                                    wit_bindgen::rt::string_lift(bytes66)
+                                                  };
+                                                  Some(e)
+                                                }
+                                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                              }
+                                            };
+                                            ErrorCode::InternalError(e67)
+                                          }
+                                        };
+                                        
+                                        v67
+                                      };
+                                      Err(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                Ok(e)
+                              }
+                              1 => {
+                                let e = ();
+                                Err(e)
+                              }
+                              _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                            }
+                          };
+                          Some(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                
+              }
+              
+              
+              #[allow(clippy::all)]
+              pub mod outgoing_handler {
+                #[used]
+                #[doc(hidden)]
+                #[cfg(target_arch = "wasm32")]
+                static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                pub type OutgoingRequest = super::super::super::wasi::http::types::OutgoingRequest;
+                pub type RequestOptions = super::super::super::wasi::http::types::RequestOptions;
+                pub type FutureIncomingResponse = super::super::super::wasi::http::types::FutureIncomingResponse;
+                pub type ErrorCode = super::super::super::wasi::http::types::ErrorCode;
+                #[allow(unused_unsafe, clippy::all)]
+                /// This function is invoked with an outgoing HTTP Request, and it returns
+                /// a resource `future-incoming-response` which represents an HTTP Response
+                /// which may arrive in the future.
+                /// 
+                /// The `options` argument accepts optional parameters for the HTTP
+                /// protocol's transport layer.
+                /// 
+                /// This function may return an error if the `outgoing-request` is invalid
+                /// or not allowed to be made. Otherwise, protocol errors are reported
+                /// through the `future-incoming-response`.
+                pub fn handle(request: OutgoingRequest,options: Option<RequestOptions>,) -> Result<FutureIncomingResponse,ErrorCode>{
+                  
+                  #[allow(unused_imports)]
+                  use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                  unsafe {
+                    
+                    #[repr(align(8))]
+                    struct RetArea([u8; 40]);
+                    let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                    let (result0_0,result0_1,) = match options {
+                      Some(e) => (1i32, (e).into_handle() as i32),
+                      None => {
+                        (0i32, 0i32)
+                      },
+                    };let ptr1 = ret_area.as_mut_ptr() as i32;
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:http/outgoing-handler@0.2.0")]
+                    extern "C" {
+                      #[link_name = "handle"]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                    }
+                    
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                    wit_import((request).into_handle() as i32, result0_0, result0_1, ptr1);
+                    let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                    match l2 {
+                      0 => {
+                        let e = {
+                          let l3 = *((ptr1 + 8) as *const i32);
+                          
+                          super::super::super::wasi::http::types::FutureIncomingResponse::from_handle(l3 as u32)
+                        };
+                        Ok(e)
+                      }
+                      1 => {
+                        let e = {
+                          let l4 = i32::from(*((ptr1 + 8) as *const u8));
+                          use super::super::super::wasi::http::types::ErrorCode as V66;
+                          let v66 = match l4 {
+                            0 => {
+                              V66::DnsTimeout
+                            }
+                            1 => {
+                              let e66 = {
+                                let l5 = i32::from(*((ptr1 + 16) as *const u8));
+                                let l9 = i32::from(*((ptr1 + 28) as *const u8));
+                                
+                                super::super::super::wasi::http::types::DnsErrorPayload{
+                                  rcode: match l5 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l6 = *((ptr1 + 20) as *const i32);
+                                        let l7 = *((ptr1 + 24) as *const i32);
+                                        let len8 = l7 as usize;
+                                        let bytes8 = Vec::from_raw_parts(l6 as *mut _, len8, len8);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes8)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                  info_code: match l9 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l10 = i32::from(*((ptr1 + 30) as *const u16));
+                                        
+                                        l10 as u16
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                }
+                              };
+                              V66::DnsError(e66)
+                            }
+                            2 => {
+                              V66::DestinationNotFound
+                            }
+                            3 => {
+                              V66::DestinationUnavailable
+                            }
+                            4 => {
+                              V66::DestinationIpProhibited
+                            }
+                            5 => {
+                              V66::DestinationIpUnroutable
+                            }
+                            6 => {
+                              V66::ConnectionRefused
+                            }
+                            7 => {
+                              V66::ConnectionTerminated
+                            }
+                            8 => {
+                              V66::ConnectionTimeout
+                            }
+                            9 => {
+                              V66::ConnectionReadTimeout
+                            }
+                            10 => {
+                              V66::ConnectionWriteTimeout
+                            }
+                            11 => {
+                              V66::ConnectionLimitReached
+                            }
+                            12 => {
+                              V66::TlsProtocolError
+                            }
+                            13 => {
+                              V66::TlsCertificateError
+                            }
+                            14 => {
+                              let e66 = {
+                                let l11 = i32::from(*((ptr1 + 16) as *const u8));
+                                let l13 = i32::from(*((ptr1 + 20) as *const u8));
+                                
+                                super::super::super::wasi::http::types::TlsAlertReceivedPayload{
+                                  alert_id: match l11 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l12 = i32::from(*((ptr1 + 17) as *const u8));
+                                        
+                                        l12 as u8
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                  alert_message: match l13 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l14 = *((ptr1 + 24) as *const i32);
+                                        let l15 = *((ptr1 + 28) as *const i32);
+                                        let len16 = l15 as usize;
+                                        let bytes16 = Vec::from_raw_parts(l14 as *mut _, len16, len16);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes16)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                }
+                              };
+                              V66::TlsAlertReceived(e66)
+                            }
+                            15 => {
+                              V66::HttpRequestDenied
+                            }
+                            16 => {
+                              V66::HttpRequestLengthRequired
+                            }
+                            17 => {
+                              let e66 = {
+                                let l17 = i32::from(*((ptr1 + 16) as *const u8));
+                                
+                                match l17 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l18 = *((ptr1 + 24) as *const i64);
+                                      
+                                      l18 as u64
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              V66::HttpRequestBodySize(e66)
+                            }
+                            18 => {
+                              V66::HttpRequestMethodInvalid
+                            }
+                            19 => {
+                              V66::HttpRequestUriInvalid
+                            }
+                            20 => {
+                              V66::HttpRequestUriTooLong
+                            }
+                            21 => {
+                              let e66 = {
+                                let l19 = i32::from(*((ptr1 + 16) as *const u8));
+                                
+                                match l19 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l20 = *((ptr1 + 20) as *const i32);
+                                      
+                                      l20 as u32
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              V66::HttpRequestHeaderSectionSize(e66)
+                            }
+                            22 => {
+                              let e66 = {
+                                let l21 = i32::from(*((ptr1 + 16) as *const u8));
+                                
+                                match l21 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l22 = i32::from(*((ptr1 + 20) as *const u8));
+                                      let l26 = i32::from(*((ptr1 + 32) as *const u8));
+                                      
+                                      super::super::super::wasi::http::types::FieldSizePayload{
+                                        field_name: match l22 {
+                                          0 => None,
+                                          1 => {
+                                            let e = {
+                                              let l23 = *((ptr1 + 24) as *const i32);
+                                              let l24 = *((ptr1 + 28) as *const i32);
+                                              let len25 = l24 as usize;
+                                              let bytes25 = Vec::from_raw_parts(l23 as *mut _, len25, len25);
+                                              
+                                              wit_bindgen::rt::string_lift(bytes25)
+                                            };
+                                            Some(e)
+                                          }
+                                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                        },
+                                        field_size: match l26 {
+                                          0 => None,
+                                          1 => {
+                                            let e = {
+                                              let l27 = *((ptr1 + 36) as *const i32);
+                                              
+                                              l27 as u32
+                                            };
+                                            Some(e)
+                                          }
+                                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                        },
+                                      }
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              V66::HttpRequestHeaderSize(e66)
+                            }
+                            23 => {
+                              let e66 = {
+                                let l28 = i32::from(*((ptr1 + 16) as *const u8));
+                                
+                                match l28 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l29 = *((ptr1 + 20) as *const i32);
+                                      
+                                      l29 as u32
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              V66::HttpRequestTrailerSectionSize(e66)
+                            }
+                            24 => {
+                              let e66 = {
+                                let l30 = i32::from(*((ptr1 + 16) as *const u8));
+                                let l34 = i32::from(*((ptr1 + 28) as *const u8));
+                                
+                                super::super::super::wasi::http::types::FieldSizePayload{
+                                  field_name: match l30 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l31 = *((ptr1 + 20) as *const i32);
+                                        let l32 = *((ptr1 + 24) as *const i32);
+                                        let len33 = l32 as usize;
+                                        let bytes33 = Vec::from_raw_parts(l31 as *mut _, len33, len33);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes33)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                  field_size: match l34 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l35 = *((ptr1 + 32) as *const i32);
+                                        
+                                        l35 as u32
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                }
+                              };
+                              V66::HttpRequestTrailerSize(e66)
+                            }
+                            25 => {
+                              V66::HttpResponseIncomplete
+                            }
+                            26 => {
+                              let e66 = {
+                                let l36 = i32::from(*((ptr1 + 16) as *const u8));
+                                
+                                match l36 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l37 = *((ptr1 + 20) as *const i32);
+                                      
+                                      l37 as u32
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              V66::HttpResponseHeaderSectionSize(e66)
+                            }
+                            27 => {
+                              let e66 = {
+                                let l38 = i32::from(*((ptr1 + 16) as *const u8));
+                                let l42 = i32::from(*((ptr1 + 28) as *const u8));
+                                
+                                super::super::super::wasi::http::types::FieldSizePayload{
+                                  field_name: match l38 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l39 = *((ptr1 + 20) as *const i32);
+                                        let l40 = *((ptr1 + 24) as *const i32);
+                                        let len41 = l40 as usize;
+                                        let bytes41 = Vec::from_raw_parts(l39 as *mut _, len41, len41);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes41)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                  field_size: match l42 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l43 = *((ptr1 + 32) as *const i32);
+                                        
+                                        l43 as u32
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                }
+                              };
+                              V66::HttpResponseHeaderSize(e66)
+                            }
+                            28 => {
+                              let e66 = {
+                                let l44 = i32::from(*((ptr1 + 16) as *const u8));
+                                
+                                match l44 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l45 = *((ptr1 + 24) as *const i64);
+                                      
+                                      l45 as u64
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              V66::HttpResponseBodySize(e66)
+                            }
+                            29 => {
+                              let e66 = {
+                                let l46 = i32::from(*((ptr1 + 16) as *const u8));
+                                
+                                match l46 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l47 = *((ptr1 + 20) as *const i32);
+                                      
+                                      l47 as u32
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              V66::HttpResponseTrailerSectionSize(e66)
+                            }
+                            30 => {
+                              let e66 = {
+                                let l48 = i32::from(*((ptr1 + 16) as *const u8));
+                                let l52 = i32::from(*((ptr1 + 28) as *const u8));
+                                
+                                super::super::super::wasi::http::types::FieldSizePayload{
+                                  field_name: match l48 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l49 = *((ptr1 + 20) as *const i32);
+                                        let l50 = *((ptr1 + 24) as *const i32);
+                                        let len51 = l50 as usize;
+                                        let bytes51 = Vec::from_raw_parts(l49 as *mut _, len51, len51);
+                                        
+                                        wit_bindgen::rt::string_lift(bytes51)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                  field_size: match l52 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l53 = *((ptr1 + 32) as *const i32);
+                                        
+                                        l53 as u32
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  },
+                                }
+                              };
+                              V66::HttpResponseTrailerSize(e66)
+                            }
+                            31 => {
+                              let e66 = {
+                                let l54 = i32::from(*((ptr1 + 16) as *const u8));
+                                
+                                match l54 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l55 = *((ptr1 + 20) as *const i32);
+                                      let l56 = *((ptr1 + 24) as *const i32);
+                                      let len57 = l56 as usize;
+                                      let bytes57 = Vec::from_raw_parts(l55 as *mut _, len57, len57);
+                                      
+                                      wit_bindgen::rt::string_lift(bytes57)
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              V66::HttpResponseTransferCoding(e66)
+                            }
+                            32 => {
+                              let e66 = {
+                                let l58 = i32::from(*((ptr1 + 16) as *const u8));
+                                
+                                match l58 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l59 = *((ptr1 + 20) as *const i32);
+                                      let l60 = *((ptr1 + 24) as *const i32);
+                                      let len61 = l60 as usize;
+                                      let bytes61 = Vec::from_raw_parts(l59 as *mut _, len61, len61);
+                                      
+                                      wit_bindgen::rt::string_lift(bytes61)
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              V66::HttpResponseContentCoding(e66)
+                            }
+                            33 => {
+                              V66::HttpResponseTimeout
+                            }
+                            34 => {
+                              V66::HttpUpgradeFailed
+                            }
+                            35 => {
+                              V66::HttpProtocolError
+                            }
+                            36 => {
+                              V66::LoopDetected
+                            }
+                            37 => {
+                              V66::ConfigurationError
+                            }
+                            n => {
+                              debug_assert_eq!(n, 38, "invalid enum discriminant");
+                              let e66 = {
+                                let l62 = i32::from(*((ptr1 + 16) as *const u8));
+                                
+                                match l62 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l63 = *((ptr1 + 20) as *const i32);
+                                      let l64 = *((ptr1 + 24) as *const i32);
+                                      let len65 = l64 as usize;
+                                      let bytes65 = Vec::from_raw_parts(l63 as *mut _, len65, len65);
+                                      
+                                      wit_bindgen::rt::string_lift(bytes65)
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              V66::InternalError(e66)
+                            }
+                          };
+                          
+                          v66
+                        };
+                        Err(e)
+                      }
+                      _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                    }
                   }
                 }
                 
@@ -2329,16 +12340,3147 @@ pub mod golem {
                 
               }
               
-            }
-          }
-          
-          #[cfg(target_arch = "wasm32")]
-          #[link_section = "component-type:golem-rust"]
-          #[doc(hidden)]
-          pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3185] = [3, 0, 10, 103, 111, 108, 101, 109, 45, 114, 117, 115, 116, 0, 97, 115, 109, 13, 0, 1, 0, 7, 237, 23, 1, 65, 2, 1, 65, 11, 1, 66, 25, 1, 122, 4, 0, 10, 110, 111, 100, 101, 45, 105, 110, 100, 101, 120, 3, 0, 0, 1, 112, 1, 1, 107, 1, 1, 111, 2, 121, 3, 1, 112, 127, 1, 106, 1, 3, 1, 3, 1, 113, 21, 12, 114, 101, 99, 111, 114, 100, 45, 118, 97, 108, 117, 101, 1, 2, 0, 13, 118, 97, 114, 105, 97, 110, 116, 45, 118, 97, 108, 117, 101, 1, 4, 0, 10, 101, 110, 117, 109, 45, 118, 97, 108, 117, 101, 1, 121, 0, 11, 102, 108, 97, 103, 115, 45, 118, 97, 108, 117, 101, 1, 5, 0, 11, 116, 117, 112, 108, 101, 45, 118, 97, 108, 117, 101, 1, 2, 0, 10, 108, 105, 115, 116, 45, 118, 97, 108, 117, 101, 1, 2, 0, 12, 111, 112, 116, 105, 111, 110, 45, 118, 97, 108, 117, 101, 1, 3, 0, 12, 114, 101, 115, 117, 108, 116, 45, 118, 97, 108, 117, 101, 1, 6, 0, 7, 112, 114, 105, 109, 45, 117, 56, 1, 125, 0, 8, 112, 114, 105, 109, 45, 117, 49, 54, 1, 123, 0, 8, 112, 114, 105, 109, 45, 117, 51, 50, 1, 121, 0, 8, 112, 114, 105, 109, 45, 117, 54, 52, 1, 119, 0, 7, 112, 114, 105, 109, 45, 115, 56, 1, 126, 0, 8, 112, 114, 105, 109, 45, 115, 49, 54, 1, 124, 0, 8, 112, 114, 105, 109, 45, 115, 51, 50, 1, 122, 0, 8, 112, 114, 105, 109, 45, 115, 54, 52, 1, 120, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 51, 50, 1, 118, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 54, 52, 1, 117, 0, 9, 112, 114, 105, 109, 45, 99, 104, 97, 114, 1, 116, 0, 9, 112, 114, 105, 109, 45, 98, 111, 111, 108, 1, 127, 0, 11, 112, 114, 105, 109, 45, 115, 116, 114, 105, 110, 103, 1, 115, 0, 4, 0, 8, 119, 105, 116, 45, 110, 111, 100, 101, 3, 0, 7, 1, 112, 8, 1, 114, 1, 5, 110, 111, 100, 101, 115, 9, 4, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 0, 10, 1, 114, 1, 5, 118, 97, 108, 117, 101, 115, 4, 0, 3, 117, 114, 105, 3, 0, 12, 1, 113, 4, 14, 112, 114, 111, 116, 111, 99, 111, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 6, 100, 101, 110, 105, 101, 100, 1, 115, 0, 9, 110, 111, 116, 45, 102, 111, 117, 110, 100, 1, 115, 0, 21, 114, 101, 109, 111, 116, 101, 45, 105, 110, 116, 101, 114, 110, 97, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 4, 0, 9, 114, 112, 99, 45, 101, 114, 114, 111, 114, 3, 0, 14, 4, 0, 8, 119, 97, 115, 109, 45, 114, 112, 99, 3, 1, 1, 105, 16, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 13, 0, 17, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 119, 97, 115, 109, 45, 114, 112, 99, 1, 18, 1, 104, 16, 1, 112, 11, 1, 106, 1, 11, 1, 15, 1, 64, 3, 4, 115, 101, 108, 102, 19, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 20, 0, 21, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 1, 22, 3, 1, 21, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 116, 121, 112, 101, 115, 64, 48, 46, 49, 46, 48, 5, 0, 1, 66, 10, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 1, 1, 104, 0, 1, 64, 1, 4, 115, 101, 108, 102, 1, 0, 127, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 114, 101, 97, 100, 121, 1, 2, 1, 64, 1, 4, 115, 101, 108, 102, 1, 1, 0, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 98, 108, 111, 99, 107, 1, 3, 1, 112, 1, 1, 112, 121, 1, 64, 1, 2, 105, 110, 4, 0, 5, 4, 0, 4, 112, 111, 108, 108, 1, 6, 3, 1, 18, 119, 97, 115, 105, 58, 105, 111, 47, 112, 111, 108, 108, 64, 48, 46, 50, 46, 48, 5, 1, 2, 3, 0, 1, 8, 112, 111, 108, 108, 97, 98, 108, 101, 1, 66, 15, 2, 3, 2, 1, 2, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 0, 1, 119, 4, 0, 7, 105, 110, 115, 116, 97, 110, 116, 3, 0, 2, 1, 119, 4, 0, 8, 100, 117, 114, 97, 116, 105, 111, 110, 3, 0, 4, 1, 64, 0, 0, 3, 4, 0, 3, 110, 111, 119, 1, 6, 1, 64, 0, 0, 5, 4, 0, 10, 114, 101, 115, 111, 108, 117, 116, 105, 111, 110, 1, 7, 1, 105, 1, 1, 64, 1, 4, 119, 104, 101, 110, 3, 0, 8, 4, 0, 17, 115, 117, 98, 115, 99, 114, 105, 98, 101, 45, 105, 110, 115, 116, 97, 110, 116, 1, 9, 1, 64, 1, 4, 119, 104, 101, 110, 5, 0, 8, 4, 0, 18, 115, 117, 98, 115, 99, 114, 105, 98, 101, 45, 100, 117, 114, 97, 116, 105, 111, 110, 1, 10, 3, 1, 33, 119, 97, 115, 105, 58, 99, 108, 111, 99, 107, 115, 47, 109, 111, 110, 111, 116, 111, 110, 105, 99, 45, 99, 108, 111, 99, 107, 64, 48, 46, 50, 46, 48, 5, 3, 2, 3, 0, 0, 3, 117, 114, 105, 2, 3, 0, 2, 8, 100, 117, 114, 97, 116, 105, 111, 110, 1, 66, 97, 2, 3, 2, 1, 4, 4, 0, 3, 117, 114, 105, 3, 0, 0, 2, 3, 2, 1, 5, 4, 0, 8, 100, 117, 114, 97, 116, 105, 111, 110, 3, 0, 2, 1, 119, 4, 0, 11, 111, 112, 108, 111, 103, 45, 105, 110, 100, 101, 120, 3, 0, 4, 1, 119, 4, 0, 17, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 118, 101, 114, 115, 105, 111, 110, 3, 0, 6, 1, 114, 2, 9, 104, 105, 103, 104, 45, 98, 105, 116, 115, 119, 8, 108, 111, 119, 45, 98, 105, 116, 115, 119, 4, 0, 4, 117, 117, 105, 100, 3, 0, 8, 1, 114, 1, 4, 117, 117, 105, 100, 9, 4, 0, 12, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 105, 100, 3, 0, 10, 1, 114, 2, 12, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 105, 100, 11, 11, 119, 111, 114, 107, 101, 114, 45, 110, 97, 109, 101, 115, 4, 0, 9, 119, 111, 114, 107, 101, 114, 45, 105, 100, 3, 0, 12, 1, 114, 2, 9, 119, 111, 114, 107, 101, 114, 45, 105, 100, 13, 9, 111, 112, 108, 111, 103, 45, 105, 100, 120, 5, 4, 0, 10, 112, 114, 111, 109, 105, 115, 101, 45, 105, 100, 3, 0, 14, 1, 114, 4, 12, 109, 97, 120, 45, 97, 116, 116, 101, 109, 112, 116, 115, 121, 9, 109, 105, 110, 45, 100, 101, 108, 97, 121, 3, 9, 109, 97, 120, 45, 100, 101, 108, 97, 121, 3, 10, 109, 117, 108, 116, 105, 112, 108, 105, 101, 114, 121, 4, 0, 12, 114, 101, 116, 114, 121, 45, 112, 111, 108, 105, 99, 121, 3, 0, 16, 1, 113, 3, 15, 112, 101, 114, 115, 105, 115, 116, 45, 110, 111, 116, 104, 105, 110, 103, 0, 0, 27, 112, 101, 114, 115, 105, 115, 116, 45, 114, 101, 109, 111, 116, 101, 45, 115, 105, 100, 101, 45, 101, 102, 102, 101, 99, 116, 115, 0, 0, 5, 115, 109, 97, 114, 116, 0, 0, 4, 0, 17, 112, 101, 114, 115, 105, 115, 116, 101, 110, 99, 101, 45, 108, 101, 118, 101, 108, 3, 0, 18, 1, 109, 2, 9, 97, 117, 116, 111, 109, 97, 116, 105, 99, 14, 115, 110, 97, 112, 115, 104, 111, 116, 45, 98, 97, 115, 101, 100, 4, 0, 11, 117, 112, 100, 97, 116, 101, 45, 109, 111, 100, 101, 3, 0, 20, 1, 109, 6, 5, 101, 113, 117, 97, 108, 9, 110, 111, 116, 45, 101, 113, 117, 97, 108, 13, 103, 114, 101, 97, 116, 101, 114, 45, 101, 113, 117, 97, 108, 7, 103, 114, 101, 97, 116, 101, 114, 10, 108, 101, 115, 115, 45, 101, 113, 117, 97, 108, 4, 108, 101, 115, 115, 4, 0, 17, 102, 105, 108, 116, 101, 114, 45, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 3, 0, 22, 1, 109, 4, 5, 101, 113, 117, 97, 108, 9, 110, 111, 116, 45, 101, 113, 117, 97, 108, 4, 108, 105, 107, 101, 8, 110, 111, 116, 45, 108, 105, 107, 101, 4, 0, 24, 115, 116, 114, 105, 110, 103, 45, 102, 105, 108, 116, 101, 114, 45, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 3, 0, 24, 1, 109, 7, 7, 114, 117, 110, 110, 105, 110, 103, 4, 105, 100, 108, 101, 9, 115, 117, 115, 112, 101, 110, 100, 101, 100, 11, 105, 110, 116, 101, 114, 114, 117, 112, 116, 101, 100, 8, 114, 101, 116, 114, 121, 105, 110, 103, 6, 102, 97, 105, 108, 101, 100, 6, 101, 120, 105, 116, 101, 100, 4, 0, 13, 119, 111, 114, 107, 101, 114, 45, 115, 116, 97, 116, 117, 115, 3, 0, 26, 1, 114, 2, 10, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 25, 5, 118, 97, 108, 117, 101, 115, 4, 0, 18, 119, 111, 114, 107, 101, 114, 45, 110, 97, 109, 101, 45, 102, 105, 108, 116, 101, 114, 3, 0, 28, 1, 114, 2, 10, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 23, 5, 118, 97, 108, 117, 101, 27, 4, 0, 20, 119, 111, 114, 107, 101, 114, 45, 115, 116, 97, 116, 117, 115, 45, 102, 105, 108, 116, 101, 114, 3, 0, 30, 1, 114, 2, 10, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 23, 5, 118, 97, 108, 117, 101, 119, 4, 0, 21, 119, 111, 114, 107, 101, 114, 45, 118, 101, 114, 115, 105, 111, 110, 45, 102, 105, 108, 116, 101, 114, 3, 0, 32, 1, 114, 2, 10, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 23, 5, 118, 97, 108, 117, 101, 119, 4, 0, 24, 119, 111, 114, 107, 101, 114, 45, 99, 114, 101, 97, 116, 101, 100, 45, 97, 116, 45, 102, 105, 108, 116, 101, 114, 3, 0, 34, 1, 114, 3, 4, 110, 97, 109, 101, 115, 10, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 25, 5, 118, 97, 108, 117, 101, 115, 4, 0, 17, 119, 111, 114, 107, 101, 114, 45, 101, 110, 118, 45, 102, 105, 108, 116, 101, 114, 3, 0, 36, 1, 113, 5, 4, 110, 97, 109, 101, 1, 29, 0, 6, 115, 116, 97, 116, 117, 115, 1, 31, 0, 7, 118, 101, 114, 115, 105, 111, 110, 1, 33, 0, 10, 99, 114, 101, 97, 116, 101, 100, 45, 97, 116, 1, 35, 0, 3, 101, 110, 118, 1, 37, 0, 4, 0, 22, 119, 111, 114, 107, 101, 114, 45, 112, 114, 111, 112, 101, 114, 116, 121, 45, 102, 105, 108, 116, 101, 114, 3, 0, 38, 1, 112, 39, 1, 114, 1, 7, 102, 105, 108, 116, 101, 114, 115, 40, 4, 0, 17, 119, 111, 114, 107, 101, 114, 45, 97, 108, 108, 45, 102, 105, 108, 116, 101, 114, 3, 0, 41, 1, 112, 42, 1, 114, 1, 7, 102, 105, 108, 116, 101, 114, 115, 43, 4, 0, 17, 119, 111, 114, 107, 101, 114, 45, 97, 110, 121, 45, 102, 105, 108, 116, 101, 114, 3, 0, 44, 1, 112, 115, 1, 111, 2, 115, 115, 1, 112, 47, 1, 114, 6, 9, 119, 111, 114, 107, 101, 114, 45, 105, 100, 13, 4, 97, 114, 103, 115, 46, 3, 101, 110, 118, 48, 6, 115, 116, 97, 116, 117, 115, 27, 17, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 118, 101, 114, 115, 105, 111, 110, 119, 11, 114, 101, 116, 114, 121, 45, 99, 111, 117, 110, 116, 119, 4, 0, 15, 119, 111, 114, 107, 101, 114, 45, 109, 101, 116, 97, 100, 97, 116, 97, 3, 0, 49, 4, 0, 11, 103, 101, 116, 45, 119, 111, 114, 107, 101, 114, 115, 3, 1, 1, 107, 45, 1, 105, 51, 1, 64, 3, 12, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 105, 100, 11, 6, 102, 105, 108, 116, 101, 114, 52, 7, 112, 114, 101, 99, 105, 115, 101, 127, 0, 53, 4, 0, 24, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 103, 101, 116, 45, 119, 111, 114, 107, 101, 114, 115, 1, 54, 1, 104, 51, 1, 112, 50, 1, 107, 56, 1, 64, 1, 4, 115, 101, 108, 102, 55, 0, 57, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 103, 101, 116, 45, 119, 111, 114, 107, 101, 114, 115, 46, 103, 101, 116, 45, 110, 101, 120, 116, 1, 58, 1, 64, 0, 0, 15, 4, 0, 20, 103, 111, 108, 101, 109, 45, 99, 114, 101, 97, 116, 101, 45, 112, 114, 111, 109, 105, 115, 101, 1, 59, 1, 112, 125, 1, 64, 1, 10, 112, 114, 111, 109, 105, 115, 101, 45, 105, 100, 15, 0, 60, 4, 0, 19, 103, 111, 108, 101, 109, 45, 97, 119, 97, 105, 116, 45, 112, 114, 111, 109, 105, 115, 101, 1, 61, 1, 64, 2, 10, 112, 114, 111, 109, 105, 115, 101, 45, 105, 100, 15, 4, 100, 97, 116, 97, 60, 0, 127, 4, 0, 22, 103, 111, 108, 101, 109, 45, 99, 111, 109, 112, 108, 101, 116, 101, 45, 112, 114, 111, 109, 105, 115, 101, 1, 62, 1, 64, 1, 10, 112, 114, 111, 109, 105, 115, 101, 45, 105, 100, 15, 1, 0, 4, 0, 20, 103, 111, 108, 101, 109, 45, 100, 101, 108, 101, 116, 101, 45, 112, 114, 111, 109, 105, 115, 101, 1, 63, 1, 64, 1, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 0, 1, 4, 0, 12, 103, 101, 116, 45, 115, 101, 108, 102, 45, 117, 114, 105, 1, 64, 1, 64, 0, 0, 5, 4, 0, 15, 103, 101, 116, 45, 111, 112, 108, 111, 103, 45, 105, 110, 100, 101, 120, 1, 65, 1, 64, 1, 9, 111, 112, 108, 111, 103, 45, 105, 100, 120, 5, 1, 0, 4, 0, 15, 115, 101, 116, 45, 111, 112, 108, 111, 103, 45, 105, 110, 100, 101, 120, 1, 66, 1, 64, 1, 8, 114, 101, 112, 108, 105, 99, 97, 115, 125, 1, 0, 4, 0, 12, 111, 112, 108, 111, 103, 45, 99, 111, 109, 109, 105, 116, 1, 67, 4, 0, 20, 109, 97, 114, 107, 45, 98, 101, 103, 105, 110, 45, 111, 112, 101, 114, 97, 116, 105, 111, 110, 1, 65, 1, 64, 1, 5, 98, 101, 103, 105, 110, 5, 1, 0, 4, 0, 18, 109, 97, 114, 107, 45, 101, 110, 100, 45, 111, 112, 101, 114, 97, 116, 105, 111, 110, 1, 68, 1, 64, 0, 0, 17, 4, 0, 16, 103, 101, 116, 45, 114, 101, 116, 114, 121, 45, 112, 111, 108, 105, 99, 121, 1, 69, 1, 64, 1, 16, 110, 101, 119, 45, 114, 101, 116, 114, 121, 45, 112, 111, 108, 105, 99, 121, 17, 1, 0, 4, 0, 16, 115, 101, 116, 45, 114, 101, 116, 114, 121, 45, 112, 111, 108, 105, 99, 121, 1, 70, 1, 64, 0, 0, 19, 4, 0, 27, 103, 101, 116, 45, 111, 112, 108, 111, 103, 45, 112, 101, 114, 115, 105, 115, 116, 101, 110, 99, 101, 45, 108, 101, 118, 101, 108, 1, 71, 1, 64, 1, 21, 110, 101, 119, 45, 112, 101, 114, 115, 105, 115, 116, 101, 110, 99, 101, 45, 108, 101, 118, 101, 108, 19, 1, 0, 4, 0, 27, 115, 101, 116, 45, 111, 112, 108, 111, 103, 45, 112, 101, 114, 115, 105, 115, 116, 101, 110, 99, 101, 45, 108, 101, 118, 101, 108, 1, 72, 1, 64, 0, 0, 127, 4, 0, 20, 103, 101, 116, 45, 105, 100, 101, 109, 112, 111, 116, 101, 110, 99, 101, 45, 109, 111, 100, 101, 1, 73, 1, 64, 1, 10, 105, 100, 101, 109, 112, 111, 116, 101, 110, 116, 127, 1, 0, 4, 0, 20, 115, 101, 116, 45, 105, 100, 101, 109, 112, 111, 116, 101, 110, 99, 101, 45, 109, 111, 100, 101, 1, 74, 1, 64, 0, 0, 9, 4, 0, 24, 103, 101, 110, 101, 114, 97, 116, 101, 45, 105, 100, 101, 109, 112, 111, 116, 101, 110, 99, 121, 45, 107, 101, 121, 1, 75, 1, 64, 3, 9, 119, 111, 114, 107, 101, 114, 45, 105, 100, 13, 14, 116, 97, 114, 103, 101, 116, 45, 118, 101, 114, 115, 105, 111, 110, 7, 4, 109, 111, 100, 101, 21, 1, 0, 4, 0, 13, 117, 112, 100, 97, 116, 101, 45, 119, 111, 114, 107, 101, 114, 1, 76, 3, 1, 20, 103, 111, 108, 101, 109, 58, 97, 112, 105, 47, 104, 111, 115, 116, 64, 48, 46, 50, 46, 48, 5, 6, 4, 1, 21, 103, 111, 108, 101, 109, 58, 114, 117, 115, 116, 47, 103, 111, 108, 101, 109, 45, 114, 117, 115, 116, 4, 0, 11, 16, 1, 0, 10, 103, 111, 108, 101, 109, 45, 114, 117, 115, 116, 3, 0, 0, 0, 16, 12, 112, 97, 99, 107, 97, 103, 101, 45, 100, 111, 99, 115, 0, 123, 125, 0, 70, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 2, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 6, 48, 46, 49, 56, 46, 50, 16, 119, 105, 116, 45, 98, 105, 110, 100, 103, 101, 110, 45, 114, 117, 115, 116, 6, 48, 46, 49, 54, 46, 48];
-          
-          #[inline(never)]
-          #[doc(hidden)]
-          #[cfg(target_arch = "wasm32")]
-          pub fn __link_section() {}
-          
+              
+              #[allow(clippy::all)]
+              pub mod error {
+                #[used]
+                #[doc(hidden)]
+                #[cfg(target_arch = "wasm32")]
+                static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                /// A resource which represents some error information.
+                /// 
+                /// The only method provided by this resource is `to-debug-string`,
+                /// which provides some human-readable information about the error.
+                /// 
+                /// In the `wasi:io` package, this resource is returned through the
+                /// `wasi:io/streams/stream-error` type.
+                /// 
+                /// To provide more specific error information, other interfaces may
+                /// provide functions to further "downcast" this error into more specific
+                /// error information. For example, `error`s returned in streams derived
+                /// from filesystem types to be described using the filesystem's own
+                /// error-code type, using the function
+                /// `wasi:filesystem/types/filesystem-error-code`, which takes a parameter
+                /// `borrow<error>` and returns
+                /// `option<wasi:filesystem/types/error-code>`.
+                /// 
+                /// The set of functions which can "downcast" an `error` into a more
+                /// concrete type is open.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct Error{
+                  handle: wit_bindgen::rt::Resource<Error>,
+                }
+                
+                impl Error{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for Error{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:io/error@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]error"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                impl Error {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Returns a string that is suitable to assist humans in debugging
+                  /// this error.
+                  /// 
+                  /// WARNING: The returned string should not be consumed mechanically!
+                  /// It may change across platforms, hosts, or other implementation
+                  /// details. Parsing this string is a major platform-compatibility
+                  /// hazard.
+                  pub fn to_debug_string(&self,) -> wit_bindgen::rt::string::String{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 8]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:io/error@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]error.to-debug-string"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = *((ptr0 + 0) as *const i32);
+                      let l2 = *((ptr0 + 4) as *const i32);
+                      let len3 = l2 as usize;
+                      let bytes3 = Vec::from_raw_parts(l1 as *mut _, len3, len3);
+                      wit_bindgen::rt::string_lift(bytes3)
+                    }
+                  }
+                }
+                
+              }
+              
+              
+              #[allow(clippy::all)]
+              pub mod streams {
+                #[used]
+                #[doc(hidden)]
+                #[cfg(target_arch = "wasm32")]
+                static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                pub type Error = super::super::super::wasi::io::error::Error;
+                pub type Pollable = super::super::super::wasi::io::poll::Pollable;
+                /// An error for input-stream and output-stream operations.
+                pub enum StreamError{
+                  /// The last operation (a write or flush) failed before completion.
+                  /// 
+                  /// More information is available in the `error` payload.
+                  LastOperationFailed(Error),
+                  /// The stream is closed: no more input will be accepted by the
+                  /// stream. A closed output-stream will return this error on all
+                  /// future operations.
+                  Closed,
+                }
+                impl ::core::fmt::Debug for StreamError {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                      StreamError::LastOperationFailed(e) => {
+                        f.debug_tuple("StreamError::LastOperationFailed").field(e).finish()
+                      }
+                      StreamError::Closed => {
+                        f.debug_tuple("StreamError::Closed").finish()
+                      }
+                    }
+                  }
+                }
+                impl ::core::fmt::Display for StreamError {
+                  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    write!(f, "{:?}", self)
+                  }
+                }
+                
+                impl std::error::Error for StreamError {}
+                /// An input bytestream.
+                /// 
+                /// `input-stream`s are *non-blocking* to the extent practical on underlying
+                /// platforms. I/O operations always return promptly; if fewer bytes are
+                /// promptly available than requested, they return the number of bytes promptly
+                /// available, which could even be zero. To wait for data to be available,
+                /// use the `subscribe` function to obtain a `pollable` which can be polled
+                /// for using `wasi:io/poll`.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct InputStream{
+                  handle: wit_bindgen::rt::Resource<InputStream>,
+                }
+                
+                impl InputStream{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for InputStream{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]input-stream"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                /// An output bytestream.
+                /// 
+                /// `output-stream`s are *non-blocking* to the extent practical on
+                /// underlying platforms. Except where specified otherwise, I/O operations also
+                /// always return promptly, after the number of bytes that can be written
+                /// promptly, which could even be zero. To wait for the stream to be ready to
+                /// accept data, the `subscribe` function to obtain a `pollable` which can be
+                /// polled for using `wasi:io/poll`.
+                
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct OutputStream{
+                  handle: wit_bindgen::rt::Resource<OutputStream>,
+                }
+                
+                impl OutputStream{
+                  #[doc(hidden)]
+                  pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                      handle: wit_bindgen::rt::Resource::from_handle(handle),
+                    }
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn into_handle(self) -> u32 {
+                    wit_bindgen::rt::Resource::into_handle(self.handle)
+                  }
+                  
+                  #[doc(hidden)]
+                  pub fn handle(&self) -> u32 {
+                    wit_bindgen::rt::Resource::handle(&self.handle)
+                  }
+                }
+                
+                
+                unsafe impl wit_bindgen::rt::WasmResource for OutputStream{
+                  #[inline]
+                  unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                      #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[resource-drop]output-stream"]
+                        fn drop(_: u32);
+                      }
+                      
+                      drop(_handle);
+                    }
+                  }
+                }
+                
+                impl InputStream {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Perform a non-blocking read from the stream.
+                  /// 
+                  /// This function returns a list of bytes containing the read data,
+                  /// when successful. The returned list will contain up to `len` bytes;
+                  /// it may return fewer than requested, but not more. The list is
+                  /// empty when no bytes are available for reading at this time. The
+                  /// pollable given by `subscribe` will be ready when more bytes are
+                  /// available.
+                  /// 
+                  /// This function fails with a `stream-error` when the operation
+                  /// encounters an error, giving `last-operation-failed`, or when the
+                  /// stream is closed, giving `closed`.
+                  /// 
+                  /// When the caller gives a `len` of 0, it represents a request to
+                  /// read 0 bytes. If the stream is still open, this call should
+                  /// succeed and return an empty list, or otherwise fail with `closed`.
+                  /// 
+                  /// The `len` parameter is a `u64`, which could represent a list of u8 which
+                  /// is not possible to allocate in wasm32, or not desirable to allocate as
+                  /// as a return value by the callee. The callee may return a list of bytes
+                  /// less than `len` in size while more bytes are available for reading.
+                  pub fn read(&self,len: u64,) -> Result<wit_bindgen::rt::vec::Vec::<u8>,StreamError>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]input-stream.read"]
+                        fn wit_import(_: i32, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(len), ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            
+                            Vec::from_raw_parts(l2 as *mut _, len4, len4)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l5 = i32::from(*((ptr0 + 4) as *const u8));
+                            let v7 = match l5 {
+                              0 => {
+                                let e7 = {
+                                  let l6 = *((ptr0 + 8) as *const i32);
+                                  
+                                  super::super::super::wasi::io::error::Error::from_handle(l6 as u32)
+                                };
+                                StreamError::LastOperationFailed(e7)
+                              }
+                              n => {
+                                debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                StreamError::Closed
+                              }
+                            };
+                            
+                            v7
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl InputStream {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Read bytes from a stream, after blocking until at least one byte can
+                  /// be read. Except for blocking, behavior is identical to `read`.
+                  pub fn blocking_read(&self,len: u64,) -> Result<wit_bindgen::rt::vec::Vec::<u8>,StreamError>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]input-stream.blocking-read"]
+                        fn wit_import(_: i32, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(len), ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 4) as *const i32);
+                            let l3 = *((ptr0 + 8) as *const i32);
+                            let len4 = l3 as usize;
+                            
+                            Vec::from_raw_parts(l2 as *mut _, len4, len4)
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l5 = i32::from(*((ptr0 + 4) as *const u8));
+                            let v7 = match l5 {
+                              0 => {
+                                let e7 = {
+                                  let l6 = *((ptr0 + 8) as *const i32);
+                                  
+                                  super::super::super::wasi::io::error::Error::from_handle(l6 as u32)
+                                };
+                                StreamError::LastOperationFailed(e7)
+                              }
+                              n => {
+                                debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                StreamError::Closed
+                              }
+                            };
+                            
+                            v7
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl InputStream {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Skip bytes from a stream. Returns number of bytes skipped.
+                  /// 
+                  /// Behaves identical to `read`, except instead of returning a list
+                  /// of bytes, returns the number of bytes consumed from the stream.
+                  pub fn skip(&self,len: u64,) -> Result<u64,StreamError>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 16]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]input-stream.skip"]
+                        fn wit_import(_: i32, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(len), ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 8) as *const i64);
+                            
+                            l2 as u64
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr0 + 8) as *const u8));
+                            let v5 = match l3 {
+                              0 => {
+                                let e5 = {
+                                  let l4 = *((ptr0 + 12) as *const i32);
+                                  
+                                  super::super::super::wasi::io::error::Error::from_handle(l4 as u32)
+                                };
+                                StreamError::LastOperationFailed(e5)
+                              }
+                              n => {
+                                debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                StreamError::Closed
+                              }
+                            };
+                            
+                            v5
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl InputStream {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Skip bytes from a stream, after blocking until at least one byte
+                  /// can be skipped. Except for blocking behavior, identical to `skip`.
+                  pub fn blocking_skip(&self,len: u64,) -> Result<u64,StreamError>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 16]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]input-stream.blocking-skip"]
+                        fn wit_import(_: i32, _: i64, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i64, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(len), ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 8) as *const i64);
+                            
+                            l2 as u64
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr0 + 8) as *const u8));
+                            let v5 = match l3 {
+                              0 => {
+                                let e5 = {
+                                  let l4 = *((ptr0 + 12) as *const i32);
+                                  
+                                  super::super::super::wasi::io::error::Error::from_handle(l4 as u32)
+                                };
+                                StreamError::LastOperationFailed(e5)
+                              }
+                              n => {
+                                debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                StreamError::Closed
+                              }
+                            };
+                            
+                            v5
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl InputStream {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Create a `pollable` which will resolve once either the specified stream
+                  /// has bytes available to read or the other end of the stream has been
+                  /// closed.
+                  /// The created `pollable` is a child resource of the `input-stream`.
+                  /// Implementations may trap if the `input-stream` is dropped before
+                  /// all derived `pollable`s created with this function are dropped.
+                  pub fn subscribe(&self,) -> Pollable{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]input-stream.subscribe"]
+                        fn wit_import(_: i32, ) -> i32;
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                      let ret = wit_import((self).handle() as i32);
+                      super::super::super::wasi::io::poll::Pollable::from_handle(ret as u32)
+                    }
+                  }
+                }
+                impl OutputStream {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Check readiness for writing. This function never blocks.
+                  /// 
+                  /// Returns the number of bytes permitted for the next call to `write`,
+                  /// or an error. Calling `write` with more bytes than this function has
+                  /// permitted will trap.
+                  /// 
+                  /// When this function returns 0 bytes, the `subscribe` pollable will
+                  /// become ready when this function will report at least 1 byte, or an
+                  /// error.
+                  pub fn check_write(&self,) -> Result<u64,StreamError>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(8))]
+                      struct RetArea([u8; 16]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let ptr0 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]output-stream.check-write"]
+                        fn wit_import(_: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0);
+                      let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                      match l1 {
+                        0 => {
+                          let e = {
+                            let l2 = *((ptr0 + 8) as *const i64);
+                            
+                            l2 as u64
+                          };
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr0 + 8) as *const u8));
+                            let v5 = match l3 {
+                              0 => {
+                                let e5 = {
+                                  let l4 = *((ptr0 + 12) as *const i32);
+                                  
+                                  super::super::super::wasi::io::error::Error::from_handle(l4 as u32)
+                                };
+                                StreamError::LastOperationFailed(e5)
+                              }
+                              n => {
+                                debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                StreamError::Closed
+                              }
+                            };
+                            
+                            v5
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutputStream {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Perform a write. This function never blocks.
+                  /// 
+                  /// Precondition: check-write gave permit of Ok(n) and contents has a
+                  /// length of less than or equal to n. Otherwise, this function will trap.
+                  /// 
+                  /// returns Err(closed) without writing if the stream has closed since
+                  /// the last call to check-write provided a permit.
+                  pub fn write(&self,contents: &[u8],) -> Result<(),StreamError>{
+                    
+                    #[allow(unused_imports)]
+                    use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                    unsafe {
+                      
+                      #[repr(align(4))]
+                      struct RetArea([u8; 12]);
+                      let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                      let vec0 = contents;
+                      let ptr0 = vec0.as_ptr() as i32;
+                      let len0 = vec0.len() as i32;
+                      let ptr1 = ret_area.as_mut_ptr() as i32;
+                      #[cfg(target_arch = "wasm32")]
+                      #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                      extern "C" {
+                        #[link_name = "[method]output-stream.write"]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                      }
+                      
+                      #[cfg(not(target_arch = "wasm32"))]
+                      fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                      wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                      let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                      match l2 {
+                        0 => {
+                          let e = ();
+                          Ok(e)
+                        }
+                        1 => {
+                          let e = {
+                            let l3 = i32::from(*((ptr1 + 4) as *const u8));
+                            let v5 = match l3 {
+                              0 => {
+                                let e5 = {
+                                  let l4 = *((ptr1 + 8) as *const i32);
+                                  
+                                  super::super::super::wasi::io::error::Error::from_handle(l4 as u32)
+                                };
+                                StreamError::LastOperationFailed(e5)
+                              }
+                              n => {
+                                debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                StreamError::Closed
+                              }
+                            };
+                            
+                            v5
+                          };
+                          Err(e)
+                        }
+                        _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                      }
+                    }
+                  }
+                }
+                impl OutputStream {
+                  #[allow(unused_unsafe, clippy::all)]
+                  /// Perform a write of up to 4096 bytes, and then flush the stream. Block
+                  /// until all of these operations are complete, or an error occurs.
+                  /// 
+                  /// This is a convenience wrapper around the use of `check-write`,
+                  /// `subscribe`, `write`, and `flush`, and is implemented with the
+                  /// following pseudo-code:
+                  /// 
+                  /// ```text
+                  /// let pollable = this.subscribe();
+                  /// while !contents.is_empty() {
+                    /// // Wait for the stream to become writable
+                    /// poll-one(pollable);
+                    /// let Ok(n) = this.check-write(); // eliding error handling
+                    /// let len = min(n, contents.len());
+                    /// let (chunk, rest) = contents.split_at(len);
+                    /// this.write(chunk  );            // eliding error handling
+                    /// contents = rest;
+                    /// }
+                    /// this.flush();
+                    /// // Wait for completion of `flush`
+                    /// poll-one(pollable);
+                    /// // Check for any errors that arose during `flush`
+                    /// let _ = this.check-write();         // eliding error handling
+                    /// ```
+                    pub fn blocking_write_and_flush(&self,contents: &[u8],) -> Result<(),StreamError>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 12]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let vec0 = contents;
+                        let ptr0 = vec0.as_ptr() as i32;
+                        let len0 = vec0.len() as i32;
+                        let ptr1 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                          #[link_name = "[method]output-stream.blocking-write-and-flush"]
+                          fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                        wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                        let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                        match l2 {
+                          0 => {
+                            let e = ();
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l3 = i32::from(*((ptr1 + 4) as *const u8));
+                              let v5 = match l3 {
+                                0 => {
+                                  let e5 = {
+                                    let l4 = *((ptr1 + 8) as *const i32);
+                                    
+                                    super::super::super::wasi::io::error::Error::from_handle(l4 as u32)
+                                  };
+                                  StreamError::LastOperationFailed(e5)
+                                }
+                                n => {
+                                  debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                  StreamError::Closed
+                                }
+                              };
+                              
+                              v5
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                  }
+                  impl OutputStream {
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Request to flush buffered output. This function never blocks.
+                    /// 
+                    /// This tells the output-stream that the caller intends any buffered
+                    /// output to be flushed. the output which is expected to be flushed
+                    /// is all that has been passed to `write` prior to this call.
+                    /// 
+                    /// Upon calling this function, the `output-stream` will not accept any
+                    /// writes (`check-write` will return `ok(0)`) until the flush has
+                    /// completed. The `subscribe` pollable will become ready when the
+                    /// flush has completed and the stream can accept more writes.
+                    pub fn flush(&self,) -> Result<(),StreamError>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 12]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let ptr0 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                          #[link_name = "[method]output-stream.flush"]
+                          fn wit_import(_: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                        match l1 {
+                          0 => {
+                            let e = ();
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l2 = i32::from(*((ptr0 + 4) as *const u8));
+                              let v4 = match l2 {
+                                0 => {
+                                  let e4 = {
+                                    let l3 = *((ptr0 + 8) as *const i32);
+                                    
+                                    super::super::super::wasi::io::error::Error::from_handle(l3 as u32)
+                                  };
+                                  StreamError::LastOperationFailed(e4)
+                                }
+                                n => {
+                                  debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                  StreamError::Closed
+                                }
+                              };
+                              
+                              v4
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                  }
+                  impl OutputStream {
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Request to flush buffered output, and block until flush completes
+                    /// and stream is ready for writing again.
+                    pub fn blocking_flush(&self,) -> Result<(),StreamError>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 12]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let ptr0 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                          #[link_name = "[method]output-stream.blocking-flush"]
+                          fn wit_import(_: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                        match l1 {
+                          0 => {
+                            let e = ();
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l2 = i32::from(*((ptr0 + 4) as *const u8));
+                              let v4 = match l2 {
+                                0 => {
+                                  let e4 = {
+                                    let l3 = *((ptr0 + 8) as *const i32);
+                                    
+                                    super::super::super::wasi::io::error::Error::from_handle(l3 as u32)
+                                  };
+                                  StreamError::LastOperationFailed(e4)
+                                }
+                                n => {
+                                  debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                  StreamError::Closed
+                                }
+                              };
+                              
+                              v4
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                  }
+                  impl OutputStream {
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Create a `pollable` which will resolve once the output-stream
+                    /// is ready for more writing, or an error has occured. When this
+                    /// pollable is ready, `check-write` will return `ok(n)` with n>0, or an
+                    /// error.
+                    /// 
+                    /// If the stream is closed, this pollable is always ready immediately.
+                    /// 
+                    /// The created `pollable` is a child resource of the `output-stream`.
+                    /// Implementations may trap if the `output-stream` is dropped before
+                    /// all derived `pollable`s created with this function are dropped.
+                    pub fn subscribe(&self,) -> Pollable{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                          #[link_name = "[method]output-stream.subscribe"]
+                          fn wit_import(_: i32, ) -> i32;
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                        let ret = wit_import((self).handle() as i32);
+                        super::super::super::wasi::io::poll::Pollable::from_handle(ret as u32)
+                      }
+                    }
+                  }
+                  impl OutputStream {
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Write zeroes to a stream.
+                    /// 
+                    /// this should be used precisely like `write` with the exact same
+                    /// preconditions (must use check-write first), but instead of
+                    /// passing a list of bytes, you simply pass the number of zero-bytes
+                    /// that should be written.
+                    pub fn write_zeroes(&self,len: u64,) -> Result<(),StreamError>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 12]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let ptr0 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                        extern "C" {
+                          #[link_name = "[method]output-stream.write-zeroes"]
+                          fn wit_import(_: i32, _: i64, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i64, _: i32, ){ unreachable!() }
+                        wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(len), ptr0);
+                        let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                        match l1 {
+                          0 => {
+                            let e = ();
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l2 = i32::from(*((ptr0 + 4) as *const u8));
+                              let v4 = match l2 {
+                                0 => {
+                                  let e4 = {
+                                    let l3 = *((ptr0 + 8) as *const i32);
+                                    
+                                    super::super::super::wasi::io::error::Error::from_handle(l3 as u32)
+                                  };
+                                  StreamError::LastOperationFailed(e4)
+                                }
+                                n => {
+                                  debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                  StreamError::Closed
+                                }
+                              };
+                              
+                              v4
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                  }
+                  impl OutputStream {
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Perform a write of up to 4096 zeroes, and then flush the stream.
+                    /// Block until all of these operations are complete, or an error
+                    /// occurs.
+                    /// 
+                    /// This is a convenience wrapper around the use of `check-write`,
+                    /// `subscribe`, `write-zeroes`, and `flush`, and is implemented with
+                    /// the following pseudo-code:
+                    /// 
+                    /// ```text
+                    /// let pollable = this.subscribe();
+                    /// while num_zeroes != 0 {
+                      /// // Wait for the stream to become writable
+                      /// poll-one(pollable);
+                      /// let Ok(n) = this.check-write(); // eliding error handling
+                      /// let len = min(n, num_zeroes);
+                      /// this.write-zeroes(len);         // eliding error handling
+                      /// num_zeroes -= len;
+                      /// }
+                      /// this.flush();
+                      /// // Wait for completion of `flush`
+                      /// poll-one(pollable);
+                      /// // Check for any errors that arose during `flush`
+                      /// let _ = this.check-write();         // eliding error handling
+                      /// ```
+                      pub fn blocking_write_zeroes_and_flush(&self,len: u64,) -> Result<(),StreamError>{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[repr(align(4))]
+                          struct RetArea([u8; 12]);
+                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                          let ptr0 = ret_area.as_mut_ptr() as i32;
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                          extern "C" {
+                            #[link_name = "[method]output-stream.blocking-write-zeroes-and-flush"]
+                            fn wit_import(_: i32, _: i64, _: i32, );
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, _: i64, _: i32, ){ unreachable!() }
+                          wit_import((self).handle() as i32, wit_bindgen::rt::as_i64(len), ptr0);
+                          let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                          match l1 {
+                            0 => {
+                              let e = ();
+                              Ok(e)
+                            }
+                            1 => {
+                              let e = {
+                                let l2 = i32::from(*((ptr0 + 4) as *const u8));
+                                let v4 = match l2 {
+                                  0 => {
+                                    let e4 = {
+                                      let l3 = *((ptr0 + 8) as *const i32);
+                                      
+                                      super::super::super::wasi::io::error::Error::from_handle(l3 as u32)
+                                    };
+                                    StreamError::LastOperationFailed(e4)
+                                  }
+                                  n => {
+                                    debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                    StreamError::Closed
+                                  }
+                                };
+                                
+                                v4
+                              };
+                              Err(e)
+                            }
+                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                          }
+                        }
+                      }
+                    }
+                    impl OutputStream {
+                      #[allow(unused_unsafe, clippy::all)]
+                      /// Read from one stream and write to another.
+                      /// 
+                      /// The behavior of splice is equivelant to:
+                      /// 1. calling `check-write` on the `output-stream`
+                      /// 2. calling `read` on the `input-stream` with the smaller of the
+                      /// `check-write` permitted length and the `len` provided to `splice`
+                      /// 3. calling `write` on the `output-stream` with that read data.
+                      /// 
+                      /// Any error reported by the call to `check-write`, `read`, or
+                      /// `write` ends the splice and reports that error.
+                      /// 
+                      /// This function returns the number of bytes transferred; it may be less
+                      /// than `len`.
+                      pub fn splice(&self,src: &InputStream,len: u64,) -> Result<u64,StreamError>{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[repr(align(8))]
+                          struct RetArea([u8; 16]);
+                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                          let ptr0 = ret_area.as_mut_ptr() as i32;
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                          extern "C" {
+                            #[link_name = "[method]output-stream.splice"]
+                            fn wit_import(_: i32, _: i32, _: i64, _: i32, );
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, _: i32, _: i64, _: i32, ){ unreachable!() }
+                          wit_import((self).handle() as i32, (src).handle() as i32, wit_bindgen::rt::as_i64(len), ptr0);
+                          let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                          match l1 {
+                            0 => {
+                              let e = {
+                                let l2 = *((ptr0 + 8) as *const i64);
+                                
+                                l2 as u64
+                              };
+                              Ok(e)
+                            }
+                            1 => {
+                              let e = {
+                                let l3 = i32::from(*((ptr0 + 8) as *const u8));
+                                let v5 = match l3 {
+                                  0 => {
+                                    let e5 = {
+                                      let l4 = *((ptr0 + 12) as *const i32);
+                                      
+                                      super::super::super::wasi::io::error::Error::from_handle(l4 as u32)
+                                    };
+                                    StreamError::LastOperationFailed(e5)
+                                  }
+                                  n => {
+                                    debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                    StreamError::Closed
+                                  }
+                                };
+                                
+                                v5
+                              };
+                              Err(e)
+                            }
+                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                          }
+                        }
+                      }
+                    }
+                    impl OutputStream {
+                      #[allow(unused_unsafe, clippy::all)]
+                      /// Read from one stream and write to another, with blocking.
+                      /// 
+                      /// This is similar to `splice`, except that it blocks until the
+                      /// `output-stream` is ready for writing, and the `input-stream`
+                      /// is ready for reading, before performing the `splice`.
+                      pub fn blocking_splice(&self,src: &InputStream,len: u64,) -> Result<u64,StreamError>{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[repr(align(8))]
+                          struct RetArea([u8; 16]);
+                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                          let ptr0 = ret_area.as_mut_ptr() as i32;
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:io/streams@0.2.0")]
+                          extern "C" {
+                            #[link_name = "[method]output-stream.blocking-splice"]
+                            fn wit_import(_: i32, _: i32, _: i64, _: i32, );
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, _: i32, _: i64, _: i32, ){ unreachable!() }
+                          wit_import((self).handle() as i32, (src).handle() as i32, wit_bindgen::rt::as_i64(len), ptr0);
+                          let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                          match l1 {
+                            0 => {
+                              let e = {
+                                let l2 = *((ptr0 + 8) as *const i64);
+                                
+                                l2 as u64
+                              };
+                              Ok(e)
+                            }
+                            1 => {
+                              let e = {
+                                let l3 = i32::from(*((ptr0 + 8) as *const u8));
+                                let v5 = match l3 {
+                                  0 => {
+                                    let e5 = {
+                                      let l4 = *((ptr0 + 12) as *const i32);
+                                      
+                                      super::super::super::wasi::io::error::Error::from_handle(l4 as u32)
+                                    };
+                                    StreamError::LastOperationFailed(e5)
+                                  }
+                                  n => {
+                                    debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                    StreamError::Closed
+                                  }
+                                };
+                                
+                                v5
+                              };
+                              Err(e)
+                            }
+                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                          }
+                        }
+                      }
+                    }
+                    
+                  }
+                  
+                }
+                pub mod keyvalue {
+                  
+                  #[allow(clippy::all)]
+                  pub mod wasi_keyvalue_error {
+                    #[used]
+                    #[doc(hidden)]
+                    #[cfg(target_arch = "wasm32")]
+                    static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                    /// An error resource type for keyvalue operations.
+                    /// 
+                    /// Common errors:
+                    /// - Connectivity errors (e.g. network errors): when the client cannot establish
+                    /// a connection to the keyvalue service.
+                    /// - Authentication and Authorization errors: when the client fails to authenticate
+                    /// or does not have the required permissions to perform the operation.
+                    /// - Data errors: when the client sends incompatible or corrupted data.
+                    /// - Resource errors: when the system runs out of resources (e.g. memory).
+                    /// - Internal errors: unexpected errors on the server side.
+                    /// 
+                    /// Currently, this provides only one function to return a string representation
+                    /// of the error. In the future, this will be extended to provide more information
+                    /// about the error.
+                    /// Soon: switch to `resource error { ... }`
+                    
+                    #[derive(Debug)]
+                    #[repr(transparent)]
+                    pub struct Error{
+                      handle: wit_bindgen::rt::Resource<Error>,
+                    }
+                    
+                    impl Error{
+                      #[doc(hidden)]
+                      pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                          handle: wit_bindgen::rt::Resource::from_handle(handle),
+                        }
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn into_handle(self) -> u32 {
+                        wit_bindgen::rt::Resource::into_handle(self.handle)
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn handle(&self) -> u32 {
+                        wit_bindgen::rt::Resource::handle(&self.handle)
+                      }
+                    }
+                    
+                    
+                    unsafe impl wit_bindgen::rt::WasmResource for Error{
+                      #[inline]
+                      unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                          #[link(wasm_import_module = "wasi:keyvalue/wasi-keyvalue-error@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[resource-drop]error"]
+                            fn drop(_: u32);
+                          }
+                          
+                          drop(_handle);
+                        }
+                      }
+                    }
+                    
+                    impl Error {
+                      #[allow(unused_unsafe, clippy::all)]
+                      pub fn trace(&self,) -> wit_bindgen::rt::string::String{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[repr(align(4))]
+                          struct RetArea([u8; 8]);
+                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                          let ptr0 = ret_area.as_mut_ptr() as i32;
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:keyvalue/wasi-keyvalue-error@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[method]error.trace"]
+                            fn wit_import(_: i32, _: i32, );
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                          wit_import((self).handle() as i32, ptr0);
+                          let l1 = *((ptr0 + 0) as *const i32);
+                          let l2 = *((ptr0 + 4) as *const i32);
+                          let len3 = l2 as usize;
+                          let bytes3 = Vec::from_raw_parts(l1 as *mut _, len3, len3);
+                          wit_bindgen::rt::string_lift(bytes3)
+                        }
+                      }
+                    }
+                    
+                  }
+                  
+                  
+                  #[allow(clippy::all)]
+                  pub mod types {
+                    #[used]
+                    #[doc(hidden)]
+                    #[cfg(target_arch = "wasm32")]
+                    static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                    pub type InputStream = super::super::super::wasi::io::streams::InputStream;
+                    pub type OutputStream = super::super::super::wasi::io::streams::OutputStream;
+                    pub type Error = super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error;
+                    /// A bucket is a collection of key-value pairs. Each key-value pair is stored
+                    /// as a entry in the bucket, and the bucket itself acts as a collection of all
+                    /// these entries.
+                    /// 
+                    /// It is worth noting that the exact terminology for bucket in key-value stores
+                    /// can very depending on the specific implementation. For example,
+                    /// 1. Amazon DynamoDB calls a collection of key-value pairs a table
+                    /// 2. Redis has hashes, sets, and sorted sets as different types of collections
+                    /// 3. Cassandra calls a collection of key-value pairs a column family
+                    /// 4. MongoDB calls a collection of key-value pairs a collection
+                    /// 5. Riak calls a collection of key-value pairs a bucket
+                    /// 6. Memcached calls a collection of key-value pairs a slab
+                    /// 7. Azure Cosmos DB calls a collection of key-value pairs a container
+                    /// 
+                    /// In this interface, we use the term `bucket` to refer to a collection of key-value
+                    /// Soon: switch to `resource bucket { ... }`
+                    
+                    #[derive(Debug)]
+                    #[repr(transparent)]
+                    pub struct Bucket{
+                      handle: wit_bindgen::rt::Resource<Bucket>,
+                    }
+                    
+                    impl Bucket{
+                      #[doc(hidden)]
+                      pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                          handle: wit_bindgen::rt::Resource::from_handle(handle),
+                        }
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn into_handle(self) -> u32 {
+                        wit_bindgen::rt::Resource::into_handle(self.handle)
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn handle(&self) -> u32 {
+                        wit_bindgen::rt::Resource::handle(&self.handle)
+                      }
+                    }
+                    
+                    
+                    unsafe impl wit_bindgen::rt::WasmResource for Bucket{
+                      #[inline]
+                      unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                          #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[resource-drop]bucket"]
+                            fn drop(_: u32);
+                          }
+                          
+                          drop(_handle);
+                        }
+                      }
+                    }
+                    
+                    /// A key is a unique identifier for a value in a bucket. The key is used to
+                    /// retrieve the value from the bucket.
+                    pub type Key = wit_bindgen::rt::string::String;
+                    /// A value is the data stored in a key-value pair. The value can be of any type
+                    /// that can be represented in a byte array. It provides a way to write the value
+                    /// to the output-stream defined in the `wasi-io` interface.
+                    /// Soon: switch to `resource value { ... }`
+                    
+                    #[derive(Debug)]
+                    #[repr(transparent)]
+                    pub struct OutgoingValue{
+                      handle: wit_bindgen::rt::Resource<OutgoingValue>,
+                    }
+                    
+                    impl OutgoingValue{
+                      #[doc(hidden)]
+                      pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                          handle: wit_bindgen::rt::Resource::from_handle(handle),
+                        }
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn into_handle(self) -> u32 {
+                        wit_bindgen::rt::Resource::into_handle(self.handle)
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn handle(&self) -> u32 {
+                        wit_bindgen::rt::Resource::handle(&self.handle)
+                      }
+                    }
+                    
+                    
+                    unsafe impl wit_bindgen::rt::WasmResource for OutgoingValue{
+                      #[inline]
+                      unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                          #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[resource-drop]outgoing-value"]
+                            fn drop(_: u32);
+                          }
+                          
+                          drop(_handle);
+                        }
+                      }
+                    }
+                    
+                    pub type OutgoingValueBodyAsync = OutputStream;
+                    pub type OutgoingValueBodySync = wit_bindgen::rt::vec::Vec::<u8>;
+                    /// A incoming-value is a wrapper around a value. It provides a way to read the value
+                    /// from the `input-stream` defined in the `wasi-io` interface.
+                    /// 
+                    /// The incoming-value provides two ways to consume the value:
+                    /// 1. `incoming-value-consume-sync` consumes the value synchronously and returns the
+                    /// value as a `list<u8>`.
+                    /// 2. `incoming-value-consume-async` consumes the value asynchronously and returns the
+                    /// value as an `input-stream`.
+                    /// In addition, it provides a `incoming-value-size` function to get the size of the value.
+                    /// This is useful when the value is large and the caller wants to allocate a buffer of
+                    /// the right size to consume the value.
+                    /// Soon: switch to `resource incoming-value { ... }`
+                    
+                    #[derive(Debug)]
+                    #[repr(transparent)]
+                    pub struct IncomingValue{
+                      handle: wit_bindgen::rt::Resource<IncomingValue>,
+                    }
+                    
+                    impl IncomingValue{
+                      #[doc(hidden)]
+                      pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                          handle: wit_bindgen::rt::Resource::from_handle(handle),
+                        }
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn into_handle(self) -> u32 {
+                        wit_bindgen::rt::Resource::into_handle(self.handle)
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn handle(&self) -> u32 {
+                        wit_bindgen::rt::Resource::handle(&self.handle)
+                      }
+                    }
+                    
+                    
+                    unsafe impl wit_bindgen::rt::WasmResource for IncomingValue{
+                      #[inline]
+                      unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                          #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[resource-drop]incoming-value"]
+                            fn drop(_: u32);
+                          }
+                          
+                          drop(_handle);
+                        }
+                      }
+                    }
+                    
+                    pub type IncomingValueAsyncBody = InputStream;
+                    pub type IncomingValueSyncBody = wit_bindgen::rt::vec::Vec::<u8>;
+                    impl Bucket {
+                      #[allow(unused_unsafe, clippy::all)]
+                      /// Opens a bucket with the given name.
+                      /// 
+                      /// If any error occurs, including if the bucket does not exist, it returns an `Err(error)`.
+                      pub fn open_bucket(name: &str,) -> Result<Bucket,Error>{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[repr(align(4))]
+                          struct RetArea([u8; 8]);
+                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                          let vec0 = name;
+                          let ptr0 = vec0.as_ptr() as i32;
+                          let len0 = vec0.len() as i32;
+                          let ptr1 = ret_area.as_mut_ptr() as i32;
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[static]bucket.open-bucket"]
+                            fn wit_import(_: i32, _: i32, _: i32, );
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, _: i32, _: i32, ){ unreachable!() }
+                          wit_import(ptr0, len0, ptr1);
+                          let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                          match l2 {
+                            0 => {
+                              let e = {
+                                let l3 = *((ptr1 + 4) as *const i32);
+                                
+                                Bucket::from_handle(l3 as u32)
+                              };
+                              Ok(e)
+                            }
+                            1 => {
+                              let e = {
+                                let l4 = *((ptr1 + 4) as *const i32);
+                                
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l4 as u32)
+                              };
+                              Err(e)
+                            }
+                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                          }
+                        }
+                      }
+                    }
+                    impl OutgoingValue {
+                      #[allow(unused_unsafe, clippy::all)]
+                      pub fn new_outgoing_value() -> OutgoingValue{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[static]outgoing-value.new-outgoing-value"]
+                            fn wit_import() -> i32;
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import() -> i32{ unreachable!() }
+                          let ret = wit_import();
+                          OutgoingValue::from_handle(ret as u32)
+                        }
+                      }
+                    }
+                    impl OutgoingValue {
+                      #[allow(unused_unsafe, clippy::all)]
+                      /// Writes the value to the output-stream asynchronously.
+                      /// If any other error occurs, it returns an `Err(error)`.
+                      pub fn outgoing_value_write_body_async(&self,) -> Result<OutgoingValueBodyAsync,Error>{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[repr(align(4))]
+                          struct RetArea([u8; 8]);
+                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                          let ptr0 = ret_area.as_mut_ptr() as i32;
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[method]outgoing-value.outgoing-value-write-body-async"]
+                            fn wit_import(_: i32, _: i32, );
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                          wit_import((self).handle() as i32, ptr0);
+                          let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                          match l1 {
+                            0 => {
+                              let e = {
+                                let l2 = *((ptr0 + 4) as *const i32);
+                                
+                                super::super::super::wasi::io::streams::OutputStream::from_handle(l2 as u32)
+                              };
+                              Ok(e)
+                            }
+                            1 => {
+                              let e = {
+                                let l3 = *((ptr0 + 4) as *const i32);
+                                
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l3 as u32)
+                              };
+                              Err(e)
+                            }
+                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                          }
+                        }
+                      }
+                    }
+                    impl OutgoingValue {
+                      #[allow(unused_unsafe, clippy::all)]
+                      /// Writes the value to the output-stream synchronously.
+                      /// If any other error occurs, it returns an `Err(error)`.
+                      pub fn outgoing_value_write_body_sync(&self,value: &OutgoingValueBodySync,) -> Result<(),Error>{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[repr(align(4))]
+                          struct RetArea([u8; 8]);
+                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                          let vec0 = value;
+                          let ptr0 = vec0.as_ptr() as i32;
+                          let len0 = vec0.len() as i32;
+                          let ptr1 = ret_area.as_mut_ptr() as i32;
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[method]outgoing-value.outgoing-value-write-body-sync"]
+                            fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                          wit_import((self).handle() as i32, ptr0, len0, ptr1);
+                          let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                          match l2 {
+                            0 => {
+                              let e = ();
+                              Ok(e)
+                            }
+                            1 => {
+                              let e = {
+                                let l3 = *((ptr1 + 4) as *const i32);
+                                
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l3 as u32)
+                              };
+                              Err(e)
+                            }
+                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                          }
+                        }
+                      }
+                    }
+                    impl IncomingValue {
+                      #[allow(unused_unsafe, clippy::all)]
+                      /// Consumes the value synchronously and returns the value as a list of bytes.
+                      /// If any other error occurs, it returns an `Err(error)`.
+                      pub fn incoming_value_consume_sync(&self,) -> Result<IncomingValueSyncBody,Error>{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[repr(align(4))]
+                          struct RetArea([u8; 12]);
+                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                          let ptr0 = ret_area.as_mut_ptr() as i32;
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[method]incoming-value.incoming-value-consume-sync"]
+                            fn wit_import(_: i32, _: i32, );
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                          wit_import((self).handle() as i32, ptr0);
+                          let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                          match l1 {
+                            0 => {
+                              let e = {
+                                let l2 = *((ptr0 + 4) as *const i32);
+                                let l3 = *((ptr0 + 8) as *const i32);
+                                let len4 = l3 as usize;
+                                
+                                Vec::from_raw_parts(l2 as *mut _, len4, len4)
+                              };
+                              Ok(e)
+                            }
+                            1 => {
+                              let e = {
+                                let l5 = *((ptr0 + 4) as *const i32);
+                                
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l5 as u32)
+                              };
+                              Err(e)
+                            }
+                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                          }
+                        }
+                      }
+                    }
+                    impl IncomingValue {
+                      #[allow(unused_unsafe, clippy::all)]
+                      /// Consumes the value asynchronously and returns the value as an `input-stream`.
+                      /// If any other error occurs, it returns an `Err(error)`.
+                      pub fn incoming_value_consume_async(&self,) -> Result<IncomingValueAsyncBody,Error>{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[repr(align(4))]
+                          struct RetArea([u8; 8]);
+                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                          let ptr0 = ret_area.as_mut_ptr() as i32;
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[method]incoming-value.incoming-value-consume-async"]
+                            fn wit_import(_: i32, _: i32, );
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                          wit_import((self).handle() as i32, ptr0);
+                          let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                          match l1 {
+                            0 => {
+                              let e = {
+                                let l2 = *((ptr0 + 4) as *const i32);
+                                
+                                super::super::super::wasi::io::streams::InputStream::from_handle(l2 as u32)
+                              };
+                              Ok(e)
+                            }
+                            1 => {
+                              let e = {
+                                let l3 = *((ptr0 + 4) as *const i32);
+                                
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l3 as u32)
+                              };
+                              Err(e)
+                            }
+                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                          }
+                        }
+                      }
+                    }
+                    impl IncomingValue {
+                      #[allow(unused_unsafe, clippy::all)]
+                      /// The size of the value in bytes.
+                      /// If the size is unknown or unavailable, this function returns an `Err(error)`.
+                      pub fn incoming_value_size(&self,) -> Result<u64,Error>{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[repr(align(8))]
+                          struct RetArea([u8; 16]);
+                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                          let ptr0 = ret_area.as_mut_ptr() as i32;
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:keyvalue/types@0.1.0")]
+                          extern "C" {
+                            #[link_name = "[method]incoming-value.incoming-value-size"]
+                            fn wit_import(_: i32, _: i32, );
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                          wit_import((self).handle() as i32, ptr0);
+                          let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                          match l1 {
+                            0 => {
+                              let e = {
+                                let l2 = *((ptr0 + 8) as *const i64);
+                                
+                                l2 as u64
+                              };
+                              Ok(e)
+                            }
+                            1 => {
+                              let e = {
+                                let l3 = *((ptr0 + 8) as *const i32);
+                                
+                                super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l3 as u32)
+                              };
+                              Err(e)
+                            }
+                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                          }
+                        }
+                      }
+                    }
+                    
+                  }
+                  
+                  
+                  #[allow(clippy::all)]
+                  pub mod eventual_batch {
+                    #[used]
+                    #[doc(hidden)]
+                    #[cfg(target_arch = "wasm32")]
+                    static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                    pub type Bucket = super::super::super::wasi::keyvalue::types::Bucket;
+                    pub type Error = super::super::super::wasi::keyvalue::types::Error;
+                    pub type Key = super::super::super::wasi::keyvalue::types::Key;
+                    pub type IncomingValue = super::super::super::wasi::keyvalue::types::IncomingValue;
+                    pub type OutgoingValue = super::super::super::wasi::keyvalue::types::OutgoingValue;
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Get the values associated with the keys in the bucket. It returns a list of
+                    /// incoming-value that can be consumed to get the value associated with the key.
+                    /// 
+                    /// If any of the keys do not exist in the bucket, it returns a `none` value for
+                    /// that key in the list.
+                    /// 
+                    /// Note that the key-value pairs are guaranteed to be returned in the same order
+                    /// 
+                    /// MAY show an out-of-date value if there are concurrent writes to the bucket.
+                    /// 
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    pub fn get_many(bucket: &Bucket,keys: &[Key],) -> Result<wit_bindgen::rt::vec::Vec::<Option<IncomingValue>>,Error>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 12]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let vec1 = keys;
+                        let len1 = vec1.len() as i32;
+                        let layout1 = alloc::Layout::from_size_align_unchecked(vec1.len() * 8, 4);
+                        let result1 = if layout1.size() != 0
+                        {
+                          let ptr = alloc::alloc(layout1);
+                          if ptr.is_null()
+                          {
+                            alloc::handle_alloc_error(layout1);
+                          }
+                          ptr
+                        }else {{
+                          ::core::ptr::null_mut()
+                        }};
+                        for (i, e) in vec1.into_iter().enumerate() {
+                          let base = result1 as i32 + (i as i32) * 8;
+                          {
+                            let vec0 = e;
+                            let ptr0 = vec0.as_ptr() as i32;
+                            let len0 = vec0.len() as i32;
+                            *((base + 4) as *mut i32) = len0;
+                            *((base + 0) as *mut i32) = ptr0;
+                          }
+                        }
+                        let ptr2 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/eventual-batch@0.1.0")]
+                        extern "C" {
+                          #[link_name = "get-many"]
+                          fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                        wit_import((bucket).handle() as i32, result1 as i32, len1, ptr2);
+                        let l3 = i32::from(*((ptr2 + 0) as *const u8));
+                        if layout1.size() != 0 {
+                          alloc::dealloc(result1, layout1);
+                        }
+                        match l3 {
+                          0 => {
+                            let e = {
+                              let l4 = *((ptr2 + 4) as *const i32);
+                              let l5 = *((ptr2 + 8) as *const i32);
+                              let base8 = l4;
+                              let len8 = l5;
+                              let mut result8 = Vec::with_capacity(len8 as usize);
+                              for i in 0..len8 {
+                                let base = base8 + i * 8;
+                                let e8 = {
+                                  let l6 = i32::from(*((base + 0) as *const u8));
+                                  
+                                  match l6 {
+                                    0 => None,
+                                    1 => {
+                                      let e = {
+                                        let l7 = *((base + 4) as *const i32);
+                                        
+                                        super::super::super::wasi::keyvalue::types::IncomingValue::from_handle(l7 as u32)
+                                      };
+                                      Some(e)
+                                    }
+                                    _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                  }
+                                };
+                                result8.push(e8);
+                              }
+                              wit_bindgen::rt::dealloc(base8, (len8 as usize) * 8, 4);
+                              
+                              result8
+                            };
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l9 = *((ptr2 + 4) as *const i32);
+                              
+                              super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l9 as u32)
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Get all the keys in the bucket. It returns a list of keys.
+                    /// 
+                    /// Note that the keys are not guaranteed to be returned in any particular order.
+                    /// 
+                    /// If the bucket is empty, it returns an empty list.
+                    /// 
+                    /// MAY show an out-of-date list of keys if there are concurrent writes to the bucket.
+                    /// 
+                    /// If any error occurs, it returns an `Err(error)`.
+                    pub fn keys(bucket: &Bucket,) -> Result<wit_bindgen::rt::vec::Vec::<Key>,Error>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 12]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let ptr0 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/eventual-batch@0.1.0")]
+                        extern "C" {
+                          #[link_name = "keys"]
+                          fn wit_import(_: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                        wit_import((bucket).handle() as i32, ptr0);
+                        let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                        match l1 {
+                          0 => {
+                            let e = {
+                              let l2 = *((ptr0 + 4) as *const i32);
+                              let l3 = *((ptr0 + 8) as *const i32);
+                              let base7 = l2;
+                              let len7 = l3;
+                              let mut result7 = Vec::with_capacity(len7 as usize);
+                              for i in 0..len7 {
+                                let base = base7 + i * 8;
+                                let e7 = {
+                                  let l4 = *((base + 0) as *const i32);
+                                  let l5 = *((base + 4) as *const i32);
+                                  let len6 = l5 as usize;
+                                  let bytes6 = Vec::from_raw_parts(l4 as *mut _, len6, len6);
+                                  
+                                  wit_bindgen::rt::string_lift(bytes6)
+                                };
+                                result7.push(e7);
+                              }
+                              wit_bindgen::rt::dealloc(base7, (len7 as usize) * 8, 4);
+                              
+                              result7
+                            };
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l8 = *((ptr0 + 4) as *const i32);
+                              
+                              super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l8 as u32)
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Set the values associated with the keys in the bucket. If the key already
+                    /// exists in the bucket, it overwrites the value.
+                    /// 
+                    /// Note that the key-value pairs are not guaranteed to be set in the order
+                    /// they are provided.
+                    /// 
+                    /// If any of the keys do not exist in the bucket, it creates a new key-value pair.
+                    /// 
+                    /// If any other error occurs, it returns an `Err(error)`. When an error occurs, it
+                    /// does not rollback the key-value pairs that were already set. Thus, this batch operation
+                    /// does not guarantee atomicity, implying that some key-value pairs could be
+                    /// set while others might fail.
+                    /// 
+                    /// Other concurrent operations may also be able to see the partial results.
+                    pub fn set_many(bucket: &Bucket,key_values: &[(Key,&OutgoingValue,)],) -> Result<(),Error>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 8]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let vec2 = key_values;
+                        let len2 = vec2.len() as i32;
+                        let layout2 = alloc::Layout::from_size_align_unchecked(vec2.len() * 12, 4);
+                        let result2 = if layout2.size() != 0
+                        {
+                          let ptr = alloc::alloc(layout2);
+                          if ptr.is_null()
+                          {
+                            alloc::handle_alloc_error(layout2);
+                          }
+                          ptr
+                        }else {{
+                          ::core::ptr::null_mut()
+                        }};
+                        for (i, e) in vec2.into_iter().enumerate() {
+                          let base = result2 as i32 + (i as i32) * 12;
+                          {
+                            let (t0_0, t0_1, ) = e;
+                            let vec1 = t0_0;
+                            let ptr1 = vec1.as_ptr() as i32;
+                            let len1 = vec1.len() as i32;
+                            *((base + 4) as *mut i32) = len1;
+                            *((base + 0) as *mut i32) = ptr1;
+                            *((base + 8) as *mut i32) = (t0_1).handle() as i32;
+                          }
+                        }
+                        let ptr3 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/eventual-batch@0.1.0")]
+                        extern "C" {
+                          #[link_name = "set-many"]
+                          fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                        wit_import((bucket).handle() as i32, result2 as i32, len2, ptr3);
+                        let l4 = i32::from(*((ptr3 + 0) as *const u8));
+                        if layout2.size() != 0 {
+                          alloc::dealloc(result2, layout2);
+                        }
+                        match l4 {
+                          0 => {
+                            let e = ();
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l5 = *((ptr3 + 4) as *const i32);
+                              
+                              super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l5 as u32)
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Delete the key-value pairs associated with the keys in the bucket.
+                    /// 
+                    /// Note that the key-value pairs are not guaranteed to be deleted in the order
+                    /// they are provided.
+                    /// 
+                    /// If any of the keys do not exist in the bucket, it skips the key.
+                    /// 
+                    /// If any other error occurs, it returns an `Err(error)`. When an error occurs, it
+                    /// does not rollback the key-value pairs that were already deleted. Thus, this batch operation
+                    /// does not guarantee atomicity, implying that some key-value pairs could be
+                    /// deleted while others might fail.
+                    /// 
+                    /// Other concurrent operations may also be able to see the partial results.
+                    pub fn delete_many(bucket: &Bucket,keys: &[Key],) -> Result<(),Error>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 8]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let vec1 = keys;
+                        let len1 = vec1.len() as i32;
+                        let layout1 = alloc::Layout::from_size_align_unchecked(vec1.len() * 8, 4);
+                        let result1 = if layout1.size() != 0
+                        {
+                          let ptr = alloc::alloc(layout1);
+                          if ptr.is_null()
+                          {
+                            alloc::handle_alloc_error(layout1);
+                          }
+                          ptr
+                        }else {{
+                          ::core::ptr::null_mut()
+                        }};
+                        for (i, e) in vec1.into_iter().enumerate() {
+                          let base = result1 as i32 + (i as i32) * 8;
+                          {
+                            let vec0 = e;
+                            let ptr0 = vec0.as_ptr() as i32;
+                            let len0 = vec0.len() as i32;
+                            *((base + 4) as *mut i32) = len0;
+                            *((base + 0) as *mut i32) = ptr0;
+                          }
+                        }
+                        let ptr2 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/eventual-batch@0.1.0")]
+                        extern "C" {
+                          #[link_name = "delete-many"]
+                          fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                        wit_import((bucket).handle() as i32, result1 as i32, len1, ptr2);
+                        let l3 = i32::from(*((ptr2 + 0) as *const u8));
+                        if layout1.size() != 0 {
+                          alloc::dealloc(result1, layout1);
+                        }
+                        match l3 {
+                          0 => {
+                            let e = ();
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l4 = *((ptr2 + 4) as *const i32);
+                              
+                              super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l4 as u32)
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                    
+                  }
+                  
+                  
+                  #[allow(clippy::all)]
+                  pub mod eventual {
+                    #[used]
+                    #[doc(hidden)]
+                    #[cfg(target_arch = "wasm32")]
+                    static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                    pub type Bucket = super::super::super::wasi::keyvalue::types::Bucket;
+                    pub type Error = super::super::super::wasi::keyvalue::types::Error;
+                    pub type IncomingValue = super::super::super::wasi::keyvalue::types::IncomingValue;
+                    pub type Key = super::super::super::wasi::keyvalue::types::Key;
+                    pub type OutgoingValue = super::super::super::wasi::keyvalue::types::OutgoingValue;
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Get the value associated with the key in the bucket.
+                    /// 
+                    /// The value is returned as an option. If the key-value pair exists in the
+                    /// bucket, it returns `Ok(value)`. If the key does not exist in the
+                    /// bucket, it returns `Ok(none)`.
+                    /// 
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    pub fn get(bucket: &Bucket,key: &Key,) -> Result<Option<IncomingValue>,Error>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 12]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let vec0 = key;
+                        let ptr0 = vec0.as_ptr() as i32;
+                        let len0 = vec0.len() as i32;
+                        let ptr1 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/eventual@0.1.0")]
+                        extern "C" {
+                          #[link_name = "get"]
+                          fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                        wit_import((bucket).handle() as i32, ptr0, len0, ptr1);
+                        let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                        match l2 {
+                          0 => {
+                            let e = {
+                              let l3 = i32::from(*((ptr1 + 4) as *const u8));
+                              
+                              match l3 {
+                                0 => None,
+                                1 => {
+                                  let e = {
+                                    let l4 = *((ptr1 + 8) as *const i32);
+                                    
+                                    super::super::super::wasi::keyvalue::types::IncomingValue::from_handle(l4 as u32)
+                                  };
+                                  Some(e)
+                                }
+                                _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                              }
+                            };
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l5 = *((ptr1 + 4) as *const i32);
+                              
+                              super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l5 as u32)
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Set the value associated with the key in the bucket. If the key already
+                    /// exists in the bucket, it overwrites the value.
+                    /// 
+                    /// If the key does not exist in the bucket, it creates a new key-value pair.
+                    /// 
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    pub fn set(bucket: &Bucket,key: &Key,outgoing_value: &OutgoingValue,) -> Result<(),Error>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 8]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let vec0 = key;
+                        let ptr0 = vec0.as_ptr() as i32;
+                        let len0 = vec0.len() as i32;
+                        let ptr1 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/eventual@0.1.0")]
+                        extern "C" {
+                          #[link_name = "set"]
+                          fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                        wit_import((bucket).handle() as i32, ptr0, len0, (outgoing_value).handle() as i32, ptr1);
+                        let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                        match l2 {
+                          0 => {
+                            let e = ();
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l3 = *((ptr1 + 4) as *const i32);
+                              
+                              super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l3 as u32)
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Delete the key-value pair associated with the key in the bucket.
+                    /// 
+                    /// If the key does not exist in the bucket, it does nothing.
+                    /// 
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    pub fn delete(bucket: &Bucket,key: &Key,) -> Result<(),Error>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 8]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let vec0 = key;
+                        let ptr0 = vec0.as_ptr() as i32;
+                        let len0 = vec0.len() as i32;
+                        let ptr1 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/eventual@0.1.0")]
+                        extern "C" {
+                          #[link_name = "delete"]
+                          fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                        wit_import((bucket).handle() as i32, ptr0, len0, ptr1);
+                        let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                        match l2 {
+                          0 => {
+                            let e = ();
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l3 = *((ptr1 + 4) as *const i32);
+                              
+                              super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l3 as u32)
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Check if the key exists in the bucket.
+                    /// 
+                    /// If the key exists in the bucket, it returns `Ok(true)`. If the key does
+                    /// not exist in the bucket, it returns `Ok(false)`.
+                    /// 
+                    /// If any other error occurs, it returns an `Err(error)`.
+                    pub fn exists(bucket: &Bucket,key: &Key,) -> Result<bool,Error>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 8]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let vec0 = key;
+                        let ptr0 = vec0.as_ptr() as i32;
+                        let len0 = vec0.len() as i32;
+                        let ptr1 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:keyvalue/eventual@0.1.0")]
+                        extern "C" {
+                          #[link_name = "exists"]
+                          fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                        wit_import((bucket).handle() as i32, ptr0, len0, ptr1);
+                        let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                        match l2 {
+                          0 => {
+                            let e = {
+                              let l3 = i32::from(*((ptr1 + 4) as *const u8));
+                              
+                              wit_bindgen::rt::bool_lift(l3 as u8)
+                            };
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l4 = *((ptr1 + 4) as *const i32);
+                              
+                              super::super::super::wasi::keyvalue::wasi_keyvalue_error::Error::from_handle(l4 as u32)
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                    
+                  }
+                  
+                }
+                pub mod logging {
+                  
+                  #[allow(clippy::all)]
+                  pub mod logging {
+                    #[used]
+                    #[doc(hidden)]
+                    #[cfg(target_arch = "wasm32")]
+                    static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                    /// A log level, describing a kind of message.
+                    #[repr(u8)]
+                    #[derive(Clone, Copy, Eq, PartialEq)]
+                    pub enum Level {
+                      /// Describes messages about the values of variables and the flow of
+                      /// control within a program.
+                      Trace,
+                      /// Describes messages likely to be of interest to someone debugging a
+                      /// program.
+                      Debug,
+                      /// Describes messages likely to be of interest to someone monitoring a
+                      /// program.
+                      Info,
+                      /// Describes messages indicating hazardous situations.
+                      Warn,
+                      /// Describes messages indicating serious errors.
+                      Error,
+                      /// Describes messages indicating fatal errors.
+                      Critical,
+                    }
+                    impl ::core::fmt::Debug for Level {
+                      fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        match self {
+                          Level::Trace => {
+                            f.debug_tuple("Level::Trace").finish()
+                          }
+                          Level::Debug => {
+                            f.debug_tuple("Level::Debug").finish()
+                          }
+                          Level::Info => {
+                            f.debug_tuple("Level::Info").finish()
+                          }
+                          Level::Warn => {
+                            f.debug_tuple("Level::Warn").finish()
+                          }
+                          Level::Error => {
+                            f.debug_tuple("Level::Error").finish()
+                          }
+                          Level::Critical => {
+                            f.debug_tuple("Level::Critical").finish()
+                          }
+                        }
+                      }
+                    }
+                    
+                    impl Level{
+                      pub(crate) unsafe fn _lift(val: u8) -> Level{
+                        if !cfg!(debug_assertions) {
+                          return ::core::mem::transmute(val);
+                        }
+                        
+                        match val {
+                          0 => Level::Trace,
+                          1 => Level::Debug,
+                          2 => Level::Info,
+                          3 => Level::Warn,
+                          4 => Level::Error,
+                          5 => Level::Critical,
+                          
+                          _ => panic!("invalid enum discriminant"),
+                        }
+                      }
+                    }
+                    
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Emit a log message.
+                    /// 
+                    /// A log message has a `level` describing what kind of message is being
+                    /// sent, a context, which is an uninterpreted string meant to help
+                    /// consumers group similar messages, and a string containing the message
+                    /// text.
+                    pub fn log(level: Level,context: &str,message: &str,){
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        let vec0 = context;
+                        let ptr0 = vec0.as_ptr() as i32;
+                        let len0 = vec0.len() as i32;
+                        let vec1 = message;
+                        let ptr1 = vec1.as_ptr() as i32;
+                        let len1 = vec1.len() as i32;
+                        
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:logging/logging")]
+                        extern "C" {
+                          #[link_name = "log"]
+                          fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                        wit_import(level.clone() as i32, ptr0, len0, ptr1, len1);
+                      }
+                    }
+                    
+                  }
+                  
+                }
+                pub mod sockets {
+                  
+                  #[allow(clippy::all)]
+                  pub mod network {
+                    #[used]
+                    #[doc(hidden)]
+                    #[cfg(target_arch = "wasm32")]
+                    static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                    /// An opaque resource that represents access to (a subset of) the network.
+                    /// This enables context-based security for networking.
+                    /// There is no need for this to map 1:1 to a physical network interface.
+                    
+                    #[derive(Debug)]
+                    #[repr(transparent)]
+                    pub struct Network{
+                      handle: wit_bindgen::rt::Resource<Network>,
+                    }
+                    
+                    impl Network{
+                      #[doc(hidden)]
+                      pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                          handle: wit_bindgen::rt::Resource::from_handle(handle),
+                        }
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn into_handle(self) -> u32 {
+                        wit_bindgen::rt::Resource::into_handle(self.handle)
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn handle(&self) -> u32 {
+                        wit_bindgen::rt::Resource::handle(&self.handle)
+                      }
+                    }
+                    
+                    
+                    unsafe impl wit_bindgen::rt::WasmResource for Network{
+                      #[inline]
+                      unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                          #[link(wasm_import_module = "wasi:sockets/network@0.2.0")]
+                          extern "C" {
+                            #[link_name = "[resource-drop]network"]
+                            fn drop(_: u32);
+                          }
+                          
+                          drop(_handle);
+                        }
+                      }
+                    }
+                    
+                    /// Error codes.
+                    /// 
+                    /// In theory, every API can return any error code.
+                    /// In practice, API's typically only return the errors documented per API
+                    /// combined with a couple of errors that are always possible:
+                    /// - `unknown`
+                    /// - `access-denied`
+                    /// - `not-supported`
+                    /// - `out-of-memory`
+                    /// - `concurrency-conflict`
+                    /// 
+                    /// See each individual API for what the POSIX equivalents are. They sometimes differ per API.
+                    #[repr(u8)]
+                    #[derive(Clone, Copy, Eq, PartialEq)]
+                    pub enum ErrorCode {
+                      /// Unknown error
+                      Unknown,
+                      /// Access denied.
+                      /// 
+                      /// POSIX equivalent: EACCES, EPERM
+                      AccessDenied,
+                      /// The operation is not supported.
+                      /// 
+                      /// POSIX equivalent: EOPNOTSUPP
+                      NotSupported,
+                      /// One of the arguments is invalid.
+                      /// 
+                      /// POSIX equivalent: EINVAL
+                      InvalidArgument,
+                      /// Not enough memory to complete the operation.
+                      /// 
+                      /// POSIX equivalent: ENOMEM, ENOBUFS, EAI_MEMORY
+                      OutOfMemory,
+                      /// The operation timed out before it could finish completely.
+                      Timeout,
+                      /// This operation is incompatible with another asynchronous operation that is already in progress.
+                      /// 
+                      /// POSIX equivalent: EALREADY
+                      ConcurrencyConflict,
+                      /// Trying to finish an asynchronous operation that:
+                      /// - has not been started yet, or:
+                      /// - was already finished by a previous `finish-*` call.
+                      /// 
+                      /// Note: this is scheduled to be removed when `future`s are natively supported.
+                      NotInProgress,
+                      /// The operation has been aborted because it could not be completed immediately.
+                      /// 
+                      /// Note: this is scheduled to be removed when `future`s are natively supported.
+                      WouldBlock,
+                      /// The operation is not valid in the socket's current state.
+                      InvalidState,
+                      /// A new socket resource could not be created because of a system limit.
+                      NewSocketLimit,
+                      /// A bind operation failed because the provided address is not an address that the `network` can bind to.
+                      AddressNotBindable,
+                      /// A bind operation failed because the provided address is already in use or because there are no ephemeral ports available.
+                      AddressInUse,
+                      /// The remote address is not reachable
+                      RemoteUnreachable,
+                      /// The TCP connection was forcefully rejected
+                      ConnectionRefused,
+                      /// The TCP connection was reset.
+                      ConnectionReset,
+                      /// A TCP connection was aborted.
+                      ConnectionAborted,
+                      /// The size of a datagram sent to a UDP socket exceeded the maximum
+                      /// supported size.
+                      DatagramTooLarge,
+                      /// Name does not exist or has no suitable associated IP addresses.
+                      NameUnresolvable,
+                      /// A temporary failure in name resolution occurred.
+                      TemporaryResolverFailure,
+                      /// A permanent failure in name resolution occurred.
+                      PermanentResolverFailure,
+                    }
+                    impl ErrorCode{
+                      pub fn name(&self) -> &'static str {
+                        match self {
+                          ErrorCode::Unknown => "unknown",
+                          ErrorCode::AccessDenied => "access-denied",
+                          ErrorCode::NotSupported => "not-supported",
+                          ErrorCode::InvalidArgument => "invalid-argument",
+                          ErrorCode::OutOfMemory => "out-of-memory",
+                          ErrorCode::Timeout => "timeout",
+                          ErrorCode::ConcurrencyConflict => "concurrency-conflict",
+                          ErrorCode::NotInProgress => "not-in-progress",
+                          ErrorCode::WouldBlock => "would-block",
+                          ErrorCode::InvalidState => "invalid-state",
+                          ErrorCode::NewSocketLimit => "new-socket-limit",
+                          ErrorCode::AddressNotBindable => "address-not-bindable",
+                          ErrorCode::AddressInUse => "address-in-use",
+                          ErrorCode::RemoteUnreachable => "remote-unreachable",
+                          ErrorCode::ConnectionRefused => "connection-refused",
+                          ErrorCode::ConnectionReset => "connection-reset",
+                          ErrorCode::ConnectionAborted => "connection-aborted",
+                          ErrorCode::DatagramTooLarge => "datagram-too-large",
+                          ErrorCode::NameUnresolvable => "name-unresolvable",
+                          ErrorCode::TemporaryResolverFailure => "temporary-resolver-failure",
+                          ErrorCode::PermanentResolverFailure => "permanent-resolver-failure",
+                        }
+                      }
+                      pub fn message(&self) -> &'static str {
+                        match self {
+                          ErrorCode::Unknown => "Unknown error",
+                          ErrorCode::AccessDenied => "Access denied.
+                          
+                          POSIX equivalent: EACCES, EPERM",
+                          ErrorCode::NotSupported => "The operation is not supported.
+                          
+                          POSIX equivalent: EOPNOTSUPP",
+                          ErrorCode::InvalidArgument => "One of the arguments is invalid.
+                          
+                          POSIX equivalent: EINVAL",
+                          ErrorCode::OutOfMemory => "Not enough memory to complete the operation.
+                          
+                          POSIX equivalent: ENOMEM, ENOBUFS, EAI_MEMORY",
+                          ErrorCode::Timeout => "The operation timed out before it could finish completely.",
+                          ErrorCode::ConcurrencyConflict => "This operation is incompatible with another asynchronous operation that is already in progress.
+                          
+                          POSIX equivalent: EALREADY",
+                          ErrorCode::NotInProgress => "Trying to finish an asynchronous operation that:
+                          - has not been started yet, or:
+                          - was already finished by a previous `finish-*` call.
+                          
+                          Note: this is scheduled to be removed when `future`s are natively supported.",
+                          ErrorCode::WouldBlock => "The operation has been aborted because it could not be completed immediately.
+                          
+                          Note: this is scheduled to be removed when `future`s are natively supported.",
+                          ErrorCode::InvalidState => "The operation is not valid in the socket's current state.",
+                          ErrorCode::NewSocketLimit => "A new socket resource could not be created because of a system limit.",
+                          ErrorCode::AddressNotBindable => "A bind operation failed because the provided address is not an address that the `network` can bind to.",
+                          ErrorCode::AddressInUse => "A bind operation failed because the provided address is already in use or because there are no ephemeral ports available.",
+                          ErrorCode::RemoteUnreachable => "The remote address is not reachable",
+                          ErrorCode::ConnectionRefused => "The TCP connection was forcefully rejected",
+                          ErrorCode::ConnectionReset => "The TCP connection was reset.",
+                          ErrorCode::ConnectionAborted => "A TCP connection was aborted.",
+                          ErrorCode::DatagramTooLarge => "The size of a datagram sent to a UDP socket exceeded the maximum
+                          supported size.",
+                          ErrorCode::NameUnresolvable => "Name does not exist or has no suitable associated IP addresses.",
+                          ErrorCode::TemporaryResolverFailure => "A temporary failure in name resolution occurred.",
+                          ErrorCode::PermanentResolverFailure => "A permanent failure in name resolution occurred.",
+                        }
+                      }
+                    }
+                    impl ::core::fmt::Debug for ErrorCode{
+                      fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        f.debug_struct("ErrorCode")
+                        .field("code", &(*self as i32))
+                        .field("name", &self.name())
+                        .field("message", &self.message())
+                        .finish()
+                      }
+                    }
+                    impl ::core::fmt::Display for ErrorCode{
+                      fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        write!(f, "{} (error {})", self.name(), *self as i32)
+                      }
+                    }
+                    
+                    impl std::error::Error for ErrorCode{}
+                    
+                    impl ErrorCode{
+                      pub(crate) unsafe fn _lift(val: u8) -> ErrorCode{
+                        if !cfg!(debug_assertions) {
+                          return ::core::mem::transmute(val);
+                        }
+                        
+                        match val {
+                          0 => ErrorCode::Unknown,
+                          1 => ErrorCode::AccessDenied,
+                          2 => ErrorCode::NotSupported,
+                          3 => ErrorCode::InvalidArgument,
+                          4 => ErrorCode::OutOfMemory,
+                          5 => ErrorCode::Timeout,
+                          6 => ErrorCode::ConcurrencyConflict,
+                          7 => ErrorCode::NotInProgress,
+                          8 => ErrorCode::WouldBlock,
+                          9 => ErrorCode::InvalidState,
+                          10 => ErrorCode::NewSocketLimit,
+                          11 => ErrorCode::AddressNotBindable,
+                          12 => ErrorCode::AddressInUse,
+                          13 => ErrorCode::RemoteUnreachable,
+                          14 => ErrorCode::ConnectionRefused,
+                          15 => ErrorCode::ConnectionReset,
+                          16 => ErrorCode::ConnectionAborted,
+                          17 => ErrorCode::DatagramTooLarge,
+                          18 => ErrorCode::NameUnresolvable,
+                          19 => ErrorCode::TemporaryResolverFailure,
+                          20 => ErrorCode::PermanentResolverFailure,
+                          
+                          _ => panic!("invalid enum discriminant"),
+                        }
+                      }
+                    }
+                    
+                    #[repr(u8)]
+                    #[derive(Clone, Copy, Eq, PartialEq)]
+                    pub enum IpAddressFamily {
+                      /// Similar to `AF_INET` in POSIX.
+                      Ipv4,
+                      /// Similar to `AF_INET6` in POSIX.
+                      Ipv6,
+                    }
+                    impl ::core::fmt::Debug for IpAddressFamily {
+                      fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        match self {
+                          IpAddressFamily::Ipv4 => {
+                            f.debug_tuple("IpAddressFamily::Ipv4").finish()
+                          }
+                          IpAddressFamily::Ipv6 => {
+                            f.debug_tuple("IpAddressFamily::Ipv6").finish()
+                          }
+                        }
+                      }
+                    }
+                    
+                    impl IpAddressFamily{
+                      pub(crate) unsafe fn _lift(val: u8) -> IpAddressFamily{
+                        if !cfg!(debug_assertions) {
+                          return ::core::mem::transmute(val);
+                        }
+                        
+                        match val {
+                          0 => IpAddressFamily::Ipv4,
+                          1 => IpAddressFamily::Ipv6,
+                          
+                          _ => panic!("invalid enum discriminant"),
+                        }
+                      }
+                    }
+                    
+                    pub type Ipv4Address = (u8,u8,u8,u8,);
+                    pub type Ipv6Address = (u16,u16,u16,u16,u16,u16,u16,u16,);
+                    #[derive(Clone, Copy)]
+                    pub enum IpAddress{
+                      Ipv4(Ipv4Address),
+                      Ipv6(Ipv6Address),
+                    }
+                    impl ::core::fmt::Debug for IpAddress {
+                      fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        match self {
+                          IpAddress::Ipv4(e) => {
+                            f.debug_tuple("IpAddress::Ipv4").field(e).finish()
+                          }
+                          IpAddress::Ipv6(e) => {
+                            f.debug_tuple("IpAddress::Ipv6").field(e).finish()
+                          }
+                        }
+                      }
+                    }
+                    #[repr(C)]
+                    #[derive(Clone, Copy)]
+                    pub struct Ipv4SocketAddress {
+                      /// sin_port
+                      pub port: u16,
+                      /// sin_addr
+                      pub address: Ipv4Address,
+                    }
+                    impl ::core::fmt::Debug for Ipv4SocketAddress {
+                      fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        f.debug_struct("Ipv4SocketAddress").field("port", &self.port).field("address", &self.address).finish()
+                      }
+                    }
+                    #[repr(C)]
+                    #[derive(Clone, Copy)]
+                    pub struct Ipv6SocketAddress {
+                      /// sin6_port
+                      pub port: u16,
+                      /// sin6_flowinfo
+                      pub flow_info: u32,
+                      /// sin6_addr
+                      pub address: Ipv6Address,
+                      /// sin6_scope_id
+                      pub scope_id: u32,
+                    }
+                    impl ::core::fmt::Debug for Ipv6SocketAddress {
+                      fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        f.debug_struct("Ipv6SocketAddress").field("port", &self.port).field("flow-info", &self.flow_info).field("address", &self.address).field("scope-id", &self.scope_id).finish()
+                      }
+                    }
+                    #[derive(Clone, Copy)]
+                    pub enum IpSocketAddress{
+                      Ipv4(Ipv4SocketAddress),
+                      Ipv6(Ipv6SocketAddress),
+                    }
+                    impl ::core::fmt::Debug for IpSocketAddress {
+                      fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        match self {
+                          IpSocketAddress::Ipv4(e) => {
+                            f.debug_tuple("IpSocketAddress::Ipv4").field(e).finish()
+                          }
+                          IpSocketAddress::Ipv6(e) => {
+                            f.debug_tuple("IpSocketAddress::Ipv6").field(e).finish()
+                          }
+                        }
+                      }
+                    }
+                    
+                  }
+                  
+                  
+                  #[allow(clippy::all)]
+                  pub mod ip_name_lookup {
+                    #[used]
+                    #[doc(hidden)]
+                    #[cfg(target_arch = "wasm32")]
+                    static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                    pub type Pollable = super::super::super::wasi::io::poll::Pollable;
+                    pub type Network = super::super::super::wasi::sockets::network::Network;
+                    pub type ErrorCode = super::super::super::wasi::sockets::network::ErrorCode;
+                    pub type IpAddress = super::super::super::wasi::sockets::network::IpAddress;
+                    
+                    #[derive(Debug)]
+                    #[repr(transparent)]
+                    pub struct ResolveAddressStream{
+                      handle: wit_bindgen::rt::Resource<ResolveAddressStream>,
+                    }
+                    
+                    impl ResolveAddressStream{
+                      #[doc(hidden)]
+                      pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                          handle: wit_bindgen::rt::Resource::from_handle(handle),
+                        }
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn into_handle(self) -> u32 {
+                        wit_bindgen::rt::Resource::into_handle(self.handle)
+                      }
+                      
+                      #[doc(hidden)]
+                      pub fn handle(&self) -> u32 {
+                        wit_bindgen::rt::Resource::handle(&self.handle)
+                      }
+                    }
+                    
+                    
+                    unsafe impl wit_bindgen::rt::WasmResource for ResolveAddressStream{
+                      #[inline]
+                      unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+                        
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                          #[link(wasm_import_module = "wasi:sockets/ip-name-lookup@0.2.0")]
+                          extern "C" {
+                            #[link_name = "[resource-drop]resolve-address-stream"]
+                            fn drop(_: u32);
+                          }
+                          
+                          drop(_handle);
+                        }
+                      }
+                    }
+                    
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Resolve an internet host name to a list of IP addresses.
+                    /// 
+                    /// Unicode domain names are automatically converted to ASCII using IDNA encoding.
+                    /// If the input is an IP address string, the address is parsed and returned
+                    /// as-is without making any external requests.
+                    /// 
+                    /// See the wasi-socket proposal README.md for a comparison with getaddrinfo.
+                    /// 
+                    /// This function never blocks. It either immediately fails or immediately
+                    /// returns successfully with a `resolve-address-stream` that can be used
+                    /// to (asynchronously) fetch the results.
+                    /// 
+                    /// # Typical errors
+                    /// - `invalid-argument`: `name` is a syntactically invalid domain name or IP address.
+                    /// 
+                    /// # References:
+                    /// - <https://pubs.opengroup.org/onlinepubs/9699919799/functions/getaddrinfo.html>
+                    /// - <https://man7.org/linux/man-pages/man3/getaddrinfo.3.html>
+                    /// - <https://learn.microsoft.com/en-us/windows/win32/api/ws2tcpip/nf-ws2tcpip-getaddrinfo>
+                    /// - <https://man.freebsd.org/cgi/man.cgi?query=getaddrinfo&sektion=3>
+                    pub fn resolve_addresses(network: &Network,name: &str,) -> Result<ResolveAddressStream,ErrorCode>{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[repr(align(4))]
+                        struct RetArea([u8; 8]);
+                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr() as i32;
+                        let len0 = vec0.len() as i32;
+                        let ptr1 = ret_area.as_mut_ptr() as i32;
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:sockets/ip-name-lookup@0.2.0")]
+                        extern "C" {
+                          #[link_name = "resolve-addresses"]
+                          fn wit_import(_: i32, _: i32, _: i32, _: i32, );
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i32, _: i32, _: i32, ){ unreachable!() }
+                        wit_import((network).handle() as i32, ptr0, len0, ptr1);
+                        let l2 = i32::from(*((ptr1 + 0) as *const u8));
+                        match l2 {
+                          0 => {
+                            let e = {
+                              let l3 = *((ptr1 + 4) as *const i32);
+                              
+                              ResolveAddressStream::from_handle(l3 as u32)
+                            };
+                            Ok(e)
+                          }
+                          1 => {
+                            let e = {
+                              let l4 = i32::from(*((ptr1 + 4) as *const u8));
+                              
+                              super::super::super::wasi::sockets::network::ErrorCode::_lift(l4 as u8)
+                            };
+                            Err(e)
+                          }
+                          _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                        }
+                      }
+                    }
+                    impl ResolveAddressStream {
+                      #[allow(unused_unsafe, clippy::all)]
+                      /// Returns the next address from the resolver.
+                      /// 
+                      /// This function should be called multiple times. On each call, it will
+                      /// return the next address in connection order preference. If all
+                      /// addresses have been exhausted, this function returns `none`.
+                      /// 
+                      /// This function never returns IPv4-mapped IPv6 addresses.
+                      /// 
+                      /// # Typical errors
+                      /// - `name-unresolvable`:          Name does not exist or has no suitable associated IP addresses. (EAI_NONAME, EAI_NODATA, EAI_ADDRFAMILY)
+                      /// - `temporary-resolver-failure`: A temporary failure in name resolution occurred. (EAI_AGAIN)
+                      /// - `permanent-resolver-failure`: A permanent failure in name resolution occurred. (EAI_FAIL)
+                      /// - `would-block`:                A result is not available yet. (EWOULDBLOCK, EAGAIN)
+                      pub fn resolve_next_address(&self,) -> Result<Option<IpAddress>,ErrorCode>{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[repr(align(2))]
+                          struct RetArea([u8; 22]);
+                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                          let ptr0 = ret_area.as_mut_ptr() as i32;
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:sockets/ip-name-lookup@0.2.0")]
+                          extern "C" {
+                            #[link_name = "[method]resolve-address-stream.resolve-next-address"]
+                            fn wit_import(_: i32, _: i32, );
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                          wit_import((self).handle() as i32, ptr0);
+                          let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                          match l1 {
+                            0 => {
+                              let e = {
+                                let l2 = i32::from(*((ptr0 + 2) as *const u8));
+                                
+                                match l2 {
+                                  0 => None,
+                                  1 => {
+                                    let e = {
+                                      let l3 = i32::from(*((ptr0 + 4) as *const u8));
+                                      use super::super::super::wasi::sockets::network::IpAddress as V16;
+                                      let v16 = match l3 {
+                                        0 => {
+                                          let e16 = {
+                                            let l4 = i32::from(*((ptr0 + 6) as *const u8));
+                                            let l5 = i32::from(*((ptr0 + 7) as *const u8));
+                                            let l6 = i32::from(*((ptr0 + 8) as *const u8));
+                                            let l7 = i32::from(*((ptr0 + 9) as *const u8));
+                                            
+                                            (l4 as u8, l5 as u8, l6 as u8, l7 as u8)
+                                          };
+                                          V16::Ipv4(e16)
+                                        }
+                                        n => {
+                                          debug_assert_eq!(n, 1, "invalid enum discriminant");
+                                          let e16 = {
+                                            let l8 = i32::from(*((ptr0 + 6) as *const u16));
+                                            let l9 = i32::from(*((ptr0 + 8) as *const u16));
+                                            let l10 = i32::from(*((ptr0 + 10) as *const u16));
+                                            let l11 = i32::from(*((ptr0 + 12) as *const u16));
+                                            let l12 = i32::from(*((ptr0 + 14) as *const u16));
+                                            let l13 = i32::from(*((ptr0 + 16) as *const u16));
+                                            let l14 = i32::from(*((ptr0 + 18) as *const u16));
+                                            let l15 = i32::from(*((ptr0 + 20) as *const u16));
+                                            
+                                            (l8 as u16, l9 as u16, l10 as u16, l11 as u16, l12 as u16, l13 as u16, l14 as u16, l15 as u16)
+                                          };
+                                          V16::Ipv6(e16)
+                                        }
+                                      };
+                                      
+                                      v16
+                                    };
+                                    Some(e)
+                                  }
+                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                }
+                              };
+                              Ok(e)
+                            }
+                            1 => {
+                              let e = {
+                                let l17 = i32::from(*((ptr0 + 2) as *const u8));
+                                
+                                super::super::super::wasi::sockets::network::ErrorCode::_lift(l17 as u8)
+                              };
+                              Err(e)
+                            }
+                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                          }
+                        }
+                      }
+                    }
+                    impl ResolveAddressStream {
+                      #[allow(unused_unsafe, clippy::all)]
+                      /// Create a `pollable` which will resolve once the stream is ready for I/O.
+                      /// 
+                      /// Note: this function is here for WASI Preview2 only.
+                      /// It's planned to be removed when `future` is natively supported in Preview3.
+                      pub fn subscribe(&self,) -> Pollable{
+                        
+                        #[allow(unused_imports)]
+                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                        unsafe {
+                          
+                          #[cfg(target_arch = "wasm32")]
+                          #[link(wasm_import_module = "wasi:sockets/ip-name-lookup@0.2.0")]
+                          extern "C" {
+                            #[link_name = "[method]resolve-address-stream.subscribe"]
+                            fn wit_import(_: i32, ) -> i32;
+                          }
+                          
+                          #[cfg(not(target_arch = "wasm32"))]
+                          fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                          let ret = wit_import((self).handle() as i32);
+                          super::super::super::wasi::io::poll::Pollable::from_handle(ret as u32)
+                        }
+                      }
+                    }
+                    
+                  }
+                  
+                  
+                  #[allow(clippy::all)]
+                  pub mod instance_network {
+                    #[used]
+                    #[doc(hidden)]
+                    #[cfg(target_arch = "wasm32")]
+                    static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                    pub type Network = super::super::super::wasi::sockets::network::Network;
+                    #[allow(unused_unsafe, clippy::all)]
+                    /// Get a handle to the default network.
+                    pub fn instance_network() -> Network{
+                      
+                      #[allow(unused_imports)]
+                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                      unsafe {
+                        
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:sockets/instance-network@0.2.0")]
+                        extern "C" {
+                          #[link_name = "instance-network"]
+                          fn wit_import() -> i32;
+                        }
+                        
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import() -> i32{ unreachable!() }
+                        let ret = wit_import();
+                        super::super::super::wasi::sockets::network::Network::from_handle(ret as u32)
+                      }
+                    }
+                    
+                  }
+                  
+                }
+              }
+              
+              #[cfg(target_arch = "wasm32")]
+              #[link_section = "component-type:golem-rust"]
+              #[doc(hidden)]
+              pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 17404] = [3, 0, 10, 103, 111, 108, 101, 109, 45, 114, 117, 115, 116, 0, 97, 115, 109, 13, 0, 1, 0, 7, 247, 134, 1, 1, 65, 2, 1, 65, 75, 1, 66, 25, 1, 122, 4, 0, 10, 110, 111, 100, 101, 45, 105, 110, 100, 101, 120, 3, 0, 0, 1, 112, 1, 1, 107, 1, 1, 111, 2, 121, 3, 1, 112, 127, 1, 106, 1, 3, 1, 3, 1, 113, 21, 12, 114, 101, 99, 111, 114, 100, 45, 118, 97, 108, 117, 101, 1, 2, 0, 13, 118, 97, 114, 105, 97, 110, 116, 45, 118, 97, 108, 117, 101, 1, 4, 0, 10, 101, 110, 117, 109, 45, 118, 97, 108, 117, 101, 1, 121, 0, 11, 102, 108, 97, 103, 115, 45, 118, 97, 108, 117, 101, 1, 5, 0, 11, 116, 117, 112, 108, 101, 45, 118, 97, 108, 117, 101, 1, 2, 0, 10, 108, 105, 115, 116, 45, 118, 97, 108, 117, 101, 1, 2, 0, 12, 111, 112, 116, 105, 111, 110, 45, 118, 97, 108, 117, 101, 1, 3, 0, 12, 114, 101, 115, 117, 108, 116, 45, 118, 97, 108, 117, 101, 1, 6, 0, 7, 112, 114, 105, 109, 45, 117, 56, 1, 125, 0, 8, 112, 114, 105, 109, 45, 117, 49, 54, 1, 123, 0, 8, 112, 114, 105, 109, 45, 117, 51, 50, 1, 121, 0, 8, 112, 114, 105, 109, 45, 117, 54, 52, 1, 119, 0, 7, 112, 114, 105, 109, 45, 115, 56, 1, 126, 0, 8, 112, 114, 105, 109, 45, 115, 49, 54, 1, 124, 0, 8, 112, 114, 105, 109, 45, 115, 51, 50, 1, 122, 0, 8, 112, 114, 105, 109, 45, 115, 54, 52, 1, 120, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 51, 50, 1, 118, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 54, 52, 1, 117, 0, 9, 112, 114, 105, 109, 45, 99, 104, 97, 114, 1, 116, 0, 9, 112, 114, 105, 109, 45, 98, 111, 111, 108, 1, 127, 0, 11, 112, 114, 105, 109, 45, 115, 116, 114, 105, 110, 103, 1, 115, 0, 4, 0, 8, 119, 105, 116, 45, 110, 111, 100, 101, 3, 0, 7, 1, 112, 8, 1, 114, 1, 5, 110, 111, 100, 101, 115, 9, 4, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 0, 10, 1, 114, 1, 5, 118, 97, 108, 117, 101, 115, 4, 0, 3, 117, 114, 105, 3, 0, 12, 1, 113, 4, 14, 112, 114, 111, 116, 111, 99, 111, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 6, 100, 101, 110, 105, 101, 100, 1, 115, 0, 9, 110, 111, 116, 45, 102, 111, 117, 110, 100, 1, 115, 0, 21, 114, 101, 109, 111, 116, 101, 45, 105, 110, 116, 101, 114, 110, 97, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 4, 0, 9, 114, 112, 99, 45, 101, 114, 114, 111, 114, 3, 0, 14, 4, 0, 8, 119, 97, 115, 109, 45, 114, 112, 99, 3, 1, 1, 105, 16, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 13, 0, 17, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 119, 97, 115, 109, 45, 114, 112, 99, 1, 18, 1, 104, 16, 1, 112, 11, 1, 106, 1, 11, 1, 15, 1, 64, 3, 4, 115, 101, 108, 102, 19, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 20, 0, 21, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 1, 22, 3, 1, 21, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 116, 121, 112, 101, 115, 64, 48, 46, 49, 46, 48, 5, 0, 1, 66, 10, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 1, 1, 104, 0, 1, 64, 1, 4, 115, 101, 108, 102, 1, 0, 127, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 114, 101, 97, 100, 121, 1, 2, 1, 64, 1, 4, 115, 101, 108, 102, 1, 1, 0, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 98, 108, 111, 99, 107, 1, 3, 1, 112, 1, 1, 112, 121, 1, 64, 1, 2, 105, 110, 4, 0, 5, 4, 0, 4, 112, 111, 108, 108, 1, 6, 3, 1, 18, 119, 97, 115, 105, 58, 105, 111, 47, 112, 111, 108, 108, 64, 48, 46, 50, 46, 48, 5, 1, 2, 3, 0, 1, 8, 112, 111, 108, 108, 97, 98, 108, 101, 1, 66, 15, 2, 3, 2, 1, 2, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 0, 1, 119, 4, 0, 7, 105, 110, 115, 116, 97, 110, 116, 3, 0, 2, 1, 119, 4, 0, 8, 100, 117, 114, 97, 116, 105, 111, 110, 3, 0, 4, 1, 64, 0, 0, 3, 4, 0, 3, 110, 111, 119, 1, 6, 1, 64, 0, 0, 5, 4, 0, 10, 114, 101, 115, 111, 108, 117, 116, 105, 111, 110, 1, 7, 1, 105, 1, 1, 64, 1, 4, 119, 104, 101, 110, 3, 0, 8, 4, 0, 17, 115, 117, 98, 115, 99, 114, 105, 98, 101, 45, 105, 110, 115, 116, 97, 110, 116, 1, 9, 1, 64, 1, 4, 119, 104, 101, 110, 5, 0, 8, 4, 0, 18, 115, 117, 98, 115, 99, 114, 105, 98, 101, 45, 100, 117, 114, 97, 116, 105, 111, 110, 1, 10, 3, 1, 33, 119, 97, 115, 105, 58, 99, 108, 111, 99, 107, 115, 47, 109, 111, 110, 111, 116, 111, 110, 105, 99, 45, 99, 108, 111, 99, 107, 64, 48, 46, 50, 46, 48, 5, 3, 2, 3, 0, 0, 3, 117, 114, 105, 2, 3, 0, 2, 8, 100, 117, 114, 97, 116, 105, 111, 110, 1, 66, 97, 2, 3, 2, 1, 4, 4, 0, 3, 117, 114, 105, 3, 0, 0, 2, 3, 2, 1, 5, 4, 0, 8, 100, 117, 114, 97, 116, 105, 111, 110, 3, 0, 2, 1, 119, 4, 0, 11, 111, 112, 108, 111, 103, 45, 105, 110, 100, 101, 120, 3, 0, 4, 1, 119, 4, 0, 17, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 118, 101, 114, 115, 105, 111, 110, 3, 0, 6, 1, 114, 2, 9, 104, 105, 103, 104, 45, 98, 105, 116, 115, 119, 8, 108, 111, 119, 45, 98, 105, 116, 115, 119, 4, 0, 4, 117, 117, 105, 100, 3, 0, 8, 1, 114, 1, 4, 117, 117, 105, 100, 9, 4, 0, 12, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 105, 100, 3, 0, 10, 1, 114, 2, 12, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 105, 100, 11, 11, 119, 111, 114, 107, 101, 114, 45, 110, 97, 109, 101, 115, 4, 0, 9, 119, 111, 114, 107, 101, 114, 45, 105, 100, 3, 0, 12, 1, 114, 2, 9, 119, 111, 114, 107, 101, 114, 45, 105, 100, 13, 9, 111, 112, 108, 111, 103, 45, 105, 100, 120, 5, 4, 0, 10, 112, 114, 111, 109, 105, 115, 101, 45, 105, 100, 3, 0, 14, 1, 114, 4, 12, 109, 97, 120, 45, 97, 116, 116, 101, 109, 112, 116, 115, 121, 9, 109, 105, 110, 45, 100, 101, 108, 97, 121, 3, 9, 109, 97, 120, 45, 100, 101, 108, 97, 121, 3, 10, 109, 117, 108, 116, 105, 112, 108, 105, 101, 114, 121, 4, 0, 12, 114, 101, 116, 114, 121, 45, 112, 111, 108, 105, 99, 121, 3, 0, 16, 1, 113, 3, 15, 112, 101, 114, 115, 105, 115, 116, 45, 110, 111, 116, 104, 105, 110, 103, 0, 0, 27, 112, 101, 114, 115, 105, 115, 116, 45, 114, 101, 109, 111, 116, 101, 45, 115, 105, 100, 101, 45, 101, 102, 102, 101, 99, 116, 115, 0, 0, 5, 115, 109, 97, 114, 116, 0, 0, 4, 0, 17, 112, 101, 114, 115, 105, 115, 116, 101, 110, 99, 101, 45, 108, 101, 118, 101, 108, 3, 0, 18, 1, 109, 2, 9, 97, 117, 116, 111, 109, 97, 116, 105, 99, 14, 115, 110, 97, 112, 115, 104, 111, 116, 45, 98, 97, 115, 101, 100, 4, 0, 11, 117, 112, 100, 97, 116, 101, 45, 109, 111, 100, 101, 3, 0, 20, 1, 109, 6, 5, 101, 113, 117, 97, 108, 9, 110, 111, 116, 45, 101, 113, 117, 97, 108, 13, 103, 114, 101, 97, 116, 101, 114, 45, 101, 113, 117, 97, 108, 7, 103, 114, 101, 97, 116, 101, 114, 10, 108, 101, 115, 115, 45, 101, 113, 117, 97, 108, 4, 108, 101, 115, 115, 4, 0, 17, 102, 105, 108, 116, 101, 114, 45, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 3, 0, 22, 1, 109, 4, 5, 101, 113, 117, 97, 108, 9, 110, 111, 116, 45, 101, 113, 117, 97, 108, 4, 108, 105, 107, 101, 8, 110, 111, 116, 45, 108, 105, 107, 101, 4, 0, 24, 115, 116, 114, 105, 110, 103, 45, 102, 105, 108, 116, 101, 114, 45, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 3, 0, 24, 1, 109, 7, 7, 114, 117, 110, 110, 105, 110, 103, 4, 105, 100, 108, 101, 9, 115, 117, 115, 112, 101, 110, 100, 101, 100, 11, 105, 110, 116, 101, 114, 114, 117, 112, 116, 101, 100, 8, 114, 101, 116, 114, 121, 105, 110, 103, 6, 102, 97, 105, 108, 101, 100, 6, 101, 120, 105, 116, 101, 100, 4, 0, 13, 119, 111, 114, 107, 101, 114, 45, 115, 116, 97, 116, 117, 115, 3, 0, 26, 1, 114, 2, 10, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 25, 5, 118, 97, 108, 117, 101, 115, 4, 0, 18, 119, 111, 114, 107, 101, 114, 45, 110, 97, 109, 101, 45, 102, 105, 108, 116, 101, 114, 3, 0, 28, 1, 114, 2, 10, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 23, 5, 118, 97, 108, 117, 101, 27, 4, 0, 20, 119, 111, 114, 107, 101, 114, 45, 115, 116, 97, 116, 117, 115, 45, 102, 105, 108, 116, 101, 114, 3, 0, 30, 1, 114, 2, 10, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 23, 5, 118, 97, 108, 117, 101, 119, 4, 0, 21, 119, 111, 114, 107, 101, 114, 45, 118, 101, 114, 115, 105, 111, 110, 45, 102, 105, 108, 116, 101, 114, 3, 0, 32, 1, 114, 2, 10, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 23, 5, 118, 97, 108, 117, 101, 119, 4, 0, 24, 119, 111, 114, 107, 101, 114, 45, 99, 114, 101, 97, 116, 101, 100, 45, 97, 116, 45, 102, 105, 108, 116, 101, 114, 3, 0, 34, 1, 114, 3, 4, 110, 97, 109, 101, 115, 10, 99, 111, 109, 112, 97, 114, 97, 116, 111, 114, 25, 5, 118, 97, 108, 117, 101, 115, 4, 0, 17, 119, 111, 114, 107, 101, 114, 45, 101, 110, 118, 45, 102, 105, 108, 116, 101, 114, 3, 0, 36, 1, 113, 5, 4, 110, 97, 109, 101, 1, 29, 0, 6, 115, 116, 97, 116, 117, 115, 1, 31, 0, 7, 118, 101, 114, 115, 105, 111, 110, 1, 33, 0, 10, 99, 114, 101, 97, 116, 101, 100, 45, 97, 116, 1, 35, 0, 3, 101, 110, 118, 1, 37, 0, 4, 0, 22, 119, 111, 114, 107, 101, 114, 45, 112, 114, 111, 112, 101, 114, 116, 121, 45, 102, 105, 108, 116, 101, 114, 3, 0, 38, 1, 112, 39, 1, 114, 1, 7, 102, 105, 108, 116, 101, 114, 115, 40, 4, 0, 17, 119, 111, 114, 107, 101, 114, 45, 97, 108, 108, 45, 102, 105, 108, 116, 101, 114, 3, 0, 41, 1, 112, 42, 1, 114, 1, 7, 102, 105, 108, 116, 101, 114, 115, 43, 4, 0, 17, 119, 111, 114, 107, 101, 114, 45, 97, 110, 121, 45, 102, 105, 108, 116, 101, 114, 3, 0, 44, 1, 112, 115, 1, 111, 2, 115, 115, 1, 112, 47, 1, 114, 6, 9, 119, 111, 114, 107, 101, 114, 45, 105, 100, 13, 4, 97, 114, 103, 115, 46, 3, 101, 110, 118, 48, 6, 115, 116, 97, 116, 117, 115, 27, 17, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 118, 101, 114, 115, 105, 111, 110, 119, 11, 114, 101, 116, 114, 121, 45, 99, 111, 117, 110, 116, 119, 4, 0, 15, 119, 111, 114, 107, 101, 114, 45, 109, 101, 116, 97, 100, 97, 116, 97, 3, 0, 49, 4, 0, 11, 103, 101, 116, 45, 119, 111, 114, 107, 101, 114, 115, 3, 1, 1, 107, 45, 1, 105, 51, 1, 64, 3, 12, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 105, 100, 11, 6, 102, 105, 108, 116, 101, 114, 52, 7, 112, 114, 101, 99, 105, 115, 101, 127, 0, 53, 4, 0, 24, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 103, 101, 116, 45, 119, 111, 114, 107, 101, 114, 115, 1, 54, 1, 104, 51, 1, 112, 50, 1, 107, 56, 1, 64, 1, 4, 115, 101, 108, 102, 55, 0, 57, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 103, 101, 116, 45, 119, 111, 114, 107, 101, 114, 115, 46, 103, 101, 116, 45, 110, 101, 120, 116, 1, 58, 1, 64, 0, 0, 15, 4, 0, 20, 103, 111, 108, 101, 109, 45, 99, 114, 101, 97, 116, 101, 45, 112, 114, 111, 109, 105, 115, 101, 1, 59, 1, 112, 125, 1, 64, 1, 10, 112, 114, 111, 109, 105, 115, 101, 45, 105, 100, 15, 0, 60, 4, 0, 19, 103, 111, 108, 101, 109, 45, 97, 119, 97, 105, 116, 45, 112, 114, 111, 109, 105, 115, 101, 1, 61, 1, 64, 2, 10, 112, 114, 111, 109, 105, 115, 101, 45, 105, 100, 15, 4, 100, 97, 116, 97, 60, 0, 127, 4, 0, 22, 103, 111, 108, 101, 109, 45, 99, 111, 109, 112, 108, 101, 116, 101, 45, 112, 114, 111, 109, 105, 115, 101, 1, 62, 1, 64, 1, 10, 112, 114, 111, 109, 105, 115, 101, 45, 105, 100, 15, 1, 0, 4, 0, 20, 103, 111, 108, 101, 109, 45, 100, 101, 108, 101, 116, 101, 45, 112, 114, 111, 109, 105, 115, 101, 1, 63, 1, 64, 1, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 0, 1, 4, 0, 12, 103, 101, 116, 45, 115, 101, 108, 102, 45, 117, 114, 105, 1, 64, 1, 64, 0, 0, 5, 4, 0, 15, 103, 101, 116, 45, 111, 112, 108, 111, 103, 45, 105, 110, 100, 101, 120, 1, 65, 1, 64, 1, 9, 111, 112, 108, 111, 103, 45, 105, 100, 120, 5, 1, 0, 4, 0, 15, 115, 101, 116, 45, 111, 112, 108, 111, 103, 45, 105, 110, 100, 101, 120, 1, 66, 1, 64, 1, 8, 114, 101, 112, 108, 105, 99, 97, 115, 125, 1, 0, 4, 0, 12, 111, 112, 108, 111, 103, 45, 99, 111, 109, 109, 105, 116, 1, 67, 4, 0, 20, 109, 97, 114, 107, 45, 98, 101, 103, 105, 110, 45, 111, 112, 101, 114, 97, 116, 105, 111, 110, 1, 65, 1, 64, 1, 5, 98, 101, 103, 105, 110, 5, 1, 0, 4, 0, 18, 109, 97, 114, 107, 45, 101, 110, 100, 45, 111, 112, 101, 114, 97, 116, 105, 111, 110, 1, 68, 1, 64, 0, 0, 17, 4, 0, 16, 103, 101, 116, 45, 114, 101, 116, 114, 121, 45, 112, 111, 108, 105, 99, 121, 1, 69, 1, 64, 1, 16, 110, 101, 119, 45, 114, 101, 116, 114, 121, 45, 112, 111, 108, 105, 99, 121, 17, 1, 0, 4, 0, 16, 115, 101, 116, 45, 114, 101, 116, 114, 121, 45, 112, 111, 108, 105, 99, 121, 1, 70, 1, 64, 0, 0, 19, 4, 0, 27, 103, 101, 116, 45, 111, 112, 108, 111, 103, 45, 112, 101, 114, 115, 105, 115, 116, 101, 110, 99, 101, 45, 108, 101, 118, 101, 108, 1, 71, 1, 64, 1, 21, 110, 101, 119, 45, 112, 101, 114, 115, 105, 115, 116, 101, 110, 99, 101, 45, 108, 101, 118, 101, 108, 19, 1, 0, 4, 0, 27, 115, 101, 116, 45, 111, 112, 108, 111, 103, 45, 112, 101, 114, 115, 105, 115, 116, 101, 110, 99, 101, 45, 108, 101, 118, 101, 108, 1, 72, 1, 64, 0, 0, 127, 4, 0, 20, 103, 101, 116, 45, 105, 100, 101, 109, 112, 111, 116, 101, 110, 99, 101, 45, 109, 111, 100, 101, 1, 73, 1, 64, 1, 10, 105, 100, 101, 109, 112, 111, 116, 101, 110, 116, 127, 1, 0, 4, 0, 20, 115, 101, 116, 45, 105, 100, 101, 109, 112, 111, 116, 101, 110, 99, 101, 45, 109, 111, 100, 101, 1, 74, 1, 64, 0, 0, 9, 4, 0, 24, 103, 101, 110, 101, 114, 97, 116, 101, 45, 105, 100, 101, 109, 112, 111, 116, 101, 110, 99, 121, 45, 107, 101, 121, 1, 75, 1, 64, 3, 9, 119, 111, 114, 107, 101, 114, 45, 105, 100, 13, 14, 116, 97, 114, 103, 101, 116, 45, 118, 101, 114, 115, 105, 111, 110, 7, 4, 109, 111, 100, 101, 21, 1, 0, 4, 0, 13, 117, 112, 100, 97, 116, 101, 45, 119, 111, 114, 107, 101, 114, 1, 76, 3, 1, 20, 103, 111, 108, 101, 109, 58, 97, 112, 105, 47, 104, 111, 115, 116, 64, 48, 46, 50, 46, 48, 5, 6, 1, 66, 4, 4, 0, 5, 101, 114, 114, 111, 114, 3, 1, 1, 104, 0, 1, 64, 1, 4, 115, 101, 108, 102, 1, 0, 115, 4, 0, 29, 91, 109, 101, 116, 104, 111, 100, 93, 101, 114, 114, 111, 114, 46, 116, 111, 45, 100, 101, 98, 117, 103, 45, 115, 116, 114, 105, 110, 103, 1, 2, 3, 1, 19, 119, 97, 115, 105, 58, 105, 111, 47, 101, 114, 114, 111, 114, 64, 48, 46, 50, 46, 48, 5, 7, 2, 3, 0, 4, 5, 101, 114, 114, 111, 114, 1, 66, 40, 2, 3, 2, 1, 8, 4, 0, 5, 101, 114, 114, 111, 114, 3, 0, 0, 2, 3, 2, 1, 2, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 2, 1, 105, 1, 1, 113, 2, 21, 108, 97, 115, 116, 45, 111, 112, 101, 114, 97, 116, 105, 111, 110, 45, 102, 97, 105, 108, 101, 100, 1, 4, 0, 6, 99, 108, 111, 115, 101, 100, 0, 0, 4, 0, 12, 115, 116, 114, 101, 97, 109, 45, 101, 114, 114, 111, 114, 3, 0, 5, 4, 0, 12, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 1, 4, 0, 13, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 1, 1, 104, 7, 1, 112, 125, 1, 106, 1, 10, 1, 6, 1, 64, 2, 4, 115, 101, 108, 102, 9, 3, 108, 101, 110, 119, 0, 11, 4, 0, 25, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 114, 101, 97, 100, 1, 12, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 114, 101, 97, 100, 1, 12, 1, 106, 1, 119, 1, 6, 1, 64, 2, 4, 115, 101, 108, 102, 9, 3, 108, 101, 110, 119, 0, 13, 4, 0, 25, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 115, 107, 105, 112, 1, 14, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 115, 107, 105, 112, 1, 14, 1, 105, 3, 1, 64, 1, 4, 115, 101, 108, 102, 9, 0, 15, 4, 0, 30, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 16, 1, 104, 8, 1, 64, 1, 4, 115, 101, 108, 102, 17, 0, 13, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 99, 104, 101, 99, 107, 45, 119, 114, 105, 116, 101, 1, 18, 1, 106, 0, 1, 6, 1, 64, 2, 4, 115, 101, 108, 102, 17, 8, 99, 111, 110, 116, 101, 110, 116, 115, 10, 0, 19, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 119, 114, 105, 116, 101, 1, 20, 4, 0, 46, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 119, 114, 105, 116, 101, 45, 97, 110, 100, 45, 102, 108, 117, 115, 104, 1, 20, 1, 64, 1, 4, 115, 101, 108, 102, 17, 0, 19, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 102, 108, 117, 115, 104, 1, 21, 4, 0, 36, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 102, 108, 117, 115, 104, 1, 21, 1, 64, 1, 4, 115, 101, 108, 102, 17, 0, 15, 4, 0, 31, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 22, 1, 64, 2, 4, 115, 101, 108, 102, 17, 3, 108, 101, 110, 119, 0, 19, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 119, 114, 105, 116, 101, 45, 122, 101, 114, 111, 101, 115, 1, 23, 4, 0, 53, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 119, 114, 105, 116, 101, 45, 122, 101, 114, 111, 101, 115, 45, 97, 110, 100, 45, 102, 108, 117, 115, 104, 1, 23, 1, 64, 3, 4, 115, 101, 108, 102, 17, 3, 115, 114, 99, 9, 3, 108, 101, 110, 119, 0, 13, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 115, 112, 108, 105, 99, 101, 1, 24, 4, 0, 37, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 115, 112, 108, 105, 99, 101, 1, 24, 3, 1, 21, 119, 97, 115, 105, 58, 105, 111, 47, 115, 116, 114, 101, 97, 109, 115, 64, 48, 46, 50, 46, 48, 5, 9, 2, 3, 0, 5, 12, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 2, 3, 0, 5, 13, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 1, 66, 43, 2, 3, 2, 1, 10, 4, 0, 12, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 0, 0, 2, 3, 2, 1, 11, 4, 0, 13, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 0, 2, 1, 115, 4, 0, 14, 99, 111, 110, 116, 97, 105, 110, 101, 114, 45, 110, 97, 109, 101, 3, 0, 4, 1, 115, 4, 0, 11, 111, 98, 106, 101, 99, 116, 45, 110, 97, 109, 101, 3, 0, 6, 1, 119, 4, 0, 9, 116, 105, 109, 101, 115, 116, 97, 109, 112, 3, 0, 8, 1, 119, 4, 0, 11, 111, 98, 106, 101, 99, 116, 45, 115, 105, 122, 101, 3, 0, 10, 1, 115, 4, 0, 5, 101, 114, 114, 111, 114, 3, 0, 12, 1, 114, 2, 4, 110, 97, 109, 101, 5, 10, 99, 114, 101, 97, 116, 101, 100, 45, 97, 116, 9, 4, 0, 18, 99, 111, 110, 116, 97, 105, 110, 101, 114, 45, 109, 101, 116, 97, 100, 97, 116, 97, 3, 0, 14, 1, 114, 4, 4, 110, 97, 109, 101, 7, 9, 99, 111, 110, 116, 97, 105, 110, 101, 114, 5, 10, 99, 114, 101, 97, 116, 101, 100, 45, 97, 116, 9, 4, 115, 105, 122, 101, 11, 4, 0, 15, 111, 98, 106, 101, 99, 116, 45, 109, 101, 116, 97, 100, 97, 116, 97, 3, 0, 16, 1, 114, 2, 9, 99, 111, 110, 116, 97, 105, 110, 101, 114, 5, 6, 111, 98, 106, 101, 99, 116, 7, 4, 0, 9, 111, 98, 106, 101, 99, 116, 45, 105, 100, 3, 0, 18, 4, 0, 14, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 3, 1, 4, 0, 14, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 3, 1, 4, 0, 25, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 97, 115, 121, 110, 99, 45, 98, 111, 100, 121, 3, 0, 1, 1, 112, 125, 4, 0, 24, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 115, 121, 110, 99, 45, 98, 111, 100, 121, 3, 0, 23, 1, 105, 20, 1, 64, 0, 0, 25, 4, 0, 41, 91, 115, 116, 97, 116, 105, 99, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 46, 110, 101, 119, 45, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 1, 26, 1, 104, 20, 1, 105, 3, 1, 106, 1, 28, 0, 1, 64, 1, 4, 115, 101, 108, 102, 27, 0, 29, 4, 0, 48, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 46, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 119, 114, 105, 116, 101, 45, 98, 111, 100, 121, 1, 30, 1, 104, 21, 1, 106, 1, 24, 1, 13, 1, 64, 1, 4, 115, 101, 108, 102, 31, 0, 32, 4, 0, 50, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 46, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 99, 111, 110, 115, 117, 109, 101, 45, 115, 121, 110, 99, 1, 33, 1, 105, 22, 1, 106, 1, 34, 1, 13, 1, 64, 1, 4, 115, 101, 108, 102, 31, 0, 35, 4, 0, 51, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 46, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 99, 111, 110, 115, 117, 109, 101, 45, 97, 115, 121, 110, 99, 1, 36, 1, 64, 1, 4, 115, 101, 108, 102, 31, 0, 119, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 46, 115, 105, 122, 101, 1, 37, 3, 1, 20, 119, 97, 115, 105, 58, 98, 108, 111, 98, 115, 116, 111, 114, 101, 47, 116, 121, 112, 101, 115, 5, 12, 2, 3, 0, 6, 18, 99, 111, 110, 116, 97, 105, 110, 101, 114, 45, 109, 101, 116, 97, 100, 97, 116, 97, 2, 3, 0, 6, 5, 101, 114, 114, 111, 114, 2, 3, 0, 6, 14, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 2, 3, 0, 6, 15, 111, 98, 106, 101, 99, 116, 45, 109, 101, 116, 97, 100, 97, 116, 97, 2, 3, 0, 6, 11, 111, 98, 106, 101, 99, 116, 45, 110, 97, 109, 101, 2, 3, 0, 6, 14, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 1, 66, 59, 2, 3, 2, 1, 10, 4, 0, 12, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 0, 0, 2, 3, 2, 1, 11, 4, 0, 13, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 0, 2, 2, 3, 2, 1, 13, 4, 0, 18, 99, 111, 110, 116, 97, 105, 110, 101, 114, 45, 109, 101, 116, 97, 100, 97, 116, 97, 3, 0, 4, 2, 3, 2, 1, 14, 4, 0, 5, 101, 114, 114, 111, 114, 3, 0, 6, 2, 3, 2, 1, 15, 4, 0, 14, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 3, 0, 8, 2, 3, 2, 1, 16, 4, 0, 15, 111, 98, 106, 101, 99, 116, 45, 109, 101, 116, 97, 100, 97, 116, 97, 3, 0, 10, 2, 3, 2, 1, 17, 4, 0, 11, 111, 98, 106, 101, 99, 116, 45, 110, 97, 109, 101, 3, 0, 12, 2, 3, 2, 1, 18, 4, 0, 14, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 3, 0, 14, 4, 0, 9, 99, 111, 110, 116, 97, 105, 110, 101, 114, 3, 1, 4, 0, 19, 115, 116, 114, 101, 97, 109, 45, 111, 98, 106, 101, 99, 116, 45, 110, 97, 109, 101, 115, 3, 1, 1, 104, 16, 1, 106, 1, 115, 1, 7, 1, 64, 1, 4, 115, 101, 108, 102, 18, 0, 19, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 110, 116, 97, 105, 110, 101, 114, 46, 110, 97, 109, 101, 1, 20, 1, 106, 1, 5, 1, 7, 1, 64, 1, 4, 115, 101, 108, 102, 18, 0, 21, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 110, 116, 97, 105, 110, 101, 114, 46, 105, 110, 102, 111, 1, 22, 1, 105, 9, 1, 106, 1, 23, 1, 7, 1, 64, 4, 4, 115, 101, 108, 102, 18, 4, 110, 97, 109, 101, 13, 5, 115, 116, 97, 114, 116, 119, 3, 101, 110, 100, 119, 0, 24, 4, 0, 26, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 110, 116, 97, 105, 110, 101, 114, 46, 103, 101, 116, 45, 100, 97, 116, 97, 1, 25, 1, 104, 15, 1, 106, 0, 1, 7, 1, 64, 3, 4, 115, 101, 108, 102, 18, 4, 110, 97, 109, 101, 13, 4, 100, 97, 116, 97, 26, 0, 27, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 110, 116, 97, 105, 110, 101, 114, 46, 119, 114, 105, 116, 101, 45, 100, 97, 116, 97, 1, 28, 1, 105, 17, 1, 106, 1, 29, 1, 7, 1, 64, 1, 4, 115, 101, 108, 102, 18, 0, 30, 4, 0, 30, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 110, 116, 97, 105, 110, 101, 114, 46, 108, 105, 115, 116, 45, 111, 98, 106, 101, 99, 116, 115, 1, 31, 1, 64, 2, 4, 115, 101, 108, 102, 18, 4, 110, 97, 109, 101, 13, 0, 27, 4, 0, 31, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 110, 116, 97, 105, 110, 101, 114, 46, 100, 101, 108, 101, 116, 101, 45, 111, 98, 106, 101, 99, 116, 1, 32, 1, 112, 13, 1, 64, 2, 4, 115, 101, 108, 102, 18, 5, 110, 97, 109, 101, 115, 33, 0, 27, 4, 0, 32, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 110, 116, 97, 105, 110, 101, 114, 46, 100, 101, 108, 101, 116, 101, 45, 111, 98, 106, 101, 99, 116, 115, 1, 34, 1, 106, 1, 127, 1, 7, 1, 64, 2, 4, 115, 101, 108, 102, 18, 4, 110, 97, 109, 101, 13, 0, 35, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 110, 116, 97, 105, 110, 101, 114, 46, 104, 97, 115, 45, 111, 98, 106, 101, 99, 116, 1, 36, 1, 106, 1, 11, 1, 7, 1, 64, 2, 4, 115, 101, 108, 102, 18, 4, 110, 97, 109, 101, 13, 0, 37, 4, 0, 29, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 110, 116, 97, 105, 110, 101, 114, 46, 111, 98, 106, 101, 99, 116, 45, 105, 110, 102, 111, 1, 38, 1, 64, 1, 4, 115, 101, 108, 102, 18, 0, 27, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 110, 116, 97, 105, 110, 101, 114, 46, 99, 108, 101, 97, 114, 1, 39, 1, 104, 17, 1, 111, 2, 33, 127, 1, 106, 1, 41, 1, 7, 1, 64, 2, 4, 115, 101, 108, 102, 40, 3, 108, 101, 110, 119, 0, 42, 4, 0, 52, 91, 109, 101, 116, 104, 111, 100, 93, 115, 116, 114, 101, 97, 109, 45, 111, 98, 106, 101, 99, 116, 45, 110, 97, 109, 101, 115, 46, 114, 101, 97, 100, 45, 115, 116, 114, 101, 97, 109, 45, 111, 98, 106, 101, 99, 116, 45, 110, 97, 109, 101, 115, 1, 43, 1, 111, 2, 119, 127, 1, 106, 1, 44, 1, 7, 1, 64, 2, 4, 115, 101, 108, 102, 40, 3, 110, 117, 109, 119, 0, 45, 4, 0, 52, 91, 109, 101, 116, 104, 111, 100, 93, 115, 116, 114, 101, 97, 109, 45, 111, 98, 106, 101, 99, 116, 45, 110, 97, 109, 101, 115, 46, 115, 107, 105, 112, 45, 115, 116, 114, 101, 97, 109, 45, 111, 98, 106, 101, 99, 116, 45, 110, 97, 109, 101, 115, 1, 46, 3, 1, 24, 119, 97, 115, 105, 58, 98, 108, 111, 98, 115, 116, 111, 114, 101, 47, 99, 111, 110, 116, 97, 105, 110, 101, 114, 5, 19, 2, 3, 0, 7, 9, 99, 111, 110, 116, 97, 105, 110, 101, 114, 2, 3, 0, 6, 14, 99, 111, 110, 116, 97, 105, 110, 101, 114, 45, 110, 97, 109, 101, 2, 3, 0, 6, 9, 111, 98, 106, 101, 99, 116, 45, 105, 100, 1, 66, 22, 2, 3, 2, 1, 20, 4, 0, 9, 99, 111, 110, 116, 97, 105, 110, 101, 114, 3, 0, 0, 2, 3, 2, 1, 14, 4, 0, 5, 101, 114, 114, 111, 114, 3, 0, 2, 2, 3, 2, 1, 21, 4, 0, 14, 99, 111, 110, 116, 97, 105, 110, 101, 114, 45, 110, 97, 109, 101, 3, 0, 4, 2, 3, 2, 1, 22, 4, 0, 9, 111, 98, 106, 101, 99, 116, 45, 105, 100, 3, 0, 6, 1, 105, 1, 1, 106, 1, 8, 1, 3, 1, 64, 1, 4, 110, 97, 109, 101, 5, 0, 9, 4, 0, 16, 99, 114, 101, 97, 116, 101, 45, 99, 111, 110, 116, 97, 105, 110, 101, 114, 1, 10, 4, 0, 13, 103, 101, 116, 45, 99, 111, 110, 116, 97, 105, 110, 101, 114, 1, 10, 1, 106, 0, 1, 3, 1, 64, 1, 4, 110, 97, 109, 101, 5, 0, 11, 4, 0, 16, 100, 101, 108, 101, 116, 101, 45, 99, 111, 110, 116, 97, 105, 110, 101, 114, 1, 12, 1, 106, 1, 127, 1, 3, 1, 64, 1, 4, 110, 97, 109, 101, 5, 0, 13, 4, 0, 16, 99, 111, 110, 116, 97, 105, 110, 101, 114, 45, 101, 120, 105, 115, 116, 115, 1, 14, 1, 64, 2, 3, 115, 114, 99, 7, 4, 100, 101, 115, 116, 7, 0, 11, 4, 0, 11, 99, 111, 112, 121, 45, 111, 98, 106, 101, 99, 116, 1, 15, 4, 0, 11, 109, 111, 118, 101, 45, 111, 98, 106, 101, 99, 116, 1, 15, 3, 1, 24, 119, 97, 115, 105, 58, 98, 108, 111, 98, 115, 116, 111, 114, 101, 47, 98, 108, 111, 98, 115, 116, 111, 114, 101, 5, 23, 1, 66, 5, 1, 114, 2, 7, 115, 101, 99, 111, 110, 100, 115, 119, 11, 110, 97, 110, 111, 115, 101, 99, 111, 110, 100, 115, 121, 4, 0, 8, 100, 97, 116, 101, 116, 105, 109, 101, 3, 0, 0, 1, 64, 0, 0, 1, 4, 0, 3, 110, 111, 119, 1, 2, 4, 0, 10, 114, 101, 115, 111, 108, 117, 116, 105, 111, 110, 1, 2, 3, 1, 28, 119, 97, 115, 105, 58, 99, 108, 111, 99, 107, 115, 47, 119, 97, 108, 108, 45, 99, 108, 111, 99, 107, 64, 48, 46, 50, 46, 48, 5, 24, 2, 3, 0, 5, 5, 101, 114, 114, 111, 114, 2, 3, 0, 9, 8, 100, 97, 116, 101, 116, 105, 109, 101, 1, 66, 114, 2, 3, 2, 1, 10, 4, 0, 12, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 0, 0, 2, 3, 2, 1, 11, 4, 0, 13, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 0, 2, 2, 3, 2, 1, 25, 4, 0, 5, 101, 114, 114, 111, 114, 3, 0, 4, 2, 3, 2, 1, 26, 4, 0, 8, 100, 97, 116, 101, 116, 105, 109, 101, 3, 0, 6, 1, 119, 4, 0, 8, 102, 105, 108, 101, 115, 105, 122, 101, 3, 0, 8, 1, 109, 8, 7, 117, 110, 107, 110, 111, 119, 110, 12, 98, 108, 111, 99, 107, 45, 100, 101, 118, 105, 99, 101, 16, 99, 104, 97, 114, 97, 99, 116, 101, 114, 45, 100, 101, 118, 105, 99, 101, 9, 100, 105, 114, 101, 99, 116, 111, 114, 121, 4, 102, 105, 102, 111, 13, 115, 121, 109, 98, 111, 108, 105, 99, 45, 108, 105, 110, 107, 12, 114, 101, 103, 117, 108, 97, 114, 45, 102, 105, 108, 101, 6, 115, 111, 99, 107, 101, 116, 4, 0, 15, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 45, 116, 121, 112, 101, 3, 0, 10, 1, 110, 6, 4, 114, 101, 97, 100, 5, 119, 114, 105, 116, 101, 19, 102, 105, 108, 101, 45, 105, 110, 116, 101, 103, 114, 105, 116, 121, 45, 115, 121, 110, 99, 19, 100, 97, 116, 97, 45, 105, 110, 116, 101, 103, 114, 105, 116, 121, 45, 115, 121, 110, 99, 20, 114, 101, 113, 117, 101, 115, 116, 101, 100, 45, 119, 114, 105, 116, 101, 45, 115, 121, 110, 99, 16, 109, 117, 116, 97, 116, 101, 45, 100, 105, 114, 101, 99, 116, 111, 114, 121, 4, 0, 16, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 45, 102, 108, 97, 103, 115, 3, 0, 12, 1, 110, 1, 14, 115, 121, 109, 108, 105, 110, 107, 45, 102, 111, 108, 108, 111, 119, 4, 0, 10, 112, 97, 116, 104, 45, 102, 108, 97, 103, 115, 3, 0, 14, 1, 110, 4, 6, 99, 114, 101, 97, 116, 101, 9, 100, 105, 114, 101, 99, 116, 111, 114, 121, 9, 101, 120, 99, 108, 117, 115, 105, 118, 101, 8, 116, 114, 117, 110, 99, 97, 116, 101, 4, 0, 10, 111, 112, 101, 110, 45, 102, 108, 97, 103, 115, 3, 0, 16, 1, 119, 4, 0, 10, 108, 105, 110, 107, 45, 99, 111, 117, 110, 116, 3, 0, 18, 1, 107, 7, 1, 114, 6, 4, 116, 121, 112, 101, 11, 10, 108, 105, 110, 107, 45, 99, 111, 117, 110, 116, 19, 4, 115, 105, 122, 101, 9, 21, 100, 97, 116, 97, 45, 97, 99, 99, 101, 115, 115, 45, 116, 105, 109, 101, 115, 116, 97, 109, 112, 20, 27, 100, 97, 116, 97, 45, 109, 111, 100, 105, 102, 105, 99, 97, 116, 105, 111, 110, 45, 116, 105, 109, 101, 115, 116, 97, 109, 112, 20, 23, 115, 116, 97, 116, 117, 115, 45, 99, 104, 97, 110, 103, 101, 45, 116, 105, 109, 101, 115, 116, 97, 109, 112, 20, 4, 0, 15, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 45, 115, 116, 97, 116, 3, 0, 21, 1, 113, 3, 9, 110, 111, 45, 99, 104, 97, 110, 103, 101, 0, 0, 3, 110, 111, 119, 0, 0, 9, 116, 105, 109, 101, 115, 116, 97, 109, 112, 1, 7, 0, 4, 0, 13, 110, 101, 119, 45, 116, 105, 109, 101, 115, 116, 97, 109, 112, 3, 0, 23, 1, 114, 2, 4, 116, 121, 112, 101, 11, 4, 110, 97, 109, 101, 115, 4, 0, 15, 100, 105, 114, 101, 99, 116, 111, 114, 121, 45, 101, 110, 116, 114, 121, 3, 0, 25, 1, 109, 37, 6, 97, 99, 99, 101, 115, 115, 11, 119, 111, 117, 108, 100, 45, 98, 108, 111, 99, 107, 7, 97, 108, 114, 101, 97, 100, 121, 14, 98, 97, 100, 45, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 4, 98, 117, 115, 121, 8, 100, 101, 97, 100, 108, 111, 99, 107, 5, 113, 117, 111, 116, 97, 5, 101, 120, 105, 115, 116, 14, 102, 105, 108, 101, 45, 116, 111, 111, 45, 108, 97, 114, 103, 101, 21, 105, 108, 108, 101, 103, 97, 108, 45, 98, 121, 116, 101, 45, 115, 101, 113, 117, 101, 110, 99, 101, 11, 105, 110, 45, 112, 114, 111, 103, 114, 101, 115, 115, 11, 105, 110, 116, 101, 114, 114, 117, 112, 116, 101, 100, 7, 105, 110, 118, 97, 108, 105, 100, 2, 105, 111, 12, 105, 115, 45, 100, 105, 114, 101, 99, 116, 111, 114, 121, 4, 108, 111, 111, 112, 14, 116, 111, 111, 45, 109, 97, 110, 121, 45, 108, 105, 110, 107, 115, 12, 109, 101, 115, 115, 97, 103, 101, 45, 115, 105, 122, 101, 13, 110, 97, 109, 101, 45, 116, 111, 111, 45, 108, 111, 110, 103, 9, 110, 111, 45, 100, 101, 118, 105, 99, 101, 8, 110, 111, 45, 101, 110, 116, 114, 121, 7, 110, 111, 45, 108, 111, 99, 107, 19, 105, 110, 115, 117, 102, 102, 105, 99, 105, 101, 110, 116, 45, 109, 101, 109, 111, 114, 121, 18, 105, 110, 115, 117, 102, 102, 105, 99, 105, 101, 110, 116, 45, 115, 112, 97, 99, 101, 13, 110, 111, 116, 45, 100, 105, 114, 101, 99, 116, 111, 114, 121, 9, 110, 111, 116, 45, 101, 109, 112, 116, 121, 15, 110, 111, 116, 45, 114, 101, 99, 111, 118, 101, 114, 97, 98, 108, 101, 11, 117, 110, 115, 117, 112, 112, 111, 114, 116, 101, 100, 6, 110, 111, 45, 116, 116, 121, 14, 110, 111, 45, 115, 117, 99, 104, 45, 100, 101, 118, 105, 99, 101, 8, 111, 118, 101, 114, 102, 108, 111, 119, 13, 110, 111, 116, 45, 112, 101, 114, 109, 105, 116, 116, 101, 100, 4, 112, 105, 112, 101, 9, 114, 101, 97, 100, 45, 111, 110, 108, 121, 12, 105, 110, 118, 97, 108, 105, 100, 45, 115, 101, 101, 107, 14, 116, 101, 120, 116, 45, 102, 105, 108, 101, 45, 98, 117, 115, 121, 12, 99, 114, 111, 115, 115, 45, 100, 101, 118, 105, 99, 101, 4, 0, 10, 101, 114, 114, 111, 114, 45, 99, 111, 100, 101, 3, 0, 27, 1, 109, 6, 6, 110, 111, 114, 109, 97, 108, 10, 115, 101, 113, 117, 101, 110, 116, 105, 97, 108, 6, 114, 97, 110, 100, 111, 109, 9, 119, 105, 108, 108, 45, 110, 101, 101, 100, 9, 100, 111, 110, 116, 45, 110, 101, 101, 100, 8, 110, 111, 45, 114, 101, 117, 115, 101, 4, 0, 6, 97, 100, 118, 105, 99, 101, 3, 0, 29, 1, 114, 2, 5, 108, 111, 119, 101, 114, 119, 5, 117, 112, 112, 101, 114, 119, 4, 0, 19, 109, 101, 116, 97, 100, 97, 116, 97, 45, 104, 97, 115, 104, 45, 118, 97, 108, 117, 101, 3, 0, 31, 4, 0, 10, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 3, 1, 4, 0, 22, 100, 105, 114, 101, 99, 116, 111, 114, 121, 45, 101, 110, 116, 114, 121, 45, 115, 116, 114, 101, 97, 109, 3, 1, 1, 104, 33, 1, 105, 1, 1, 106, 1, 36, 1, 28, 1, 64, 2, 4, 115, 101, 108, 102, 35, 6, 111, 102, 102, 115, 101, 116, 9, 0, 37, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 114, 101, 97, 100, 45, 118, 105, 97, 45, 115, 116, 114, 101, 97, 109, 1, 38, 1, 105, 3, 1, 106, 1, 39, 1, 28, 1, 64, 2, 4, 115, 101, 108, 102, 35, 6, 111, 102, 102, 115, 101, 116, 9, 0, 40, 4, 0, 35, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 119, 114, 105, 116, 101, 45, 118, 105, 97, 45, 115, 116, 114, 101, 97, 109, 1, 41, 1, 64, 1, 4, 115, 101, 108, 102, 35, 0, 40, 4, 0, 36, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 97, 112, 112, 101, 110, 100, 45, 118, 105, 97, 45, 115, 116, 114, 101, 97, 109, 1, 42, 1, 106, 0, 1, 28, 1, 64, 4, 4, 115, 101, 108, 102, 35, 6, 111, 102, 102, 115, 101, 116, 9, 6, 108, 101, 110, 103, 116, 104, 9, 6, 97, 100, 118, 105, 99, 101, 30, 0, 43, 4, 0, 25, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 97, 100, 118, 105, 115, 101, 1, 44, 1, 64, 1, 4, 115, 101, 108, 102, 35, 0, 43, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 115, 121, 110, 99, 45, 100, 97, 116, 97, 1, 45, 1, 106, 1, 13, 1, 28, 1, 64, 1, 4, 115, 101, 108, 102, 35, 0, 46, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 103, 101, 116, 45, 102, 108, 97, 103, 115, 1, 47, 1, 106, 1, 11, 1, 28, 1, 64, 1, 4, 115, 101, 108, 102, 35, 0, 48, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 103, 101, 116, 45, 116, 121, 112, 101, 1, 49, 1, 64, 2, 4, 115, 101, 108, 102, 35, 4, 115, 105, 122, 101, 9, 0, 43, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 115, 101, 116, 45, 115, 105, 122, 101, 1, 50, 1, 64, 3, 4, 115, 101, 108, 102, 35, 21, 100, 97, 116, 97, 45, 97, 99, 99, 101, 115, 115, 45, 116, 105, 109, 101, 115, 116, 97, 109, 112, 24, 27, 100, 97, 116, 97, 45, 109, 111, 100, 105, 102, 105, 99, 97, 116, 105, 111, 110, 45, 116, 105, 109, 101, 115, 116, 97, 109, 112, 24, 0, 43, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 115, 101, 116, 45, 116, 105, 109, 101, 115, 1, 51, 1, 112, 125, 1, 111, 2, 52, 127, 1, 106, 1, 53, 1, 28, 1, 64, 3, 4, 115, 101, 108, 102, 35, 6, 108, 101, 110, 103, 116, 104, 9, 6, 111, 102, 102, 115, 101, 116, 9, 0, 54, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 114, 101, 97, 100, 1, 55, 1, 106, 1, 9, 1, 28, 1, 64, 3, 4, 115, 101, 108, 102, 35, 6, 98, 117, 102, 102, 101, 114, 52, 6, 111, 102, 102, 115, 101, 116, 9, 0, 56, 4, 0, 24, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 119, 114, 105, 116, 101, 1, 57, 1, 105, 34, 1, 106, 1, 58, 1, 28, 1, 64, 1, 4, 115, 101, 108, 102, 35, 0, 59, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 114, 101, 97, 100, 45, 100, 105, 114, 101, 99, 116, 111, 114, 121, 1, 60, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 115, 121, 110, 99, 1, 45, 1, 64, 2, 4, 115, 101, 108, 102, 35, 4, 112, 97, 116, 104, 115, 0, 43, 4, 0, 38, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 99, 114, 101, 97, 116, 101, 45, 100, 105, 114, 101, 99, 116, 111, 114, 121, 45, 97, 116, 1, 61, 1, 106, 1, 22, 1, 28, 1, 64, 1, 4, 115, 101, 108, 102, 35, 0, 62, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 115, 116, 97, 116, 1, 63, 1, 64, 3, 4, 115, 101, 108, 102, 35, 10, 112, 97, 116, 104, 45, 102, 108, 97, 103, 115, 15, 4, 112, 97, 116, 104, 115, 0, 62, 4, 0, 26, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 115, 116, 97, 116, 45, 97, 116, 1, 64, 1, 64, 5, 4, 115, 101, 108, 102, 35, 10, 112, 97, 116, 104, 45, 102, 108, 97, 103, 115, 15, 4, 112, 97, 116, 104, 115, 21, 100, 97, 116, 97, 45, 97, 99, 99, 101, 115, 115, 45, 116, 105, 109, 101, 115, 116, 97, 109, 112, 24, 27, 100, 97, 116, 97, 45, 109, 111, 100, 105, 102, 105, 99, 97, 116, 105, 111, 110, 45, 116, 105, 109, 101, 115, 116, 97, 109, 112, 24, 0, 43, 4, 0, 31, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 115, 101, 116, 45, 116, 105, 109, 101, 115, 45, 97, 116, 1, 65, 1, 64, 5, 4, 115, 101, 108, 102, 35, 14, 111, 108, 100, 45, 112, 97, 116, 104, 45, 102, 108, 97, 103, 115, 15, 8, 111, 108, 100, 45, 112, 97, 116, 104, 115, 14, 110, 101, 119, 45, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 35, 8, 110, 101, 119, 45, 112, 97, 116, 104, 115, 0, 43, 4, 0, 26, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 108, 105, 110, 107, 45, 97, 116, 1, 66, 1, 105, 33, 1, 106, 1, 195, 0, 1, 28, 1, 64, 5, 4, 115, 101, 108, 102, 35, 10, 112, 97, 116, 104, 45, 102, 108, 97, 103, 115, 15, 4, 112, 97, 116, 104, 115, 10, 111, 112, 101, 110, 45, 102, 108, 97, 103, 115, 17, 5, 102, 108, 97, 103, 115, 13, 0, 196, 0, 4, 0, 26, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 111, 112, 101, 110, 45, 97, 116, 1, 69, 1, 106, 1, 115, 1, 28, 1, 64, 2, 4, 115, 101, 108, 102, 35, 4, 112, 97, 116, 104, 115, 0, 198, 0, 4, 0, 30, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 114, 101, 97, 100, 108, 105, 110, 107, 45, 97, 116, 1, 71, 4, 0, 38, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 114, 101, 109, 111, 118, 101, 45, 100, 105, 114, 101, 99, 116, 111, 114, 121, 45, 97, 116, 1, 61, 1, 64, 4, 4, 115, 101, 108, 102, 35, 8, 111, 108, 100, 45, 112, 97, 116, 104, 115, 14, 110, 101, 119, 45, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 35, 8, 110, 101, 119, 45, 112, 97, 116, 104, 115, 0, 43, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 114, 101, 110, 97, 109, 101, 45, 97, 116, 1, 72, 1, 64, 3, 4, 115, 101, 108, 102, 35, 8, 111, 108, 100, 45, 112, 97, 116, 104, 115, 8, 110, 101, 119, 45, 112, 97, 116, 104, 115, 0, 43, 4, 0, 29, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 115, 121, 109, 108, 105, 110, 107, 45, 97, 116, 1, 73, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 117, 110, 108, 105, 110, 107, 45, 102, 105, 108, 101, 45, 97, 116, 1, 61, 1, 64, 2, 4, 115, 101, 108, 102, 35, 5, 111, 116, 104, 101, 114, 35, 0, 127, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 105, 115, 45, 115, 97, 109, 101, 45, 111, 98, 106, 101, 99, 116, 1, 74, 1, 106, 1, 32, 1, 28, 1, 64, 1, 4, 115, 101, 108, 102, 35, 0, 203, 0, 4, 0, 32, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 109, 101, 116, 97, 100, 97, 116, 97, 45, 104, 97, 115, 104, 1, 76, 1, 64, 3, 4, 115, 101, 108, 102, 35, 10, 112, 97, 116, 104, 45, 102, 108, 97, 103, 115, 15, 4, 112, 97, 116, 104, 115, 0, 203, 0, 4, 0, 35, 91, 109, 101, 116, 104, 111, 100, 93, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 46, 109, 101, 116, 97, 100, 97, 116, 97, 45, 104, 97, 115, 104, 45, 97, 116, 1, 77, 1, 104, 34, 1, 107, 26, 1, 106, 1, 207, 0, 1, 28, 1, 64, 1, 4, 115, 101, 108, 102, 206, 0, 0, 208, 0, 4, 0, 51, 91, 109, 101, 116, 104, 111, 100, 93, 100, 105, 114, 101, 99, 116, 111, 114, 121, 45, 101, 110, 116, 114, 121, 45, 115, 116, 114, 101, 97, 109, 46, 114, 101, 97, 100, 45, 100, 105, 114, 101, 99, 116, 111, 114, 121, 45, 101, 110, 116, 114, 121, 1, 81, 1, 104, 5, 1, 107, 28, 1, 64, 1, 3, 101, 114, 114, 210, 0, 0, 211, 0, 4, 0, 21, 102, 105, 108, 101, 115, 121, 115, 116, 101, 109, 45, 101, 114, 114, 111, 114, 45, 99, 111, 100, 101, 1, 84, 3, 1, 27, 119, 97, 115, 105, 58, 102, 105, 108, 101, 115, 121, 115, 116, 101, 109, 47, 116, 121, 112, 101, 115, 64, 48, 46, 50, 46, 48, 5, 27, 2, 3, 0, 10, 10, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 1, 66, 7, 2, 3, 2, 1, 28, 4, 0, 10, 100, 101, 115, 99, 114, 105, 112, 116, 111, 114, 3, 0, 0, 1, 105, 1, 1, 111, 2, 2, 115, 1, 112, 3, 1, 64, 0, 0, 4, 4, 0, 15, 103, 101, 116, 45, 100, 105, 114, 101, 99, 116, 111, 114, 105, 101, 115, 1, 5, 3, 1, 30, 119, 97, 115, 105, 58, 102, 105, 108, 101, 115, 121, 115, 116, 101, 109, 47, 112, 114, 101, 111, 112, 101, 110, 115, 64, 48, 46, 50, 46, 48, 5, 29, 1, 66, 192, 1, 2, 3, 2, 1, 5, 4, 0, 8, 100, 117, 114, 97, 116, 105, 111, 110, 3, 0, 0, 2, 3, 2, 1, 10, 4, 0, 12, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 0, 2, 2, 3, 2, 1, 11, 4, 0, 13, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 0, 4, 2, 3, 2, 1, 8, 4, 0, 8, 105, 111, 45, 101, 114, 114, 111, 114, 3, 0, 6, 2, 3, 2, 1, 2, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 8, 1, 113, 10, 3, 103, 101, 116, 0, 0, 4, 104, 101, 97, 100, 0, 0, 4, 112, 111, 115, 116, 0, 0, 3, 112, 117, 116, 0, 0, 6, 100, 101, 108, 101, 116, 101, 0, 0, 7, 99, 111, 110, 110, 101, 99, 116, 0, 0, 7, 111, 112, 116, 105, 111, 110, 115, 0, 0, 5, 116, 114, 97, 99, 101, 0, 0, 5, 112, 97, 116, 99, 104, 0, 0, 5, 111, 116, 104, 101, 114, 1, 115, 0, 4, 0, 6, 109, 101, 116, 104, 111, 100, 3, 0, 10, 1, 113, 3, 4, 72, 84, 84, 80, 0, 0, 5, 72, 84, 84, 80, 83, 0, 0, 5, 111, 116, 104, 101, 114, 1, 115, 0, 4, 0, 6, 115, 99, 104, 101, 109, 101, 3, 0, 12, 1, 107, 115, 1, 107, 123, 1, 114, 2, 5, 114, 99, 111, 100, 101, 14, 9, 105, 110, 102, 111, 45, 99, 111, 100, 101, 15, 4, 0, 17, 68, 78, 83, 45, 101, 114, 114, 111, 114, 45, 112, 97, 121, 108, 111, 97, 100, 3, 0, 16, 1, 107, 125, 1, 114, 2, 8, 97, 108, 101, 114, 116, 45, 105, 100, 18, 13, 97, 108, 101, 114, 116, 45, 109, 101, 115, 115, 97, 103, 101, 14, 4, 0, 26, 84, 76, 83, 45, 97, 108, 101, 114, 116, 45, 114, 101, 99, 101, 105, 118, 101, 100, 45, 112, 97, 121, 108, 111, 97, 100, 3, 0, 19, 1, 107, 121, 1, 114, 2, 10, 102, 105, 101, 108, 100, 45, 110, 97, 109, 101, 14, 10, 102, 105, 101, 108, 100, 45, 115, 105, 122, 101, 21, 4, 0, 18, 102, 105, 101, 108, 100, 45, 115, 105, 122, 101, 45, 112, 97, 121, 108, 111, 97, 100, 3, 0, 22, 1, 107, 119, 1, 107, 23, 1, 113, 39, 11, 68, 78, 83, 45, 116, 105, 109, 101, 111, 117, 116, 0, 0, 9, 68, 78, 83, 45, 101, 114, 114, 111, 114, 1, 17, 0, 21, 100, 101, 115, 116, 105, 110, 97, 116, 105, 111, 110, 45, 110, 111, 116, 45, 102, 111, 117, 110, 100, 0, 0, 23, 100, 101, 115, 116, 105, 110, 97, 116, 105, 111, 110, 45, 117, 110, 97, 118, 97, 105, 108, 97, 98, 108, 101, 0, 0, 25, 100, 101, 115, 116, 105, 110, 97, 116, 105, 111, 110, 45, 73, 80, 45, 112, 114, 111, 104, 105, 98, 105, 116, 101, 100, 0, 0, 25, 100, 101, 115, 116, 105, 110, 97, 116, 105, 111, 110, 45, 73, 80, 45, 117, 110, 114, 111, 117, 116, 97, 98, 108, 101, 0, 0, 18, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 45, 114, 101, 102, 117, 115, 101, 100, 0, 0, 21, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 45, 116, 101, 114, 109, 105, 110, 97, 116, 101, 100, 0, 0, 18, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 45, 116, 105, 109, 101, 111, 117, 116, 0, 0, 23, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 45, 114, 101, 97, 100, 45, 116, 105, 109, 101, 111, 117, 116, 0, 0, 24, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 45, 119, 114, 105, 116, 101, 45, 116, 105, 109, 101, 111, 117, 116, 0, 0, 24, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 45, 108, 105, 109, 105, 116, 45, 114, 101, 97, 99, 104, 101, 100, 0, 0, 18, 84, 76, 83, 45, 112, 114, 111, 116, 111, 99, 111, 108, 45, 101, 114, 114, 111, 114, 0, 0, 21, 84, 76, 83, 45, 99, 101, 114, 116, 105, 102, 105, 99, 97, 116, 101, 45, 101, 114, 114, 111, 114, 0, 0, 18, 84, 76, 83, 45, 97, 108, 101, 114, 116, 45, 114, 101, 99, 101, 105, 118, 101, 100, 1, 20, 0, 19, 72, 84, 84, 80, 45, 114, 101, 113, 117, 101, 115, 116, 45, 100, 101, 110, 105, 101, 100, 0, 0, 28, 72, 84, 84, 80, 45, 114, 101, 113, 117, 101, 115, 116, 45, 108, 101, 110, 103, 116, 104, 45, 114, 101, 113, 117, 105, 114, 101, 100, 0, 0, 22, 72, 84, 84, 80, 45, 114, 101, 113, 117, 101, 115, 116, 45, 98, 111, 100, 121, 45, 115, 105, 122, 101, 1, 24, 0, 27, 72, 84, 84, 80, 45, 114, 101, 113, 117, 101, 115, 116, 45, 109, 101, 116, 104, 111, 100, 45, 105, 110, 118, 97, 108, 105, 100, 0, 0, 24, 72, 84, 84, 80, 45, 114, 101, 113, 117, 101, 115, 116, 45, 85, 82, 73, 45, 105, 110, 118, 97, 108, 105, 100, 0, 0, 25, 72, 84, 84, 80, 45, 114, 101, 113, 117, 101, 115, 116, 45, 85, 82, 73, 45, 116, 111, 111, 45, 108, 111, 110, 103, 0, 0, 32, 72, 84, 84, 80, 45, 114, 101, 113, 117, 101, 115, 116, 45, 104, 101, 97, 100, 101, 114, 45, 115, 101, 99, 116, 105, 111, 110, 45, 115, 105, 122, 101, 1, 21, 0, 24, 72, 84, 84, 80, 45, 114, 101, 113, 117, 101, 115, 116, 45, 104, 101, 97, 100, 101, 114, 45, 115, 105, 122, 101, 1, 25, 0, 33, 72, 84, 84, 80, 45, 114, 101, 113, 117, 101, 115, 116, 45, 116, 114, 97, 105, 108, 101, 114, 45, 115, 101, 99, 116, 105, 111, 110, 45, 115, 105, 122, 101, 1, 21, 0, 25, 72, 84, 84, 80, 45, 114, 101, 113, 117, 101, 115, 116, 45, 116, 114, 97, 105, 108, 101, 114, 45, 115, 105, 122, 101, 1, 23, 0, 24, 72, 84, 84, 80, 45, 114, 101, 115, 112, 111, 110, 115, 101, 45, 105, 110, 99, 111, 109, 112, 108, 101, 116, 101, 0, 0, 33, 72, 84, 84, 80, 45, 114, 101, 115, 112, 111, 110, 115, 101, 45, 104, 101, 97, 100, 101, 114, 45, 115, 101, 99, 116, 105, 111, 110, 45, 115, 105, 122, 101, 1, 21, 0, 25, 72, 84, 84, 80, 45, 114, 101, 115, 112, 111, 110, 115, 101, 45, 104, 101, 97, 100, 101, 114, 45, 115, 105, 122, 101, 1, 23, 0, 23, 72, 84, 84, 80, 45, 114, 101, 115, 112, 111, 110, 115, 101, 45, 98, 111, 100, 121, 45, 115, 105, 122, 101, 1, 24, 0, 34, 72, 84, 84, 80, 45, 114, 101, 115, 112, 111, 110, 115, 101, 45, 116, 114, 97, 105, 108, 101, 114, 45, 115, 101, 99, 116, 105, 111, 110, 45, 115, 105, 122, 101, 1, 21, 0, 26, 72, 84, 84, 80, 45, 114, 101, 115, 112, 111, 110, 115, 101, 45, 116, 114, 97, 105, 108, 101, 114, 45, 115, 105, 122, 101, 1, 23, 0, 29, 72, 84, 84, 80, 45, 114, 101, 115, 112, 111, 110, 115, 101, 45, 116, 114, 97, 110, 115, 102, 101, 114, 45, 99, 111, 100, 105, 110, 103, 1, 14, 0, 28, 72, 84, 84, 80, 45, 114, 101, 115, 112, 111, 110, 115, 101, 45, 99, 111, 110, 116, 101, 110, 116, 45, 99, 111, 100, 105, 110, 103, 1, 14, 0, 21, 72, 84, 84, 80, 45, 114, 101, 115, 112, 111, 110, 115, 101, 45, 116, 105, 109, 101, 111, 117, 116, 0, 0, 19, 72, 84, 84, 80, 45, 117, 112, 103, 114, 97, 100, 101, 45, 102, 97, 105, 108, 101, 100, 0, 0, 19, 72, 84, 84, 80, 45, 112, 114, 111, 116, 111, 99, 111, 108, 45, 101, 114, 114, 111, 114, 0, 0, 13, 108, 111, 111, 112, 45, 100, 101, 116, 101, 99, 116, 101, 100, 0, 0, 19, 99, 111, 110, 102, 105, 103, 117, 114, 97, 116, 105, 111, 110, 45, 101, 114, 114, 111, 114, 0, 0, 14, 105, 110, 116, 101, 114, 110, 97, 108, 45, 101, 114, 114, 111, 114, 1, 14, 0, 4, 0, 10, 101, 114, 114, 111, 114, 45, 99, 111, 100, 101, 3, 0, 26, 1, 113, 3, 14, 105, 110, 118, 97, 108, 105, 100, 45, 115, 121, 110, 116, 97, 120, 0, 0, 9, 102, 111, 114, 98, 105, 100, 100, 101, 110, 0, 0, 9, 105, 109, 109, 117, 116, 97, 98, 108, 101, 0, 0, 4, 0, 12, 104, 101, 97, 100, 101, 114, 45, 101, 114, 114, 111, 114, 3, 0, 28, 1, 115, 4, 0, 9, 102, 105, 101, 108, 100, 45, 107, 101, 121, 3, 0, 30, 1, 112, 125, 4, 0, 11, 102, 105, 101, 108, 100, 45, 118, 97, 108, 117, 101, 3, 0, 32, 4, 0, 6, 102, 105, 101, 108, 100, 115, 3, 1, 4, 0, 7, 104, 101, 97, 100, 101, 114, 115, 3, 0, 34, 4, 0, 8, 116, 114, 97, 105, 108, 101, 114, 115, 3, 0, 34, 4, 0, 16, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 3, 1, 4, 0, 16, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 3, 1, 4, 0, 15, 114, 101, 113, 117, 101, 115, 116, 45, 111, 112, 116, 105, 111, 110, 115, 3, 1, 4, 0, 17, 114, 101, 115, 112, 111, 110, 115, 101, 45, 111, 117, 116, 112, 97, 114, 97, 109, 3, 1, 1, 123, 4, 0, 11, 115, 116, 97, 116, 117, 115, 45, 99, 111, 100, 101, 3, 0, 41, 4, 0, 17, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 3, 1, 4, 0, 13, 105, 110, 99, 111, 109, 105, 110, 103, 45, 98, 111, 100, 121, 3, 1, 4, 0, 15, 102, 117, 116, 117, 114, 101, 45, 116, 114, 97, 105, 108, 101, 114, 115, 3, 1, 4, 0, 17, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 3, 1, 4, 0, 13, 111, 117, 116, 103, 111, 105, 110, 103, 45, 98, 111, 100, 121, 3, 1, 4, 0, 24, 102, 117, 116, 117, 114, 101, 45, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 3, 1, 1, 105, 34, 1, 64, 0, 0, 49, 4, 0, 19, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 102, 105, 101, 108, 100, 115, 1, 50, 1, 111, 2, 31, 33, 1, 112, 51, 1, 106, 1, 49, 1, 29, 1, 64, 1, 7, 101, 110, 116, 114, 105, 101, 115, 52, 0, 53, 4, 0, 24, 91, 115, 116, 97, 116, 105, 99, 93, 102, 105, 101, 108, 100, 115, 46, 102, 114, 111, 109, 45, 108, 105, 115, 116, 1, 54, 1, 104, 34, 1, 112, 33, 1, 64, 2, 4, 115, 101, 108, 102, 55, 4, 110, 97, 109, 101, 31, 0, 56, 4, 0, 18, 91, 109, 101, 116, 104, 111, 100, 93, 102, 105, 101, 108, 100, 115, 46, 103, 101, 116, 1, 57, 1, 64, 2, 4, 115, 101, 108, 102, 55, 4, 110, 97, 109, 101, 31, 0, 127, 4, 0, 18, 91, 109, 101, 116, 104, 111, 100, 93, 102, 105, 101, 108, 100, 115, 46, 104, 97, 115, 1, 58, 1, 106, 0, 1, 29, 1, 64, 3, 4, 115, 101, 108, 102, 55, 4, 110, 97, 109, 101, 31, 5, 118, 97, 108, 117, 101, 56, 0, 59, 4, 0, 18, 91, 109, 101, 116, 104, 111, 100, 93, 102, 105, 101, 108, 100, 115, 46, 115, 101, 116, 1, 60, 1, 64, 2, 4, 115, 101, 108, 102, 55, 4, 110, 97, 109, 101, 31, 0, 59, 4, 0, 21, 91, 109, 101, 116, 104, 111, 100, 93, 102, 105, 101, 108, 100, 115, 46, 100, 101, 108, 101, 116, 101, 1, 61, 1, 64, 3, 4, 115, 101, 108, 102, 55, 4, 110, 97, 109, 101, 31, 5, 118, 97, 108, 117, 101, 33, 0, 59, 4, 0, 21, 91, 109, 101, 116, 104, 111, 100, 93, 102, 105, 101, 108, 100, 115, 46, 97, 112, 112, 101, 110, 100, 1, 62, 1, 64, 1, 4, 115, 101, 108, 102, 55, 0, 52, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 102, 105, 101, 108, 100, 115, 46, 101, 110, 116, 114, 105, 101, 115, 1, 63, 1, 64, 1, 4, 115, 101, 108, 102, 55, 0, 49, 4, 0, 20, 91, 109, 101, 116, 104, 111, 100, 93, 102, 105, 101, 108, 100, 115, 46, 99, 108, 111, 110, 101, 1, 64, 1, 104, 37, 1, 64, 1, 4, 115, 101, 108, 102, 193, 0, 0, 11, 4, 0, 31, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 109, 101, 116, 104, 111, 100, 1, 66, 1, 64, 1, 4, 115, 101, 108, 102, 193, 0, 0, 14, 4, 0, 40, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 112, 97, 116, 104, 45, 119, 105, 116, 104, 45, 113, 117, 101, 114, 121, 1, 67, 1, 107, 13, 1, 64, 1, 4, 115, 101, 108, 102, 193, 0, 0, 196, 0, 4, 0, 31, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 115, 99, 104, 101, 109, 101, 1, 69, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 97, 117, 116, 104, 111, 114, 105, 116, 121, 1, 67, 1, 105, 35, 1, 64, 1, 4, 115, 101, 108, 102, 193, 0, 0, 198, 0, 4, 0, 32, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 104, 101, 97, 100, 101, 114, 115, 1, 71, 1, 105, 44, 1, 106, 1, 200, 0, 0, 1, 64, 1, 4, 115, 101, 108, 102, 193, 0, 0, 201, 0, 4, 0, 32, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 99, 111, 110, 115, 117, 109, 101, 1, 74, 1, 105, 38, 1, 64, 1, 7, 104, 101, 97, 100, 101, 114, 115, 198, 0, 0, 203, 0, 4, 0, 29, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 1, 76, 1, 104, 38, 1, 105, 47, 1, 106, 1, 206, 0, 0, 1, 64, 1, 4, 115, 101, 108, 102, 205, 0, 0, 207, 0, 4, 0, 29, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 98, 111, 100, 121, 1, 80, 1, 64, 1, 4, 115, 101, 108, 102, 205, 0, 0, 11, 4, 0, 31, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 109, 101, 116, 104, 111, 100, 1, 81, 1, 106, 0, 0, 1, 64, 2, 4, 115, 101, 108, 102, 205, 0, 6, 109, 101, 116, 104, 111, 100, 11, 0, 210, 0, 4, 0, 35, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 115, 101, 116, 45, 109, 101, 116, 104, 111, 100, 1, 83, 1, 64, 1, 4, 115, 101, 108, 102, 205, 0, 0, 14, 4, 0, 40, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 112, 97, 116, 104, 45, 119, 105, 116, 104, 45, 113, 117, 101, 114, 121, 1, 84, 1, 64, 2, 4, 115, 101, 108, 102, 205, 0, 15, 112, 97, 116, 104, 45, 119, 105, 116, 104, 45, 113, 117, 101, 114, 121, 14, 0, 210, 0, 4, 0, 44, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 115, 101, 116, 45, 112, 97, 116, 104, 45, 119, 105, 116, 104, 45, 113, 117, 101, 114, 121, 1, 85, 1, 64, 1, 4, 115, 101, 108, 102, 205, 0, 0, 196, 0, 4, 0, 31, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 115, 99, 104, 101, 109, 101, 1, 86, 1, 64, 2, 4, 115, 101, 108, 102, 205, 0, 6, 115, 99, 104, 101, 109, 101, 196, 0, 0, 210, 0, 4, 0, 35, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 115, 101, 116, 45, 115, 99, 104, 101, 109, 101, 1, 87, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 97, 117, 116, 104, 111, 114, 105, 116, 121, 1, 84, 1, 64, 2, 4, 115, 101, 108, 102, 205, 0, 9, 97, 117, 116, 104, 111, 114, 105, 116, 121, 14, 0, 210, 0, 4, 0, 38, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 115, 101, 116, 45, 97, 117, 116, 104, 111, 114, 105, 116, 121, 1, 88, 1, 64, 1, 4, 115, 101, 108, 102, 205, 0, 0, 198, 0, 4, 0, 32, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 46, 104, 101, 97, 100, 101, 114, 115, 1, 89, 1, 105, 39, 1, 64, 0, 0, 218, 0, 4, 0, 28, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 114, 101, 113, 117, 101, 115, 116, 45, 111, 112, 116, 105, 111, 110, 115, 1, 91, 1, 104, 39, 1, 107, 1, 1, 64, 1, 4, 115, 101, 108, 102, 220, 0, 0, 221, 0, 4, 0, 39, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 113, 117, 101, 115, 116, 45, 111, 112, 116, 105, 111, 110, 115, 46, 99, 111, 110, 110, 101, 99, 116, 45, 116, 105, 109, 101, 111, 117, 116, 1, 94, 1, 64, 2, 4, 115, 101, 108, 102, 220, 0, 8, 100, 117, 114, 97, 116, 105, 111, 110, 221, 0, 0, 210, 0, 4, 0, 43, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 113, 117, 101, 115, 116, 45, 111, 112, 116, 105, 111, 110, 115, 46, 115, 101, 116, 45, 99, 111, 110, 110, 101, 99, 116, 45, 116, 105, 109, 101, 111, 117, 116, 1, 95, 4, 0, 42, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 113, 117, 101, 115, 116, 45, 111, 112, 116, 105, 111, 110, 115, 46, 102, 105, 114, 115, 116, 45, 98, 121, 116, 101, 45, 116, 105, 109, 101, 111, 117, 116, 1, 94, 4, 0, 46, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 113, 117, 101, 115, 116, 45, 111, 112, 116, 105, 111, 110, 115, 46, 115, 101, 116, 45, 102, 105, 114, 115, 116, 45, 98, 121, 116, 101, 45, 116, 105, 109, 101, 111, 117, 116, 1, 95, 4, 0, 45, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 113, 117, 101, 115, 116, 45, 111, 112, 116, 105, 111, 110, 115, 46, 98, 101, 116, 119, 101, 101, 110, 45, 98, 121, 116, 101, 115, 45, 116, 105, 109, 101, 111, 117, 116, 1, 94, 4, 0, 49, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 113, 117, 101, 115, 116, 45, 111, 112, 116, 105, 111, 110, 115, 46, 115, 101, 116, 45, 98, 101, 116, 119, 101, 101, 110, 45, 98, 121, 116, 101, 115, 45, 116, 105, 109, 101, 111, 117, 116, 1, 95, 1, 105, 40, 1, 105, 46, 1, 106, 1, 225, 0, 1, 27, 1, 64, 2, 5, 112, 97, 114, 97, 109, 224, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 226, 0, 1, 0, 4, 0, 29, 91, 115, 116, 97, 116, 105, 99, 93, 114, 101, 115, 112, 111, 110, 115, 101, 45, 111, 117, 116, 112, 97, 114, 97, 109, 46, 115, 101, 116, 1, 99, 1, 104, 43, 1, 64, 1, 4, 115, 101, 108, 102, 228, 0, 0, 42, 4, 0, 32, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 46, 115, 116, 97, 116, 117, 115, 1, 101, 1, 64, 1, 4, 115, 101, 108, 102, 228, 0, 0, 198, 0, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 46, 104, 101, 97, 100, 101, 114, 115, 1, 102, 1, 64, 1, 4, 115, 101, 108, 102, 228, 0, 0, 201, 0, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 46, 99, 111, 110, 115, 117, 109, 101, 1, 103, 1, 104, 44, 1, 105, 3, 1, 106, 1, 233, 0, 0, 1, 64, 1, 4, 115, 101, 108, 102, 232, 0, 0, 234, 0, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 98, 111, 100, 121, 46, 115, 116, 114, 101, 97, 109, 1, 107, 1, 105, 45, 1, 64, 1, 4, 116, 104, 105, 115, 200, 0, 0, 236, 0, 4, 0, 28, 91, 115, 116, 97, 116, 105, 99, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 98, 111, 100, 121, 46, 102, 105, 110, 105, 115, 104, 1, 109, 1, 104, 45, 1, 105, 9, 1, 64, 1, 4, 115, 101, 108, 102, 238, 0, 0, 239, 0, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 116, 114, 97, 105, 108, 101, 114, 115, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 112, 1, 105, 36, 1, 107, 241, 0, 1, 106, 1, 242, 0, 1, 27, 1, 106, 1, 243, 0, 0, 1, 107, 244, 0, 1, 64, 1, 4, 115, 101, 108, 102, 238, 0, 0, 245, 0, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 116, 114, 97, 105, 108, 101, 114, 115, 46, 103, 101, 116, 1, 118, 1, 64, 1, 7, 104, 101, 97, 100, 101, 114, 115, 198, 0, 0, 225, 0, 4, 0, 30, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 1, 119, 1, 104, 46, 1, 64, 1, 4, 115, 101, 108, 102, 248, 0, 0, 42, 4, 0, 37, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 46, 115, 116, 97, 116, 117, 115, 45, 99, 111, 100, 101, 1, 121, 1, 64, 2, 4, 115, 101, 108, 102, 248, 0, 11, 115, 116, 97, 116, 117, 115, 45, 99, 111, 100, 101, 42, 0, 210, 0, 4, 0, 41, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 46, 115, 101, 116, 45, 115, 116, 97, 116, 117, 115, 45, 99, 111, 100, 101, 1, 122, 1, 64, 1, 4, 115, 101, 108, 102, 248, 0, 0, 198, 0, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 46, 104, 101, 97, 100, 101, 114, 115, 1, 123, 1, 64, 1, 4, 115, 101, 108, 102, 248, 0, 0, 207, 0, 4, 0, 30, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 46, 98, 111, 100, 121, 1, 124, 1, 104, 47, 1, 105, 5, 1, 106, 1, 254, 0, 0, 1, 64, 1, 4, 115, 101, 108, 102, 253, 0, 0, 255, 0, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 98, 111, 100, 121, 46, 119, 114, 105, 116, 101, 1, 128, 1, 1, 106, 0, 1, 27, 1, 64, 2, 4, 116, 104, 105, 115, 206, 0, 8, 116, 114, 97, 105, 108, 101, 114, 115, 242, 0, 0, 129, 1, 4, 0, 28, 91, 115, 116, 97, 116, 105, 99, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 98, 111, 100, 121, 46, 102, 105, 110, 105, 115, 104, 1, 130, 1, 1, 104, 48, 1, 64, 1, 4, 115, 101, 108, 102, 131, 1, 0, 239, 0, 4, 0, 42, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 132, 1, 1, 105, 43, 1, 106, 1, 133, 1, 1, 27, 1, 106, 1, 134, 1, 0, 1, 107, 135, 1, 1, 64, 1, 4, 115, 101, 108, 102, 131, 1, 0, 136, 1, 4, 0, 36, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 46, 103, 101, 116, 1, 137, 1, 1, 104, 7, 1, 107, 27, 1, 64, 1, 3, 101, 114, 114, 138, 1, 0, 139, 1, 4, 0, 15, 104, 116, 116, 112, 45, 101, 114, 114, 111, 114, 45, 99, 111, 100, 101, 1, 140, 1, 3, 1, 21, 119, 97, 115, 105, 58, 104, 116, 116, 112, 47, 116, 121, 112, 101, 115, 64, 48, 46, 50, 46, 48, 5, 30, 2, 3, 0, 12, 16, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 2, 3, 0, 12, 15, 114, 101, 113, 117, 101, 115, 116, 45, 111, 112, 116, 105, 111, 110, 115, 2, 3, 0, 12, 24, 102, 117, 116, 117, 114, 101, 45, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 2, 3, 0, 12, 10, 101, 114, 114, 111, 114, 45, 99, 111, 100, 101, 1, 66, 15, 2, 3, 2, 1, 31, 4, 0, 16, 111, 117, 116, 103, 111, 105, 110, 103, 45, 114, 101, 113, 117, 101, 115, 116, 3, 0, 0, 2, 3, 2, 1, 32, 4, 0, 15, 114, 101, 113, 117, 101, 115, 116, 45, 111, 112, 116, 105, 111, 110, 115, 3, 0, 2, 2, 3, 2, 1, 33, 4, 0, 24, 102, 117, 116, 117, 114, 101, 45, 105, 110, 99, 111, 109, 105, 110, 103, 45, 114, 101, 115, 112, 111, 110, 115, 101, 3, 0, 4, 2, 3, 2, 1, 34, 4, 0, 10, 101, 114, 114, 111, 114, 45, 99, 111, 100, 101, 3, 0, 6, 1, 105, 1, 1, 105, 3, 1, 107, 9, 1, 105, 5, 1, 106, 1, 11, 1, 7, 1, 64, 2, 7, 114, 101, 113, 117, 101, 115, 116, 8, 7, 111, 112, 116, 105, 111, 110, 115, 10, 0, 12, 4, 0, 6, 104, 97, 110, 100, 108, 101, 1, 13, 3, 1, 32, 119, 97, 115, 105, 58, 104, 116, 116, 112, 47, 111, 117, 116, 103, 111, 105, 110, 103, 45, 104, 97, 110, 100, 108, 101, 114, 64, 48, 46, 50, 46, 48, 5, 35, 1, 66, 4, 4, 0, 5, 101, 114, 114, 111, 114, 3, 1, 1, 104, 0, 1, 64, 1, 4, 115, 101, 108, 102, 1, 0, 115, 4, 0, 19, 91, 109, 101, 116, 104, 111, 100, 93, 101, 114, 114, 111, 114, 46, 116, 114, 97, 99, 101, 1, 2, 3, 1, 39, 119, 97, 115, 105, 58, 107, 101, 121, 118, 97, 108, 117, 101, 47, 119, 97, 115, 105, 45, 107, 101, 121, 118, 97, 108, 117, 101, 45, 101, 114, 114, 111, 114, 64, 48, 46, 49, 46, 48, 5, 36, 2, 3, 0, 14, 5, 101, 114, 114, 111, 114, 1, 66, 44, 2, 3, 2, 1, 10, 4, 0, 12, 105, 110, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 0, 0, 2, 3, 2, 1, 11, 4, 0, 13, 111, 117, 116, 112, 117, 116, 45, 115, 116, 114, 101, 97, 109, 3, 0, 2, 2, 3, 2, 1, 37, 4, 0, 5, 101, 114, 114, 111, 114, 3, 0, 4, 4, 0, 6, 98, 117, 99, 107, 101, 116, 3, 1, 1, 115, 4, 0, 3, 107, 101, 121, 3, 0, 7, 4, 0, 14, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 3, 1, 4, 0, 25, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 98, 111, 100, 121, 45, 97, 115, 121, 110, 99, 3, 0, 3, 1, 112, 125, 4, 0, 24, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 98, 111, 100, 121, 45, 115, 121, 110, 99, 3, 0, 11, 4, 0, 14, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 3, 1, 4, 0, 25, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 97, 115, 121, 110, 99, 45, 98, 111, 100, 121, 3, 0, 1, 1, 112, 125, 4, 0, 24, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 115, 121, 110, 99, 45, 98, 111, 100, 121, 3, 0, 15, 1, 105, 6, 1, 105, 5, 1, 106, 1, 17, 1, 18, 1, 64, 1, 4, 110, 97, 109, 101, 115, 0, 19, 4, 0, 26, 91, 115, 116, 97, 116, 105, 99, 93, 98, 117, 99, 107, 101, 116, 46, 111, 112, 101, 110, 45, 98, 117, 99, 107, 101, 116, 1, 20, 1, 105, 9, 1, 64, 0, 0, 21, 4, 0, 41, 91, 115, 116, 97, 116, 105, 99, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 46, 110, 101, 119, 45, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 1, 22, 1, 104, 9, 1, 105, 10, 1, 106, 1, 24, 1, 18, 1, 64, 1, 4, 115, 101, 108, 102, 23, 0, 25, 4, 0, 54, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 46, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 119, 114, 105, 116, 101, 45, 98, 111, 100, 121, 45, 97, 115, 121, 110, 99, 1, 26, 1, 106, 0, 1, 18, 1, 64, 2, 4, 115, 101, 108, 102, 23, 5, 118, 97, 108, 117, 101, 12, 0, 27, 4, 0, 53, 91, 109, 101, 116, 104, 111, 100, 93, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 46, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 119, 114, 105, 116, 101, 45, 98, 111, 100, 121, 45, 115, 121, 110, 99, 1, 28, 1, 104, 13, 1, 106, 1, 16, 1, 18, 1, 64, 1, 4, 115, 101, 108, 102, 29, 0, 30, 4, 0, 50, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 46, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 99, 111, 110, 115, 117, 109, 101, 45, 115, 121, 110, 99, 1, 31, 1, 105, 14, 1, 106, 1, 32, 1, 18, 1, 64, 1, 4, 115, 101, 108, 102, 29, 0, 33, 4, 0, 51, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 46, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 99, 111, 110, 115, 117, 109, 101, 45, 97, 115, 121, 110, 99, 1, 34, 1, 106, 1, 119, 1, 18, 1, 64, 1, 4, 115, 101, 108, 102, 29, 0, 35, 4, 0, 42, 91, 109, 101, 116, 104, 111, 100, 93, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 46, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 45, 115, 105, 122, 101, 1, 36, 3, 1, 25, 119, 97, 115, 105, 58, 107, 101, 121, 118, 97, 108, 117, 101, 47, 116, 121, 112, 101, 115, 64, 48, 46, 49, 46, 48, 5, 38, 2, 3, 0, 15, 6, 98, 117, 99, 107, 101, 116, 2, 3, 0, 15, 5, 101, 114, 114, 111, 114, 2, 3, 0, 15, 3, 107, 101, 121, 2, 3, 0, 15, 14, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 2, 3, 0, 15, 14, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 1, 66, 30, 2, 3, 2, 1, 39, 4, 0, 6, 98, 117, 99, 107, 101, 116, 3, 0, 0, 2, 3, 2, 1, 40, 4, 0, 5, 101, 114, 114, 111, 114, 3, 0, 2, 2, 3, 2, 1, 41, 4, 0, 3, 107, 101, 121, 3, 0, 4, 2, 3, 2, 1, 42, 4, 0, 14, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 3, 0, 6, 2, 3, 2, 1, 43, 4, 0, 14, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 3, 0, 8, 1, 104, 1, 1, 112, 5, 1, 105, 7, 1, 107, 12, 1, 112, 13, 1, 105, 3, 1, 106, 1, 14, 1, 15, 1, 64, 2, 6, 98, 117, 99, 107, 101, 116, 10, 4, 107, 101, 121, 115, 11, 0, 16, 4, 0, 8, 103, 101, 116, 45, 109, 97, 110, 121, 1, 17, 1, 106, 1, 11, 1, 15, 1, 64, 1, 6, 98, 117, 99, 107, 101, 116, 10, 0, 18, 4, 0, 4, 107, 101, 121, 115, 1, 19, 1, 104, 9, 1, 111, 2, 5, 20, 1, 112, 21, 1, 106, 0, 1, 15, 1, 64, 2, 6, 98, 117, 99, 107, 101, 116, 10, 10, 107, 101, 121, 45, 118, 97, 108, 117, 101, 115, 22, 0, 23, 4, 0, 8, 115, 101, 116, 45, 109, 97, 110, 121, 1, 24, 1, 64, 2, 6, 98, 117, 99, 107, 101, 116, 10, 4, 107, 101, 121, 115, 11, 0, 23, 4, 0, 11, 100, 101, 108, 101, 116, 101, 45, 109, 97, 110, 121, 1, 25, 3, 1, 34, 119, 97, 115, 105, 58, 107, 101, 121, 118, 97, 108, 117, 101, 47, 101, 118, 101, 110, 116, 117, 97, 108, 45, 98, 97, 116, 99, 104, 64, 48, 46, 49, 46, 48, 5, 44, 1, 66, 26, 2, 3, 2, 1, 39, 4, 0, 6, 98, 117, 99, 107, 101, 116, 3, 0, 0, 2, 3, 2, 1, 40, 4, 0, 5, 101, 114, 114, 111, 114, 3, 0, 2, 2, 3, 2, 1, 42, 4, 0, 14, 105, 110, 99, 111, 109, 105, 110, 103, 45, 118, 97, 108, 117, 101, 3, 0, 4, 2, 3, 2, 1, 41, 4, 0, 3, 107, 101, 121, 3, 0, 6, 2, 3, 2, 1, 43, 4, 0, 14, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 3, 0, 8, 1, 104, 1, 1, 105, 5, 1, 107, 11, 1, 105, 3, 1, 106, 1, 12, 1, 13, 1, 64, 2, 6, 98, 117, 99, 107, 101, 116, 10, 3, 107, 101, 121, 7, 0, 14, 4, 0, 3, 103, 101, 116, 1, 15, 1, 104, 9, 1, 106, 0, 1, 13, 1, 64, 3, 6, 98, 117, 99, 107, 101, 116, 10, 3, 107, 101, 121, 7, 14, 111, 117, 116, 103, 111, 105, 110, 103, 45, 118, 97, 108, 117, 101, 16, 0, 17, 4, 0, 3, 115, 101, 116, 1, 18, 1, 64, 2, 6, 98, 117, 99, 107, 101, 116, 10, 3, 107, 101, 121, 7, 0, 17, 4, 0, 6, 100, 101, 108, 101, 116, 101, 1, 19, 1, 106, 1, 127, 1, 13, 1, 64, 2, 6, 98, 117, 99, 107, 101, 116, 10, 3, 107, 101, 121, 7, 0, 20, 4, 0, 6, 101, 120, 105, 115, 116, 115, 1, 21, 3, 1, 28, 119, 97, 115, 105, 58, 107, 101, 121, 118, 97, 108, 117, 101, 47, 101, 118, 101, 110, 116, 117, 97, 108, 64, 48, 46, 49, 46, 48, 5, 45, 1, 66, 4, 1, 109, 6, 5, 116, 114, 97, 99, 101, 5, 100, 101, 98, 117, 103, 4, 105, 110, 102, 111, 4, 119, 97, 114, 110, 5, 101, 114, 114, 111, 114, 8, 99, 114, 105, 116, 105, 99, 97, 108, 4, 0, 5, 108, 101, 118, 101, 108, 3, 0, 0, 1, 64, 3, 5, 108, 101, 118, 101, 108, 1, 7, 99, 111, 110, 116, 101, 120, 116, 115, 7, 109, 101, 115, 115, 97, 103, 101, 115, 1, 0, 4, 0, 3, 108, 111, 103, 1, 2, 3, 1, 20, 119, 97, 115, 105, 58, 108, 111, 103, 103, 105, 110, 103, 47, 108, 111, 103, 103, 105, 110, 103, 5, 46, 1, 66, 17, 4, 0, 7, 110, 101, 116, 119, 111, 114, 107, 3, 1, 1, 109, 21, 7, 117, 110, 107, 110, 111, 119, 110, 13, 97, 99, 99, 101, 115, 115, 45, 100, 101, 110, 105, 101, 100, 13, 110, 111, 116, 45, 115, 117, 112, 112, 111, 114, 116, 101, 100, 16, 105, 110, 118, 97, 108, 105, 100, 45, 97, 114, 103, 117, 109, 101, 110, 116, 13, 111, 117, 116, 45, 111, 102, 45, 109, 101, 109, 111, 114, 121, 7, 116, 105, 109, 101, 111, 117, 116, 20, 99, 111, 110, 99, 117, 114, 114, 101, 110, 99, 121, 45, 99, 111, 110, 102, 108, 105, 99, 116, 15, 110, 111, 116, 45, 105, 110, 45, 112, 114, 111, 103, 114, 101, 115, 115, 11, 119, 111, 117, 108, 100, 45, 98, 108, 111, 99, 107, 13, 105, 110, 118, 97, 108, 105, 100, 45, 115, 116, 97, 116, 101, 16, 110, 101, 119, 45, 115, 111, 99, 107, 101, 116, 45, 108, 105, 109, 105, 116, 20, 97, 100, 100, 114, 101, 115, 115, 45, 110, 111, 116, 45, 98, 105, 110, 100, 97, 98, 108, 101, 14, 97, 100, 100, 114, 101, 115, 115, 45, 105, 110, 45, 117, 115, 101, 18, 114, 101, 109, 111, 116, 101, 45, 117, 110, 114, 101, 97, 99, 104, 97, 98, 108, 101, 18, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 45, 114, 101, 102, 117, 115, 101, 100, 16, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 45, 114, 101, 115, 101, 116, 18, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 45, 97, 98, 111, 114, 116, 101, 100, 18, 100, 97, 116, 97, 103, 114, 97, 109, 45, 116, 111, 111, 45, 108, 97, 114, 103, 101, 17, 110, 97, 109, 101, 45, 117, 110, 114, 101, 115, 111, 108, 118, 97, 98, 108, 101, 26, 116, 101, 109, 112, 111, 114, 97, 114, 121, 45, 114, 101, 115, 111, 108, 118, 101, 114, 45, 102, 97, 105, 108, 117, 114, 101, 26, 112, 101, 114, 109, 97, 110, 101, 110, 116, 45, 114, 101, 115, 111, 108, 118, 101, 114, 45, 102, 97, 105, 108, 117, 114, 101, 4, 0, 10, 101, 114, 114, 111, 114, 45, 99, 111, 100, 101, 3, 0, 1, 1, 109, 2, 4, 105, 112, 118, 52, 4, 105, 112, 118, 54, 4, 0, 17, 105, 112, 45, 97, 100, 100, 114, 101, 115, 115, 45, 102, 97, 109, 105, 108, 121, 3, 0, 3, 1, 111, 4, 125, 125, 125, 125, 4, 0, 12, 105, 112, 118, 52, 45, 97, 100, 100, 114, 101, 115, 115, 3, 0, 5, 1, 111, 8, 123, 123, 123, 123, 123, 123, 123, 123, 4, 0, 12, 105, 112, 118, 54, 45, 97, 100, 100, 114, 101, 115, 115, 3, 0, 7, 1, 113, 2, 4, 105, 112, 118, 52, 1, 6, 0, 4, 105, 112, 118, 54, 1, 8, 0, 4, 0, 10, 105, 112, 45, 97, 100, 100, 114, 101, 115, 115, 3, 0, 9, 1, 114, 2, 4, 112, 111, 114, 116, 123, 7, 97, 100, 100, 114, 101, 115, 115, 6, 4, 0, 19, 105, 112, 118, 52, 45, 115, 111, 99, 107, 101, 116, 45, 97, 100, 100, 114, 101, 115, 115, 3, 0, 11, 1, 114, 4, 4, 112, 111, 114, 116, 123, 9, 102, 108, 111, 119, 45, 105, 110, 102, 111, 121, 7, 97, 100, 100, 114, 101, 115, 115, 8, 8, 115, 99, 111, 112, 101, 45, 105, 100, 121, 4, 0, 19, 105, 112, 118, 54, 45, 115, 111, 99, 107, 101, 116, 45, 97, 100, 100, 114, 101, 115, 115, 3, 0, 13, 1, 113, 2, 4, 105, 112, 118, 52, 1, 12, 0, 4, 105, 112, 118, 54, 1, 14, 0, 4, 0, 17, 105, 112, 45, 115, 111, 99, 107, 101, 116, 45, 97, 100, 100, 114, 101, 115, 115, 3, 0, 15, 3, 1, 26, 119, 97, 115, 105, 58, 115, 111, 99, 107, 101, 116, 115, 47, 110, 101, 116, 119, 111, 114, 107, 64, 48, 46, 50, 46, 48, 5, 47, 2, 3, 0, 19, 7, 110, 101, 116, 119, 111, 114, 107, 2, 3, 0, 19, 10, 101, 114, 114, 111, 114, 45, 99, 111, 100, 101, 2, 3, 0, 19, 10, 105, 112, 45, 97, 100, 100, 114, 101, 115, 115, 1, 66, 22, 2, 3, 2, 1, 2, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 0, 2, 3, 2, 1, 48, 4, 0, 7, 110, 101, 116, 119, 111, 114, 107, 3, 0, 2, 2, 3, 2, 1, 49, 4, 0, 10, 101, 114, 114, 111, 114, 45, 99, 111, 100, 101, 3, 0, 4, 2, 3, 2, 1, 50, 4, 0, 10, 105, 112, 45, 97, 100, 100, 114, 101, 115, 115, 3, 0, 6, 4, 0, 22, 114, 101, 115, 111, 108, 118, 101, 45, 97, 100, 100, 114, 101, 115, 115, 45, 115, 116, 114, 101, 97, 109, 3, 1, 1, 104, 8, 1, 107, 7, 1, 106, 1, 10, 1, 5, 1, 64, 1, 4, 115, 101, 108, 102, 9, 0, 11, 4, 0, 51, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 115, 111, 108, 118, 101, 45, 97, 100, 100, 114, 101, 115, 115, 45, 115, 116, 114, 101, 97, 109, 46, 114, 101, 115, 111, 108, 118, 101, 45, 110, 101, 120, 116, 45, 97, 100, 100, 114, 101, 115, 115, 1, 12, 1, 105, 1, 1, 64, 1, 4, 115, 101, 108, 102, 9, 0, 13, 4, 0, 40, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 115, 111, 108, 118, 101, 45, 97, 100, 100, 114, 101, 115, 115, 45, 115, 116, 114, 101, 97, 109, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 14, 1, 104, 3, 1, 105, 8, 1, 106, 1, 16, 1, 5, 1, 64, 2, 7, 110, 101, 116, 119, 111, 114, 107, 15, 4, 110, 97, 109, 101, 115, 0, 17, 4, 0, 17, 114, 101, 115, 111, 108, 118, 101, 45, 97, 100, 100, 114, 101, 115, 115, 101, 115, 1, 18, 3, 1, 33, 119, 97, 115, 105, 58, 115, 111, 99, 107, 101, 116, 115, 47, 105, 112, 45, 110, 97, 109, 101, 45, 108, 111, 111, 107, 117, 112, 64, 48, 46, 50, 46, 48, 5, 51, 1, 66, 5, 2, 3, 2, 1, 48, 4, 0, 7, 110, 101, 116, 119, 111, 114, 107, 3, 0, 0, 1, 105, 1, 1, 64, 0, 0, 2, 4, 0, 16, 105, 110, 115, 116, 97, 110, 99, 101, 45, 110, 101, 116, 119, 111, 114, 107, 1, 3, 3, 1, 35, 119, 97, 115, 105, 58, 115, 111, 99, 107, 101, 116, 115, 47, 105, 110, 115, 116, 97, 110, 99, 101, 45, 110, 101, 116, 119, 111, 114, 107, 64, 48, 46, 50, 46, 48, 5, 52, 4, 1, 21, 103, 111, 108, 101, 109, 58, 114, 117, 115, 116, 47, 103, 111, 108, 101, 109, 45, 114, 117, 115, 116, 4, 0, 11, 16, 1, 0, 10, 103, 111, 108, 101, 109, 45, 114, 117, 115, 116, 3, 0, 0, 0, 16, 12, 112, 97, 99, 107, 97, 103, 101, 45, 100, 111, 99, 115, 0, 123, 125, 0, 70, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 2, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 6, 48, 46, 49, 56, 46, 50, 16, 119, 105, 116, 45, 98, 105, 110, 100, 103, 101, 110, 45, 114, 117, 115, 116, 6, 48, 46, 49, 54, 46, 48];
+              
+              #[inline(never)]
+              #[doc(hidden)]
+              #[cfg(target_arch = "wasm32")]
+              pub fn __link_section() {}
+              
