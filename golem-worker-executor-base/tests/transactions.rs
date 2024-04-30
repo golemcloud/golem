@@ -339,3 +339,226 @@ async fn persist_nothing() {
     check!(events == vec!["1", "2", "3", "2", "2", "4"]);
     check!(result.is_ok());
 }
+
+// golem-rust library tests
+
+#[tokio::test]
+#[instrument]
+async fn golem_rust_explicit_oplog_commit() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_component("golem-rust-tests").await;
+
+    let worker_id = executor
+        .start_worker(&component_id, "golem-rust-tests-explicit-oplog-commit")
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    // Note: we can only test with replicas=0 because we don't have redis slaves in the test environment currently
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/explicit-commit",
+            vec![Value::U8(0)],
+        )
+        .await;
+
+    drop(executor);
+    check!(result.is_ok());
+}
+
+#[tokio::test]
+#[instrument]
+async fn golem_rust_set_retry_policy() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_component("golem-rust-tests").await;
+    let worker_id = executor
+        .start_worker(&component_id, "golem-rust-tests-set-retry-policy-1")
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    let start = SystemTime::now();
+    let result1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/fail-with-custom-max-retries",
+            vec![Value::U64(2)],
+        )
+        .await;
+    let elapsed = start.elapsed().unwrap();
+
+    let result2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/fail-with-custom-max-retries",
+            vec![Value::U64(1)],
+        )
+        .await;
+
+    drop(executor);
+
+    check!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
+    check!(result1.is_err());
+    check!(result2.is_err());
+    check!(worker_error_message(&result1.clone().err().unwrap())
+        .starts_with("Runtime error: error while executing at wasm backtrace:"));
+    check!(worker_error_message(&result2.err().unwrap()).starts_with("Previous invocation failed"));
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn golem_rust_atomic_region() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let host_http_port = context.host_http_port();
+
+    let http_server = TestHttpServer::start(host_http_port, 2);
+    let component_id = executor.store_component("golem-rust-tests").await;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+
+    let worker_id = executor
+        .start_worker_with(&component_id, "golem-rust-tests-atomic-region", vec![], env)
+        .await;
+
+    let _ = executor
+        .invoke_and_await(&worker_id, "golem:it/api/atomic-region", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+    http_server.abort();
+
+    let events = http_server.get_events();
+    println!("events:\n - {}", events.join("\n - "));
+
+    check!(events == vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn golem_rust_idempotence_on() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let host_http_port = context.host_http_port();
+    let http_server = TestHttpServer::start(host_http_port, 1);
+
+    let component_id = executor.store_component("golem-rust-tests").await;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "golem-rust-tests-idempotence-flag-on",
+            vec![],
+            env,
+        )
+        .await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/idempotence-flag",
+            vec![Value::Bool(true)],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+    http_server.abort();
+
+    let events = http_server.get_events();
+    println!("events:\n - {}", events.join("\n - "));
+
+    check!(events == vec!["1", "1"]);
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn golem_rust_idempotence_off() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let host_http_port = context.host_http_port();
+    let http_server = TestHttpServer::start(host_http_port, 1);
+
+    let component_id = executor.store_component("golem-rust-tests").await;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "golem-rust-testsidempotence-flag-off",
+            vec![],
+            env,
+        )
+        .await;
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/idempotence-flag",
+            vec![Value::Bool(false)],
+        )
+        .await;
+
+    drop(executor);
+    http_server.abort();
+
+    let events = http_server.get_events();
+    println!("events:\n - {}", events.join("\n - "));
+    println!("result: {:?}", result);
+
+    check!(events == vec!["1"]);
+    check!(result.is_err());
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn golem_rust_persist_nothing() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let host_http_port = context.host_http_port();
+    let http_server = TestHttpServer::start(host_http_port, 2);
+
+    let component_id = executor.store_component("golem-rust-tests").await;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "golem-rust-tests-persist-nothing",
+            vec![],
+            env,
+        )
+        .await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api/persist-nothing", vec![])
+        .await;
+
+    drop(executor);
+    http_server.abort();
+
+    let events = http_server.get_events();
+    println!("events:\n - {}", events.join("\n - "));
+    println!("result: {:?}", result);
+
+    check!(events == vec!["1", "2", "3", "2", "2", "4"]);
+    check!(result.is_ok());
+}
