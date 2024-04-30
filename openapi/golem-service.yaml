@@ -2735,14 +2735,14 @@ components:
     WorkerCreationResponse:
       type: object
       properties:
-        worker_id:
+        workerId:
           $ref: '#/components/schemas/WorkerId'
-        component_version:
+        componentVersion:
           type: integer
           format: uint64
       required:
-      - worker_id
-      - component_version
+      - workerId
+      - componentVersion
     WorkerEnvFilter:
       type: object
       properties:
