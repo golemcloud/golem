@@ -41,7 +41,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                     ttl,
                     period: Duration::from_secs(60),
                 },
-                "active_instances",
+                "active_workers",
             ),
         }
     }
@@ -52,7 +52,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 None,
                 FullCacheEvictionMode::None,
                 BackgroundEvictionMode::None,
-                "active_instances",
+                "active_workers",
             ),
         }
     }

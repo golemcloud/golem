@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_service::ComponentService;
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
 use crate::components::worker_executor::{env_vars, wait_for_startup, WorkerExecutor};
 use crate::components::worker_service::WorkerService;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
@@ -29,6 +29,7 @@ use kube::api::PostParams;
 use kube::{Api, Client};
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{info, Level};
 
@@ -52,9 +53,11 @@ impl K8sWorkerExecutor {
         idx: usize,
         verbosity: Level,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting Golem Worker Executor {idx} pod");
 
@@ -63,7 +66,7 @@ impl K8sWorkerExecutor {
         let env_vars = env_vars(
             Self::HTTP_PORT,
             Self::GRPC_PORT,
-            template_service,
+            component_service,
             shard_manager,
             worker_service,
             redis,
@@ -122,7 +125,7 @@ impl K8sWorkerExecutor {
         let _res_pod = pods.create(&pp, &pod).await.expect("Failed to create pod");
         let managed_pod = AsyncDropper::new(ManagedPod::new(name, namespace));
 
-        let service: Service = serde_json::from_value(json!({
+        let mut service: Service = serde_json::from_value(json!({
             "apiVersion": "v1",
             "kind": "Service",
             "metadata": {
@@ -150,6 +153,7 @@ impl K8sWorkerExecutor {
             }
         }))
         .expect("Failed to deserialize service definition");
+        service.metadata.annotations = service_annotations;
 
         let _res_srv = services
             .create(&pp, &service)
@@ -164,7 +168,7 @@ impl K8sWorkerExecutor {
             routing: managed_routing,
         } = Routing::create(name, Self::GRPC_PORT, namespace, routing_type).await;
 
-        wait_for_startup(&local_host, local_port).await;
+        wait_for_startup(&local_host, local_port, timeout).await;
 
         info!("Golem Worker Executor pod started");
 

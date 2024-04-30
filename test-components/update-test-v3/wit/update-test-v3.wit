@@ -1,0 +1,13 @@
+package golem:component;
+
+interface api {
+  get: func() -> u64;
+  set: func(value: u64) -> u64;
+}
+
+world update-test-v3 {
+  export golem:api/save-snapshot@0.2.0;
+  export golem:api/load-snapshot@0.2.0;
+
+  export api;
+}

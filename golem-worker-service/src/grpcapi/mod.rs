@@ -31,7 +31,7 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         .add_service(reflection_service)
         .add_service(health_service)
         .add_service(WorkerServiceServer::new(WorkerGrpcApi::new(
-            services.template_service.clone(),
+            services.component_service.clone(),
             services.worker_service.clone(),
         )))
         .add_service(ApiDefinitionServiceServer::new(

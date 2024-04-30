@@ -3,9 +3,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use golem_common::model::TemplateId;
+use golem_common::model::ComponentId;
 use golem_service_base::model::{
-    Export, ExportFunction, ExportInstance, Template, TemplateMetadata,
+    Component, ComponentMetadata, Export, ExportFunction, ExportInstance,
 };
 
 use crate::api_definition::http::{HttpApiDefinition, MethodPattern, Route};
@@ -17,7 +17,7 @@ use crate::service::api_definition_validator::{ApiDefinitionValidatorService, Va
 pub struct RouteValidationError {
     pub method: MethodPattern,
     pub path: String,
-    pub template: TemplateId,
+    pub component: ComponentId,
     pub detail: String,
 }
 
@@ -26,7 +26,7 @@ impl RouteValidationError {
         Self {
             method: route.method,
             path: route.path.to_string(),
-            template: route.binding.template,
+            component: route.binding.component,
             detail,
         }
     }
@@ -41,14 +41,14 @@ impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
     fn validate(
         &self,
         api: &HttpApiDefinition,
-        templates: &[Template],
+        components: &[Component],
     ) -> Result<(), ValidationErrors<RouteValidationError>> {
-        let templates: HashMap<&TemplateId, &TemplateMetadata> = templates
+        let components: HashMap<&ComponentId, &ComponentMetadata> = components
             .iter()
-            .map(|template| {
+            .map(|component| {
                 (
-                    &template.versioned_template_id.template_id,
-                    &template.metadata,
+                    &component.versioned_component_id.component_id,
+                    &component.metadata,
                 )
             })
             .collect();
@@ -58,7 +58,7 @@ impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
                 .routes
                 .iter()
                 .cloned()
-                .flat_map(|route| validate_route(route, &templates).err())
+                .flat_map(|route| validate_route(route, &components).err())
                 .collect::<Vec<_>>();
 
             let unique_route_errors = unique_routes(api.routes.as_slice());
@@ -100,7 +100,7 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
             errors.push(RouteValidationError {
                 method: route.method.clone(),
                 path: route.path.to_string(),
-                template: route.binding.template.clone(),
+                component: route.binding.component.clone(),
                 detail,
             });
         }
@@ -111,24 +111,24 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
 
 fn validate_route(
     route: Route,
-    templates: &HashMap<&TemplateId, &TemplateMetadata>,
+    components: &HashMap<&ComponentId, &ComponentMetadata>,
 ) -> Result<(), RouteValidationError> {
-    let template_id = route.binding.template.clone();
-    // We can unwrap here because we've already validated that all templates are present.
-    let template = templates.get(&template_id).unwrap();
+    let component_id = route.binding.component.clone();
+    // We can unwrap here because we've already validated that all components are present.
+    let component = components.get(&component_id).unwrap();
 
     let function_name = route.binding.function_name.clone();
 
     // TODO: Validate function params.
-    let _function = find_function(function_name.as_str(), template).ok_or_else(|| {
+    let _function = find_function(function_name.as_str(), component).ok_or_else(|| {
         RouteValidationError::from_route(route, format!("Invalid function name: {function_name}"))
     })?;
 
     Ok(())
 }
 
-fn find_function(name: &str, template: &TemplateMetadata) -> Option<ExportFunction> {
-    template.exports.iter().find_map(|exp| match exp {
+fn find_function(name: &str, component: &ComponentMetadata) -> Option<ExportFunction> {
+    component.exports.iter().find_map(|exp| match exp {
         Export::Instance(ExportInstance {
             name: instance_name,
             functions,
@@ -157,7 +157,7 @@ fn test_unique_routes() {
             method,
             path: crate::api_definition::http::AllPathPatterns::parse(path).unwrap(),
             binding: crate::worker_binding::GolemWorkerBinding {
-                template: TemplateId::new_v4(),
+                component: ComponentId::new_v4(),
                 worker_id: crate::expression::Expr::Request(),
                 function_name: "test".into(),
                 function_params: vec![],

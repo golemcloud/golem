@@ -55,7 +55,7 @@ impl RegisterApiDefinitionApi {
         Ok(Json(definition))
     }
 
-    #[oai(path = "/", method = "post", operation_id = "create")]
+    #[oai(path = "/", method = "post", operation_id = "create_definition")]
     async fn create(
         &self,
         payload: Json<HttpApiDefinition>,
@@ -74,7 +74,11 @@ impl RegisterApiDefinitionApi {
 
         Ok(Json(definition))
     }
-    #[oai(path = "/:id/:version", method = "put", operation_id = "update")]
+    #[oai(
+        path = "/:id/:version",
+        method = "put",
+        operation_id = "update_definition"
+    )]
     async fn update(
         &self,
         id: Path<ApiDefinitionId>,
@@ -112,7 +116,11 @@ impl RegisterApiDefinitionApi {
         Ok(Json(definition))
     }
 
-    #[oai(path = "/:id/:version", method = "get", operation_id = "get")]
+    #[oai(
+        path = "/:id/:version",
+        method = "get",
+        operation_id = "get_definition"
+    )]
     async fn get(
         &self,
         id: Path<ApiDefinitionId>,
@@ -146,7 +154,11 @@ impl RegisterApiDefinitionApi {
         Ok(Json(value))
     }
 
-    #[oai(path = "/:id/:version", method = "delete", operation_id = "delete")]
+    #[oai(
+        path = "/:id/:version",
+        method = "delete",
+        operation_id = "delete_definition"
+    )]
     async fn delete(
         &self,
         id: Path<ApiDefinitionId>,
@@ -174,7 +186,7 @@ impl RegisterApiDefinitionApi {
         }
     }
 
-    #[oai(path = "/", method = "get", operation_id = "list")]
+    #[oai(path = "/", method = "get", operation_id = "list_definitions")]
     async fn list(
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
@@ -219,21 +231,21 @@ impl RegisterApiDefinitionApi {
 #[cfg(test)]
 mod test {
     use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
-    use golem_worker_service_base::service::template::TemplateServiceNoop;
+    use golem_worker_service_base::service::component::ComponentServiceNoop;
     use http::StatusCode;
     use poem::test::TestClient;
 
     use golem_worker_service_base::repo::api_definition_repo::InMemoryRegistry;
     use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
 
-    use crate::service::template::TemplateService;
+    use crate::service::component::ComponentService;
 
     use super::*;
 
     fn make_route() -> poem::Route {
-        let template_service: TemplateService = Arc::new(TemplateServiceNoop {});
+        let component_service: ComponentService = Arc::new(ComponentServiceNoop {});
         let definition_service = ApiDefinitionServiceDefault::new(
-            template_service,
+            component_service,
             Arc::new(InMemoryRegistry::default()),
             Arc::new(ApiDefinitionValidatorNoop {}),
         );
@@ -368,7 +380,7 @@ mod test {
                     "worker-id": "worker-${request.path.user-id}",
                     "function-name": "golem:it/api/get-cart-contents",
                     "function-params": [],
-                    "template-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+                    "component-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
                     "response" : "${{headers : {ContentType: 'json', userid: 'foo'}, body: worker.response, status: 200}}"
                   },
                   "get": {

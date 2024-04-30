@@ -19,11 +19,13 @@ use std::time::Duration;
 use crate::model::{InterruptKind, LastError, TrapType};
 use crate::services::rpc::Rpc;
 use crate::services::{
-    active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, scheduler,
-    template, worker, worker_enumeration, HasActiveWorkers, HasAll, HasBlobStoreService, HasConfig,
-    HasExtraDeps, HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
+    active_workers, blob_store, component, golem_config, invocation_key, key_value, oplog, promise,
+    scheduler, worker, worker_activator, worker_enumeration, worker_proxy, HasActiveWorkers,
+    HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasExtraDeps,
+    HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
     HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasTemplateService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
+    HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy,
+    HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -74,7 +76,7 @@ pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
-    template_service: Arc<dyn template::TemplateService + Send + Sync>,
+    component_service: Arc<dyn component::ComponentService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     running_worker_enumeration_service:
@@ -88,6 +90,8 @@ pub struct RecoveryManagementDefault<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
     rpc: Arc<dyn Rpc + Send + Sync>,
+    worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
+    worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -99,7 +103,7 @@ impl<Ctx: WorkerCtx> Clone for RecoveryManagementDefault<Ctx> {
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
-            template_service: self.template_service.clone(),
+            component_service: self.component_service.clone(),
             worker_service: self.worker_service.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
             running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
@@ -112,6 +116,8 @@ impl<Ctx: WorkerCtx> Clone for RecoveryManagementDefault<Ctx> {
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
             rpc: self.rpc.clone(),
+            worker_activator: self.worker_activator.clone(),
+            worker_proxy: self.worker_proxy.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -123,9 +129,9 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for RecoveryManagementDefault<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasTemplateService for RecoveryManagementDefault<Ctx> {
-    fn template_service(&self) -> Arc<dyn template::TemplateService + Send + Sync> {
-        self.template_service.clone()
+impl<Ctx: WorkerCtx> HasComponentService for RecoveryManagementDefault<Ctx> {
+    fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
+        self.component_service.clone()
     }
 }
 
@@ -203,6 +209,18 @@ impl<Ctx: WorkerCtx> HasSchedulerService for RecoveryManagementDefault<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasWorkerActivator for RecoveryManagementDefault<Ctx> {
+    fn worker_activator(&self) -> Arc<dyn worker_activator::WorkerActivator + Send + Sync> {
+        self.worker_activator.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWorkerProxy for RecoveryManagementDefault<Ctx> {
+    fn worker_proxy(&self) -> Arc<dyn worker_proxy::WorkerProxy + Send + Sync> {
+        self.worker_proxy.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasOplogService for RecoveryManagementDefault<Ctx> {
     fn oplog_service(&self) -> Arc<dyn oplog::OplogService + Send + Sync> {
         self.oplog_service.clone()
@@ -233,7 +251,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        template_service: Arc<dyn template::TemplateService + Send + Sync>,
+        component_service: Arc<dyn component::ComponentService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -248,6 +266,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
+        worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
@@ -257,7 +277,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             engine,
             linker,
             runtime,
-            template_service,
+            component_service,
             worker_service,
             worker_enumeration_service,
             running_worker_enumeration_service,
@@ -270,6 +290,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             golem_config,
             recovery_override: None,
             rpc,
+            worker_activator,
+            worker_proxy,
             extra_deps,
         }
     }
@@ -280,7 +302,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        template_service: Arc<dyn template::TemplateService + Send + Sync>,
+        component_service: Arc<dyn component::ComponentService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -296,6 +318,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
+        worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
         recovery_override: F,
     ) -> Self
@@ -308,7 +332,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             engine,
             linker,
             runtime,
-            template_service,
+            component_service,
             worker_service,
             worker_enumeration_service,
             running_worker_enumeration_service,
@@ -321,6 +345,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             golem_config,
             recovery_override: Some(Arc::new(recovery_override)),
             rpc,
+            worker_activator,
+            worker_proxy,
             extra_deps,
         }
     }
@@ -581,21 +607,21 @@ mod tests {
     use crate::services::active_workers::ActiveWorkers;
     use crate::services::blob_store::BlobStoreService;
     use crate::services::golem_config::GolemConfig;
-    use crate::services::invocation_key::InvocationKeyService;
+    use crate::services::invocation_key::{InvocationKeyService, LookupResult};
     use crate::services::invocation_queue::InvocationQueue;
     use crate::services::key_value::KeyValueService;
     use crate::services::promise::PromiseService;
     use crate::services::worker::WorkerService;
     use crate::services::worker_event::WorkerEventService;
     use crate::services::{
-        worker_enumeration, All, HasAll, HasBlobStoreService, HasConfig, HasExtraDeps,
-        HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasOplog,
-        HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasTemplateService,
-        HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
+        worker_enumeration, All, HasAll, HasBlobStoreService, HasComponentService, HasConfig,
+        HasExtraDeps, HasInvocationKeyService, HasInvocationQueue, HasKeyValueService, HasOplog,
+        HasPromiseService, HasRpc, HasRunningWorkerEnumerationService, HasWasmtimeEngine,
+        HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
     };
     use crate::workerctx::{
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
-        PublicWorkerIo, StatusManagement, WorkerCtx,
+        PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
     };
     use anyhow::Error;
     use async_trait::async_trait;
@@ -603,8 +629,8 @@ mod tests {
     use golem_common::config::RetryConfig;
     use golem_common::model::oplog::WorkerError;
     use golem_common::model::{
-        AccountId, CallingConvention, InvocationKey, TemplateId, WorkerId, WorkerMetadata,
-        WorkerStatus, WorkerStatusRecord,
+        AccountId, CallingConvention, ComponentId, ComponentVersion, InvocationKey, WorkerId,
+        WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use golem_wasm_rpc::wasmtime::ResourceStore;
     use golem_wasm_rpc::{Uri, Value};
@@ -618,11 +644,13 @@ mod tests {
     use crate::services::rpc::Rpc;
     use crate::services::scheduler;
     use crate::services::scheduler::SchedulerService;
+    use crate::services::worker_proxy::WorkerProxy;
 
     struct EmptyContext {
         worker_id: WorkerId,
         public_state: EmptyPublicState,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     }
 
     #[derive(Clone)]
@@ -695,6 +723,14 @@ mod tests {
         ) {
             unimplemented!()
         }
+
+        fn generate_new_invocation_key(&mut self) -> InvocationKey {
+            unimplemented!()
+        }
+
+        fn lookup_invocation_result(&self, _key: &InvocationKey) -> LookupResult {
+            unimplemented!()
+        }
     }
 
     #[async_trait]
@@ -731,6 +767,10 @@ mod tests {
         }
 
         async fn update_pending_invocations(&self) {
+            unimplemented!()
+        }
+
+        async fn update_pending_updates(&self) {
             unimplemented!()
         }
 
@@ -773,6 +813,29 @@ mod tests {
     }
 
     #[async_trait]
+    impl UpdateManagement for EmptyContext {
+        fn begin_call_snapshotting_function(&mut self) {
+            unimplemented!()
+        }
+
+        fn end_call_snapshotting_function(&mut self) {
+            unimplemented!()
+        }
+
+        async fn on_worker_update_failed(
+            &self,
+            _target_version: ComponentVersion,
+            _details: Option<String>,
+        ) {
+            unimplemented!()
+        }
+
+        async fn on_worker_update_succeeded(&self, _target_version: ComponentVersion) {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait]
     impl ExternalOperations<Self> for EmptyContext {
         type ExtraDeps = ();
 
@@ -803,7 +866,7 @@ mod tests {
             _worker_id: &WorkerId,
             _instance: &Instance,
             _store: &mut (impl AsContextMut<Data = Self> + Send),
-        ) -> Result<(), GolemError> {
+        ) -> Result<bool, GolemError> {
             unimplemented!()
         }
 
@@ -852,6 +915,7 @@ mod tests {
             _scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
             _recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
             rpc: Arc<dyn Rpc + Send + Sync>,
+            worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
             _extra_deps: Self::ExtraDeps,
             _config: Arc<GolemConfig>,
             _worker_config: WorkerConfig,
@@ -861,6 +925,7 @@ mod tests {
                 worker_id: create_test_id(),
                 public_state: EmptyPublicState,
                 rpc,
+                worker_proxy,
             })
         }
 
@@ -882,6 +947,10 @@ mod tests {
 
         fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
             self.rpc.clone()
+        }
+
+        fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+            self.worker_proxy.clone()
         }
     }
 
@@ -943,7 +1012,7 @@ mod tests {
             deps.engine(),
             linker,
             runtime,
-            deps.template_service(),
+            deps.component_service(),
             deps.worker_service(),
             deps.worker_enumeration_service(),
             deps.running_worker_enumeration_service(),
@@ -955,6 +1024,8 @@ mod tests {
             deps.blob_store_service(),
             deps.config(),
             deps.rpc(),
+            deps.worker_activator(),
+            deps.worker_proxy(),
             (),
             recovery_fn,
         )
@@ -964,7 +1035,7 @@ mod tests {
         let uuid = uuid::Uuid::parse_str("14e55083-2ff5-44ec-a414-595a748b19a0").unwrap();
 
         WorkerId {
-            template_id: TemplateId(uuid),
+            component_id: ComponentId(uuid),
             worker_name: "test-worker".to_string(),
         }
     }

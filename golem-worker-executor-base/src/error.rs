@@ -20,7 +20,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use golem_api_grpc::proto::golem;
-use golem_common::model::{PromiseId, ShardId, TemplateId, WorkerId};
+use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use tonic::Status;
 
 use crate::model::InterruptKind;
@@ -42,19 +42,20 @@ pub enum GolemError {
     },
     FailedToResumeWorker {
         worker_id: WorkerId,
+        reason: Box<GolemError>,
     },
-    TemplateDownloadFailed {
-        template_id: TemplateId,
-        template_version: u64,
+    ComponentDownloadFailed {
+        component_id: ComponentId,
+        component_version: u64,
         reason: String,
     },
-    TemplateParseFailed {
-        template_id: TemplateId,
-        template_version: u64,
+    ComponentParseFailed {
+        component_id: ComponentId,
+        component_version: u64,
         reason: String,
     },
-    GetLatestVersionOfTemplateFailed {
-        template_id: TemplateId,
+    GetLatestVersionOfComponentFailed {
+        component_id: ComponentId,
         reason: String,
     },
     PromiseNotFound {
@@ -96,8 +97,11 @@ pub enum GolemError {
 }
 
 impl GolemError {
-    pub fn failed_to_resume_instance(worker_id: WorkerId) -> Self {
-        GolemError::FailedToResumeWorker { worker_id }
+    pub fn failed_to_resume_worker(worker_id: WorkerId, reason: GolemError) -> Self {
+        GolemError::FailedToResumeWorker {
+            worker_id,
+            reason: Box::new(reason),
+        }
     }
 
     pub fn worker_creation_failed(worker_id: WorkerId, details: impl Into<String>) -> Self {
@@ -111,14 +115,14 @@ impl GolemError {
         GolemError::WorkerNotFound { worker_id }
     }
 
-    pub fn template_download_failed(
-        template_id: TemplateId,
-        template_version: u64,
+    pub fn component_download_failed(
+        component_id: ComponentId,
+        component_version: u64,
         reason: impl Into<String>,
     ) -> Self {
-        GolemError::TemplateDownloadFailed {
-            template_id,
-            template_version,
+        GolemError::ComponentDownloadFailed {
+            component_id,
+            component_version,
             reason: reason.into(),
         }
     }
@@ -162,10 +166,10 @@ impl GolemError {
             GolemError::WorkerNotFound { .. } => "WorkerNotFound",
             GolemError::WorkerCreationFailed { .. } => "WorkerCreationFailed",
             GolemError::FailedToResumeWorker { .. } => "FailedToResumeWorker",
-            GolemError::TemplateDownloadFailed { .. } => "TemplateDownloadFailed",
-            GolemError::TemplateParseFailed { .. } => "TemplateParseFailed",
-            GolemError::GetLatestVersionOfTemplateFailed { .. } => {
-                "GetLatestVersionOfTemplateFailed"
+            GolemError::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
+            GolemError::ComponentParseFailed { .. } => "ComponentParseFailed",
+            GolemError::GetLatestVersionOfComponentFailed { .. } => {
+                "GetLatestVersionOfComponentFailed"
             }
             GolemError::PromiseNotFound { .. } => "PromiseNotFound",
             GolemError::PromiseDropped { .. } => "PromiseDropped",
@@ -200,36 +204,36 @@ impl Display for GolemError {
             GolemError::WorkerCreationFailed { worker_id, details } => {
                 write!(f, "Failed to create worker: {worker_id}: {details}")
             }
-            GolemError::FailedToResumeWorker { worker_id } => {
-                write!(f, "Failed to resume worker: {worker_id}")
+            GolemError::FailedToResumeWorker { worker_id, reason } => {
+                write!(f, "Failed to resume worker: {worker_id}: {reason}")
             }
-            GolemError::TemplateDownloadFailed {
-                template_id,
-                template_version,
+            GolemError::ComponentDownloadFailed {
+                component_id,
+                component_version,
                 reason,
             } => {
                 write!(
                     f,
-                    "Failed to download template: {template_id}#{template_version}: {reason}"
+                    "Failed to download component: {component_id}#{component_version}: {reason}"
                 )
             }
-            GolemError::TemplateParseFailed {
-                template_id,
-                template_version,
+            GolemError::ComponentParseFailed {
+                component_id,
+                component_version,
                 reason,
             } => {
                 write!(
                     f,
-                    "Failed to parse downloaded template: {template_id}#{template_version}: {reason}"
+                    "Failed to parse downloaded component: {component_id}#{component_version}: {reason}"
                 )
             }
-            GolemError::GetLatestVersionOfTemplateFailed {
-                template_id,
+            GolemError::GetLatestVersionOfComponentFailed {
+                component_id,
                 reason,
             } => {
                 write!(
                     f,
-                    "Failed to get latest version of template {template_id}: {reason}"
+                    "Failed to get latest version of component {component_id}: {reason}"
                 )
             }
             GolemError::PromiseNotFound { promise_id } => {
@@ -289,10 +293,10 @@ impl Error for GolemError {
             GolemError::WorkerNotFound { .. } => "Worker not found",
             GolemError::WorkerCreationFailed { .. } => "Failed to create worker",
             GolemError::FailedToResumeWorker { .. } => "Failed to resume worker",
-            GolemError::TemplateDownloadFailed { .. } => "Failed to download template",
-            GolemError::TemplateParseFailed { .. } => "Failed to parse downloaded template",
-            GolemError::GetLatestVersionOfTemplateFailed { .. } => {
-                "Failed to get latest version of template"
+            GolemError::ComponentDownloadFailed { .. } => "Failed to download component",
+            GolemError::ComponentParseFailed { .. } => "Failed to parse downloaded component",
+            GolemError::GetLatestVersionOfComponentFailed { .. } => {
+                "Failed to get latest version of component"
             }
             GolemError::PromiseNotFound { .. } => "Promise not found",
             GolemError::PromiseDropped { .. } => "Promise dropped",
@@ -394,53 +398,56 @@ impl From<GolemError> for golem::worker::WorkerExecutionError {
                     ),
                 }
             }
-            GolemError::FailedToResumeWorker { worker_id } => golem::worker::WorkerExecutionError {
-                error: Some(
-                    golem::worker::worker_execution_error::Error::FailedToResumeWorker(
-                        golem::worker::FailedToResumeWorker {
-                            worker_id: Some(worker_id.into()),
-                        },
+            GolemError::FailedToResumeWorker { worker_id, reason } => {
+                golem::worker::WorkerExecutionError {
+                    error: Some(
+                        golem::worker::worker_execution_error::Error::FailedToResumeWorker(
+                            Box::new(golem::worker::FailedToResumeWorker {
+                                worker_id: Some(worker_id.into()),
+                                reason: Some(Box::new((*reason).clone().into())),
+                            }),
+                        ),
                     ),
-                ),
-            },
-            GolemError::TemplateDownloadFailed {
-                template_id,
-                template_version,
+                }
+            }
+            GolemError::ComponentDownloadFailed {
+                component_id,
+                component_version,
                 reason,
             } => golem::worker::WorkerExecutionError {
                 error: Some(
-                    golem::worker::worker_execution_error::Error::TemplateDownloadFailed(
-                        golem::worker::TemplateDownloadFailed {
-                            template_id: Some(template_id.into()),
-                            template_version,
+                    golem::worker::worker_execution_error::Error::ComponentDownloadFailed(
+                        golem::worker::ComponentDownloadFailed {
+                            component_id: Some(component_id.into()),
+                            component_version,
                             reason,
                         },
                     ),
                 ),
             },
-            GolemError::TemplateParseFailed {
-                template_id,
-                template_version,
+            GolemError::ComponentParseFailed {
+                component_id,
+                component_version,
                 reason,
             } => golem::worker::WorkerExecutionError {
                 error: Some(
-                    golem::worker::worker_execution_error::Error::TemplateParseFailed(
-                        golem::worker::TemplateParseFailed {
-                            template_id: Some(template_id.into()),
-                            template_version,
+                    golem::worker::worker_execution_error::Error::ComponentParseFailed(
+                        golem::worker::ComponentParseFailed {
+                            component_id: Some(component_id.into()),
+                            component_version,
                             reason,
                         },
                     ),
                 ),
             },
-            GolemError::GetLatestVersionOfTemplateFailed {
-                template_id,
+            GolemError::GetLatestVersionOfComponentFailed {
+                component_id,
                 reason,
             } => golem::worker::WorkerExecutionError {
                 error: Some(
-                    golem::worker::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(
-                        golem::worker::GetLatestVersionOfTemplateFailed {
-                            template_id: Some(template_id.into()),
+                    golem::worker::worker_execution_error::Error::GetLatestVersionOfComponentFailed(
+                        golem::worker::GetLatestVersionOfComponentFailed {
+                            component_id: Some(component_id.into()),
                             reason,
                         },
                     ),
@@ -606,37 +613,40 @@ impl TryFrom<golem::worker::WorkerExecutionError> for GolemError {
                     .worker_id
                     .ok_or("Missing worker_id")?
                     .try_into()?,
+                reason: Box::new(
+                    (*failed_to_resume_worker.reason.ok_or("Missing reason")?).try_into()?,
+                ),
             }),
-            Some(golem::worker::worker_execution_error::Error::TemplateDownloadFailed(
-                template_download_failed,
-            )) => Ok(GolemError::TemplateDownloadFailed {
-                template_id: template_download_failed
-                    .template_id
-                    .ok_or("Missing template_id")?
+            Some(golem::worker::worker_execution_error::Error::ComponentDownloadFailed(
+                component_download_failed,
+            )) => Ok(GolemError::ComponentDownloadFailed {
+                component_id: component_download_failed
+                    .component_id
+                    .ok_or("Missing component_id")?
                     .try_into()?,
-                template_version: template_download_failed.template_version,
-                reason: template_download_failed.reason,
+                component_version: component_download_failed.component_version,
+                reason: component_download_failed.reason,
             }),
-            Some(golem::worker::worker_execution_error::Error::TemplateParseFailed(
-                template_parse_failed,
-            )) => Ok(GolemError::TemplateParseFailed {
-                template_id: template_parse_failed
-                    .template_id
-                    .ok_or("Missing template_id")?
+            Some(golem::worker::worker_execution_error::Error::ComponentParseFailed(
+                component_parse_failed,
+            )) => Ok(GolemError::ComponentParseFailed {
+                component_id: component_parse_failed
+                    .component_id
+                    .ok_or("Missing component_id")?
                     .try_into()?,
-                template_version: template_parse_failed.template_version,
-                reason: template_parse_failed.reason,
+                component_version: component_parse_failed.component_version,
+                reason: component_parse_failed.reason,
             }),
             Some(
-                golem::worker::worker_execution_error::Error::GetLatestVersionOfTemplateFailed(
-                    get_latest_version_of_template_failed,
+                golem::worker::worker_execution_error::Error::GetLatestVersionOfComponentFailed(
+                    get_latest_version_of_component_failed,
                 ),
-            ) => Ok(GolemError::GetLatestVersionOfTemplateFailed {
-                template_id: get_latest_version_of_template_failed
-                    .template_id
-                    .ok_or("Missing template_id")?
+            ) => Ok(GolemError::GetLatestVersionOfComponentFailed {
+                component_id: get_latest_version_of_component_failed
+                    .component_id
+                    .ok_or("Missing component_id")?
                     .try_into()?,
-                reason: get_latest_version_of_template_failed.reason,
+                reason: get_latest_version_of_component_failed.reason,
             }),
             Some(golem::worker::worker_execution_error::Error::PromiseNotFound(
                 promise_not_found,

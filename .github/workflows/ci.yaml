@@ -158,20 +158,20 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-shard-manager.outputs.tags }}
           labels: ${{ steps.meta-shard-manager.outputs.labels }}
-      - name: Extract metadata (tags, labels) for golem template service
-        id: meta-golem-template-service
+      - name: Extract metadata (tags, labels) for golem component service
+        id: meta-golem-component-service
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-template-service
-      - name: Build and push golem template service image
+          images: golemservices/golem-component-service
+      - name: Build and push golem component service image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./golem-template-service/docker/Dockerfile
+          file: ./golem-component-service/docker/Dockerfile
           push: true
           platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-golem-template-service.outputs.tags }}
-          labels: ${{ steps.meta-golem-template-service.outputs.labels }}
+          tags: ${{ steps.meta-golem-component-service.outputs.tags }}
+          labels: ${{ steps.meta-golem-component-service.outputs.labels }}
       - name: Extract metadata (tags, labels) for golem worker service
         id: meta-golem-worker-service
         uses: docker/metadata-action@v5
@@ -186,20 +186,20 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-worker-service.outputs.tags }}
           labels: ${{ steps.meta-golem-worker-service.outputs.labels }}
-      - name: Extract metadata (tags, labels) for golem template compilation service
-        id: meta-golem-template-compilation-service
+      - name: Extract metadata (tags, labels) for golem component compilation service
+        id: meta-golem-component-compilation-service
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-template-compilation-service
-      - name: Build and push golem template compilation service image
+          images: golemservices/golem-component-compilation-service
+      - name: Build and push golem component compilation service image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./golem-template-compilation-service/docker/Dockerfile
+          file: ./golem-component-compilation-service/docker/Dockerfile
           push: true
           platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-golem-template-compilation-service.outputs.tags }}
-          labels: ${{ steps.meta-golem-template-compilation-service.outputs.labels }}
+          tags: ${{ steps.meta-golem-component-compilation-service.outputs.tags }}
+          labels: ${{ steps.meta-golem-component-compilation-service.outputs.labels }}
       - name: Extract metadata (tags, labels) for golem router
         id: meta-golem-router
         uses: docker/metadata-action@v5

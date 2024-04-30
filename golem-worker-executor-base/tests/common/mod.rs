@@ -16,14 +16,14 @@ use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 
 use golem_common::model::{
-    AccountId, InvocationKey, TemplateId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    AccountId, ComponentId, ComponentVersion, InvocationKey, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
-    BlobStoreServiceConfig, BlobStoreServiceInMemoryConfig, CompiledTemplateServiceConfig,
-    CompiledTemplateServiceLocalConfig, GolemConfig, KeyValueServiceConfig, PromisesConfig,
-    ShardManagerServiceConfig, TemplateServiceConfig, TemplateServiceLocalConfig,
+    BlobStoreServiceConfig, BlobStoreServiceInMemoryConfig, CompiledComponentServiceConfig,
+    CompiledComponentServiceLocalConfig, ComponentServiceConfig, ComponentServiceLocalConfig,
+    GolemConfig, KeyValueServiceConfig, PromisesConfig, ShardManagerServiceConfig,
     WorkerServiceGrpcConfig, WorkersServiceConfig,
 };
 
@@ -35,7 +35,8 @@ use golem_worker_executor_base::model::{
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
+use golem_worker_executor_base::services::component::ComponentService;
+use golem_worker_executor_base::services::invocation_key::{InvocationKeyService, LookupResult};
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
 use golem_worker_executor_base::services::promise::PromiseService;
@@ -45,15 +46,14 @@ use golem_worker_executor_base::services::recovery::{
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
 use golem_worker_executor_base::services::shard_manager::ShardManagerService;
-use golem_worker_executor_base::services::template::TemplateService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::{worker_enumeration, All, HasAll};
+use golem_worker_executor_base::services::{All, HasAll};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
-    StatusManagement, WorkerCtx,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor_base::Bootstrap;
 
@@ -84,9 +84,9 @@ use golem_worker_executor_base::services::rpc::{
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
+use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use tonic::transport::Channel;
 use tracing::{error, info};
-use uuid::Uuid;
 use wasmtime::component::{Instance, Linker, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 
@@ -102,16 +102,16 @@ impl TestWorkerExecutor {
 
     pub async fn get_running_workers_metadata(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
     ) -> Vec<WorkerMetadata> {
-        let template_id: golem_api_grpc::proto::golem::template::TemplateId =
-            template_id.clone().into();
+        let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+            component_id.clone().into();
         let response = self
             .client()
             .await
             .get_running_workers_metadata(GetRunningWorkersMetadataRequest {
-                template_id: Some(template_id),
+                component_id: Some(component_id),
                 filter: filter.map(|f| f.into()),
             })
             .await
@@ -132,19 +132,19 @@ impl TestWorkerExecutor {
 
     pub async fn get_workers_metadata(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
         precise: bool,
     ) -> (Option<u64>, Vec<WorkerMetadata>) {
-        let template_id: golem_api_grpc::proto::golem::template::TemplateId =
-            template_id.clone().into();
+        let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+            component_id.clone().into();
         let response = self
             .client()
             .await
             .get_workers_metadata(GetWorkersMetadataRequest {
-                template_id: Some(template_id),
+                component_id: Some(component_id),
                 filter: filter.map(|f| f.into()),
                 cursor,
                 count,
@@ -192,19 +192,19 @@ impl TestDependencies for TestWorkerExecutor {
         self.deps.shard_manager()
     }
 
-    fn template_directory(&self) -> PathBuf {
-        self.deps.template_directory()
+    fn component_directory(&self) -> PathBuf {
+        self.deps.component_directory()
     }
 
-    fn template_service(
+    fn component_service(
         &self,
     ) -> Arc<
-        dyn golem_test_framework::components::template_service::TemplateService
+        dyn golem_test_framework::components::component_service::ComponentService
             + Send
             + Sync
             + 'static,
     > {
-        self.deps.template_service()
+        self.deps.component_service()
     }
 
     fn worker_service(
@@ -269,12 +269,12 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
     let config = GolemConfig {
         port: context.grpc_port(),
         http_port: context.http_port(),
-        template_service: TemplateServiceConfig::Local(TemplateServiceLocalConfig {
-            root: Path::new("data/templates").to_path_buf(),
+        component_service: ComponentServiceConfig::Local(ComponentServiceLocalConfig {
+            root: Path::new("data/components").to_path_buf(),
         }),
-        compiled_template_service: CompiledTemplateServiceConfig::Local(
-            CompiledTemplateServiceLocalConfig {
-                root: Path::new("data/templates").to_path_buf(),
+        compiled_component_service: CompiledComponentServiceConfig::Local(
+            CompiledComponentServiceLocalConfig {
+                root: Path::new("data/components").to_path_buf(),
             },
         ),
         blob_store_service: BlobStoreServiceConfig::InMemory(BlobStoreServiceInMemoryConfig {}),
@@ -403,7 +403,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
-    ) -> Result<(), GolemError> {
+    ) -> Result<bool, GolemError> {
         DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -461,6 +461,14 @@ impl InvocationManagement for TestWorkerCtx {
     ) {
         self.durable_ctx.confirm_invocation_key(key, vals).await
     }
+
+    fn generate_new_invocation_key(&mut self) -> InvocationKey {
+        self.durable_ctx.generate_new_invocation_key()
+    }
+
+    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult {
+        self.durable_ctx.lookup_invocation_result(key)
+    }
 }
 
 #[async_trait]
@@ -500,6 +508,10 @@ impl StatusManagement for TestWorkerCtx {
 
     async fn update_pending_invocations(&self) {
         self.durable_ctx.update_pending_invocations().await
+    }
+
+    async fn update_pending_updates(&self) {
+        self.durable_ctx.update_pending_updates().await
     }
 
     async fn deactivate(&self) {
@@ -565,6 +577,33 @@ impl ResourceStore for TestWorkerCtx {
     }
 }
 
+#[async_trait]
+impl UpdateManagement for TestWorkerCtx {
+    fn begin_call_snapshotting_function(&mut self) {
+        self.durable_ctx.begin_call_snapshotting_function()
+    }
+
+    fn end_call_snapshotting_function(&mut self) {
+        self.durable_ctx.end_call_snapshotting_function()
+    }
+
+    async fn on_worker_update_failed(
+        &self,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    ) {
+        self.durable_ctx
+            .on_worker_update_failed(target_version, details)
+            .await
+    }
+
+    async fn on_worker_update_succeeded(&self, target_version: ComponentVersion) {
+        self.durable_ctx
+            .on_worker_update_succeeded(target_version)
+            .await
+    }
+}
+
 struct ServerBootstrap {}
 
 #[async_trait]
@@ -577,9 +616,7 @@ impl WorkerCtx for TestWorkerCtx {
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
-        >,
+        worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
@@ -590,6 +627,7 @@ impl WorkerCtx for TestWorkerCtx {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -612,6 +650,7 @@ impl WorkerCtx for TestWorkerCtx {
             scheduler_service,
             recovery_management,
             rpc,
+            worker_proxy,
             config,
             worker_config,
             execution_status,
@@ -638,6 +677,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
         self.durable_ctx.rpc()
+    }
+
+    fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+        self.durable_ctx.worker_proxy()
     }
 }
 
@@ -669,7 +712,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::bounded(
-            golem_config.limits.max_active_instances,
+            golem_config.limits.max_active_workers,
             golem_config.active_workers.drop_when_full,
             golem_config.active_workers.ttl,
         ))
@@ -681,7 +724,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<TestWorkerCtx>>,
         runtime: Handle,
-        template_service: Arc<dyn TemplateService + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -692,24 +735,18 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        _worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
-            Arc::new(RemoteInvocationRpc::new(
-                golem_config.public_worker_api.uri(),
-                golem_config
-                    .public_worker_api
-                    .access_token
-                    .parse::<Uuid>()
-                    .expect("Access token must be an UUID"),
-            )),
+            Arc::new(RemoteInvocationRpc::new(worker_proxy.clone())),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
             runtime.clone(),
-            template_service.clone(),
+            component_service.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -722,6 +759,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             blob_store_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
+            worker_activator.clone(),
             (),
         ));
         let recovery_management = Arc::new(RecoveryManagementDefault::new(
@@ -729,7 +767,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
-            template_service.clone(),
+            component_service.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -740,6 +778,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             key_value_service.clone(),
             blob_store_service.clone(),
             rpc.clone(),
+            worker_activator.clone(),
+            worker_proxy.clone(),
             golem_config.clone(),
             (),
         ));
@@ -750,7 +790,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             engine,
             linker,
             runtime,
-            template_service,
+            component_service,
             shard_manager_service,
             worker_service,
             worker_enumeration_service,
@@ -765,6 +805,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             recovery_management,
             rpc,
             scheduler_service,
+            worker_activator,
+            worker_proxy,
             (),
         ))
     }

@@ -14,6 +14,7 @@
 
 use crate::error::GolemError;
 use crate::services::rpc::RpcError;
+use crate::services::worker_proxy::WorkerProxyError;
 use anyhow::anyhow;
 use bincode::{Decode, Encode};
 use std::ops::Add;
@@ -85,6 +86,7 @@ pub enum SerializableError {
     Golem { error: GolemError },
     SocketError { code: u8 },
     Rpc { error: RpcError },
+    WorkerProxy { error: WorkerProxyError },
 }
 
 fn get_fs_error_code(value: &filesystem::types::ErrorCode) -> u8 {
@@ -273,6 +275,7 @@ impl From<SerializableError> for anyhow::Error {
                 }
             }
             SerializableError::Rpc { error } => anyhow!(error),
+            SerializableError::WorkerProxy { error } => anyhow!(error),
         }
     }
 }
@@ -297,6 +300,7 @@ impl From<SerializableError> for FsError {
                 FsError::trap(anyhow)
             }
             SerializableError::Rpc { error } => FsError::trap(anyhow!(error)),
+            SerializableError::WorkerProxy { error } => FsError::trap(anyhow!(error)),
         }
     }
 }
@@ -329,6 +333,7 @@ impl From<SerializableError> for GolemError {
                 GolemError::unknown(anyhow.to_string())
             }
             SerializableError::Rpc { error } => GolemError::unknown(error.to_string()),
+            SerializableError::WorkerProxy { error } => GolemError::unknown(error.to_string()),
         }
     }
 }
@@ -369,6 +374,7 @@ impl From<SerializableError> for SocketError {
                 }
             }
             SerializableError::Rpc { error } => SocketError::trap(anyhow!(error)),
+            SerializableError::WorkerProxy { error } => SocketError::trap(anyhow!(error)),
         }
     }
 }
@@ -401,6 +407,41 @@ impl From<SerializableError> for RpcError {
                 }
             }
             SerializableError::Rpc { error } => error,
+            SerializableError::WorkerProxy { error } => RpcError::ProtocolError {
+                details: error.to_string(),
+            },
+        }
+    }
+}
+
+impl From<&WorkerProxyError> for SerializableError {
+    fn from(value: &WorkerProxyError) -> Self {
+        Self::WorkerProxy {
+            error: value.clone(),
+        }
+    }
+}
+
+impl From<SerializableError> for WorkerProxyError {
+    fn from(value: SerializableError) -> Self {
+        match value {
+            SerializableError::Generic { message } => {
+                WorkerProxyError::InternalError(GolemError::unknown(message))
+            }
+            SerializableError::FsError { .. } => {
+                let anyhow: anyhow::Error = value.into();
+                WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
+            }
+            SerializableError::Golem { error } => WorkerProxyError::InternalError(error),
+            SerializableError::SocketError { .. } => {
+                let anyhow: anyhow::Error = value.into();
+                WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
+            }
+            SerializableError::Rpc { .. } => {
+                let anyhow: anyhow::Error = value.into();
+                WorkerProxyError::InternalError(GolemError::unknown(anyhow.to_string()))
+            }
+            SerializableError::WorkerProxy { error } => error,
         }
     }
 }
@@ -503,7 +544,7 @@ mod tests {
     };
     use crate::error::GolemError;
     use crate::model::InterruptKind;
-    use golem_common::model::{PromiseId, ShardId, TemplateId, WorkerId};
+    use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
     use proptest::collection::vec;
     use proptest::prelude::*;
     use proptest::strategy::LazyJust;
@@ -590,13 +631,13 @@ mod tests {
         (any::<u64>(), any::<u64>()).prop_map(|(a, b)| Uuid::from_u64_pair(a, b))
     }
 
-    fn templateid_strat() -> impl Strategy<Value = TemplateId> {
-        uuid_strat().prop_map(TemplateId)
+    fn componentid_strat() -> impl Strategy<Value = ComponentId> {
+        uuid_strat().prop_map(ComponentId)
     }
 
     fn workerid_strat() -> impl Strategy<Value = WorkerId> {
-        (templateid_strat(), ".+").prop_map(|(template_id, worker_name)| WorkerId {
-            template_id,
+        (componentid_strat(), ".+").prop_map(|(component_id, worker_name)| WorkerId {
+            component_id,
             worker_name,
         })
     }
@@ -626,10 +667,10 @@ mod tests {
             workerid_strat().prop_map(|worker_id| GolemError::WorkerAlreadyExists { worker_id }),
             workerid_strat().prop_map(|worker_id| GolemError::WorkerNotFound { worker_id }),
             (workerid_strat(), ".*").prop_map(|(worker_id, details)| GolemError::WorkerCreationFailed { worker_id, details }),
-            workerid_strat().prop_map(|worker_id| GolemError::FailedToResumeWorker { worker_id }),
-            (templateid_strat(), any::<u64>(), ".*").prop_map(|(template_id, template_version, reason)| GolemError::TemplateDownloadFailed { template_id, template_version, reason }),
-            (templateid_strat(), any::<u64>(), ".*").prop_map(|(template_id, template_version, reason)| GolemError::TemplateParseFailed { template_id, template_version, reason }),
-            (templateid_strat(), ".*").prop_map(|(template_id, reason)| GolemError::GetLatestVersionOfTemplateFailed { template_id, reason }),
+            (workerid_strat(), ".*").prop_map(|(worker_id, reason)| GolemError::FailedToResumeWorker { worker_id, reason: Box::new(GolemError::unknown(reason)) }),
+            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| GolemError::ComponentDownloadFailed { component_id, component_version, reason }),
+            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| GolemError::ComponentParseFailed { component_id, component_version, reason }),
+            (componentid_strat(), ".*").prop_map(|(component_id, reason)| GolemError::GetLatestVersionOfComponentFailed { component_id, reason }),
             promiseid_strat().prop_map(|promise_id| GolemError::PromiseNotFound { promise_id }),
             promiseid_strat().prop_map(|promise_id| GolemError::PromiseDropped { promise_id }),
             promiseid_strat().prop_map(|promise_id| GolemError::PromiseAlreadyCompleted { promise_id }),

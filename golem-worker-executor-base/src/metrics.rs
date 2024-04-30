@@ -59,7 +59,7 @@ const MEMORY_SIZE_BUCKETS: &[f64; 11] = &[
     1073741824.0,
 ];
 
-pub mod template {
+pub mod component {
     use std::time::Duration;
 
     use golem_common::metrics::DEFAULT_TIME_BUCKETS;
@@ -69,7 +69,7 @@ pub mod template {
     lazy_static! {
         pub static ref COMPILATION_TIME_SECONDS: Histogram = register_histogram!(
             "compilation_time_seconds",
-            "Time to compile a WASM template to native code",
+            "Time to compile a WASM component to native code",
             DEFAULT_TIME_BUCKETS.to_vec()
         )
         .unwrap();

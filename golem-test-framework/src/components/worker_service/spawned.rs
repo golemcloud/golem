@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
 use crate::components::worker_service::{env_vars, wait_for_startup, WorkerService};
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tracing::info;
 use tracing::Level;
@@ -42,7 +43,7 @@ impl SpawnedWorkerService {
         http_port: u16,
         grpc_port: u16,
         custom_request_port: u16,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -62,7 +63,7 @@ impl SpawnedWorkerService {
                 http_port,
                 grpc_port,
                 custom_request_port,
-                template_service,
+                component_service,
                 shard_manager,
                 rdb,
                 redis,
@@ -77,7 +78,7 @@ impl SpawnedWorkerService {
         let logger =
             ChildProcessLogger::log_child_process("[workersvc]", out_level, err_level, &mut child);
 
-        wait_for_startup("localhost", grpc_port).await;
+        wait_for_startup("localhost", grpc_port, Duration::from_secs(90)).await;
 
         Self {
             http_port,

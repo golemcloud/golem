@@ -20,8 +20,8 @@ async fn zig_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("zig-1").await;
-    let worker_id = executor.start_worker(&template_id, "zig-1").await;
+    let component_id = executor.store_component("zig-1").await;
+    let worker_id = executor.start_worker(&component_id, "zig-1").await;
 
     let result = executor
         .invoke_and_await_stdio(
@@ -42,8 +42,8 @@ async fn zig_example_2() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("zig-2").await;
-    let worker_id = executor.start_worker(&template_id, "zig-2").await;
+    let component_id = executor.store_component("zig-2").await;
+    let worker_id = executor.start_worker(&component_id, "zig-2").await;
     let rx = executor.capture_output(&worker_id).await;
 
     let _ = executor
@@ -91,8 +91,8 @@ async fn tinygo_example() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("tinygo-wasi").await;
-    let worker_id = executor.start_worker(&template_id, "tinygo-wasi-1").await;
+    let component_id = executor.store_component("tinygo-wasi").await;
+    let worker_id = executor.start_worker(&component_id, "tinygo-wasi-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
@@ -162,12 +162,12 @@ async fn tinygo_http_client() {
             .await;
     });
 
-    let template_id = executor.store_template("tinygo-wasi-http").await;
+    let component_id = executor.store_component("tinygo-wasi-http").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), context.host_http_port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "tinygo-wasi-http-1", vec![], env)
+        .start_worker_with(&component_id, "tinygo-wasi-http-1", vec![], env)
         .await;
 
     let result = executor
@@ -203,8 +203,8 @@ async fn grain_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("grain-1").await;
-    let worker_id = executor.start_worker(&template_id, "grain-1").await;
+    let component_id = executor.store_component("grain-1").await;
+    let worker_id = executor.start_worker(&component_id, "grain-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
@@ -239,8 +239,8 @@ async fn java_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("java-1").await;
-    let worker_id = executor.start_worker(&template_id, "java-1").await;
+    let component_id = executor.store_component("java-1").await;
+    let worker_id = executor.start_worker(&component_id, "java-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
@@ -271,8 +271,8 @@ async fn java_shopping_cart() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("java-2").await;
-    let worker_id = executor.start_worker(&template_id, "java-2").await;
+    let component_id = executor.store_component("java-2").await;
+    let worker_id = executor.start_worker(&component_id, "java-2").await;
 
     let _ = executor
         .invoke_and_await(
@@ -370,8 +370,8 @@ async fn javascript_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("js-1").await;
-    let worker_id = executor.start_worker(&template_id, "js-1").await;
+    let component_id = executor.store_component("js-1").await;
+    let worker_id = executor.start_worker(&component_id, "js-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
@@ -429,8 +429,8 @@ async fn javascript_example_2() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("js-2").await;
-    let worker_id = executor.start_worker(&template_id, "js-2").await;
+    let component_id = executor.store_component("js-2").await;
+    let worker_id = executor.start_worker(&component_id, "js-2").await;
 
     let _ = executor
         .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(5)])
@@ -458,8 +458,8 @@ async fn javascript_example_3() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("js-3").await;
-    let worker_id = executor.start_worker(&template_id, "js-3").await;
+    let component_id = executor.store_component("js-3").await;
+    let worker_id = executor.start_worker(&component_id, "js-3").await;
 
     let timeout_time = 1000;
     // Invoke_and_await will wait for the timeout to be finished.
@@ -492,15 +492,34 @@ async fn javascript_example_3() {
 
 #[tokio::test]
 #[tracing::instrument]
+async fn javascript_example_4() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_component("js-4").await;
+    let worker_id = executor.start_worker(&component_id, "js-4").await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api/create-promise", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    let_assert!(Some(Value::Record(_)) = result.into_iter().next());
+}
+
+#[tokio::test]
+#[tracing::instrument]
 async fn csharp_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("csharp-1").await;
+    let component_id = executor.store_component("csharp-1").await;
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_worker_with(&template_id, "csharp-1", vec!["test-arg".to_string()], env)
+        .start_worker_with(&component_id, "csharp-1", vec!["test-arg".to_string()], env)
         .await;
 
     let mut rx = executor.capture_output(&worker_id).await;
@@ -524,9 +543,9 @@ async fn csharp_example_1() {
     // NOTE: command line argument access is not working currently in dotnet-wasi
     check!(lines[3] == "".to_string());
     check!(lines.contains(&"TEST_ENV: test-value".to_string()));
-    check!(lines.contains(&format!("GOLEM_TEMPLATE_ID: {template_id}")));
+    check!(lines.contains(&format!("GOLEM_COMPONENT_ID: {component_id}")));
     check!(lines.contains(&"GOLEM_WORKER_NAME: csharp-1".to_string()));
-    check!(lines.contains(&"GOLEM_TEMPLATE_VERSION: 0".to_string()));
+    check!(lines.contains(&"GOLEM_COMPONENT_VERSION: 0".to_string()));
 }
 
 #[tokio::test]
@@ -535,8 +554,8 @@ async fn c_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("c-1").await;
-    let worker_id = executor.start_worker(&template_id, "c-1").await;
+    let component_id = executor.store_component("c-1").await;
+    let worker_id = executor.start_worker(&component_id, "c-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
@@ -563,8 +582,8 @@ async fn c_example_2() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("c-1").await;
-    let worker_id = executor.start_worker(&template_id, "c-2").await;
+    let component_id = executor.store_component("c-1").await;
+    let worker_id = executor.start_worker(&component_id, "c-2").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
@@ -596,8 +615,8 @@ async fn swift_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("swift-1").await;
-    let worker_id = executor.start_worker(&template_id, "swift-1").await;
+    let component_id = executor.store_component("swift-1").await;
+    let worker_id = executor.start_worker(&component_id, "swift-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
@@ -624,8 +643,8 @@ async fn python_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("python-1").await;
-    let worker_id = executor.start_worker(&template_id, "python-1").await;
+    let component_id = executor.store_component("python-1").await;
+    let worker_id = executor.start_worker(&component_id, "python-1").await;
 
     let _ = executor
         .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(3)])

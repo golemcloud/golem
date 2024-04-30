@@ -84,11 +84,11 @@ impl WorkerConfig {
         deleted_regions: DeletedRegions,
     ) -> WorkerConfig {
         let worker_name = worker_id.worker_name.clone();
-        let template_id = worker_id.template_id;
-        let template_version = component_version.to_string();
+        let component_id = worker_id.component_id;
+        let component_version = component_version.to_string();
         worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name));
-        worker_env.push((String::from("GOLEM_TEMPLATE_ID"), template_id.to_string()));
-        worker_env.push((String::from("GOLEM_TEMPLATE_VERSION"), template_version));
+        worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
+        worker_env.push((String::from("GOLEM_COMPONENT_VERSION"), component_version));
         WorkerConfig {
             args: worker_args,
             env: worker_env,
@@ -98,13 +98,11 @@ impl WorkerConfig {
 }
 
 /// Information about the available resources for the worker.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CurrentResourceLimits {
     /// The available fuel to borrow
-    #[serde(rename = "availableFuel")]
     pub fuel: i64,
     /// The maximum amount of memory that can be used by the worker
-    #[serde(rename = "maxMemoryPerInstance")]
     pub max_memory: usize,
 }
 
@@ -249,7 +247,7 @@ impl From<PersistenceLevel> for crate::preview2::golem::api::host::PersistenceLe
 mod shard_id_tests {
     use uuid::Uuid;
 
-    use golem_common::model::TemplateId;
+    use golem_common::model::ComponentId;
 
     use super::*;
 
@@ -257,9 +255,9 @@ mod shard_id_tests {
     fn test_hash() {
         let uuid = Uuid::parse_str("96c12379-4fff-4fa2-aa09-a4d96c029ac2").unwrap();
 
-        let template_id = TemplateId(uuid);
+        let component_id = ComponentId(uuid);
         let worker_id = WorkerId {
-            template_id,
+            component_id,
             worker_name: "instanceName".to_string(),
         };
         let hash = ShardId::hash_worker_id(&worker_id);

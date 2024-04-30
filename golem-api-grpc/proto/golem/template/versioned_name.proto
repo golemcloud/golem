@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-package golem.template;
-
-
-message VersionedName {
-  string name = 1;
-  string version = 2;
-}

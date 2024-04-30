@@ -40,23 +40,26 @@ use crate::services::{worker_enumeration, HasAll, HasInvocationQueue, HasOplog};
 use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
     ExternalOperations, InvocationHooks, InvocationManagement, IoCapturing, PublicWorkerIo,
-    StatusManagement, WorkerCtx,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use cap_std::ambient_authority;
 use golem_common::config::RetryConfig;
-use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
+use golem_common::model::oplog::{
+    OplogEntry, SnapshotSource, UpdateDescription, WrappedFunctionType,
+};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, TemplateId, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord, InvocationKey,
+    SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::AsContextMut;
 use wasmtime_wasi::preview2::{I32Exit, ResourceTable, Stderr, Subscribe, WasiCtx, WasiView};
@@ -92,6 +95,7 @@ pub mod wasm_rpc;
 
 mod durability;
 use crate::services::invocation_queue::InvocationQueue;
+use crate::services::worker_proxy::WorkerProxy;
 pub use durability::*;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
@@ -127,6 +131,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -194,6 +199,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         active_workers: active_workers.clone(),
                         recovery_management,
                         rpc,
+                        worker_proxy,
                         resources: HashMap::new(),
                         last_resource_id: 0,
                         deleted_regions: worker_config.deleted_regions.clone(),
@@ -206,6 +212,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         open_function_table: HashMap::new(),
                         replay_idx: 1,
                         replay_target: oplog_size,
+                        snapshotting_mode: None,
                     },
                     temp_dir,
                     execution_status,
@@ -298,61 +305,44 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    pub async fn store_worker_status(&self, status: WorkerStatus) {
-        let oplog_idx = self.state.oplog.current_oplog_index().await;
-        let last_known_status = self
+    pub async fn update_worker_status(&self, f: impl FnOnce(&mut WorkerStatusRecord)) {
+        let mut status = self
             .execution_status
             .read()
             .unwrap()
             .last_known_status()
             .clone();
-        let status_record = WorkerStatusRecord {
-            status,
-            deleted_regions: self.state.deleted_regions.clone(),
-            overridden_retry_config: self.state.overridden_retry_policy.clone(),
-            pending_invocations: self.public_state.invocation_queue().pending_invocations(),
-            pending_updates: self.public_state.invocation_queue().pending_updates(),
-            failed_updates: last_known_status.failed_updates,
-            successful_updates: last_known_status.successful_updates,
-            component_version: last_known_status.component_version,
-            oplog_idx,
-        };
+
+        let mut deleted_regions = self.state.deleted_regions.clone();
+        let (pending_updates, extra_deleted_regions) =
+            self.public_state.invocation_queue().pending_updates();
+        deleted_regions.set_override(extra_deleted_regions);
+
+        status.deleted_regions = deleted_regions;
+        status.overridden_retry_config = self.state.overridden_retry_policy.clone();
+        status.pending_invocations = self.public_state.invocation_queue().pending_invocations();
+        status.pending_updates = pending_updates;
+        status.oplog_idx = self.state.oplog.current_oplog_index().await;
+        f(&mut status);
         self.state
             .worker_service
-            .update_status(&self.worker_id, &status_record)
+            .update_status(&self.worker_id, &status)
             .await;
 
         let mut execution_status = self.execution_status.write().unwrap();
-        execution_status.set_last_known_status(status_record);
+        execution_status.set_last_known_status(status);
+    }
+
+    pub async fn store_worker_status(&self, status: WorkerStatus) {
+        self.update_worker_status(|s| s.status = status).await;
     }
 
     pub async fn update_pending_invocations(&self) {
-        let oplog_idx = self.state.oplog.current_oplog_index().await;
-        let last_known_status = self
-            .execution_status
-            .read()
-            .unwrap()
-            .last_known_status()
-            .clone();
-        let status = self.get_worker_status().await;
-        let status_record = WorkerStatusRecord {
-            status,
-            deleted_regions: self.state.deleted_regions.clone(),
-            overridden_retry_config: self.state.overridden_retry_policy.clone(),
-            pending_invocations: self.public_state.invocation_queue().pending_invocations(),
-            pending_updates: self.public_state.invocation_queue().pending_updates(),
-            failed_updates: last_known_status.failed_updates,
-            successful_updates: last_known_status.successful_updates,
-            component_version: last_known_status.component_version,
-            oplog_idx,
-        };
-        self.state
-            .worker_service
-            .update_status(&self.worker_id, &status_record)
-            .await;
+        self.update_worker_status(|_| {}).await;
+    }
 
-        let mut execution_status = self.execution_status.write().unwrap();
-        execution_status.set_last_known_status(status_record);
+    pub async fn update_pending_updates(&self) {
+        self.update_worker_status(|_| {}).await;
     }
 
     pub fn get_stdio(&self) -> ManagedStandardIo {
@@ -378,6 +368,140 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
         self.state.rpc.clone()
+    }
+
+    pub fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+        self.state.worker_proxy.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
+    /// Records the result of an automatic update, if any was active, and returns whether the worker
+    /// should be restarted to retry recovering without the pending update.
+    pub async fn finalize_pending_update(
+        result: &Result<(), GolemError>,
+        instance: &Instance,
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+    ) -> bool {
+        let public_state = store.as_context().data().durable_ctx().public_state.clone();
+        let worker_id = store.as_context().data().worker_id().clone();
+        let pending_update = public_state.invocation_queue.pop_pending_update();
+        match pending_update {
+            Some(pending_update) => match result {
+                Ok(_) => {
+                    if let UpdateDescription::SnapshotBased { source, .. } =
+                        &pending_update.description
+                    {
+                        match source {
+                            SnapshotSource::Inline(data) => {
+                                let invocation_key = store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .durable_ctx_mut()
+                                    .generate_new_invocation_key();
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .durable_ctx_mut()
+                                    .set_current_invocation_key(invocation_key.clone())
+                                    .await;
+
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .begin_call_snapshotting_function();
+                                let _ = invoke_worker(
+                                    "golem:api/load-snapshot@0.2.0/load".to_string(),
+                                    vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
+                                    store,
+                                    instance,
+                                    CallingConvention::Component,
+                                    true,
+                                )
+                                .await;
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .end_call_snapshotting_function();
+                                let result = store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .lookup_invocation_result(&invocation_key);
+                                let target_version = *pending_update.description.target_version();
+
+                                let failed = match result {
+                                    LookupResult::Complete(Err(error)) => Some(format!(
+                                        "Manual update failed to load snapshot: {error}"
+                                    )),
+                                    LookupResult::Complete(Ok(value)) => {
+                                        if value.len() == 1 {
+                                            match &value[0] {
+                                                Value::Result(Err(Some(boxed_error_value))) => {
+                                                    match &**boxed_error_value {
+                                                        Value::String(error) =>
+                                                            Some(format!("Manual update failed to load snapshot: {error}")),
+                                                        _ =>
+                                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                                    }
+                                                }
+                                                _ => None
+                                            }
+                                        } else {
+                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                        }
+                                    }
+                                    _ => None,
+                                };
+
+                                if let Some(error) = failed {
+                                    store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .on_worker_update_failed(target_version, Some(error))
+                                        .await;
+                                    true
+                                } else {
+                                    store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .on_worker_update_succeeded(target_version)
+                                        .await;
+                                    false
+                                }
+                            }
+                            SnapshotSource::BlobStore { .. } => {
+                                panic!("Snapshot-based updates using the blob store are not supported yet")
+                            }
+                        }
+                    } else {
+                        let target_version = *pending_update.description.target_version();
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .on_worker_update_succeeded(target_version)
+                            .await;
+                        false
+                    }
+                }
+                Err(error) => {
+                    let target_version = *pending_update.description.target_version();
+
+                    store
+                        .as_context_mut()
+                        .data_mut()
+                        .on_worker_update_failed(
+                            target_version,
+                            Some(format!("Automatic update failed: {error}")),
+                        )
+                        .await;
+                    true
+                }
+            },
+            None => {
+                debug!("No pending updates to finalize for {}", worker_id);
+                false
+            }
+        }
     }
 }
 
@@ -405,6 +529,18 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
         vals: Result<Vec<Value>, GolemError>,
     ) {
         self.state.confirm_invocation_key(key, vals).await
+    }
+
+    fn generate_new_invocation_key(&mut self) -> InvocationKey {
+        self.state
+            .invocation_key_service
+            .generate_key(&self.worker_id)
+    }
+
+    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult {
+        self.state
+            .invocation_key_service
+            .lookup_key(&self.worker_id, key)
     }
 }
 
@@ -451,6 +587,10 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         self.update_pending_invocations().await
     }
 
+    async fn update_pending_updates(&self) {
+        self.update_pending_invocations().await
+    }
+
     async fn deactivate(&self) {
         debug!("deactivating worker {}", self.worker_id);
         self.state.active_workers.remove(&self.worker_id);
@@ -465,27 +605,28 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         function_input: &Vec<Value>,
         calling_convention: Option<CallingConvention>,
     ) -> anyhow::Result<()> {
-        let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
-            .iter()
-            .map(|value| value.clone().into())
-            .collect();
-        let oplog_entry = OplogEntry::exported_function_invoked(
-            full_function_name.to_string(),
-            &proto_function_input,
-            self.get_current_invocation_key().await.ok_or(anyhow!(
-                "No active invocation key is associated with the worker"
-            ))?,
-            calling_convention,
-        )
-        .unwrap_or_else(|err| {
-            panic!(
-                "could not encode function input for {full_function_name} on {}: {err}",
-                self.worker_id()
+        if self.state.snapshotting_mode.is_none() {
+            let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
+                .iter()
+                .map(|value| value.clone().into())
+                .collect();
+            let oplog_entry = OplogEntry::exported_function_invoked(
+                full_function_name.to_string(),
+                &proto_function_input,
+                self.get_current_invocation_key().await.ok_or(anyhow!(
+                    "No active invocation key is associated with the worker"
+                ))?,
+                calling_convention,
             )
-        });
+            .unwrap_or_else(|err| {
+                panic!(
+                    "could not encode function input for {full_function_name} on {}: {err}",
+                    self.worker_id()
+                )
+            });
 
-        self.state.oplog.add(oplog_entry).await;
-        self.state.oplog.commit().await;
+            self.state.oplog.add_and_commit(oplog_entry).await;
+        }
         Ok(())
     }
 
@@ -502,8 +643,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             };
 
             if let Some(entry) = needs_commit {
-                self.state.oplog.add(entry).await;
-                self.state.oplog.commit().await;
+                self.state.oplog.add_and_commit(entry).await;
             }
         }
 
@@ -551,15 +691,19 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let is_live_after = self.state.is_live();
 
         if is_live_after {
-            let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
-                output.iter().map(|value| value.clone().into()).collect();
-            let oplog_entry = OplogEntry::exported_function_completed(&proto_output, consumed_fuel)
-                .unwrap_or_else(|err| {
-                    panic!("could not encode function result for {full_function_name}: {err}")
-                });
+            if self.state.snapshotting_mode.is_none() {
+                let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
+                    output.iter().map(|value| value.clone().into()).collect();
+                let oplog_entry =
+                    OplogEntry::exported_function_completed(&proto_output, consumed_fuel)
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "could not encode function result for {full_function_name}: {err}"
+                            )
+                        });
 
-            self.state.oplog.add(oplog_entry).await;
-            self.state.oplog.commit().await;
+                self.state.oplog.add_and_commit(oplog_entry).await;
+            }
         } else {
             let response = self
                 .state
@@ -606,6 +750,70 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
     }
 }
 
+#[async_trait]
+impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
+    fn begin_call_snapshotting_function(&mut self) {
+        // While calling a snapshotting function (load/save), we completely turn off persistence
+        // In addition to the user-controllable persistence level we also skip writing the
+        // oplog entries marking the exported function call.
+        let previous_level = self.state.persistence_level.clone();
+        self.state.snapshotting_mode = Some(previous_level);
+        self.state.persistence_level = PersistenceLevel::PersistNothing;
+    }
+
+    fn end_call_snapshotting_function(&mut self) {
+        // Restoring the state of persistence after calling a snapshotting function
+        self.state.persistence_level = self
+            .state
+            .snapshotting_mode
+            .take()
+            .expect("Not in snapshotting mode");
+    }
+
+    async fn on_worker_update_failed(
+        &self,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    ) {
+        let entry = OplogEntry::failed_update(target_version, details.clone());
+        let timestamp = entry.timestamp();
+        self.public_state.oplog.add_and_commit(entry).await;
+        self.update_worker_status(|status| {
+            status.failed_updates.push(FailedUpdateRecord {
+                timestamp,
+                target_version,
+                details: details.clone(),
+            })
+        })
+        .await;
+
+        warn!(
+            "Worker {} failed to update to {}: {}, update attempt aborted",
+            self.worker_id,
+            target_version,
+            details.unwrap_or_else(|| "?".to_string())
+        );
+    }
+
+    async fn on_worker_update_succeeded(&self, target_version: ComponentVersion) {
+        info!(
+            "Worker update to {} finished successfully for {}",
+            target_version, self.worker_id
+        );
+        let entry = OplogEntry::successful_update(target_version);
+        let timestamp = entry.timestamp();
+        self.public_state.oplog.add_and_commit(entry).await;
+        self.update_worker_status(|status| {
+            status.component_version = target_version;
+            status.successful_updates.push(SuccessfulUpdateRecord {
+                timestamp,
+                target_version,
+            })
+        })
+        .await;
+    }
+}
+
 pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
     fn durable_ctx(&self) -> &DurableWorkerCtx<Ctx>;
     fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Ctx>;
@@ -648,10 +856,20 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<(), GolemError> {
+    ) -> Result<bool, GolemError> {
         debug!("Starting prepare_instance for {worker_id}");
         let start = Instant::now();
         let mut count = 0;
+
+        // Handle the case when recovery immediately starts in a deleted region
+        // (for example due to a manual update)
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .state
+            .get_out_of_deleted_region();
+
         let result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay();
 
@@ -662,10 +880,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .durable_ctx_mut()
                     .state
                     .get_oplog_entry_exported_function_invoked()
-                    .await?;
+                    .await;
                 match oplog_entry {
-                    None => break Ok(()),
-                    Some((function_name, function_input, invocation_key, calling_convention)) => {
+                    Err(error) => break Err(error),
+                    Ok(None) => break Ok(()),
+                    Ok(Some((
+                        function_name,
+                        function_input,
+                        invocation_key,
+                        calling_convention,
+                    ))) => {
                         debug!("prepare_instance invoking function {function_name} on {worker_id}");
                         store
                             .as_context_mut()
@@ -684,18 +908,17 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .await;
 
                         if !finished {
-                            break Err(GolemError::failed_to_resume_instance(worker_id.clone()));
+                            break Err(GolemError::runtime(format!(
+                                "The worker could not finish replaying a function {function_name}"
+                            )));
                         } else {
                             let result = store
                                 .as_context()
                                 .data()
                                 .durable_ctx()
                                 .get_current_invocation_result();
-                            if matches!(result, LookupResult::Complete(Err(_))) {
-                                // TODO: include the inner error in the failure?
-                                break Err(GolemError::failed_to_resume_instance(
-                                    worker_id.clone(),
-                                ));
+                            if let LookupResult::Complete(Err(error)) = result {
+                                break Err(error);
                             }
                         }
 
@@ -708,8 +931,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         };
         record_resume_worker(start.elapsed());
         record_number_of_replayed_functions(count);
-        debug!("Finished prepare_instance for {worker_id}");
-        result
+
+        let retry = Self::finalize_pending_update(&result, instance, store).await;
+
+        if retry {
+            debug!("Retrying prepare_instance for {worker_id} after failed update attempt");
+            Ok(true)
+        } else {
+            debug!("Finished prepare_instance for {worker_id}");
+            result
+                .map(|_| false)
+                .map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
+        }
     }
 
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
@@ -822,6 +1055,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     active_workers: Arc<ActiveWorkers<Ctx>>,
     recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
     rpc: Arc<dyn Rpc + Send + Sync>,
+    worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     resources: HashMap<u64, ResourceAny>,
     last_resource_id: u64,
     deleted_regions: DeletedRegions,
@@ -832,6 +1066,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     open_function_table: HashMap<u32, u64>,
     replay_target: u64,
     replay_idx: u64,
+    snapshotting_mode: Option<PersistenceLevel>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -845,8 +1080,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             && self.persistence_level != PersistenceLevel::PersistNothing
         {
             if self.is_live() {
-                self.oplog.add(OplogEntry::begin_remote_write()).await;
-                self.oplog.commit().await;
+                self.oplog
+                    .add_and_commit(OplogEntry::begin_remote_write())
+                    .await;
                 Ok(begin_index)
             } else {
                 let _ = crate::get_oplog_entry!(self, OplogEntry::BeginRemoteWrite)?;
@@ -915,32 +1151,42 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         !self.is_live()
     }
 
+    fn get_out_of_deleted_region(&mut self) -> bool {
+        if self.is_replay() {
+            let update_next_deleted_region = match &self.next_deleted_region {
+                Some(region) if region.start == self.replay_idx => {
+                    let target = region.end + 1;
+                    debug!(
+                        "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
+                        self.worker_id, self.replay_idx, target, self.replay_target
+                    );
+                    self.replay_idx = target;
+                    true
+                }
+                _ => false,
+            };
+
+            if update_next_deleted_region {
+                self.next_deleted_region = self
+                    .deleted_regions
+                    .find_next_deleted_region(self.replay_idx);
+            }
+
+            update_next_deleted_region
+        } else {
+            false
+        }
+    }
+
     async fn get_oplog_entry(&mut self) -> OplogEntry {
         assert!(self.is_replay());
 
         let oplog_entries = self.read_oplog(self.replay_idx, 1).await;
         let oplog_entry = oplog_entries[0].clone();
 
-        let update_next_deleted_region = match &self.next_deleted_region {
-            Some(region) if region.start == self.replay_idx => {
-                let target = region.end + 1;
-                debug!(
-                    "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
-                    self.worker_id, self.replay_idx, target, self.replay_target
-                );
-                self.replay_idx = target;
-                true
-            }
-            _ => {
-                self.replay_idx += 1;
-                false
-            }
-        };
-
-        if update_next_deleted_region {
-            self.next_deleted_region = self
-                .deleted_regions
-                .find_next_deleted_region(self.replay_idx);
+        if !self.get_out_of_deleted_region() {
+            // No jump happened, increment replay index
+            self.replay_idx += 1;
         }
 
         oplog_entry
@@ -1123,14 +1369,14 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     pub async fn get_workers(
         &self,
-        template_id: &TemplateId,
+        component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: u64,
         count: u64,
         precise: bool,
     ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
         self.worker_enumeration_service
-            .get(template_id, filter, cursor, count, precise)
+            .get(component_id, filter, cursor, count, precise)
             .await
     }
 }

@@ -23,12 +23,12 @@ use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
 
+pub mod component_service;
 pub mod k8s;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
 pub mod shard_manager;
-pub mod template_service;
 pub mod worker_executor;
 pub mod worker_executor_cluster;
 pub mod worker_service;
@@ -92,7 +92,11 @@ impl ChildProcessLogger {
     }
 }
 
-async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str) {
+async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str, timeout: Duration) {
+    info!(
+        "Waiting for {name} start on host {host}:{grpc_port}, timeout: {}s",
+        timeout.as_secs()
+    );
     let start = Instant::now();
     loop {
         let success =
@@ -118,10 +122,10 @@ async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str) {
         if success {
             break;
         } else {
-            if start.elapsed().as_secs() > 30 {
+            if start.elapsed() > timeout {
                 panic!("Failed to verify that {name} is running");
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     }
 }

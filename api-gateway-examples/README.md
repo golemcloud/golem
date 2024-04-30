@@ -34,11 +34,11 @@ docker-compose -f docker-compose-sqlite.yaml up --build
 
 ```bash
 cd golem-services
-# Note down the template id, say "c467b83d-cb27-4296-b48a-ee85114cdb7"
-golem-cli template add --template-name mytemplate test-templates/shopping-cart.wasm
+# Note down the component id, say "c467b83d-cb27-4296-b48a-ee85114cdb7"
+golem-cli component add --component-name mytemplate test-components/shopping-cart.wasm
 
 # Note down the worker-name, here it is myworker
-golem-cli worker invoke-and-await  --template-name mytemplate --worker-name worker-adam --function golem:it/api/add-item --parameters '[{"product-id" : "hmm", "name" : "hmm" , "price" : 10, "quantity" : 2}]'
+golem-cli worker invoke-and-await  --component-name mytemplate --worker-name worker-adam --function golem:it/api/add-item --parameters '[{"product-id" : "hmm", "name" : "hmm" , "price" : 10, "quantity" : 2}]'
 ```
 
 ### Step 3: Register the endpoint definitions with worker-service
@@ -49,7 +49,7 @@ A typical worker bridge endpoint definition looks like this. Please refer to thi
 ```bash
 cd api-gateway-examples
 # register with worker bridge
-# Ensure to make change in template-id in worker_service_api_definition.json
+# Ensure to make change in component-id in worker_service_api_definition.json
 # Our golem service is accessible through localhost:9881. (It will redirect to the right internal service)
 curl -X PUT http://localhost:9881/v1/api/definitions -H "Content-Type: application/json"  -d @worker_service_api_definition.json
 

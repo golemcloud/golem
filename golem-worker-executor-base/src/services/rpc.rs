@@ -12,36 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::{Display, Formatter};
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use bincode::{Decode, Encode};
+use golem_wasm_rpc::{Value, WitValue};
+use serde::{Deserialize, Serialize};
+use tokio::runtime::Handle;
+use tracing::debug;
+
+use golem_common::model::{AccountId, WorkerId};
+
 use crate::error::GolemError;
-use crate::grpc::{authorised_grpc_request, UriBackConversion};
+use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
-    active_workers, blob_store, golem_config, invocation_key, key_value, oplog, promise, recovery,
-    scheduler, shard, shard_manager, template, worker, worker_enumeration, HasActiveWorkers,
-    HasBlobStoreService, HasConfig, HasExtraDeps, HasInvocationKeyService, HasKeyValueService,
-    HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardService, HasTemplateService,
-    HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerService,
+    active_workers, blob_store, component, golem_config, invocation_key, key_value, oplog, promise,
+    recovery, scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration,
+    HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasExtraDeps,
+    HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
+    HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
+    HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::{invoke, invoke_and_await, Worker};
 use crate::workerctx::WorkerCtx;
-use async_trait::async_trait;
-use bincode::{Decode, Encode};
-use golem_api_grpc::proto::golem::worker::worker_error::Error;
-use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
-use golem_api_grpc::proto::golem::worker::{
-    get_invocation_key_response, invoke_and_await_response, invoke_response, CallingConvention,
-    GetInvocationKeyRequest, GetInvocationKeyResponse, InvokeAndAwaitRequest,
-    InvokeAndAwaitResponse, InvokeParameters, InvokeRequest, InvokeResponse, WorkerError,
-};
-use golem_common::model::{AccountId, WorkerId};
-use golem_wasm_rpc::{Value, WitValue};
-use http::Uri;
-use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
-use std::sync::{Arc, Mutex};
-use tokio::runtime::Handle;
-use tracing::debug;
-use uuid::Uuid;
 
 #[async_trait]
 pub trait Rpc {
@@ -87,44 +82,6 @@ impl Display for RpcError {
 
 impl std::error::Error for RpcError {}
 
-impl From<WorkerError> for RpcError {
-    fn from(value: WorkerError) -> Self {
-        match &value.error {
-            Some(Error::BadRequest(errors)) => Self::ProtocolError {
-                details: format!("Bad request: {}", errors.errors.join(", ")),
-            },
-            Some(Error::Unauthorized(error)) => Self::Denied {
-                details: format!("Unauthorized: {}", error.error),
-            },
-            Some(Error::LimitExceeded(error)) => Self::Denied {
-                details: format!("Limit exceeded: {}", error.error),
-            },
-            Some(Error::NotFound(error)) => Self::NotFound {
-                details: error.error.clone(),
-            },
-            Some(Error::AlreadyExists(error)) => Self::ProtocolError {
-                details: format!(
-                    "Unexpected response: worker already exists: {}",
-                    error.error
-                ),
-            },
-            Some(Error::InternalError(error)) => {
-                match TryInto::<GolemError>::try_into(error.clone()) {
-                    Ok(golem_error) => Self::RemoteInternalError {
-                        details: golem_error.to_string(),
-                    },
-                    Err(_) => Self::ProtocolError {
-                        details: format!("Invalid internal error: {:?}", error.error),
-                    },
-                }
-            }
-            None => Self::ProtocolError {
-                details: "Error response without any details".to_string(),
-            },
-        }
-    }
-}
-
 impl From<tonic::transport::Error> for RpcError {
     fn from(value: tonic::transport::Error) -> Self {
         Self::ProtocolError {
@@ -160,19 +117,30 @@ impl From<GolemError> for RpcError {
     }
 }
 
+impl From<WorkerProxyError> for RpcError {
+    fn from(value: WorkerProxyError) -> Self {
+        match value {
+            WorkerProxyError::BadRequest(errors) => RpcError::ProtocolError {
+                details: errors.join(", "),
+            },
+            WorkerProxyError::Unauthorized(error) => RpcError::Denied { details: error },
+            WorkerProxyError::LimitExceeded(error) => RpcError::Denied { details: error },
+            WorkerProxyError::NotFound(error) => RpcError::NotFound { details: error },
+            WorkerProxyError::AlreadyExists(error) => RpcError::Denied { details: error },
+            WorkerProxyError::InternalError(error) => error.into(),
+        }
+    }
+}
+
 pub trait RpcDemand: Send + Sync {}
 
 pub struct RemoteInvocationRpc {
-    endpoint: Uri,
-    access_token: Uuid,
+    worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
 }
 
 impl RemoteInvocationRpc {
-    pub fn new(endpoint: Uri, access_token: Uuid) -> Self {
-        Self {
-            endpoint,
-            access_token,
-        }
+    pub fn new(worker_proxy: Arc<dyn WorkerProxy + Send + Sync>) -> Self {
+        Self { worker_proxy }
     }
 }
 
@@ -208,75 +176,12 @@ impl Rpc for RemoteInvocationRpc {
         worker_id: &WorkerId,
         function_name: String,
         function_params: Vec<WitValue>,
-        _account_id: &AccountId,
+        account_id: &AccountId,
     ) -> Result<WitValue, RpcError> {
-        debug!("Invoking remote worker {worker_id} function {function_name} with parameters {function_params:?}");
-
-        let proto_params = function_params
-            .into_iter()
-            .map(|param| {
-                let value: Value = param.into();
-                value.into()
-            })
-            .collect();
-        let invoke_parameters = Some(InvokeParameters {
-            params: proto_params,
-        });
-
-        let mut client = WorkerServiceClient::connect(self.endpoint.as_http_02()).await?;
-
-        let response: GetInvocationKeyResponse = client
-            .get_invocation_key(authorised_grpc_request(
-                GetInvocationKeyRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                },
-                &self.access_token,
-            ))
-            .await?
-            .into_inner();
-
-        match response.result {
-            Some(get_invocation_key_response::Result::Success(invocation_key)) => {
-                let response: InvokeAndAwaitResponse = client
-                    .invoke_and_await(authorised_grpc_request(
-                        InvokeAndAwaitRequest {
-                            worker_id: Some(worker_id.clone().into()),
-                            invocation_key: Some(invocation_key),
-                            function: function_name,
-                            invoke_parameters,
-                            calling_convention: CallingConvention::Component as i32,
-                        },
-                        &self.access_token,
-                    ))
-                    .await?
-                    .into_inner();
-
-                match response.result {
-                    Some(invoke_and_await_response::Result::Success(result)) => {
-                        let mut result_values = Vec::new();
-                        for proto_value in result.result {
-                            let value: Value =
-                                proto_value
-                                    .try_into()
-                                    .map_err(|err| RpcError::ProtocolError {
-                                        details: format!("Could not decode result: {err}"),
-                                    })?;
-                            result_values.push(value);
-                        }
-                        let result: WitValue = Value::Tuple(result_values).into();
-                        Ok(result)
-                    }
-                    Some(invoke_and_await_response::Result::Error(error)) => Err(error.into()),
-                    None => Err(RpcError::ProtocolError {
-                        details: "Empty response through the worker API".to_string(),
-                    }),
-                }
-            }
-            Some(get_invocation_key_response::Result::Error(error)) => Err(error.into()),
-            None => Err(RpcError::ProtocolError {
-                details: "Empty response through the worker API".to_string(),
-            }),
-        }
+        Ok(self
+            .worker_proxy
+            .invoke_and_await(worker_id, function_name, function_params, account_id)
+            .await?)
     }
 
     async fn invoke(
@@ -284,42 +189,12 @@ impl Rpc for RemoteInvocationRpc {
         worker_id: &WorkerId,
         function_name: String,
         function_params: Vec<WitValue>,
-        _account_id: &AccountId,
+        account_id: &AccountId,
     ) -> Result<(), RpcError> {
-        debug!("Invoking remote worker {worker_id} function {function_name} with parameters {function_params:?} without awaiting for the result");
-
-        let proto_params = function_params
-            .into_iter()
-            .map(|param| {
-                let value: Value = param.into();
-                value.into()
-            })
-            .collect();
-        let invoke_parameters = Some(InvokeParameters {
-            params: proto_params,
-        });
-
-        let mut client = WorkerServiceClient::connect(self.endpoint.as_http_02()).await?;
-
-        let response: InvokeResponse = client
-            .invoke(authorised_grpc_request(
-                InvokeRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    function: function_name,
-                    invoke_parameters,
-                },
-                &self.access_token,
-            ))
-            .await?
-            .into_inner();
-
-        match response.result {
-            Some(invoke_response::Result::Success(_)) => Ok(()),
-            Some(invoke_response::Result::Error(error)) => Err(error.into()),
-            None => Err(RpcError::ProtocolError {
-                details: "Empty response through the worker API".to_string(),
-            }),
-        }
+        Ok(self
+            .worker_proxy
+            .invoke(worker_id, function_name, function_params, account_id)
+            .await?)
     }
 }
 
@@ -329,7 +204,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
-    template_service: Arc<dyn template::TemplateService + Send + Sync>,
+    component_service: Arc<dyn component::ComponentService + Send + Sync>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
@@ -344,6 +219,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
     recovery_management: Arc<Mutex<Option<Arc<dyn recovery::RecoveryManagement + Send + Sync>>>>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
+    worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -355,7 +231,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
-            template_service: self.template_service.clone(),
+            component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
             worker_service: self.worker_service.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
@@ -369,6 +245,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             oplog_service: self.oplog_service.clone(),
             recovery_management: self.recovery_management.clone(),
             scheduler_service: self.scheduler_service.clone(),
+            worker_activator: self.worker_activator.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -380,9 +257,9 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasTemplateService for DirectWorkerInvocationRpc<Ctx> {
-    fn template_service(&self) -> Arc<dyn template::TemplateService + Send + Sync> {
-        self.template_service.clone()
+impl<Ctx: WorkerCtx> HasComponentService for DirectWorkerInvocationRpc<Ctx> {
+    fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
+        self.component_service.clone()
     }
 }
 
@@ -495,6 +372,18 @@ impl<Ctx: WorkerCtx> HasShardService for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasWorkerActivator for DirectWorkerInvocationRpc<Ctx> {
+    fn worker_activator(&self) -> Arc<dyn worker_activator::WorkerActivator + Send + Sync> {
+        self.worker_activator.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWorkerProxy for DirectWorkerInvocationRpc<Ctx> {
+    fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+        self.remote_rpc.worker_proxy.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     pub fn new(
         remote_rpc: Arc<RemoteInvocationRpc>,
@@ -502,7 +391,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        template_service: Arc<dyn template::TemplateService + Send + Sync>,
+        component_service: Arc<dyn component::ComponentService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -519,6 +408,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
+        worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -527,7 +417,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             engine,
             linker,
             runtime,
-            template_service,
+            component_service,
             shard_manager_service,
             worker_service,
             worker_enumeration_service,
@@ -541,6 +431,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             oplog_service,
             recovery_management: Arc::new(Mutex::new(None)),
             scheduler_service,
+            worker_activator,
             extra_deps,
         }
     }

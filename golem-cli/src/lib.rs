@@ -13,10 +13,11 @@
 // limitations under the License.
 
 pub mod api_definition;
+pub mod api_deployment;
 pub mod clients;
+pub mod component;
 pub mod examples;
 pub mod model;
-pub mod template;
 pub mod version;
 pub mod worker;
 pub fn parse_key_val(

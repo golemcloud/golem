@@ -33,6 +33,7 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tonic::transport::Server;
 use tracing::info;
+use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::{Config, Engine};
 
@@ -40,6 +41,7 @@ use crate::grpc::WorkerExecutorImpl;
 use crate::http_server::HttpServerImpl;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
+use crate::services::component::ComponentService;
 use crate::services::golem_config::{GolemConfig, WorkersServiceConfig};
 use crate::services::invocation_key::{InvocationKeyService, InvocationKeyServiceDefault};
 use crate::services::key_value::KeyValueService;
@@ -48,14 +50,14 @@ use crate::services::promise::PromiseService;
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::shard_manager::ShardManagerService;
-use crate::services::template::TemplateService;
 use crate::services::worker::{WorkerService, WorkerServiceInMemory, WorkerServiceRedis};
 use crate::services::worker_activator::{LazyWorkerActivator, WorkerActivator};
 use crate::services::worker_enumeration::{
     RunningWorkerEnumerationService, RunningWorkerEnumerationServiceDefault,
     WorkerEnumerationService, WorkerEnumerationServiceInMemory, WorkerEnumerationServiceRedis,
 };
-use crate::services::{blob_store, key_value, promise, shard_manager, template, All};
+use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
+use crate::services::{blob_store, component, key_value, promise, shard_manager, All};
 use crate::workerctx::WorkerCtx;
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
@@ -75,7 +77,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         engine: Arc<Engine>,
         linker: Arc<Linker<Ctx>>,
         runtime: Handle,
-        template_service: Arc<dyn TemplateService + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -89,6 +91,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -136,10 +139,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         info!("Using Redis at {}", golem_config.redis.url());
         let pool = golem_common::redis::RedisPool::configured(&golem_config.redis).await?;
 
-        let template_service = template::configured(
-            &golem_config.template_service,
-            &golem_config.template_cache,
-            &golem_config.compiled_template_service,
+        let component_service = component::configured(
+            &golem_config.component_service,
+            &golem_config.component_cache,
+            &golem_config.compiled_component_service,
         )
         .await;
 
@@ -230,13 +233,22 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             golem_config.scheduler.refresh_interval,
         );
 
+        let worker_proxy: Arc<dyn WorkerProxy + Send + Sync> = Arc::new(RemoteWorkerProxy::new(
+            golem_config.public_worker_api.uri(),
+            golem_config
+                .public_worker_api
+                .access_token
+                .parse::<Uuid>()
+                .expect("Access token must be an UUID"),
+        ));
+
         let services = self
             .create_services(
                 active_workers,
                 engine,
                 linker,
                 runtime.clone(),
-                template_service,
+                component_service,
                 shard_manager_service,
                 worker_service,
                 worker_enumeration_service,
@@ -250,6 +262,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 lazy_worker_activator.clone(),
                 oplog_service,
                 scheduler_service,
+                worker_proxy,
             )
             .await?;
 

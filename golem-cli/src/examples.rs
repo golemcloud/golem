@@ -15,7 +15,7 @@
 use std::env;
 
 use golem_examples::model::{
-    ExampleName, ExampleParameters, GuestLanguage, GuestLanguageTier, PackageName, TemplateName,
+    ComponentName, ExampleName, ExampleParameters, GuestLanguage, GuestLanguageTier, PackageName,
 };
 use golem_examples::*;
 
@@ -23,7 +23,7 @@ use crate::model::{ExampleDescription, GolemError, GolemResult};
 
 pub fn process_new(
     example_name: ExampleName,
-    template_name: TemplateName,
+    component_name: ComponentName,
     package_name: Option<PackageName>,
 ) -> Result<GolemResult, GolemError> {
     let examples = GolemExamples::list_all_examples();
@@ -34,18 +34,18 @@ pub fn process_new(
             match GolemExamples::instantiate(
                 example,
                 ExampleParameters {
-                    template_name,
+                    component_name,
                     package_name: package_name
-                        .unwrap_or(PackageName::from_string("golem:template").unwrap()),
+                        .unwrap_or(PackageName::from_string("golem:component").unwrap()),
                     target_path: cwd,
                 },
             ) {
                 Ok(instructions) => Ok(GolemResult::Str(instructions.to_string())),
-                Err(err) => GolemResult::err(format!("Failed to instantiate template: {err}")),
+                Err(err) => GolemResult::err(format!("Failed to instantiate component: {err}")),
             }
         }
         None => {
-            GolemResult::err(format!("Unknown template {example_name}. Use the list-templates command to see the available commands."))
+            GolemResult::err(format!("Unknown component {example_name}. Use the list-examples command to see the available examples."))
         }
     }
 }

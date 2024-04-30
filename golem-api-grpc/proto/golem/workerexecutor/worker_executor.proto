@@ -8,7 +8,8 @@ import public "golem/worker/log_event.proto";
 import public "golem/worker/promise_id.proto";
 import public "golem/common/resource_limits.proto";
 import public "golem/shardmanager/shard_id.proto";
-import public "golem/template/template_id.proto";
+import public "golem/component/component_id.proto";
+import public "golem/worker/update_mode.proto";
 import public "golem/worker/worker_id.proto";
 import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/worker_status.proto";
@@ -75,7 +76,7 @@ message InterruptWorkerResponse {
 
 message CreateWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
-  uint64 template_version = 2;
+  uint64 component_version = 2;
   repeated string args = 3;
   map<string, string> env = 4;
   golem.common.AccountId account_id = 5;
@@ -185,7 +186,7 @@ message ResumeWorkerResponse {
 }
 
 message GetRunningWorkersMetadataRequest {
-  golem.template.TemplateId template_id = 1;
+  golem.component.ComponentId component_id = 1;
   golem.worker.WorkerFilter filter = 2;
 }
 
@@ -202,7 +203,7 @@ message GetRunningWorkersMetadataSuccessResponse {
 }
 
 message GetWorkersMetadataRequest {
-  golem.template.TemplateId template_id = 1;
+  golem.component.ComponentId component_id = 1;
   golem.worker.WorkerFilter filter = 2;
   uint64 cursor = 3;
   uint64 count = 4;
@@ -225,12 +226,7 @@ message GetWorkersMetadataSuccessResponse {
 message UpdateWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   uint64 target_version = 2;
-  UpdateMode mode = 3;
-}
-
-enum UpdateMode {
-  AUTOMATIC = 0;
-  MANUAL = 1;
+  golem.worker.UpdateMode mode = 3;
 }
 
 message UpdateWorkerResponse {

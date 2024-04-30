@@ -452,34 +452,34 @@ mod test {
     fn test_matches() {
         let mut root = RadixNode::default();
 
-        let path1 = RouterPattern::parse("/templates/:id/worker");
+        let path1 = RouterPattern::parse("/components/:id/worker");
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let result = root.matches_str("/templates/123/worker");
+        let result = root.matches_str("/components/123/worker");
 
         assert_eq!(result, Some(&1));
 
-        assert_eq!(root.matches_str("/templates/123/worker/extra"), None);
-        assert_eq!(root.matches_str("/templates/123"), None);
+        assert_eq!(root.matches_str("/components/123/worker/extra"), None);
+        assert_eq!(root.matches_str("/components/123"), None);
     }
 
     #[test]
     fn test_matches_two_routes() {
         let mut root = RadixNode::default();
 
-        let path1 = RouterPattern::parse("/templates/:id/worker");
+        let path1 = RouterPattern::parse("/components/:id/worker");
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = RouterPattern::parse("/templates/:id/function");
+        let path2 = RouterPattern::parse("/components/:id/function");
 
         root.insert_path(path2.as_slice(), 2).unwrap();
 
-        let result = root.matches_str("/templates/123/worker");
+        let result = root.matches_str("/components/123/worker");
         assert_eq!(result, Some(&1));
 
-        let result = root.matches_str("/templates/456/function");
+        let result = root.matches_str("/components/456/function");
         assert_eq!(result, Some(&2));
     }
 
@@ -487,17 +487,17 @@ mod test {
     fn test_conflict_static_variable() {
         let mut root = RadixNode::default();
 
-        let path1 = RouterPattern::parse("/templates/worker");
+        let path1 = RouterPattern::parse("/components/worker");
 
         root.insert_path(path1.as_slice(), 1).unwrap();
 
-        let path2 = RouterPattern::parse("/templates/:id");
+        let path2 = RouterPattern::parse("/components/:id");
 
         root.insert_path(path2.as_slice(), 2).unwrap();
 
-        assert_eq!(Some(&1), root.matches_str("/templates/worker"));
+        assert_eq!(Some(&1), root.matches_str("/components/worker"));
 
-        assert_eq!(Some(&2), root.matches_str("/templates/123"));
+        assert_eq!(Some(&2), root.matches_str("/components/123"));
     }
 
     #[test]

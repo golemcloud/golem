@@ -292,6 +292,9 @@ impl OplogEntry {
                 | OplogEntry::Interrupted { .. }
                 | OplogEntry::Exited { .. }
                 | OplogEntry::PendingWorkerInvocation { .. }
+                | OplogEntry::PendingUpdate { .. }
+                | OplogEntry::SuccessfulUpdate { .. }
+                | OplogEntry::FailedUpdate { .. }
         )
     }
 
@@ -363,6 +366,7 @@ impl UpdateDescription {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct TimestampedUpdateDescription {
     pub timestamp: Timestamp,
+    pub oplog_index: OplogIndex,
     pub description: UpdateDescription,
 }
 

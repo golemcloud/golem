@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_service::ComponentService;
 use crate::components::k8s::{K8sNamespace, K8sRoutingType};
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::template_service::TemplateService;
 use crate::components::worker_executor::k8s::K8sWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
@@ -23,6 +23,7 @@ use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tracing::{info, Level};
 
 pub struct K8sWorkerExecutorCluster {
@@ -36,10 +37,12 @@ impl K8sWorkerExecutorCluster {
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
-        template_service: Arc<dyn TemplateService + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors = Vec::new();
@@ -52,9 +55,11 @@ impl K8sWorkerExecutorCluster {
                     idx,
                     verbosity,
                     redis.clone(),
-                    template_service.clone(),
+                    component_service.clone(),
                     shard_manager.clone(),
                     worker_service.clone(),
+                    timeout,
+                    service_annotations.clone(),
                 )
                 .await,
             );

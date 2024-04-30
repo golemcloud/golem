@@ -96,10 +96,11 @@ impl DeletedRegionsBuilder {
     }
 }
 
-/// Structure holding all the regions deleted from the oplog by jumps
+/// Structure holding all the regions deleted from the oplog by jumps. Deleted regions
+/// can be stacked to introduce temporary overrides.
 #[derive(Clone, Debug, Encode, Decode)]
 pub struct DeletedRegions {
-    regions: BTreeMap<u64, OplogRegion>,
+    regions: Vec<BTreeMap<u64, OplogRegion>>,
 }
 
 impl Default for DeletedRegions {
@@ -112,39 +113,78 @@ impl DeletedRegions {
     /// Constructs an empty set of deleted regions
     pub fn new() -> Self {
         Self {
-            regions: BTreeMap::new(),
+            regions: vec![BTreeMap::new()],
         }
     }
 
     /// Initializes from known list of deleted oplog regions
     pub fn from_regions(regions: impl IntoIterator<Item = OplogRegion>) -> Self {
         Self {
-            regions: BTreeMap::from_iter(regions.into_iter().map(|region| (region.start, region))),
+            regions: vec![BTreeMap::from_iter(
+                regions.into_iter().map(|region| (region.start, region)),
+            )],
         }
     }
 
     /// Adds a new region to the list of deleted regions
     pub fn add(&mut self, region: OplogRegion) {
         // We rebuild the map to make sure overlapping regions are properly merged
-        let mut builder = DeletedRegionsBuilder::from_regions(self.regions.clone().into_values());
+        let current = self.regions.pop().unwrap();
+        let mut builder = DeletedRegionsBuilder::from_regions(current.into_values());
         builder.add(region);
-        self.regions = builder.build().regions;
+        let mut temp = builder.build().regions;
+        self.regions.push(temp.pop().unwrap());
+    }
+
+    /// Sets an override of the deleted regions.This is not stacked, if there was an override already
+    /// it is going to be replaced. The override can be dropped using `drop_override`.
+    pub fn set_override(&mut self, other: DeletedRegions) {
+        if self.is_overridden() {
+            self.drop_override();
+        }
+
+        if !other.is_empty() {
+            let current = self.regions.last().unwrap();
+            let mut builder = DeletedRegionsBuilder::from_regions(current.clone().into_values());
+            for region in current.values() {
+                builder.add(region.clone());
+            }
+            for region in other.into_regions() {
+                builder.add(region);
+            }
+
+            self.regions.push(builder.build().regions.pop().unwrap());
+        }
+    }
+
+    pub fn drop_override(&mut self) {
+        self.regions.pop();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.regions.last().unwrap().is_empty()
+    }
+
+    pub fn is_overridden(&self) -> bool {
+        self.regions.len() > 1
     }
 
     /// Returns the list of deleted regions
     pub fn regions(&self) -> Values<'_, u64, OplogRegion> {
-        self.regions.values()
+        self.regions.last().unwrap().values()
     }
 
     /// Becomes the list of deleted regions
-    pub fn into_regions(self) -> IntoValues<u64, OplogRegion> {
-        self.regions.into_values()
+    pub fn into_regions(mut self) -> IntoValues<u64, OplogRegion> {
+        self.regions.pop().unwrap().into_values()
     }
 
     /// Gets the next deleted region after, possibly including, the given oplog index.
     /// Returns None if there are no more deleted regions.
     pub fn find_next_deleted_region(&self, from: u64) -> Option<OplogRegion> {
         self.regions
+            .last()
+            .unwrap()
             .range((Included(from), Unbounded))
             .next()
             .map(|(_, region)| region.clone())
@@ -152,6 +192,8 @@ impl DeletedRegions {
 
     pub fn is_in_deleted_region(&self, oplog_index: u64) -> bool {
         self.regions
+            .last()
+            .unwrap()
             .values()
             .any(|region| region.contains(oplog_index))
     }
@@ -163,6 +205,8 @@ impl Display for DeletedRegions {
             f,
             "[{}]",
             self.regions
+                .last()
+                .unwrap()
                 .values()
                 .map(|region| region.to_string())
                 .collect::<Vec<String>>()

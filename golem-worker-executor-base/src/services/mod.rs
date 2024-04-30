@@ -16,13 +16,16 @@ use std::sync::Arc;
 #[cfg(any(feature = "mocks", test))]
 use std::time::Duration;
 
+use crate::services::worker_activator::WorkerActivator;
+
 use tokio::runtime::Handle;
 
 use crate::workerctx::WorkerCtx;
 
 pub mod active_workers;
 pub mod blob_store;
-pub mod compiled_template;
+pub mod compiled_component;
+pub mod component;
 pub mod golem_config;
 pub mod invocation_key;
 pub mod invocation_queue;
@@ -34,11 +37,11 @@ pub mod rpc;
 pub mod scheduler;
 pub mod shard;
 pub mod shard_manager;
-pub mod template;
 pub mod worker;
 pub mod worker_activator;
 pub mod worker_enumeration;
 pub mod worker_event;
+pub mod worker_proxy;
 
 // HasXXX traits for fine-grained control of which dependencies a function needs
 
@@ -46,8 +49,8 @@ pub trait HasActiveWorkers<Ctx: WorkerCtx> {
     fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>>;
 }
 
-pub trait HasTemplateService {
-    fn template_service(&self) -> Arc<dyn template::TemplateService + Send + Sync>;
+pub trait HasComponentService {
+    fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync>;
 }
 
 pub trait HasShardManagerService {
@@ -129,10 +132,18 @@ pub trait HasOplog {
     fn oplog(&self) -> Arc<dyn oplog::Oplog + Send + Sync>;
 }
 
+pub trait HasWorkerActivator {
+    fn worker_activator(&self) -> Arc<dyn WorkerActivator + Send + Sync>;
+}
+
+pub trait HasWorkerProxy {
+    fn worker_proxy(&self) -> Arc<dyn worker_proxy::WorkerProxy + Send + Sync>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
-    + HasTemplateService
+    + HasComponentService
     + HasConfig
     + HasWorkerService
     + HasWorkerEnumerationService
@@ -146,6 +157,8 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasRecoveryManagement
     + HasRpc
     + HasSchedulerService
+    + HasWorkerActivator
+    + HasWorkerProxy
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -154,7 +167,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
 impl<
         Ctx: WorkerCtx,
         T: HasActiveWorkers<Ctx>
-            + HasTemplateService
+            + HasComponentService
             + HasConfig
             + HasWorkerService
             + HasWorkerEnumerationService
@@ -168,6 +181,8 @@ impl<
             + HasRecoveryManagement
             + HasRpc
             + HasSchedulerService
+            + HasWorkerActivator
+            + HasWorkerProxy
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -181,7 +196,7 @@ pub struct All<Ctx: WorkerCtx> {
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
-    template_service: Arc<dyn template::TemplateService + Send + Sync>,
+    component_service: Arc<dyn component::ComponentService + Send + Sync>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
     worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
@@ -197,6 +212,8 @@ pub struct All<Ctx: WorkerCtx> {
     recovery_management: Arc<dyn recovery::RecoveryManagement + Send + Sync>,
     rpc: Arc<dyn rpc::Rpc + Send + Sync>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
+    worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+    worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -207,7 +224,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
-            template_service: self.template_service.clone(),
+            component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
             worker_service: self.worker_service.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
@@ -222,18 +239,21 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             recovery_management: self.recovery_management.clone(),
             rpc: self.rpc.clone(),
             scheduler_service: self.scheduler_service.clone(),
+            worker_activator: self.worker_activator.clone(),
+            worker_proxy: self.worker_proxy.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
 }
 
 impl<Ctx: WorkerCtx> All<Ctx> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        template_service: Arc<dyn template::TemplateService + Send + Sync>,
+        component_service: Arc<dyn component::ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
@@ -252,6 +272,8 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         recovery_management: Arc<dyn recovery::RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn rpc::Rpc + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -259,7 +281,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             engine,
             linker,
             runtime,
-            template_service,
+            component_service,
             shard_manager_service,
             worker_service,
             worker_enumeration_service,
@@ -274,6 +296,8 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             recovery_management,
             rpc,
             scheduler_service,
+            worker_activator,
+            worker_proxy,
             extra_deps,
         }
     }
@@ -288,7 +312,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let engine = Arc::new(wasmtime::Engine::default());
         let linker = Arc::new(wasmtime::component::Linker::new(&engine));
         let runtime = Handle::current();
-        let template_service = Arc::new(template::TemplateServiceMock::new());
+        let component_service = Arc::new(component::ComponentServiceMock::new());
         let worker_service = Arc::new(worker::WorkerServiceMock::new());
         let worker_enumeration_service =
             Arc::new(worker_enumeration::WorkerEnumerationServiceMock::new());
@@ -306,12 +330,14 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let recovery_management = Arc::new(recovery::RecoveryManagementMock::new());
         let rpc = Arc::new(rpc::RpcMock::new());
         let scheduler_service = Arc::new(scheduler::SchedulerServiceMock::new());
+        let worker_activator = Arc::new(worker_activator::WorkerActivatorMock::new());
+        let worker_proxy = Arc::new(worker_proxy::WorkerProxyMock::new());
         Self {
             active_workers,
             engine,
             linker,
             runtime,
-            template_service,
+            component_service,
             shard_manager_service,
             worker_service,
             worker_enumeration_service,
@@ -326,6 +352,8 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             recovery_management,
             rpc,
             scheduler_service,
+            worker_activator,
+            worker_proxy,
             extra_deps: mocked_extra_deps,
         }
     }
@@ -351,9 +379,9 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasActiveWorkers<Ctx> for T {
     }
 }
 
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasTemplateService for T {
-    fn template_service(&self) -> Arc<dyn template::TemplateService + Send + Sync> {
-        self.all().template_service.clone()
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasComponentService for T {
+    fn component_service(&self) -> Arc<dyn component::ComponentService + Send + Sync> {
+        self.all().component_service.clone()
     }
 }
 
@@ -458,6 +486,18 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasRpc for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasSchedulerService for T {
     fn scheduler_service(&self) -> Arc<dyn scheduler::SchedulerService + Send + Sync> {
         self.all().scheduler_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerActivator for T {
+    fn worker_activator(&self) -> Arc<dyn WorkerActivator + Send + Sync> {
+        self.all().worker_activator.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerProxy for T {
+    fn worker_proxy(&self) -> Arc<dyn worker_proxy::WorkerProxy + Send + Sync> {
+        self.all().worker_proxy.clone()
     }
 }
 

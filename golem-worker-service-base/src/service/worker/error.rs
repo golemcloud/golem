@@ -1,22 +1,22 @@
 use golem_api_grpc::proto::golem::worker::{
     worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
 };
-use golem_common::model::{AccountId, TemplateId, WorkerId};
-use golem_service_base::model::{GolemError, VersionedTemplateId};
+use golem_common::model::{AccountId, ComponentId, WorkerId};
+use golem_service_base::model::{GolemError, VersionedComponentId};
 
-use crate::service::template::TemplateServiceError;
+use crate::service::component::ComponentServiceError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerServiceError {
     #[error(transparent)]
-    Template(#[from] TemplateServiceError),
+    Component(#[from] ComponentServiceError),
     // TODO: This should prob be a vec?
     #[error("Type checker error: {0}")]
     TypeChecker(String),
-    #[error("Template not found: {0}")]
-    VersionedTemplateIdNotFound(VersionedTemplateId),
-    #[error("Template not found: {0}")]
-    TemplateNotFound(TemplateId),
+    #[error("Component not found: {0}")]
+    VersionedComponentIdNotFound(VersionedComponentId),
+    #[error("Component not found: {0}")]
+    ComponentNotFound(ComponentId),
     #[error("Account not found: {0}")]
     AccountIdNotFound(AccountId),
     #[error("Worker not found: {0}")]
@@ -50,9 +50,9 @@ impl From<WorkerServiceError> for worker_error::Error {
         use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
 
         match error {
-            error @ (WorkerServiceError::TemplateNotFound(_)
+            error @ (WorkerServiceError::ComponentNotFound(_)
             | WorkerServiceError::AccountIdNotFound(_)
-            | WorkerServiceError::VersionedTemplateIdNotFound(_)
+            | WorkerServiceError::VersionedComponentIdNotFound(_)
             | WorkerServiceError::WorkerNotFound(_)) => worker_error::Error::NotFound(ErrorBody {
                 error: error.to_string(),
             }),
@@ -66,7 +66,7 @@ impl From<WorkerServiceError> for worker_error::Error {
             WorkerServiceError::TypeChecker(error) => worker_error::Error::BadRequest(ErrorsBody {
                 errors: vec![error],
             }),
-            WorkerServiceError::Template(template) => template.into(),
+            WorkerServiceError::Component(component) => component.into(),
             WorkerServiceError::Golem(worker_execution_error) => {
                 worker_error::Error::InternalError(worker_execution_error.into())
             }

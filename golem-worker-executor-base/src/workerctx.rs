@@ -18,8 +18,8 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    AccountId, CallingConvention, ComponentVersion, InvocationKey, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
@@ -32,7 +32,7 @@ use crate::model::{
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
-use crate::services::invocation_key::InvocationKeyService;
+use crate::services::invocation_key::{InvocationKeyService, LookupResult};
 use crate::services::invocation_queue::InvocationQueue;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
@@ -42,6 +42,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasInvocationQueue, HasOplog};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
@@ -56,6 +57,7 @@ pub trait WorkerCtx:
     + InvocationHooks
     + ExternalOperations<Self>
     + ResourceStore
+    + UpdateManagement
     + Send
     + Sync
     + Sized
@@ -69,7 +71,7 @@ pub trait WorkerCtx:
     /// Creates a new worker context
     ///
     /// Arguments:
-    /// - `worker_id`: The worker ID (consists of the template id and worker name)
+    /// - `worker_id`: The worker ID (consists of the component id and worker name)
     /// - `account_id`: The account that initiated the creation of the worker
     /// - `promise_service`: The service for managing promises
     /// - `invocation_key_service`: The service for managing invocation keys
@@ -82,10 +84,12 @@ pub trait WorkerCtx:
     /// - `scheduler_service`: The scheduler implementation responsible for waking up suspended workers
     /// - `recovery_management`: The service for deciding if a worker should be recovered
     /// - `rpc`: The RPC implementation used for worker to worker communication
+    /// - `worker_proyx`: Access to the worker proxy above the worker executor cluster
     /// - `extra_deps`: Extra dependencies that are required by this specific worker context
     /// - `config`: The shared worker configuration
     /// - `worker_config`: Configuration for this specific worker
     /// - `execution_status`: Lock created to store the execution status
+    #[allow(clippy::too_many_arguments)]
     async fn create(
         worker_id: WorkerId,
         account_id: AccountId,
@@ -105,6 +109,7 @@ pub trait WorkerCtx:
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -130,6 +135,10 @@ pub trait WorkerCtx:
 
     /// Gets the worker-executor's WASM RPC implementation
     fn rpc(&self) -> Arc<dyn Rpc + Send + Sync>;
+
+    /// Gets an interface to the worker-proxy which can direct calls to other worker executors
+    /// in the cluster
+    fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync>;
 }
 
 /// The fuel management interface of a worker context is responsible for borrowing and returning
@@ -195,6 +204,12 @@ pub trait InvocationManagement {
         key: &InvocationKey,
         vals: Result<Vec<Value>, GolemError>,
     );
+
+    /// Sets the invocation key associated with the current invocation to a fresh key
+    fn generate_new_invocation_key(&mut self) -> InvocationKey;
+
+    /// Gets the result associated with an invocation key of the worker
+    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult;
 }
 
 /// The IoCapturing interface of a worker context is used by the Stdio calling convention to
@@ -236,6 +251,9 @@ pub trait StatusManagement {
 
     /// Update the pending invocations of the worker
     async fn update_pending_invocations(&self);
+
+    /// Update the pending updates of the worker
+    async fn update_pending_updates(&self);
 
     /// Called when a worker is getting deactivated
     async fn deactivate(&self);
@@ -284,6 +302,25 @@ pub trait InvocationHooks {
     ) -> Result<Option<Vec<Value>>, anyhow::Error>;
 }
 
+#[async_trait]
+pub trait UpdateManagement {
+    /// Marks the beginning of a snapshot function call. This can be used to disabled persistence
+    fn begin_call_snapshotting_function(&mut self);
+
+    /// Marks the end of a snapshot function call. This can be used to re-enable persistence
+    fn end_call_snapshotting_function(&mut self);
+
+    /// Called when an update attempt has failed
+    async fn on_worker_update_failed(
+        &self,
+        target_version: ComponentVersion,
+        details: Option<String>,
+    );
+
+    /// Called when an update attempt succeeded
+    async fn on_worker_update_succeeded(&self, target_version: ComponentVersion);
+}
+
 /// Operations not requiring an active worker context, but still depending on the
 /// worker context implementation.
 #[async_trait]
@@ -316,11 +353,13 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker but by general it can be no-op.
+    ///
+    /// If the result is true, the instance
     async fn prepare_instance(
         worker_id: &WorkerId,
         instance: &wasmtime::component::Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<(), GolemError>;
+    ) -> Result<bool, GolemError>;
 
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(

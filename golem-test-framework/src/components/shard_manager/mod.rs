@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tonic::transport::Channel;
@@ -69,8 +70,8 @@ async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Cha
         .expect("Failed to connect to golem-shard-manager")
 }
 
-async fn wait_for_startup(host: &str, grpc_port: u16) {
-    wait_for_startup_grpc(host, grpc_port, "golem-shard-manager").await
+async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
+    wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout).await
 }
 
 fn env_vars(

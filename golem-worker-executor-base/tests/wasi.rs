@@ -22,8 +22,8 @@ async fn write_stdout() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("write-stdout").await;
-    let worker_id = executor.start_worker(&template_id, "write-stdout-1").await;
+    let component_id = executor.store_component("write-stdout").await;
+    let worker_id = executor.start_worker(&component_id, "write-stdout-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
@@ -44,8 +44,8 @@ async fn write_stderr() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("write-stderr").await;
-    let worker_id = executor.start_worker(&template_id, "write-stderr-1").await;
+    let component_id = executor.store_component("write-stderr").await;
+    let worker_id = executor.start_worker(&component_id, "write-stderr-1").await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
@@ -66,8 +66,8 @@ async fn read_stdin() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("read-stdin").await;
-    let worker_id = executor.start_worker(&template_id, "read-stdin-1").await;
+    let component_id = executor.store_component("read-stdin").await;
+    let worker_id = executor.start_worker(&component_id, "read-stdin-1").await;
 
     let result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
 
@@ -82,8 +82,8 @@ async fn clocks() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("clocks").await;
-    let worker_id = executor.start_worker(&template_id, "clocks-1").await;
+    let component_id = executor.store_component("clocks").await;
+    let worker_id = executor.start_worker(&component_id, "clocks-1").await;
 
     let result = executor
         .invoke_and_await(&worker_id, "run", vec![])
@@ -128,11 +128,11 @@ async fn file_write_read_delete() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-write-read-delete").await;
+    let component_id = executor.store_component("file-write-read-delete").await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker_with(&template_id, "file-write-read-delete-1", vec![], env)
+        .start_worker_with(&component_id, "file-write-read-delete-1", vec![], env)
         .await;
 
     let result = executor
@@ -158,8 +158,8 @@ async fn directories() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("directories").await;
-    let worker_id = executor.start_worker(&template_id, "directories-1").await;
+    let component_id = executor.store_component("directories").await;
+    let worker_id = executor.start_worker(&component_id, "directories-1").await;
 
     let result = executor
         .invoke_and_await(&worker_id, "run", vec![])
@@ -212,8 +212,8 @@ async fn directories_replay() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("directories").await;
-    let worker_id = executor.start_worker(&template_id, "directories-1").await;
+    let component_id = executor.store_component("directories").await;
+    let worker_id = executor.start_worker(&component_id, "directories-1").await;
 
     let result = executor
         .invoke_and_await(&worker_id, "run", vec![])
@@ -274,8 +274,8 @@ async fn file_write_read() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-1").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor.start_worker(&component_id, "file-service-1").await;
 
     let _ = executor
         .invoke_and_await(
@@ -341,13 +341,13 @@ async fn http_client() {
             .await;
     });
 
-    let template_id = executor.store_template("http-client").await;
+    let component_id = executor.store_component("http-client").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "http-client-1", vec![], env)
+        .start_worker_with(&component_id, "http-client-1", vec![], env)
         .await;
     let rx = executor.capture_output(&worker_id).await;
 
@@ -404,12 +404,12 @@ async fn http_client_using_reqwest() {
             .await;
     });
 
-    let template_id = executor.store_template("http-client-2").await;
+    let component_id = executor.store_component("http-client-2").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "http-client-reqwest-1", vec![], env)
+        .start_worker_with(&component_id, "http-client-reqwest-1", vec![], env)
         .await;
 
     let result = executor
@@ -435,12 +435,12 @@ async fn environment_service() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("environment-service").await;
+    let component_id = executor.store_component("environment-service").await;
     let args = vec!["test-arg".to_string()];
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_worker_with(&template_id, "environment-service-1", args, env)
+        .start_worker_with(&component_id, "environment-service-1", args, env)
         .await;
 
     let args_result = executor
@@ -473,11 +473,11 @@ async fn environment_service() {
                     Value::String("environment-service-1".to_string())
                 ]),
                 Value::Tuple(vec![
-                    Value::String("GOLEM_TEMPLATE_ID".to_string()),
-                    Value::String(template_id.to_string())
+                    Value::String("GOLEM_COMPONENT_ID".to_string()),
+                    Value::String(component_id.to_string())
                 ]),
                 Value::Tuple(vec![
-                    Value::String("GOLEM_TEMPLATE_VERSION".to_string()),
+                    Value::String("GOLEM_COMPONENT_VERSION".to_string()),
                     Value::String("0".to_string())
                 ]),
             ])))))]
@@ -524,12 +524,12 @@ async fn http_client_response_persisted_between_invocations() {
             .await;
     });
 
-    let template_id = executor.store_template("http-client").await;
+    let component_id = executor.store_component("http-client").await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&template_id, "http-client-2", vec![], env)
+        .start_worker_with(&component_id, "http-client-2", vec![], env)
         .await;
     let rx = executor.capture_output(&worker_id).await;
 
@@ -564,8 +564,10 @@ async fn sleep() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("clock-service").await;
-    let worker_id = executor.start_worker(&template_id, "clock-service-1").await;
+    let component_id = executor.store_component("clock-service").await;
+    let worker_id = executor
+        .start_worker(&component_id, "clock-service-1")
+        .await;
 
     let _ = executor
         .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![Value::U64(10)])
@@ -591,8 +593,10 @@ async fn resuming_sleep() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("clock-service").await;
-    let worker_id = executor.start_worker(&template_id, "clock-service-2").await;
+    let component_id = executor.store_component("clock-service").await;
+    let worker_id = executor
+        .start_worker(&component_id, "clock-service-2")
+        .await;
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
@@ -631,9 +635,9 @@ async fn failing_worker() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("failing-component").await;
+    let component_id = executor.store_component("failing-component").await;
     let worker_id = executor
-        .start_worker(&template_id, "failing-worker-1")
+        .start_worker(&component_id, "failing-worker-1")
         .await;
 
     let result1 = executor
@@ -667,8 +671,8 @@ async fn file_service_write_direct() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-2").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor.start_worker(&component_id, "file-service-2").await;
 
     let _ = executor
         .invoke_and_await(
@@ -708,8 +712,8 @@ async fn filesystem_write_replay_restores_file_times() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-3").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor.start_worker(&component_id, "file-service-3").await;
 
     let _ = executor
         .invoke_and_await(
@@ -752,8 +756,8 @@ async fn filesystem_create_dir_replay_restores_file_times() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-4").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor.start_worker(&component_id, "file-service-4").await;
 
     let _ = executor
         .invoke_and_await(
@@ -793,8 +797,8 @@ async fn file_hard_link() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-5").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor.start_worker(&component_id, "file-service-5").await;
 
     let _ = executor
         .invoke_and_await(
@@ -843,8 +847,8 @@ async fn filesystem_link_replay_restores_file_times() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-6").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor.start_worker(&component_id, "file-service-6").await;
 
     let _ = executor
         .invoke_and_await(
@@ -932,8 +936,8 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-7").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor.start_worker(&component_id, "file-service-7").await;
 
     let _ = executor
         .invoke_and_await(
@@ -989,8 +993,8 @@ async fn filesystem_symlink_replay_restores_file_times() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-8").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor.start_worker(&component_id, "file-service-8").await;
 
     let _ = executor
         .invoke_and_await(
@@ -1079,8 +1083,8 @@ async fn filesystem_rename_replay_restores_file_times() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-9").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor.start_worker(&component_id, "file-service-9").await;
 
     let _ = executor
         .invoke_and_await(
@@ -1185,8 +1189,10 @@ async fn filesystem_remove_file_replay_restores_file_times() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-10").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor
+        .start_worker(&component_id, "file-service-10")
+        .await;
 
     let _ = executor
         .invoke_and_await(
@@ -1245,8 +1251,8 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-3").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor.start_worker(&component_id, "file-service-3").await;
 
     let _ = executor
         .invoke_and_await(
@@ -1289,8 +1295,8 @@ async fn filesystem_metadata_hash() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("file-service").await;
-    let worker_id = executor.start_worker(&template_id, "file-service-3").await;
+    let component_id = executor.store_component("file-service").await;
+    let worker_id = executor.start_worker(&component_id, "file-service-3").await;
 
     let _ = executor
         .invoke_and_await(
@@ -1333,9 +1339,9 @@ async fn ip_address_resolve() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let template_id = executor.store_template("networking").await;
+    let component_id = executor.store_component("networking").await;
     let worker_id = executor
-        .start_worker(&template_id, "ip-address-resolve-1")
+        .start_worker(&component_id, "ip-address-resolve-1")
         .await;
 
     let result1 = executor

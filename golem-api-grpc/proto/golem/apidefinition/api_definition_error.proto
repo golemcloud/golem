@@ -3,7 +3,7 @@ syntax = "proto3";
 package golem.apidefinition;
 
 import "golem/common/error_body.proto";
-import public "golem/template/template_id.proto";
+import public "golem/component/component_id.proto";
 
 message ApiDefinitionError {
   oneof error {
@@ -24,6 +24,6 @@ message RouteValidationErrorsBody {
 message RouteValidationError {
   string method = 1;
   string path = 2;
-  golem.template.TemplateId template = 3;
+  golem.component.ComponentId component = 3;
   string detail = 4;
 }

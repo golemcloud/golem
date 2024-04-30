@@ -20,14 +20,14 @@ spec:
                 name: service-worker-service-{{.Values.env}}
                 port:
                   number: {{ .Values.workerService.ports.http }}
-          - path: "/v2/templates/[^/]+/workers/[^/]+/connect$"
+          - path: "/v2/components/[^/]+/workers/[^/]+/connect$"
             pathType: ImplementationSpecific
             backend:
               service:
                 name: service-worker-service-{{.Values.env}}
                 port:
                   number: {{ .Values.workerService.ports.http }}
-          - path: "/v2/templates/[^/]+/workers(.*)"
+          - path: "/v2/components/[^/]+/workers(.*)"
             pathType: ImplementationSpecific
             backend:
               service:
@@ -38,9 +38,9 @@ spec:
             pathType: ImplementationSpecific
             backend:
               service:
-                name: service-template-service-{{.Values.env}}
+                name: service-component-service-{{.Values.env}}
                 port:
-                  number: {{ .Values.templateService.ports.http }}
+                  number: {{ .Values.componentService.ports.http }}
 {{- end }}
 
 {{- if eq .Values.ingress.type "alb" }}
@@ -65,21 +65,21 @@ spec:
                 name: service-worker-service-{{.Values.env}}
                 port:
                   number: {{ .Values.workerService.ports.http }}
-          - path: "/v2/templates/*/workers/*/connect"
+          - path: "/v2/components/*/workers/*/connect"
             pathType: ImplementationSpecific
             backend:
               service:
                 name: service-worker-service-{{.Values.env}}
                 port:
                   number: {{ .Values.workerService.ports.http }}
-          - path: "/v2/templates/*/workers/*"
+          - path: "/v2/components/*/workers/*"
             pathType: ImplementationSpecific
             backend:
               service:
                 name: service-worker-service-{{.Values.env}}
                 port:
                   number: {{ .Values.workerService.ports.http }}
-          - path: "/v2/templates/*/workers"
+          - path: "/v2/components/*/workers"
             pathType: ImplementationSpecific
             backend:
               service:
@@ -90,7 +90,7 @@ spec:
             pathType: ImplementationSpecific
             backend:
               service:
-                name: service-template-service-{{.Values.env}}
+                name: service-component-service-{{.Values.env}}
                 port:
-                  number: {{ .Values.templateService.ports.http }}
+                  number: {{ .Values.componentService.ports.http }}
 {{- end }}

@@ -18,15 +18,16 @@ use golem_api_grpc::proto::golem::worker::{
     complete_promise_response, delete_worker_response, get_invocation_key_response,
     get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
     invoke_and_await_response, invoke_and_await_response_json, invoke_response,
-    launch_new_worker_response, resume_worker_response, CompletePromiseRequest,
-    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
-    GetInvocationKeyRequest, GetInvocationKeyResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitRequestJson, InvokeAndAwaitResponse,
-    InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson, InvokeResponse, InvokeResultJson,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse,
+    launch_new_worker_response, resume_worker_response, update_worker_response,
+    CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest,
+    DeleteWorkerResponse, GetInvocationKeyRequest, GetInvocationKeyResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitRequestJson,
+    InvokeAndAwaitResponse, InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson,
+    InvokeResponse, InvokeResultJson, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::{
     worker_error, worker_execution_error, InvocationKey, InvokeResult, UnknownError,
@@ -39,7 +40,7 @@ use tap::TapFallible;
 use tonic::{Request, Response, Status};
 
 use crate::empty_worker_metadata;
-use crate::service::template::TemplateService;
+use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 
 fn server_error<T>(error: T) -> GrpcWorkerError
@@ -56,14 +57,14 @@ where
 }
 
 pub struct WorkerGrpcApi {
-    template_service: TemplateService,
+    component_service: ComponentService,
     worker_service: WorkerService,
 }
 
 impl WorkerGrpcApi {
-    pub fn new(template_service: TemplateService, worker_service: WorkerService) -> Self {
+    pub fn new(component_service: ComponentService, worker_service: WorkerService) -> Self {
         Self {
-            template_service,
+            component_service,
             worker_service,
         }
     }
@@ -90,6 +91,20 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
+    async fn complete_promise(
+        &self,
+        request: Request<CompletePromiseRequest>,
+    ) -> Result<Response<CompletePromiseResponse>, Status> {
+        let response = match self.complete_promise(request.into_inner()).await {
+            Ok(result) => complete_promise_response::Result::Success(result),
+            Err(error) => complete_promise_response::Result::Error(error),
+        };
+
+        Ok(Response::new(CompletePromiseResponse {
+            result: Some(response),
+        }))
+    }
+
     async fn delete_worker(
         &self,
         request: Request<DeleteWorkerRequest>,
@@ -106,20 +121,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
-    async fn complete_promise(
-        &self,
-        request: Request<CompletePromiseRequest>,
-    ) -> Result<Response<CompletePromiseResponse>, Status> {
-        let response = match self.complete_promise(request.into_inner()).await {
-            Ok(result) => complete_promise_response::Result::Success(result),
-            Err(error) => complete_promise_response::Result::Error(error),
-        };
-
-        Ok(Response::new(CompletePromiseResponse {
-            result: Some(response),
-        }))
-    }
-
     async fn get_worker_metadata(
         &self,
         request: Request<GetWorkerMetadataRequest>,
@@ -130,23 +131,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(GetWorkerMetadataResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn get_workers_metadata(
-        &self,
-        request: Request<GetWorkersMetadataRequest>,
-    ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
-        let response =
-            match self.get_workers_metadata(request.into_inner()).await {
-                Ok((cursor, workers)) => get_workers_metadata_response::Result::Success(
-                    GetWorkersMetadataSuccessResponse { workers, cursor },
-                ),
-                Err(error) => get_workers_metadata_response::Result::Error(error),
-            };
-
-        Ok(Response::new(GetWorkersMetadataResponse {
             result: Some(response),
         }))
     }
@@ -227,6 +211,52 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
+    type ConnectWorkerStream = golem_worker_service_base::service::worker::ConnectWorkerStream;
+
+    async fn connect_worker(
+        &self,
+        request: Request<ConnectWorkerRequest>,
+    ) -> Result<Response<Self::ConnectWorkerStream>, Status> {
+        let stream = self.connect_worker(request.into_inner()).await;
+        match stream {
+            Ok(stream) => Ok(Response::new(stream)),
+            Err(error) => Err(error_to_status(error)),
+        }
+    }
+
+    async fn get_workers_metadata(
+        &self,
+        request: Request<GetWorkersMetadataRequest>,
+    ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
+        let response =
+            match self.get_workers_metadata(request.into_inner()).await {
+                Ok((cursor, workers)) => get_workers_metadata_response::Result::Success(
+                    GetWorkersMetadataSuccessResponse { workers, cursor },
+                ),
+                Err(error) => get_workers_metadata_response::Result::Error(error),
+            };
+
+        Ok(Response::new(GetWorkersMetadataResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn update_worker(
+        &self,
+        request: Request<UpdateWorkerRequest>,
+    ) -> Result<Response<UpdateWorkerResponse>, Status> {
+        let response = match self.update_worker(request.into_inner()).await {
+            Ok(()) => update_worker_response::Result::Success(
+                golem_api_grpc::proto::golem::common::Empty {},
+            ),
+            Err(error) => update_worker_response::Result::Error(error),
+        };
+
+        Ok(Response::new(UpdateWorkerResponse {
+            result: Some(response),
+        }))
+    }
+
     async fn invoke_json(
         &self,
         request: Request<InvokeRequestJson>,
@@ -266,19 +296,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
             result: Some(response),
         }))
     }
-
-    type ConnectWorkerStream = golem_worker_service_base::service::worker::ConnectWorkerStream;
-
-    async fn connect_worker(
-        &self,
-        request: Request<ConnectWorkerRequest>,
-    ) -> Result<Response<Self::ConnectWorkerStream>, Status> {
-        let stream = self.connect_worker(request.into_inner()).await;
-        match stream {
-            Ok(stream) => Ok(Response::new(stream)),
-            Err(error) => Err(error_to_status(error)),
-        }
-    }
 }
 
 impl WorkerGrpcApi {
@@ -286,29 +303,29 @@ impl WorkerGrpcApi {
         &self,
         request: LaunchNewWorkerRequest,
     ) -> Result<(WorkerId, ComponentVersion), GrpcWorkerError> {
-        let template_id: golem_common::model::TemplateId = request
-            .template_id
+        let component_id: golem_common::model::ComponentId = request
+            .component_id
             .and_then(|id| id.try_into().ok())
-            .ok_or_else(|| bad_request_error("Missing template id"))?;
+            .ok_or_else(|| bad_request_error("Missing component id"))?;
 
-        let latest_template_version = self
-            .template_service
-            .get_latest(&template_id, &EmptyAuthCtx {})
+        let latest_component = self
+            .component_service
+            .get_latest(&component_id, &EmptyAuthCtx {})
             .await
-            .tap_err(|error| tracing::error!("Error getting latest template version: {:?}", error))
+            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
             .map_err(|_| GrpcWorkerError {
                 error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Template not found: {}", &template_id),
+                    error: format!("Component not found: {}", &component_id),
                 })),
             })?;
 
-        let worker_id = make_worker_id(template_id, request.name)?;
+        let worker_id = make_worker_id(component_id, request.name)?;
 
         let worker = self
             .worker_service
             .create(
                 &worker_id,
-                latest_template_version.versioned_template_id.version,
+                latest_component.versioned_component_id.version,
                 request.args,
                 request.env,
                 empty_worker_metadata(),
@@ -318,7 +335,7 @@ impl WorkerGrpcApi {
 
         Ok((
             worker.into(),
-            latest_template_version.versioned_template_id.version,
+            latest_component.versioned_component_id.version,
         ))
     }
 
@@ -373,11 +390,11 @@ impl WorkerGrpcApi {
         &self,
         request: GetWorkersMetadataRequest,
     ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GrpcWorkerError> {
-        let template_id: golem_common::model::TemplateId = request
-            .template_id
-            .ok_or_else(|| bad_request_error("Missing template id"))?
+        let component_id: golem_common::model::ComponentId = request
+            .component_id
+            .ok_or_else(|| bad_request_error("Missing component id"))?
             .try_into()
-            .map_err(|_| bad_request_error("Invalid template id"))?;
+            .map_err(|_| bad_request_error("Invalid component id"))?;
 
         let filter: Option<WorkerFilter> =
             match request.filter {
@@ -390,7 +407,7 @@ impl WorkerGrpcApi {
         let (new_cursor, workers) = self
             .worker_service
             .find_metadata(
-                &template_id,
+                &component_id,
                 filter,
                 request.cursor,
                 request.count,
@@ -563,13 +580,28 @@ impl WorkerGrpcApi {
 
         Ok(stream)
     }
+
+    async fn update_worker(&self, request: UpdateWorkerRequest) -> Result<(), GrpcWorkerError> {
+        let worker_id = make_crate_worker_id(request.worker_id.clone())?;
+
+        self.worker_service
+            .update(
+                &worker_id,
+                request.mode(),
+                request.target_version,
+                &EmptyAuthCtx {},
+            )
+            .await?;
+
+        Ok(())
+    }
 }
 
 fn make_worker_id(
-    template_id: golem_common::model::TemplateId,
+    component_id: golem_common::model::ComponentId,
     worker_name: String,
 ) -> std::result::Result<golem_service_base::model::WorkerId, GrpcWorkerError> {
-    golem_service_base::model::WorkerId::new(template_id, worker_name)
+    golem_service_base::model::WorkerId::new(component_id, worker_name)
         .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))
 }
 
@@ -633,17 +665,17 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
                 worker_execution_error::Error::FailedToResumeWorker(err) => {
                     format!("Failed To Resume Worker: Worker ID = {:?}", err.worker_id)
                 }
-                worker_execution_error::Error::TemplateDownloadFailed(err) => format!(
-                    "Template Download Failed: Template ID = {:?}, Version: {}, Reason: {}",
-                    err.template_id, err.template_version, err.reason
+                worker_execution_error::Error::ComponentDownloadFailed(err) => format!(
+                    "Component Download Failed: Component ID = {:?}, Version: {}, Reason: {}",
+                    err.component_id, err.component_version, err.reason
                 ),
-                worker_execution_error::Error::TemplateParseFailed(err) => format!(
-                    "Template Parse Failed: Template ID = {:?}, Version: {}, Reason: {}",
-                    err.template_id, err.template_version, err.reason
+                worker_execution_error::Error::ComponentParseFailed(err) => format!(
+                    "Component Parsing Failed: Component ID = {:?}, Version: {}, Reason: {}",
+                    err.component_id, err.component_version, err.reason
                 ),
-                worker_execution_error::Error::GetLatestVersionOfTemplateFailed(err) => format!(
-                    "Get Latest Version Of Template Failed: Template ID = {:?}, Reason: {}",
-                    err.template_id, err.reason
+                worker_execution_error::Error::GetLatestVersionOfComponentFailed(err) => format!(
+                    "Get Latest Version Of Component Failed: Component ID = {:?}, Reason: {}",
+                    err.component_id, err.reason
                 ),
                 worker_execution_error::Error::PromiseNotFound(err) => {
                     format!("Promise Not Found: Promise ID = {:?}", err.promise_id)

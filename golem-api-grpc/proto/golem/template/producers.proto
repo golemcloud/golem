@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-package golem.template;
-
-import "golem/template/producer_field.proto";
-
-message Producers {
-  repeated ProducerField fields = 1;
-}

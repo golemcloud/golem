@@ -77,7 +77,7 @@ mod internal {
     use crate::api_definition::http::{AllPathPatterns, HttpResponseMapping, MethodPattern, Route};
     use crate::expression::Expr;
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
-    use golem_common::model::TemplateId;
+    use golem_common::model::ComponentId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use serde_json::Value;
 
@@ -156,7 +156,7 @@ mod internal {
             worker_id: get_worker_id_expr(worker_bridge_info)?,
             function_name: get_function_name(worker_bridge_info)?,
             function_params: get_function_params_expr(worker_bridge_info)?,
-            template: get_template_id(worker_bridge_info)?,
+            component: get_component_id(worker_bridge_info)?,
             response: get_response_mapping(worker_bridge_info)?,
         };
 
@@ -167,14 +167,14 @@ mod internal {
         })
     }
 
-    pub(crate) fn get_template_id(worker_bridge_info: &Value) -> Result<TemplateId, String> {
-        let template_id = worker_bridge_info
-            .get("template-id")
-            .ok_or("No template-id found")?
+    pub(crate) fn get_component_id(worker_bridge_info: &Value) -> Result<ComponentId, String> {
+        let component_id = worker_bridge_info
+            .get("component-id")
+            .ok_or("No component-id found")?
             .as_str()
-            .ok_or("template-id is not a string")?;
-        Ok(TemplateId(
-            Uuid::parse_str(template_id).map_err(|err| err.to_string())?,
+            .ok_or("component-id is not a string")?;
+        Ok(ComponentId(
+            Uuid::parse_str(component_id).map_err(|err| err.to_string())?,
         ))
     }
 
@@ -265,7 +265,7 @@ mod tests {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::expression::{Expr, InnerNumber};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
-    use golem_common::model::TemplateId;
+    use golem_common::model::ComponentId;
     use openapiv3::PathItem;
     use serde_json::json;
     use uuid::Uuid;
@@ -277,7 +277,7 @@ mod tests {
                 "worker-id": "worker-${request.body.user}",
                 "function-name": "test",
                 "function-params": ["${request}"],
-                "template-id": "00000000-0000-0000-0000-000000000000",
+                "component-id": "00000000-0000-0000-0000-000000000000",
                 "response": "${{headers : {ContentType: 'json', user-id: 'foo'}, body: worker.response, status: 200}}"
             }))]
                 .into_iter()
@@ -306,7 +306,7 @@ mod tests {
                     ]),
                     function_name: "test".to_string(),
                     function_params: vec![Expr::Request()],
-                    template: TemplateId(Uuid::nil()),
+                    component: ComponentId(Uuid::nil()),
                     response: Some(ResponseMapping(Expr::Record(
                         vec![
                             (

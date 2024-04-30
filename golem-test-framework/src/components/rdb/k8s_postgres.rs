@@ -16,7 +16,7 @@ use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
-use crate::components::rdb::{assert_connection, DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use k8s_openapi::api::core::v1::{Pod, Service};
@@ -24,6 +24,7 @@ use kube::api::PostParams;
 use kube::{Api, Client};
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::info;
 
@@ -37,7 +38,12 @@ pub struct K8sPostgresRdb {
 }
 
 impl K8sPostgresRdb {
-    pub async fn new(namespace: &K8sNamespace, routing_type: &K8sRoutingType) -> Self {
+    pub async fn new(
+        namespace: &K8sNamespace,
+        routing_type: &K8sRoutingType,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
+    ) -> Self {
         info!("Creating Postgres pod");
 
         let pods: Api<Pod> = Api::namespaced(
@@ -86,7 +92,7 @@ impl K8sPostgresRdb {
         let _res_pod = pods.create(&pp, &pod).await.expect("Failed to create pod");
         let managed_pod = AsyncDropper::new(ManagedPod::new("golem-postgres", namespace));
 
-        let service: Service = serde_json::from_value(json!({
+        let mut service: Service = serde_json::from_value(json!({
             "apiVersion": "v1",
             "kind": "Service",
             "metadata": {
@@ -107,6 +113,8 @@ impl K8sPostgresRdb {
         }))
         .expect("Failed to deserialize service description");
 
+        service.metadata.annotations = service_annotations;
+
         let _res_srv = services
             .create(&pp, &service)
             .await
@@ -122,7 +130,7 @@ impl K8sPostgresRdb {
         let host = format!("golem-postgres.{}.svc.cluster.local", &namespace.0);
         let port = 5432;
 
-        assert_connection(&local_host, local_port).await;
+        wait_for_startup(&local_host, local_port, timeout).await;
 
         info!("Test Postgres started on private host {host}:{port}, accessible from localhost as {local_host}:{local_port}");
 

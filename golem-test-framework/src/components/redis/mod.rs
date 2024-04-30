@@ -15,6 +15,7 @@
 use std::time::{Duration, Instant};
 
 use redis::RedisResult;
+use tracing::info;
 
 pub mod docker;
 pub mod k8s;
@@ -64,6 +65,10 @@ pub fn check_if_running(host: &str, port: u16) -> bool {
 }
 
 fn wait_for_startup(host: &str, port: u16, timeout: Duration) {
+    info!(
+        "Waiting for Redis start on host {host}:{port}, timeout: {}s",
+        timeout.as_secs()
+    );
     let start = Instant::now();
     loop {
         let is_running = check_if_running(host, port);

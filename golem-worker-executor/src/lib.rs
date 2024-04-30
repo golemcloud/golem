@@ -22,6 +22,7 @@ use golem_worker_executor_base::durable_host::DurableWorkerCtx;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
+use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
 use golem_worker_executor_base::services::key_value::KeyValueService;
@@ -32,19 +33,18 @@ use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, Remot
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
 use golem_worker_executor_base::services::shard_manager::ShardManagerService;
-use golem_worker_executor_base::services::template::TemplateService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
+use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::All;
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::Bootstrap;
 use prometheus::Registry;
 use tokio::runtime::Handle;
 use tracing::info;
-use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
@@ -65,7 +65,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<Context>>,
         runtime: Handle,
-        template_service: Arc<dyn TemplateService + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
@@ -76,26 +76,20 @@ impl Bootstrap<Context> for ServerBootstrap {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        _worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     ) -> anyhow::Result<All<Context>> {
         let additional_deps = AdditionalDeps {};
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
-            Arc::new(RemoteInvocationRpc::new(
-                golem_config.public_worker_api.uri(),
-                golem_config
-                    .public_worker_api
-                    .access_token
-                    .parse::<Uuid>()
-                    .expect("Access token must be an UUID"),
-            )),
+            Arc::new(RemoteInvocationRpc::new(worker_proxy.clone())),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
             runtime.clone(),
-            template_service.clone(),
+            component_service.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -108,6 +102,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             blob_store_service.clone(),
             oplog_service.clone(),
             scheduler_service.clone(),
+            worker_activator.clone(),
             additional_deps.clone(),
         ));
         let recovery_management = Arc::new(RecoveryManagementDefault::new(
@@ -115,7 +110,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
-            template_service.clone(),
+            component_service.clone(),
             worker_service.clone(),
             worker_enumeration_service.clone(),
             running_worker_enumeration_service.clone(),
@@ -126,6 +121,8 @@ impl Bootstrap<Context> for ServerBootstrap {
             key_value_service.clone(),
             blob_store_service.clone(),
             rpc.clone(),
+            worker_activator.clone(),
+            worker_proxy.clone(),
             golem_config.clone(),
             additional_deps.clone(),
         ));
@@ -136,7 +133,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             engine,
             linker,
             runtime.clone(),
-            template_service,
+            component_service,
             shard_manager_service,
             worker_service,
             worker_enumeration_service,
@@ -151,6 +148,8 @@ impl Bootstrap<Context> for ServerBootstrap {
             recovery_management,
             rpc,
             scheduler_service,
+            worker_activator.clone(),
+            worker_proxy.clone(),
             additional_deps,
         ))
     }

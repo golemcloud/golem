@@ -30,23 +30,23 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::preview2::golem::api::host::{
-    HostGetWorkers, OplogIndex, PersistenceLevel, RetryPolicy,
+    ComponentVersion, HostGetWorkers, OplogIndex, PersistenceLevel, RetryPolicy, UpdateMode,
 };
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{PromiseId, TemplateId, WorkerId};
+use golem_common::model::{ComponentId, PromiseId, WorkerId};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
-        template_id: golem::api::host::TemplateId,
+        component_id: golem::api::host::ComponentId,
         filter: Option<golem::api::host::WorkerAnyFilter>,
         precise: bool,
     ) -> anyhow::Result<Resource<GetWorkersEntry>> {
         record_host_function_call("golem::api::get-workers", "new");
-        let entry = GetWorkersEntry::new(template_id.into(), filter.map(|f| f.into()), precise);
+        let entry = GetWorkersEntry::new(component_id.into(), filter.map(|f| f.into()), precise);
         let resource = self.as_wasi_view().table_mut().push(entry)?;
         Ok(resource)
     }
@@ -56,13 +56,13 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
         self_: Resource<GetWorkersEntry>,
     ) -> anyhow::Result<Option<Vec<golem::api::host::WorkerMetadata>>> {
         record_host_function_call("golem::api::get-workers", "get_next");
-        let (template_id, filter, count, precise, cursor) = self
+        let (component_id, filter, count, precise, cursor) = self
             .as_wasi_view()
             .table()
             .get::<GetWorkersEntry>(&self_)
             .map(|e| {
                 (
-                    e.template_id.clone(),
+                    e.component_id.clone(),
                     e.filter.clone(),
                     e.count,
                     e.precise,
@@ -73,7 +73,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
         if let Some(cursor) = cursor {
             let (new_cursor, workers) = self
                 .state
-                .get_workers(&template_id, filter, cursor, count, precise)
+                .get_workers(&component_id, filter, cursor, count, precise)
                 .await?;
 
             let _ = self
@@ -98,7 +98,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
 }
 
 pub struct GetWorkersEntry {
-    template_id: TemplateId,
+    component_id: ComponentId,
     filter: Option<golem_common::model::WorkerFilter>,
     precise: bool,
     count: u64,
@@ -107,12 +107,12 @@ pub struct GetWorkersEntry {
 
 impl GetWorkersEntry {
     pub fn new(
-        template_id: TemplateId,
+        component_id: ComponentId,
         filter: Option<golem_common::model::WorkerFilter>,
         precise: bool,
     ) -> Self {
         Self {
-            template_id,
+            component_id,
             filter,
             precise,
             count: 50,
@@ -245,8 +245,10 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
             // Write an oplog entry with the new jump and then restart the worker
             self.state.deleted_regions.add(jump.clone());
-            self.state.oplog.add(OplogEntry::jump(jump)).await;
-            self.state.oplog.commit().await;
+            self.state
+                .oplog
+                .add_and_commit(OplogEntry::jump(jump))
+                .await;
 
             debug!(
                 "Interrupting live execution of {} for jumping from {jump_source} to {jump_target}",
@@ -329,8 +331,10 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                         end: self.state.replay_target + 1, // skipping the Jump entry too
                     };
                     self.state.deleted_regions.add(deleted_region.clone());
-                    self.state.oplog.add(OplogEntry::jump(deleted_region)).await;
-                    self.state.oplog.commit().await;
+                    self.state
+                        .oplog
+                        .add_and_commit(OplogEntry::jump(deleted_region))
+                        .await;
                 }
             }
         }
@@ -430,12 +434,43 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         .await?;
         Ok(uuid.into())
     }
+
+    async fn update_worker(
+        &mut self,
+        worker_id: golem::api::host::WorkerId,
+        target_version: ComponentVersion,
+        mode: UpdateMode,
+    ) -> anyhow::Result<()> {
+        record_host_function_call("golem::api", "update_worker");
+
+        let worker_id: WorkerId = worker_id.into();
+        let mode = match mode {
+            UpdateMode::Automatic => golem_api_grpc::proto::golem::worker::UpdateMode::Automatic,
+            UpdateMode::SnapshotBased => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
+        };
+        Durability::<Ctx, (), SerializableError>::wrap(
+            self,
+            WrappedFunctionType::WriteRemote,
+            "golem::api::update-worker",
+            |ctx| {
+                Box::pin(async move {
+                    ctx.state
+                        .worker_proxy
+                        .update(&worker_id, target_version, mode, &ctx.state.account_id)
+                        .await
+                })
+            },
+        )
+        .await?;
+
+        Ok(())
+    }
 }
 
 impl From<WorkerId> for golem::api::host::WorkerId {
     fn from(worker_id: WorkerId) -> Self {
         golem::api::host::WorkerId {
-            template_id: worker_id.template_id.into(),
+            component_id: worker_id.component_id.into(),
             worker_name: worker_id.worker_name,
         }
     }
@@ -444,14 +479,14 @@ impl From<WorkerId> for golem::api::host::WorkerId {
 impl From<golem::api::host::WorkerId> for WorkerId {
     fn from(host: golem::api::host::WorkerId) -> Self {
         Self {
-            template_id: host.template_id.into(),
+            component_id: host.component_id.into(),
             worker_name: host.worker_name,
         }
     }
 }
 
-impl From<golem::api::host::TemplateId> for TemplateId {
-    fn from(host: golem::api::host::TemplateId) -> Self {
+impl From<golem::api::host::ComponentId> for ComponentId {
+    fn from(host: golem::api::host::ComponentId) -> Self {
         let high_bits = host.uuid.high_bits;
         let low_bits = host.uuid.low_bits;
 
@@ -459,11 +494,11 @@ impl From<golem::api::host::TemplateId> for TemplateId {
     }
 }
 
-impl From<TemplateId> for golem::api::host::TemplateId {
-    fn from(template_id: TemplateId) -> Self {
-        let (high_bits, low_bits) = template_id.0.as_u64_pair();
+impl From<ComponentId> for golem::api::host::ComponentId {
+    fn from(component_id: ComponentId) -> Self {
+        let (high_bits, low_bits) = component_id.0.as_u64_pair();
 
-        golem::api::host::TemplateId {
+        golem::api::host::ComponentId {
             uuid: golem::api::host::Uuid {
                 high_bits,
                 low_bits,
@@ -658,7 +693,7 @@ impl From<golem_common::model::WorkerMetadata> for golem::api::host::WorkerMetad
             args: value.args,
             env: value.env,
             status: value.last_known_status.status.into(),
-            template_version: value.last_known_status.component_version,
+            component_version: value.last_known_status.component_version,
             retry_count: 0,
         }
     }

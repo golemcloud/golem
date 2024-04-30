@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package golem.component;
+
+import "golem/common/project_id.proto";
+import "golem/component/protected_component_id.proto";
+import "golem/component/component_metadata.proto";
+import "golem/component/user_component_id.proto";
+import "golem/component/versioned_component_id.proto";
+
+message Component {
+  VersionedComponentId versioned_component_id = 1;
+  UserComponentId user_component_id = 2;
+  ProtectedComponentId protected_component_id = 3;
+  string component_name = 4;
+  uint64 component_size = 5;
+  ComponentMetadata metadata = 6;
+  golem.common.ProjectId project_id = 7;
+}
