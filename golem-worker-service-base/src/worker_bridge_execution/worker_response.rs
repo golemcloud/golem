@@ -47,7 +47,7 @@ impl WorkerResponse {
 
     // This makes sure that the result is injected into the worker.response field
     // So that clients can refer to the worker response using worker.response keyword
-    pub(crate) fn result_with_worker_response_key(&self) -> TypeAnnotatedValue {
+    pub(crate) fn result_with_worker_response_key(&self) -> Option<TypeAnnotatedValue> {
         let worker_response_value = &self.result;
         let worker_response_typ = AnalysedType::from(worker_response_value);
         let response_key = "response".to_string();
@@ -65,7 +65,7 @@ impl WorkerResponse {
                 Token::worker().to_string(),
                 TypeAnnotatedValue::Record {
                     typ: response_type.clone(),
-                    value: vec![(response_key.clone(), resolved_response)],
+                    value: vec![(response_key.clone(), response)],
                 },
             )],
         })
@@ -172,8 +172,8 @@ mod internal {
             input_request: &TypeAnnotatedValue,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
             let mut input_request = input_request.clone();
-            let type_annotated_value =
-                input_request.merge(&worker_response.result_with_worker_response_key());
+            let type_annotated_value = worker_response.result_with_worker_response_key().map_or(&input_request, |v| input_request.merge(&v));
+            
 
             let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
                 .map_err(EvaluationError::Message)?;
