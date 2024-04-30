@@ -18,13 +18,47 @@ use crate::worker_bridge_execution::worker_request_executor::{
 };
 use crate::worker_bridge_execution::WorkerRequest;
 
+// The result of a worker execution from worker-bridge,
+// which is a combination of function metadata and the type-annotated-value representing the actual result
 pub struct WorkerResponse {
     pub result: TypedResult,
 }
 
+// Worker Bridge response is different from WorkerResponse, because,
+// it ensures that we are not returing a vector of result if they are not named results
+// or unit
 enum WorkerBridgeResponse {
-    Unit
-    
+    Unit,
+    SingleResult(TypeAnnotatedValue),
+    MultipleResults(Vec<(String, TypeAnnotatedValue)>),
+}
+
+impl WorkerBridgeResponse {
+    fn from_worker_response(worker_response: &WorkerResponse) -> Result<WorkerBridgeResponse, String> {
+        let result = &worker_response.result.result;
+
+        if worker_response.result.function_result_types.iter().all(|r| r.name.is_none()) && result.len() > 0 {
+            match result {
+                TypeAnnotatedValue::Tuple { value, .. } => {
+                    if value.len() == 1 {
+                        Ok(WorkerBridgeResponse::SingleResult(value[0].clone()))
+                    } else if value.len() == 0 {
+                        Ok(WorkerBridgeResponse::Unit)
+                    }
+                }
+                _ => Err("This can't happen either as we expect from  the worker a tuple always"),
+            }
+        } else {
+            match worker_response  {
+                TypeAnnotatedValue::Record { value, .. } => {
+                    Ok(WorkerBridgeResponse::MultipleResults(value.clone()))
+                }
+
+                // See wasm-rpc implementations for more details
+                _ => Err("This can't happen either as we expect from  the worker a record always when there are named functions."),
+            }
+        }
+    }
 }
 
 impl WorkerResponse {
@@ -147,6 +181,7 @@ mod internal {
     use poem::{Body, ResponseParts};
     use std::collections::HashMap;
     use golem_service_base::model::FunctionResult;
+
 
 
     pub(crate) fn resolve_results(result: &Vec<FunctionResult>, worker_response: &TypeAnnotatedValue) -> Result<Option<TypeAnnotatedValue>, String> {
