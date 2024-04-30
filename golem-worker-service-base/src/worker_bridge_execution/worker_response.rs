@@ -22,6 +22,11 @@ pub struct WorkerResponse {
     pub result: TypedResult,
 }
 
+enum WorkerBridgeResponse {
+    Unit
+    
+}
+
 impl WorkerResponse {
     pub(crate) fn to_http_response(
         &self,
@@ -47,14 +52,15 @@ impl WorkerResponse {
 
     // This makes sure that the result is injected into the worker.response field
     // So that clients can refer to the worker response using worker.response keyword
-    pub(crate) fn result_with_worker_response_key(&self) -> Option<TypeAnnotatedValue> {
+    pub(crate) fn result_with_worker_response_key(&self) -> Result<String, Option<TypeAnnotatedValue>> {
         let worker_response_value = &self.result;
         let worker_response_typ = AnalysedType::from(worker_response_value);
         let response_key = "response".to_string();
 
         let response_type = vec![(response_key.clone(), worker_response_typ.clone())];
 
-        let resolved_response = internal::resolve_results(worker_response_value.function_result_types, worker_response_value.result.clone()).unwrap();
+        let resolved_response =
+            internal::resolve_results(&worker_response_value.function_result_types, &worker_response_value.result).unwrap();
 
         resolved_response.map(|response| TypeAnnotatedValue::Record {
             typ: vec![(
@@ -143,7 +149,7 @@ mod internal {
     use golem_service_base::model::FunctionResult;
 
 
-    pub(crate) fn resolve_results(result: Vec<FunctionResult>, worker_response: TypeAnnotatedValue) -> Result<Option<TypeAnnotatedValue>, String> {
+    pub(crate) fn resolve_results(result: &Vec<FunctionResult>, worker_response: &TypeAnnotatedValue) -> Result<Option<TypeAnnotatedValue>, String> {
         if result.iter().all(|r| r.name.is_none()) && result.len() > 0 {
             match worker_response {
                 TypeAnnotatedValue::Tuple { typ, value } => {
@@ -172,8 +178,8 @@ mod internal {
             input_request: &TypeAnnotatedValue,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
             let mut input_request = input_request.clone();
-            let type_annotated_value = worker_response.result_with_worker_response_key().map_or(&input_request, |v| input_request.merge(&v));
-            
+            let type_annotated_value =
+                worker_response.result_with_worker_response_key().map_or(&input_request, |v| input_request.merge(&v));
 
             let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
                 .map_err(EvaluationError::Message)?;
