@@ -54,7 +54,9 @@ impl WorkerResponse {
 
         let response_type = vec![(response_key.clone(), worker_response_typ.clone())];
 
-        TypeAnnotatedValue::Record {
+        let resolved_response = internal::resolve_results(worker_response_value.function_result_types, worker_response_value.result.clone()).unwrap();
+
+        resolved_response.map(|response| TypeAnnotatedValue::Record {
             typ: vec![(
                 Token::worker().to_string(),
                 AnalysedType::Record(response_type.clone()),
@@ -63,10 +65,10 @@ impl WorkerResponse {
                 Token::worker().to_string(),
                 TypeAnnotatedValue::Record {
                     typ: response_type.clone(),
-                    value: vec![(response_key.clone(), worker_response_value.result.clone())],
+                    value: vec![(response_key.clone(), resolved_response)],
                 },
             )],
-        }
+        })
     }
 }
 
@@ -141,19 +143,20 @@ mod internal {
     use golem_service_base::model::FunctionResult;
 
 
-    pub fn resolve_results(result: Vec<FunctionResult>, worker_response: TypeAnnotatedValue) -> Option<TypeAnnotatedValue> {
+    pub(crate) fn resolve_results(result: Vec<FunctionResult>, worker_response: TypeAnnotatedValue) -> Result<Option<TypeAnnotatedValue>, String> {
         if result.iter().all(|r| r.name.is_none()) && result.len() > 0 {
             match worker_response {
-               TypeAnnotatedValue::Tuple {typ, value} => {
-                  Some(value[0].clone())
-               },
-
-            } else if result.len() == 0 {
-                None
-            } else {
-                Some(worker_response)
+                TypeAnnotatedValue::Tuple { typ, value } => {
+                    Ok(Some(value[0].clone()))
+                },
+                _ => Err("Internal error when trying to resolve the function resulttype".to_string())
             }
+        }else if result.len() == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(worker_response))
         }
+
     }
 
     pub(crate) struct IntermediateHttpResponse {
