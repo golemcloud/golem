@@ -168,6 +168,7 @@ mod tests {
                 id: "".to_string(),
                 version: "".to_string(),
                 routes: vec![],
+                draft: false,
             })
         }
 
@@ -182,6 +183,7 @@ mod tests {
                 id: "".to_string(),
                 version: "".to_string(),
                 routes: vec![],
+                draft: false,
             })
         }
 
@@ -197,6 +199,7 @@ mod tests {
                 id: "".to_string(),
                 version: "".to_string(),
                 routes: vec![],
+                draft: false,
             })
         }
 
@@ -210,6 +213,7 @@ mod tests {
                 id: "".to_string(),
                 version: "".to_string(),
                 routes: vec![],
+                draft: false,
             })
         }
 
