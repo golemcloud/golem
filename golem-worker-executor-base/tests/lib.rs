@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ctor::{ctor, dtor};
+use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::prelude::*;
@@ -70,6 +71,12 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
 
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
         self.component_service.clone()
+    }
+
+    fn component_compilation_service(
+        &self,
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+        panic!("Not supported")
     }
 
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
@@ -165,6 +172,12 @@ impl TestDependencies for WorkerExecutorTestDependencies {
 
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
         self.component_service.clone()
+    }
+
+    fn component_compilation_service(
+        &self,
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+        panic!("Not supported")
     }
 
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {

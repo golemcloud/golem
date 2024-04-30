@@ -69,6 +69,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
 };
+use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
@@ -194,6 +195,12 @@ impl TestDependencies for TestWorkerExecutor {
 
     fn component_directory(&self) -> PathBuf {
         self.deps.component_directory()
+    }
+
+    fn component_compilation_service(
+        &self,
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+        self.deps.component_compilation_service()
     }
 
     fn component_service(

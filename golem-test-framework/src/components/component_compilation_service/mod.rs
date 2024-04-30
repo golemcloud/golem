@@ -49,15 +49,15 @@ pub trait ComponentCompilationService {
                 component_version,
             })
             .await
-            .expect("Failed to enqueue compilation")
+            .expect("Failed to enqueue component compilation")
             .into_inner();
         match response.result {
             None => {
-                panic!("Missing response from golem-component-service for create-component")
+                panic!("Missing response from golem-component-service for component compilation")
             }
             Some(component_compilation_response::Result::Success(_)) => (),
             Some(component_compilation_response::Result::Failure(error)) => {
-                panic!("Failed to get component metadata from golem-component-service: {error:?}");
+                panic!("Failed to enqueue component compilation in golem-component-compilation-service: {error:?}");
             }
         }
     }

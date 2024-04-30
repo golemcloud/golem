@@ -29,9 +29,9 @@ pub struct DockerComponentCompilationService {
 }
 
 impl DockerComponentCompilationService {
-    const NAME: &'static str = "golem_component_compilation_service";
-    const HTTP_PORT: u16 = 8081;
-    const GRPC_PORT: u16 = 9091;
+    pub const NAME: &'static str = "golem_component_compilation_service";
+    pub const HTTP_PORT: u16 = 8083;
+    pub const GRPC_PORT: u16 = 9094;
 
     pub fn new(
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,

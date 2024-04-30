@@ -38,6 +38,7 @@ impl SpawnedComponentService {
         working_directory: &Path,
         http_port: u16,
         grpc_port: u16,
+        component_compilation_service_port: u16,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
         out_level: Level,
@@ -51,7 +52,14 @@ impl SpawnedComponentService {
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(http_port, grpc_port, rdb, verbosity))
+            .envs(env_vars(
+                http_port,
+                grpc_port,
+                "localhost",
+                component_compilation_service_port,
+                rdb,
+                verbosity,
+            ))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

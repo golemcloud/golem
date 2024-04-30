@@ -41,9 +41,9 @@ pub struct K8sComponentCompilationService {
 }
 
 impl K8sComponentCompilationService {
-    const GRPC_PORT: u16 = 9091;
-    const HTTP_PORT: u16 = 8084;
-    const NAME: &'static str = "golem-component-compilation-service";
+    pub const GRPC_PORT: u16 = 9094;
+    pub const HTTP_PORT: u16 = 8083;
+    pub const NAME: &'static str = "golem-component-compilation-service";
 
     pub async fn new(
         namespace: &K8sNamespace,
