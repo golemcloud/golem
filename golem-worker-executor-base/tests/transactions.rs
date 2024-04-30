@@ -22,8 +22,17 @@ struct TestHttpServer {
 
 impl TestHttpServer {
     pub fn start(host_http_port: u16, fail_per_step: u64) -> Self {
+        Self::start_custom(host_http_port, Arc::new(move |_| fail_per_step))
+    }
+
+    pub fn start_custom(
+        host_http_port: u16,
+        fail_per_step: Arc<impl Fn(u64) -> u64 + Send + Sync + 'static>,
+    ) -> Self {
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
+        let events_clone2 = events.clone();
+        let events_clone3 = events.clone();
         let handle = tokio::spawn(async move {
             let call_count_per_step = Arc::new(Mutex::new(HashMap::<u64, u64>::new()));
             let route = warp::path("step")
@@ -34,9 +43,10 @@ impl TestHttpServer {
                     let step_count = steps.entry(step).and_modify(|e| *e += 1).or_insert(0);
 
                     println!("step: {step} occurrence {step_count}");
+                    events_clone.lock().unwrap().push(format!("=> {step}"));
 
                     match step_count {
-                        n if *n < fail_per_step => Response::builder()
+                        n if *n < fail_per_step(step) => Response::builder()
                             .status(StatusCode::OK)
                             .body(Body::from("true"))
                             .unwrap(),
@@ -46,13 +56,24 @@ impl TestHttpServer {
                             .unwrap(),
                     }
                 })
+                .or(warp::path("step")
+                    .and(warp::path::param())
+                    .and(warp::delete())
+                    .map(move |step: u64| {
+                        println!("step: undo {step}");
+                        events_clone2.lock().unwrap().push(format!("<= {step}"));
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .body(Body::from("false"))
+                            .unwrap()
+                    }))
                 .or(warp::path("side-effect")
                     .and(warp::post())
                     .and(warp::body::bytes())
                     .map(move |body: Bytes| {
                         let body = String::from_utf8(body.to_vec()).unwrap();
                         info!("received POST message: {body}");
-                        events_clone.lock().unwrap().push(body.clone());
+                        events_clone3.lock().unwrap().push(body.clone());
                         Response::builder()
                             .status(StatusCode::OK)
                             .body("OK")
@@ -500,7 +521,7 @@ async fn golem_rust_idempotence_off() {
     let worker_id = executor
         .start_worker_with(
             &component_id,
-            "golem-rust-testsidempotence-flag-off",
+            "golem-rust-tests-idempotence-flag-off",
             vec![],
             env,
         )
@@ -561,4 +582,115 @@ async fn golem_rust_persist_nothing() {
 
     check!(events == vec!["1", "2", "3", "2", "2", "4"]);
     check!(result.is_ok());
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn golem_rust_fallible_transaction() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let host_http_port = context.host_http_port();
+    let http_server = TestHttpServer::start_custom(
+        host_http_port,
+        Arc::new(|step| match step {
+            3 => 1, // step 3 returns true once
+            _ => 0, // other steps always return false
+        }),
+    );
+
+    let component_id = executor.store_component("golem-rust-tests").await;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "golem-rust-tests-fallible-transaction",
+            vec![],
+            env,
+        )
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api/fallible-transaction-test", vec![])
+        .await;
+
+    let events = http_server.get_events();
+
+    drop(executor);
+    http_server.abort();
+
+    check!(result.is_err());
+    check!(
+        events
+            == vec![
+                "=> 1".to_string(),
+                "=> 2".to_string(),
+                "=> 3".to_string(),
+                "<= 3".to_string(),
+                "<= 2".to_string(),
+                "<= 1".to_string()
+            ]
+    );
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn golem_rust_infallible_transaction() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let host_http_port = context.host_http_port();
+    let http_server = TestHttpServer::start_custom(
+        host_http_port,
+        Arc::new(|step| match step {
+            3 => 1, // step 3 returns true once
+            _ => 0, // other steps always return false
+        }),
+    );
+
+    let component_id = executor.store_component("golem-rust-tests").await;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), context.host_http_port().to_string());
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "golem-rust-tests-infallible-transaction",
+            vec![],
+            env,
+        )
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api/infallible-transaction-test",
+            vec![],
+        )
+        .await;
+
+    let events = http_server.get_events();
+
+    drop(executor);
+    http_server.abort();
+
+    check!(result == Ok(vec![Value::U64(11)]));
+    check!(
+        events
+            == vec![
+                "=> 1".to_string(),
+                "=> 2".to_string(),
+                "=> 3".to_string(),
+                "=> 1".to_string(),
+                "=> 2".to_string(),
+                "=> 3".to_string(),
+                "=> 4".to_string(),
+            ]
+    );
 }
