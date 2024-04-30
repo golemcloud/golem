@@ -38,13 +38,13 @@ use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
+use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::All;
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::Bootstrap;
 use prometheus::Registry;
 use tokio::runtime::Handle;
 use tracing::info;
-use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
@@ -79,18 +79,12 @@ impl Bootstrap<Context> for ServerBootstrap {
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     ) -> anyhow::Result<All<Context>> {
         let additional_deps = AdditionalDeps {};
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
-            Arc::new(RemoteInvocationRpc::new(
-                golem_config.public_worker_api.uri(),
-                golem_config
-                    .public_worker_api
-                    .access_token
-                    .parse::<Uuid>()
-                    .expect("Access token must be an UUID"),
-            )),
+            Arc::new(RemoteInvocationRpc::new(worker_proxy.clone())),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
@@ -128,6 +122,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             blob_store_service.clone(),
             rpc.clone(),
             worker_activator.clone(),
+            worker_proxy.clone(),
             golem_config.clone(),
             additional_deps.clone(),
         ));
@@ -154,6 +149,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             rpc,
             scheduler_service,
             worker_activator.clone(),
+            worker_proxy.clone(),
             additional_deps,
         ))
     }

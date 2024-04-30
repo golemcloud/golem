@@ -1,6 +1,7 @@
 package golem:it;
 
 interface api {
+
   record product-item {
     product-id: string,
     name: string,
@@ -35,8 +36,12 @@ interface api {
   checkout: func() -> checkout-result;
 
   get-cart-contents: func() -> list<product-item>;
+
+  not-durable: func() -> ();
 }
 
 world shopping-cart {
+  import golem:api/host@0.2.0;
+
   export api;
 }

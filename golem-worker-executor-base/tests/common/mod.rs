@@ -84,9 +84,9 @@ use golem_worker_executor_base::services::rpc::{
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
+use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use tonic::transport::Channel;
 use tracing::{error, info};
-use uuid::Uuid;
 use wasmtime::component::{Instance, Linker, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 
@@ -627,6 +627,7 @@ impl WorkerCtx for TestWorkerCtx {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -649,6 +650,7 @@ impl WorkerCtx for TestWorkerCtx {
             scheduler_service,
             recovery_management,
             rpc,
+            worker_proxy,
             config,
             worker_config,
             execution_status,
@@ -675,6 +677,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
         self.durable_ctx.rpc()
+    }
+
+    fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+        self.durable_ctx.worker_proxy()
     }
 }
 
@@ -732,16 +738,10 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
-            Arc::new(RemoteInvocationRpc::new(
-                golem_config.public_worker_api.uri(),
-                golem_config
-                    .public_worker_api
-                    .access_token
-                    .parse::<Uuid>()
-                    .expect("Access token must be an UUID"),
-            )),
+            Arc::new(RemoteInvocationRpc::new(worker_proxy.clone())),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
@@ -779,6 +779,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             blob_store_service.clone(),
             rpc.clone(),
             worker_activator.clone(),
+            worker_proxy.clone(),
             golem_config.clone(),
             (),
         ));
@@ -805,6 +806,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             rpc,
             scheduler_service,
             worker_activator,
+            worker_proxy,
             (),
         ))
     }

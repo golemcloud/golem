@@ -8,6 +8,7 @@ use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
+use crate::api_definition::api_common::HasIsDraft;
 use crate::api_definition::{
     ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion,
 };
@@ -21,6 +22,8 @@ pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub routes: Vec<Route>,
+    #[serde(default)]
+    pub draft: bool,
 }
 
 impl HasGolemWorkerBindings for HttpApiDefinition {
@@ -41,6 +44,16 @@ impl HasApiDefinitionId for HttpApiDefinition {
 impl HasVersion for HttpApiDefinition {
     fn get_version(&self) -> ApiVersion {
         self.version.clone()
+    }
+}
+
+impl HasIsDraft for HttpApiDefinition {
+    fn is_draft(&self) -> bool {
+        self.draft
+    }
+
+    fn set_not_draft(&mut self) {
+        self.draft = false;
     }
 }
 

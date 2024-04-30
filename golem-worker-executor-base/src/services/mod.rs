@@ -41,6 +41,7 @@ pub mod worker;
 pub mod worker_activator;
 pub mod worker_enumeration;
 pub mod worker_event;
+pub mod worker_proxy;
 
 // HasXXX traits for fine-grained control of which dependencies a function needs
 
@@ -135,6 +136,10 @@ pub trait HasWorkerActivator {
     fn worker_activator(&self) -> Arc<dyn WorkerActivator + Send + Sync>;
 }
 
+pub trait HasWorkerProxy {
+    fn worker_proxy(&self) -> Arc<dyn worker_proxy::WorkerProxy + Send + Sync>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -153,6 +158,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasRpc
     + HasSchedulerService
     + HasWorkerActivator
+    + HasWorkerProxy
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -176,6 +182,7 @@ impl<
             + HasRpc
             + HasSchedulerService
             + HasWorkerActivator
+            + HasWorkerProxy
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -206,6 +213,7 @@ pub struct All<Ctx: WorkerCtx> {
     rpc: Arc<dyn rpc::Rpc + Send + Sync>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+    worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -232,6 +240,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             rpc: self.rpc.clone(),
             scheduler_service: self.scheduler_service.clone(),
             worker_activator: self.worker_activator.clone(),
+            worker_proxy: self.worker_proxy.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -264,6 +273,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         rpc: Arc<dyn rpc::Rpc + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -287,6 +297,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             rpc,
             scheduler_service,
             worker_activator,
+            worker_proxy,
             extra_deps,
         }
     }
@@ -320,6 +331,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let rpc = Arc::new(rpc::RpcMock::new());
         let scheduler_service = Arc::new(scheduler::SchedulerServiceMock::new());
         let worker_activator = Arc::new(worker_activator::WorkerActivatorMock::new());
+        let worker_proxy = Arc::new(worker_proxy::WorkerProxyMock::new());
         Self {
             active_workers,
             engine,
@@ -341,6 +353,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             rpc,
             scheduler_service,
             worker_activator,
+            worker_proxy,
             extra_deps: mocked_extra_deps,
         }
     }
@@ -479,6 +492,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasSchedulerService for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerActivator for T {
     fn worker_activator(&self) -> Arc<dyn WorkerActivator + Send + Sync> {
         self.all().worker_activator.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerProxy for T {
+    fn worker_proxy(&self) -> Arc<dyn worker_proxy::WorkerProxy + Send + Sync> {
+        self.all().worker_proxy.clone()
     }
 }
 

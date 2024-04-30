@@ -177,6 +177,13 @@ impl Guest for Component {
         }
         workers
     }
+
+    fn update_worker(worker_id: WorkerId, component_version: ComponentVersion, update_mode: UpdateMode) {
+        println!(
+            "Update worker worker id: {worker_id:?}, component version: {component_version:?}, update mode: {update_mode:?}"
+        );
+        bindings::golem::api::host::update_worker(&worker_id, component_version, update_mode);
+    }
 }
 
 fn remote_call(param: u64) -> bool {

@@ -33,6 +33,7 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tonic::transport::Server;
 use tracing::info;
+use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::{Config, Engine};
 
@@ -55,6 +56,7 @@ use crate::services::worker_enumeration::{
     RunningWorkerEnumerationService, RunningWorkerEnumerationServiceDefault,
     WorkerEnumerationService, WorkerEnumerationServiceInMemory, WorkerEnumerationServiceRedis,
 };
+use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{blob_store, component, key_value, promise, shard_manager, All};
 use crate::workerctx::WorkerCtx;
 
@@ -89,6 +91,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -230,6 +233,15 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             golem_config.scheduler.refresh_interval,
         );
 
+        let worker_proxy: Arc<dyn WorkerProxy + Send + Sync> = Arc::new(RemoteWorkerProxy::new(
+            golem_config.public_worker_api.uri(),
+            golem_config
+                .public_worker_api
+                .access_token
+                .parse::<Uuid>()
+                .expect("Access token must be an UUID"),
+        ));
+
         let services = self
             .create_services(
                 active_workers,
@@ -250,6 +262,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 lazy_worker_activator.clone(),
                 oplog_service,
                 scheduler_service,
+                worker_proxy,
             )
             .await?;
 

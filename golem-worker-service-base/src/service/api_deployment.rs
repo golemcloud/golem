@@ -1,4 +1,6 @@
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSiteString, ApiVersion};
+use crate::api_definition::{
+    ApiDefinitionId, ApiDeployment, ApiSiteString, ApiVersion, HasIsDraft,
+};
 use crate::repo::api_definition_repo::ApiDefinitionRepo;
 use crate::repo::api_deployment_repo::ApiDeploymentRepo;
 use crate::repo::api_namespace::ApiNamespace;
@@ -68,7 +70,7 @@ impl<Namespace, ApiDefinition> ApiDeploymentServiceDefault<Namespace, ApiDefinit
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
+impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentService<Namespace>
     for ApiDeploymentServiceDefault<Namespace, ApiDefinition>
 {
     async fn deploy(
@@ -77,7 +79,7 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         let api_definition_key = deployment.api_definition_id.clone();
 
-        if let Ok(None) = self
+        let definition = self
             .definition_repo
             .get(&api_definition_key)
             .await
@@ -86,13 +88,11 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
                     "Error getting api definition: {}",
                     err
                 ))
-            })
-        {
-            return Err(ApiDeploymentError::ApiDefinitionNotFound(
-                api_definition_key.namespace,
-                api_definition_key.id,
-            ));
-        }
+            })?
+            .ok_or(ApiDeploymentError::ApiDefinitionNotFound(
+                api_definition_key.namespace.clone(),
+                api_definition_key.id.clone(),
+            ))?;
 
         let existing_deployment = self
             .deployment_repo
@@ -116,16 +116,29 @@ impl<Namespace: ApiNamespace, ApiDefinition> ApiDeploymentService<Namespace>
                     &existing_deployment.site,
                 )))
             }
-            _ => self
-                .deployment_repo
-                .deploy(deployment)
-                .await
-                .map_err(|err| {
-                    ApiDeploymentError::InternalError(format!(
-                        "Error deploying api deployment: {}",
-                        err
-                    ))
-                }),
+            _ => {
+                if definition.is_draft() {
+                    self.definition_repo
+                        .set_not_draft(&api_definition_key)
+                        .await
+                        .map_err(|err| {
+                            ApiDeploymentError::<Namespace>::InternalError(format!(
+                                "Error freezing api definition: {}",
+                                err
+                            ))
+                        })?;
+                }
+
+                self.deployment_repo
+                    .deploy(deployment)
+                    .await
+                    .map_err(|err| {
+                        ApiDeploymentError::InternalError(format!(
+                            "Error deploying api deployment: {}",
+                            err
+                        ))
+                    })
+            }
         }
     }
 
