@@ -24,9 +24,7 @@ use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, InvocationKey,
     Timestamp, WorkerFilter, WorkerStatus,
 };
-use golem_service_base::model::{
-    GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
-};
+use golem_service_base::model::{ExportFunction, FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata};
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
     model::{Component, GolemError, GolemErrorInvalidShardId, GolemErrorRuntimeError},
@@ -87,7 +85,7 @@ pub trait WorkerService<AuthCtx> {
         calling_convention: &CallingConvention,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<TypeAnnotatedValue>;
+    ) -> WorkerResult<TypedResult>;
 
     async fn invoke_and_await_function_proto(
         &self,
@@ -158,6 +156,11 @@ pub trait WorkerService<AuthCtx> {
         target_version: ComponentVersion,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
+}
+
+pub struct TypedResult {
+    pub result: TypeAnnotatedValue,
+    pub function_result_types: Vec<FunctionResult>
 }
 
 #[derive(Clone, Debug)]
@@ -445,7 +448,7 @@ where
 
         results_val
             .result
-            .validate_function_result(function_results, *calling_convention)
+            .validate_function_result(function_results, *calling_convention).map(|result| TypedResult { result, function_result_types: function_type.results })
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
     }
 

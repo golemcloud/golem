@@ -6,8 +6,10 @@ use http::StatusCode;
 use poem::Body;
 use serde_json::json;
 use tracing::info;
+use golem_service_base::model::ExportFunction;
 
 use golem_service_base::type_inference::*;
+use crate::service::worker::TypedResult;
 
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::ResponseMapping;
@@ -17,7 +19,7 @@ use crate::worker_bridge_execution::worker_request_executor::{
 use crate::worker_bridge_execution::WorkerRequest;
 
 pub struct WorkerResponse {
-    pub result: TypeAnnotatedValue,
+    pub result: TypedResult,
 }
 
 impl WorkerResponse {
@@ -37,7 +39,7 @@ impl WorkerResponse {
                     ))),
             }
         } else {
-            let json = get_json_from_typed_value(&self.result);
+            let json = get_json_from_typed_value(&self.result.result);
             let body: Body = Body::from_json(json).unwrap();
             poem::Response::builder().body(body)
         }
@@ -61,12 +63,13 @@ impl WorkerResponse {
                 Token::worker().to_string(),
                 TypeAnnotatedValue::Record {
                     typ: response_type.clone(),
-                    value: vec![(response_key.clone(), worker_response_value.clone())],
+                    value: vec![(response_key.clone(), worker_response_value.result.clone())],
                 },
             )],
         }
     }
 }
+
 
 pub struct NoOpWorkerRequestExecutor {}
 
@@ -110,7 +113,11 @@ impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
             get_typed_value_from_json(&sample_json_data, &analysed_type).unwrap();
 
         let worker_response = WorkerResponse {
-            result: type_anntoated_value,
+
+            result: TypedResult {
+                result: type_anntoated_value,
+                function_result_types: vec![],
+            }
         };
 
         Ok(worker_response)
@@ -131,6 +138,23 @@ mod internal {
     use http::{HeaderMap, StatusCode};
     use poem::{Body, ResponseParts};
     use std::collections::HashMap;
+    use golem_service_base::model::FunctionResult;
+
+
+    pub fn resolve_results(result: Vec<FunctionResult>, worker_response: TypeAnnotatedValue) -> Option<TypeAnnotatedValue> {
+        if result.iter().all(|r| r.name.is_none()) && result.len() > 0 {
+            match worker_response {
+               TypeAnnotatedValue::Tuple {typ, value} => {
+                  Some(value[0].clone())
+               },
+
+            } else if result.len() == 0 {
+                None
+            } else {
+                Some(worker_response)
+            }
+        }
+    }
 
     pub(crate) struct IntermediateHttpResponse {
         body: TypeAnnotatedValue,
