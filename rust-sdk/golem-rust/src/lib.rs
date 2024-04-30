@@ -24,8 +24,8 @@ mod transaction;
 use bindings::golem::api::host::*;
 
 pub use bindings::golem::api::host::oplog_commit;
-pub use bindings::golem::api::host::RetryPolicy;
 pub use bindings::golem::api::host::PersistenceLevel;
+pub use bindings::golem::api::host::RetryPolicy;
 
 pub use transaction::*;
 
