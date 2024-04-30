@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::task::JoinHandle;
 use tonic::transport::Body;
-use tracing::{info, instrument};
+use tracing::{debug, instrument};
 use warp::Filter;
 
 struct TestHttpServer {
@@ -22,12 +22,13 @@ struct TestHttpServer {
 
 impl TestHttpServer {
     pub fn start(host_http_port: u16, fail_per_step: u64) -> Self {
-        Self::start_custom(host_http_port, Arc::new(move |_| fail_per_step))
+        Self::start_custom(host_http_port, Arc::new(move |_| fail_per_step), false)
     }
 
     pub fn start_custom(
         host_http_port: u16,
         fail_per_step: Arc<impl Fn(u64) -> u64 + Send + Sync + 'static>,
+        log_steps: bool,
     ) -> Self {
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
@@ -42,8 +43,10 @@ impl TestHttpServer {
                     let mut steps = call_count_per_step.lock().unwrap();
                     let step_count = steps.entry(step).and_modify(|e| *e += 1).or_insert(0);
 
-                    println!("step: {step} occurrence {step_count}");
-                    events_clone.lock().unwrap().push(format!("=> {step}"));
+                    debug!("step: {step} occurrence {step_count}");
+                    if log_steps {
+                        events_clone.lock().unwrap().push(format!("=> {step}"));
+                    }
 
                     match step_count {
                         n if *n < fail_per_step(step) => Response::builder()
@@ -60,8 +63,10 @@ impl TestHttpServer {
                     .and(warp::path::param())
                     .and(warp::delete())
                     .map(move |step: u64| {
-                        println!("step: undo {step}");
-                        events_clone2.lock().unwrap().push(format!("<= {step}"));
+                        debug!("step: undo {step}");
+                        if log_steps {
+                            events_clone2.lock().unwrap().push(format!("<= {step}"));
+                        }
                         Response::builder()
                             .status(StatusCode::OK)
                             .body(Body::from("false"))
@@ -72,7 +77,7 @@ impl TestHttpServer {
                     .and(warp::body::bytes())
                     .map(move |body: Bytes| {
                         let body = String::from_utf8(body.to_vec()).unwrap();
-                        info!("received POST message: {body}");
+                        debug!("received POST message: {body}");
                         events_clone3.lock().unwrap().push(body.clone());
                         Response::builder()
                             .status(StatusCode::OK)
@@ -597,6 +602,7 @@ async fn golem_rust_fallible_transaction() {
             3 => 1, // step 3 returns true once
             _ => 0, // other steps always return false
         }),
+        true,
     );
 
     let component_id = executor.store_component("golem-rust-tests").await;
@@ -650,6 +656,7 @@ async fn golem_rust_infallible_transaction() {
             3 => 1, // step 3 returns true once
             _ => 0, // other steps always return false
         }),
+        true,
     );
 
     let component_id = executor.store_component("golem-rust-tests").await;
