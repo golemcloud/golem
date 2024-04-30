@@ -23,6 +23,7 @@ use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
 
+pub mod component_compilation_service;
 pub mod component_service;
 pub mod k8s;
 pub mod rdb;
