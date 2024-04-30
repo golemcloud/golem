@@ -104,7 +104,7 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
                             #fnname(#(#input_args), *)
                         },
                         |#compensation_pattern| {
-                            #compensate(#compensation, (op_result,), (#(#compensation_args), *)).map_err(|err| err.0)
+                            #compensate(#compensation, (op_result,), (#(#compensation_args), *,)).map_err(|err| err.0)
                         }
                     ),
                     (#(#input_args), *)

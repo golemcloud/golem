@@ -14,7 +14,7 @@
 
 #[allow(unused)]
 #[rustfmt::skip]
-mod bindings;
+pub mod bindings;
 
 #[cfg(feature = "uuid")]
 mod uuid;
@@ -25,6 +25,7 @@ use bindings::golem::api::host::*;
 
 pub use bindings::golem::api::host::oplog_commit;
 pub use bindings::golem::api::host::RetryPolicy;
+pub use bindings::golem::api::host::PersistenceLevel;
 
 pub use transaction::*;
 
