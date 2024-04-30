@@ -197,7 +197,16 @@ impl Tracing {
         let ansi_layer = tracing_subscriber::fmt::layer()
             .with_ansi(true)
             .with_filter(
-                EnvFilter::try_new("debug,cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn,fred=warn").unwrap()
+                EnvFilter::builder()
+                    .with_default_directive("debug".parse().unwrap())
+                    .from_env_lossy()
+                    .add_directive("cranelift_codegen=warn".parse().unwrap())
+                    .add_directive("wasmtime_cranelift=warn".parse().unwrap())
+                    .add_directive("wasmtime_jit=warn".parse().unwrap())
+                    .add_directive("h2=warn".parse().unwrap())
+                    .add_directive("hyper=warn".parse().unwrap())
+                    .add_directive("tower=warn".parse().unwrap())
+                    .add_directive("fred=warn".parse().unwrap()),
             );
 
         tracing_subscriber::registry()
