@@ -4,7 +4,7 @@ use golem_wasm_rpc::json::{get_json_from_typed_value, get_typed_value_from_json}
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::StatusCode;
 use poem::Body;
-use serde_json::json;
+use serde_json::{json, to_string_pretty};
 use tracing::info;
 use golem_service_base::model::ExportFunction;
 
@@ -46,7 +46,7 @@ impl WorkerBridgeResponse {
                         Ok(WorkerBridgeResponse::Unit)
                     }
                 }
-                _ => Err("This can't happen either as we expect from  the worker a tuple always"),
+                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple if results ae unnamed. Obtained {:?}", AnalysedType::from(ty))),
             }
         } else {
             match worker_response  {
@@ -55,9 +55,17 @@ impl WorkerBridgeResponse {
                 }
 
                 // See wasm-rpc implementations for more details
-                _ => Err("This can't happen either as we expect from  the worker a record always when there are named functions."),
+                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Record if results are named. Obtained {:?}", AnalysedType::from(ty))),
             }
         }
+    }
+
+    pub(crate) fn to_http_response(
+        &self,
+        response_mapping: &Option<ResponseMapping>,
+        input_request: &TypeAnnotatedValue,
+    ) -> poem::Response {
+
     }
 }
 
