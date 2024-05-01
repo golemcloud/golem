@@ -1,7 +1,6 @@
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
-use poem_openapi::types::ToJSON;
 
 use crate::expression;
 use crate::primitive::{GetPrimitive, Primitive};
@@ -512,7 +511,6 @@ mod tests {
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, EvaluationResult, Evaluator};
     use crate::expression;
-    use crate::merge::Merge;
     use crate::worker_bridge_execution::{WorkerBridgeResponse, WorkerResponse};
     use test_utils::*;
 
@@ -927,7 +925,7 @@ mod tests {
                     }"#,
         );
 
-        let mut new_resolved_variables_from_request_path =
+        let new_resolved_variables_from_request_path =
             resolved_variables_from_request_path(uri, path_pattern);
 
         let error_response_with_request_variables = new_resolved_variables_from_request_path;
@@ -1577,7 +1575,6 @@ mod tests {
     mod test_utils {
         use crate::api_definition::http::{AllPathPatterns, PathPattern};
         use crate::evaluator::tests::{EvaluatorTestExt, WorkerBridgeExt};
-        use crate::evaluator::Evaluator;
         use crate::expression;
         use crate::http::router::RouterPattern;
         use crate::http::{ApiInputPath, InputHttpRequest};
