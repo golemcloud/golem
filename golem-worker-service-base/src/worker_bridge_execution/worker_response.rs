@@ -155,7 +155,7 @@ impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
 
 mod internal {
     use crate::api_definition::http::HttpResponseMapping;
-    use crate::evaluator::EvaluationError;
+    use crate::evaluator::{EvaluationError, EvaluationResult};
     use crate::evaluator::Evaluator;
     use crate::expression::Expr;
     use crate::merge::Merge;
@@ -172,7 +172,7 @@ mod internal {
 
 
     pub(crate) struct IntermediateHttpResponse {
-        body: TypeAnnotatedValue,
+        body: EvaluationResult,
         status: StatusCode,
         headers: ResolvedResponseHeaders,
     }
@@ -183,21 +183,20 @@ mod internal {
             response_mapping: &ResponseMapping,
             input_request: &TypeAnnotatedValue,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
-            let mut input_request = input_request.clone();
-            let type_annotated_value =
-                worker_response.result_with_worker_response_key().map_or(&input_request, |v| input_request.merge(&v));
+            let mut type_annotated_value = input_request.clone();
 
             let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
                 .map_err(EvaluationError::Message)?;
 
-            let status_code = get_status_code(&http_response_mapping.status, type_annotated_value)?;
+            let status_code = get_status_code(&http_response_mapping.status, &type_annotated_value)?;
 
             let headers = ResolvedResponseHeaders::from(
                 &http_response_mapping.headers,
-                type_annotated_value,
+                &type_annotated_value,
             )?;
 
-            let response_body = http_response_mapping.body.evaluate(type_annotated_value)?;
+            let response_body =
+                http_response_mapping.body.evaluate(&type_annotated_value, Some(worker_response))?;
 
             Ok(IntermediateHttpResponse {
                 body: response_body,
@@ -211,7 +210,7 @@ mod internal {
                 .map_err(|e: hyper::http::Error| e.to_string());
 
             let status = &self.status;
-            let body = &self.body;
+            let eval_result = &self.body;
 
             match headers {
                 Ok(response_headers) => {
@@ -221,8 +220,15 @@ mod internal {
                         headers: response_headers,
                         extensions: Default::default(),
                     };
-                    let body: Body = Body::from_json(get_json_from_typed_value(body)).unwrap();
-                    poem::Response::from_parts(parts, body)
+
+                    match eval_result {
+                        EvaluationResult::Value(value) => {
+                            let json = get_json_from_typed_value(value);
+                            let body: Body = Body::from_json(json).unwrap();
+                            poem::Response::from_parts(parts, body)
+                        }
+                        EvaluationResult::Unit => poem::Response::from_parts(parts, Body::empty()),
+                    }
                 }
                 Err(err) => poem::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -238,7 +244,7 @@ mod internal {
         status_expr: &Expr,
         resolved_variables: &TypeAnnotatedValue,
     ) -> Result<StatusCode, EvaluationError> {
-        let status_value = status_expr.evaluate(resolved_variables)?;
+        let status_value = status_expr.evaluate(resolved_variables, None)?;
         let status_res: Result<u16, EvaluationError> =
             match status_value.get_primitive() {
                 Some(Primitive::String(status_str)) => status_str.parse().map_err(|e| {
