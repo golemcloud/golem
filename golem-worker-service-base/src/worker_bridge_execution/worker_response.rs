@@ -31,13 +31,13 @@ impl WorkerBridgeResponse {
         let result = &worker_response.result.result;
         let function_result_types = &worker_response.result.function_result_types;
 
-        if function_result_types.iter().all(|r| r.name.is_none()) && function_result_types.len() > 0
+        if function_result_types.iter().all(|r| r.name.is_none()) && !function_result_types.is_empty()
         {
             match result {
                 TypeAnnotatedValue::Tuple { value, .. } => {
                     if value.len() == 1 {
                         Ok(WorkerBridgeResponse::SingleResult(value[0].clone()))
-                    } else if value.len() == 0 {
+                    } else if value.is_empty() {
                         Ok(WorkerBridgeResponse::Unit)
                     } else {
                         Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple with 1 element if results are unnamed. Obtained {:?}", AnalysedType::from(result)))

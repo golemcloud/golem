@@ -42,10 +42,7 @@ impl EvaluationResult {
     }
 
     pub fn is_unit(&self) -> bool {
-        match self {
-            EvaluationResult::Unit => true,
-            _ => false,
-        }
+        matches!(self, EvaluationResult::Unit)
     }
 
     pub fn get_value(&self) -> Option<TypeAnnotatedValue> {
