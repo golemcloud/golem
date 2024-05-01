@@ -1,6 +1,7 @@
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
+use poem_openapi::types::ToJSON;
 
 use crate::expression;
 use crate::primitive::{GetPrimitive, Primitive};
@@ -27,7 +28,7 @@ pub trait Evaluator {
     ) -> Result<EvaluationResult, EvaluationError>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EvaluationResult {
     Value(TypeAnnotatedValue),
     Unit,
@@ -70,9 +71,9 @@ pub enum EvaluationError {
     Message(String),
 }
 
-impl From<String> for EvaluationError {
-    fn from(value: String) -> Self {
-        EvaluationError::Message(value)
+impl<T : AsRef<str>> From<T> for EvaluationError {
+    fn from(value: T) -> Self {
+        EvaluationError::Message(value.as_ref().to_string())
     }
 }
 
@@ -508,7 +509,7 @@ mod tests {
 
     use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::getter::GetError;
-    use crate::evaluator::{EvaluationError, Evaluator};
+    use crate::evaluator::{EvaluationError, EvaluationResult, Evaluator};
     use crate::expression;
     use crate::merge::Merge;
     use crate::worker_bridge_execution::{WorkerBridgeResponse, WorkerResponse};
@@ -941,9 +942,9 @@ mod tests {
         assert_eq!(
             (result1, result2, result3),
             (
-                Ok(TypeAnnotatedValue::Str("bar".to_string())),
-                Ok(TypeAnnotatedValue::Str("baz".to_string())),
-                Ok(TypeAnnotatedValue::Str("empty".to_string()))
+                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str("bar".to_string()))),
+                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str("baz".to_string()))),
+                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str("empty".to_string())))
             )
         );
     }
@@ -1375,7 +1376,7 @@ mod tests {
         )
         .unwrap();
         let result =
-            expr.evaluate_worker_bridge_response(&worker_response.to_test_worker_bridge_response());
+            expr.evaluate_worker_bridge_response(&worker_response);
 
         let expected = TypeAnnotatedValue::Str("not found".to_string());
 
