@@ -965,6 +965,7 @@ mod tests {
             "${match worker_response { ok(value) => 'personal-id', err(msg) => 'not found' }}",
         )
         .unwrap();
+
         let result = expr.evaluate_worker_bridge_response(&worker_response);
         assert_eq!(
             result,
