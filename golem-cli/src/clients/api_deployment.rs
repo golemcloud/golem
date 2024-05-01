@@ -52,7 +52,12 @@ impl<C: golem_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClien
         host: &str,
         subdomain: Option<String>,
     ) -> Result<ApiDeployment, GolemError> {
-        info!("Deploying definition {api_definition_id}/{version}, host {host} {}", subdomain.clone().map_or("".to_string(), |s| format!("subdomain {}", s)));
+        info!(
+            "Deploying definition {api_definition_id}/{version}, host {host} {}",
+            subdomain
+                .clone()
+                .map_or("".to_string(), |s| format!("subdomain {}", s))
+        );
 
         let deployment = ApiDeployment {
             api_definition_id: api_definition_id.0.to_string(),

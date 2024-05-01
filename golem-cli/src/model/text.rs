@@ -2,7 +2,9 @@ use crate::model::component::ComponentView;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::{ExampleDescription, InvocationKey};
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
-use golem_client::model::{ApiDeployment, HttpApiDefinition, Route, WorkerId, WorkerMetadata, WorkersMetadataResponse};
+use golem_client::model::{
+    ApiDeployment, HttpApiDefinition, Route, WorkerId, WorkerMetadata, WorkersMetadataResponse,
+};
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier};
 use indoc::{eprintdoc, printdoc};
 use itertools::Itertools;
@@ -388,7 +390,6 @@ impl TextFormat for ApiDeployment {
         );
     }
 }
-
 
 #[derive(Table)]
 struct ApiDeploymentView {
