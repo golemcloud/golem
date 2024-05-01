@@ -29,9 +29,9 @@ pub(crate) fn evaluate_pattern_match(
     match_expr: &Expr,
     arms: &Vec<MatchArm>,
     input: &mut TypeAnnotatedValue,
-    worker_bridge_response: &Option<WorkerBridgeResponse>,
+    worker_bridge_response: Option<&WorkerBridgeResponse>,
 ) -> Result<EvaluationResult, EvaluationError> {
-    let match_evaluated = match_expr.evaluate(input, worker_bridge_response.as_ref())?;
+    let match_evaluated = match_expr.evaluate(input, worker_bridge_response)?;
 
     let mut resolved: Option<EvaluationResult> = None;
 

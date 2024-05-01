@@ -132,7 +132,7 @@ impl Evaluator for Expr {
         fn go(
             expr: &Expr,
             input: &mut TypeAnnotatedValue,
-            worker_response: &Option<WorkerBridgeResponse>
+            worker_response: Option<&WorkerBridgeResponse>
         ) -> Result<EvaluationResult, EvaluationError> {
             match expr {
                 Expr::Request() => input
@@ -210,7 +210,7 @@ impl Evaluator for Expr {
                 }
 
                 Expr::Not(expr) => {
-                    let evaluated_expr = expr.evaluate(input, worker_response.as_ref())?;
+                    let evaluated_expr = expr.evaluate(input, worker_response)?;
 
                     match evaluated_expr {
                         EvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => Ok(TypeAnnotatedValue::Bool(!value)),
@@ -378,10 +378,10 @@ impl Evaluator for Expr {
 
                         if let Some(value) = expr_result.get_value() {
                             let analysed_type = AnalysedType::from(&value);
-                            Ok(EvaluationResult::Value(TypeAnnotatedValue::Option {
+                            Ok(TypeAnnotatedValue::Option {
                                 value: Some(Box::new(value)),
                                 typ: analysed_type,
-                            }))
+                            }.into())
                         } else {
                             Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a option", expression::to_string(expr).unwrap())))
                         }
@@ -404,20 +404,25 @@ impl Evaluator for Expr {
                                 value: Ok(Some(Box::new(value))),
                                 ok: Some(Box::new(analysed_type)),
                                 error: None,
-                            })
+                            }.into())
                         } else {
                             Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a result", expression::to_string(expr).unwrap())))
                         }
                     }
                     Err(expr) => {
-                        let value = go(expr, input)?;
-                        let analysed_type = AnalysedType::from(&value);
+                        let eval_result = go(expr, input, worker_response)?;
 
-                        Ok(TypeAnnotatedValue::Result {
-                            value: Err(Some(Box::new(value))),
-                            ok: None,
-                            error: Some(Box::new(analysed_type)),
-                        })
+                        if let Some(value) = eval_result.get_value() {
+                            let analysed_type = AnalysedType::from(&value);
+
+                            Ok(TypeAnnotatedValue::Result {
+                                value: Err(Some(Box::new(value))),
+                                ok: None,
+                                error: Some(Box::new(analysed_type)),
+                            }.into())
+                        } else {
+                            Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a result", expression::to_string(expr).unwrap())))
+                        }
                     }
                 },
 
@@ -425,8 +430,13 @@ impl Evaluator for Expr {
                     let mut result: Vec<TypeAnnotatedValue> = vec![];
 
                     for expr in tuple_exprs {
-                        let type_annotated_value = go(expr, input)?;
-                        result.push(type_annotated_value);
+                        let eval_result = go(expr, input, worker_response)?;
+
+                        if let Some(value) = eval_result.get_value() {
+                            result.push(value);
+                        } else {
+                            return Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a tuple", expression::to_string(expr).unwrap())));
+                        }
                     }
 
                     let typ: &Vec<AnalysedType> = &result.iter().map(AnalysedType::from).collect();
@@ -434,7 +444,7 @@ impl Evaluator for Expr {
                     Ok(TypeAnnotatedValue::Tuple {
                         value: result,
                         typ: typ.clone(),
-                    })
+                    }.into())
                 }
 
                 Expr::Flags(flags) => Ok(TypeAnnotatedValue::Flags {
@@ -445,7 +455,7 @@ impl Evaluator for Expr {
         }
 
         let mut input = input.clone();
-        go(expr, &mut input)
+        go(expr, &mut input, worker_response)
     }
 }
 
@@ -467,6 +477,23 @@ mod tests {
     use crate::merge::Merge;
     use crate::worker_bridge_execution::WorkerResponse;
     use test_utils::*;
+
+    trait EvaluatorExt {
+      fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
+      fn evaluate_worker_bridge_response(&self, worker_bridge_response: &WorkerResponse) -> Result<TypeAnnotatedValue, EvaluationError>;
+    }
+
+    impl<T : Evaluator> EvaluatorExt for T {
+        fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
+            let eval_result = self.evaluate(input, None)?;
+            Ok(eval_result.get_value().ok_or("The expression is evaluated to unit and doesn't have a value")?)
+        }
+
+        fn evaluate_worker_bridge_response(&self, worker_bridge_response: &WorkerResponse) -> Result<TypeAnnotatedValue, EvaluationError> {
+            let eval_result = self.evaluate_worker_bridge_response(worker_bridge_response)?;
+            Ok(eval_result.get_value().ok_or("The expression is evaluated to unit and doesn't have a value")?)
+        }
+    }
 
     #[test]
     fn test_evaluation_with_request_path() {
@@ -753,15 +780,13 @@ mod tests {
         let result_as_typed_value =
             get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type)))
                 .unwrap();
-        let worker_response = WorkerResponse {
-            result: result_as_typed_value,
-        };
+        let worker_response = WorkerResponse::new(result_as_typed_value, vec![]);
 
         let expr = expression::from_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result = expr.evaluate_worker_bridge_response(&&worker_response);
         assert_eq!(
             result,
             Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
@@ -1127,8 +1152,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_variant_positive() {
-        let worker_response = WorkerResponse {
-            result: TypeAnnotatedValue::Variant {
+        let worker_response = WorkerResponse::new(
+            TypeAnnotatedValue::Variant {
                 case_name: "Foo".to_string(),
                 case_value: Some(Box::new(TypeAnnotatedValue::Record {
                     typ: vec![("id".to_string(), AnalysedType::Str)],
@@ -1141,8 +1166,7 @@ mod tests {
                         AnalysedType::Str,
                     )])),
                 )],
-            },
-        };
+            }, vec![]);
 
         let expr =
             expression::from_string("${match worker.response { Foo(value) => ok(value.id) }}")
