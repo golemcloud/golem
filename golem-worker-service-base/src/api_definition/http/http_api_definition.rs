@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn expr_worker_response() {
-        test_string_expr_parse_and_encode("${worker.response}");
+        test_string_expr_parse_and_encode("${worker_response}");
     }
 
     // TODO; Avoid having to pass null to fix tests
@@ -495,28 +495,28 @@ mod tests {
             "foo/{user-id}?{id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.body}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "{status: if (worker_response.user == admin) then 401 else 200}",
         );
 
         test_serde(
             "foo/{user-id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.body.foo}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "{status: if (worker_response.user == admin) then 401 else 200}",
         );
 
         test_serde(
             "foo/{user-id}",
             "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
             "[\"${request.path.user-id}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "{status: if (worker_response.user == admin) then 401 else 200}",
         );
 
         test_serde(
             "foo",
             "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
             "[ \"data\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "{status: if (worker_response.user == admin) then 401 else 200}",
         );
     }
 
@@ -589,7 +589,7 @@ mod tests {
 
         test_encode_decode(
             "foo",
-            "match worker.response { ok(value) => 1, error => 0 }",
+            "match worker_response { ok(value) => 1, error => 0 }",
             "[ \"data\"]",
             "{status : 200}",
         );

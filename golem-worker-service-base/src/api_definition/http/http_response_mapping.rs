@@ -199,7 +199,7 @@ mod tests {
             vec![
                 (
                     "body".to_string(),
-                    Box::new(Expr::Variable("worker.response".to_string())),
+                    Box::new(Expr::Variable("worker_response".to_string())),
                 ),
                 (
                     "status".to_string(),
