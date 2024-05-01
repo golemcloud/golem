@@ -168,12 +168,10 @@ impl Evaluator for Expr {
                     let evaluation_result = go(expr, input, worker_response)?;
                     evaluation_result
                         .get_value()
-                        .ok_or(
-                            EvaluationError::Message(format!(
-                                "The expression is evaluated to unit and doesn't have an index {}",
-                                index
-                            )),
-                        )?
+                        .ok_or(EvaluationError::Message(format!(
+                            "The expression is evaluated to unit and doesn't have an index {}",
+                            index
+                        )))?
                         .get(&Path::from_index(*index))
                         .map(|r| r.into())
                         .map_err(|err| err.into())

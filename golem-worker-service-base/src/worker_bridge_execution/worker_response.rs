@@ -4,16 +4,16 @@ use golem_wasm_rpc::json::{get_json_from_typed_value, get_typed_value_from_json}
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::StatusCode;
 use poem::Body;
-use serde_json::{json};
+use serde_json::json;
 use tracing::info;
 
 use crate::service::worker::TypedResult;
-use golem_service_base::type_inference::*;
 use crate::worker_binding::ResponseMapping;
 use crate::worker_bridge_execution::worker_request_executor::{
     WorkerRequestExecutor, WorkerRequestExecutorError,
 };
 use crate::worker_bridge_execution::{WorkerRequest, WorkerResponse};
+use golem_service_base::type_inference::*;
 
 // Worker Bridge response is different from WorkerResponse, because,
 // it ensures that we are not returing a vector of result if they are not named results
@@ -31,10 +31,7 @@ impl WorkerBridgeResponse {
         let result = &worker_response.result.result;
         let function_result_types = &worker_response.result.function_result_types;
 
-        if function_result_types
-            .iter()
-            .all(|r| r.name.is_none())
-            && function_result_types.len() > 0
+        if function_result_types.iter().all(|r| r.name.is_none()) && function_result_types.len() > 0
         {
             match result {
                 TypeAnnotatedValue::Tuple { value, .. } => {
@@ -79,7 +76,7 @@ impl WorkerBridgeResponse {
             let type_annotated_value = match self {
                 WorkerBridgeResponse::Unit => None,
                 WorkerBridgeResponse::SingleResult(value) => Some(value.clone()),
-                WorkerBridgeResponse::MultipleResults(results) => Some(results.clone())
+                WorkerBridgeResponse::MultipleResults(results) => Some(results.clone()),
             };
 
             match type_annotated_value {

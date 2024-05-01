@@ -25,8 +25,7 @@ use golem_common::model::{
     Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
-    FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId,
-    WorkerMetadata,
+    FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
 };
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
