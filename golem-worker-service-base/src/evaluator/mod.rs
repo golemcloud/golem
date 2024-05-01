@@ -822,7 +822,7 @@ mod tests {
 
         let expr = expression::from_string("${worker_response.address.street}").unwrap();
         let result = expr.evaluate_input(&resolved_variables);
-        assert_eq!(result.is_err(), true);
+        assert!(result.is_err());
     }
 
     #[test]
