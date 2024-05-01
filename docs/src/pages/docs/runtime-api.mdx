@@ -1,4 +1,4 @@
-import { Card, Cards } from "nextra/components"
+import { Callout, Card, Cards } from "nextra/components"
 
 # Runtime API
 
@@ -13,6 +13,14 @@ The entire host interface is available at https://github.com/golemcloud/golem-wi
 To use it in your program include the content of `wit/deps` from `golem-wit` in your the `wit/deps` folder in your project. Then in your `wit` file you can import it as `import golem:api/host`.
 
 This will allow you to call the Golem Runtime API from whatever language you are using. For instance, to use the Golem Runtime API in Rust, you would just add `use golem::api::host::*` to your imports.
+
+<Callout>
+  For **Rust** we also have a library called [golem-rust](https://crates.io/crates/golem-rust) that
+  provides a set of higher level idiomatic Rust wrappers for Golem specific functionality, as well
+  as exporting bindings for both the official WASI interfaces and Golem's runtime API. When using
+  this library it is not necessary to manually add the `wit/deps` folder from `golem-wit` to your
+  project.
+</Callout>
 
 <Cards>
   <Card title="Key Value API" href="/docs/runtime-api/key-value-api" />

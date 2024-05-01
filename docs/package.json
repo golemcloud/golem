@@ -8,7 +8,7 @@
     "build": "lefthook run pre-build && next build",
     "start": "next start",
     "lint": "next lint",
-    "fix": "next lint --fix . && prettier --log-level silent --write .",
+    "fix": "next lint --fix . && prettier --log-level silent --write ./src",
     "generateLocal": "bun run openapi/gen-openapi.ts --local && bun run fix",
     "generateDev": "bun run openapi/gen-openapi.ts --dev && bun run fix",
     "generateProd": "bun run openapi/gen-openapi.ts --prod && bun run fix"

@@ -14,10 +14,13 @@
   "console": {
     "title": "Management Console"
   },
-  "promises": "Promises",
+  "updating-components": "Updating components",
   "rpc": "Worker to Worker communication",
   "transaction-api": "Transactions",
+  "promises": "Promises",
+  "worker-bridge": "Worker Bridge",
   "component-interface": "Component Interface",
+  "rib": "Rib",
   "faq": "FAQ",
   "technical-details": "Technical details",
   "release-notes": "Release Notes",

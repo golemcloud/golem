@@ -3048,6 +3048,82 @@ paths:
       - Cookie: []
       - Token: []
       operationId: resume_worker
+  /v2/components/{component_id}/workers/{worker_name}/update:
+    post:
+      tags:
+      - Worker
+      summary: Update a worker
+      operationId: update_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/UpdateWorkerRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UpdateWorkerResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+      security:
+      - Cookie: []
+      - Token: [] 
 components:
   schemas:
     Account:
@@ -4100,6 +4176,19 @@ components:
         targetVersion:
           type: integer
           format: uint64
+    UpdateWorkerRequest:
+      type: object
+      properties:
+        mode:
+          $ref: '#/components/schemas/WorkerUpdateMode'
+        targetVersion:
+          type: integer
+          format: uint64
+      required:
+      - mode
+      - targetVersion
+    UpdateWorkerResponse:
+      type: object
     Token:
       type: object
       required:
@@ -4630,12 +4719,12 @@ components:
     WorkerCreationResponse:
       type: object
       required:
-      - worker_id
-      - component_version
+        - workerId
+        - componentVersion
       properties:
-        worker_id:
-          $ref: '#/components/schemas/WorkerId'
-        component_version:
+        workerId:
+          $ref: "#/components/schemas/WorkerId"
+        componentVersion:
           type: integer
           format: uint64
     WorkerEnvFilter:
@@ -4861,6 +4950,11 @@ components:
           $ref: '#/components/schemas/FilterComparator'
         value:
           $ref: '#/components/schemas/WorkerStatus'
+    WorkerUpdateMode:
+      type: string
+      enum:
+      - Automatic
+      - Manual
     WorkerVersionFilter:
       type: object
       required:

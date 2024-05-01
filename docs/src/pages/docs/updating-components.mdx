@@ -1,0 +1,91 @@
+# Updating components
+
+Golem componenents are versioned, and a new version of a component (a new WASM file) can be uploaded any time. The updated component can be referred to with the same _component ID_ and _component name_.
+
+New workers will be created with the latest version of the component. Existing workers will continue to use the version they were created with.
+
+Golem's **hot update feature** provides ways to update **existing workers** to use a new (or even an older) version of their components without loosing their state.
+
+The hot update feature is available through the Golem REST API, using `golem-cli`, and through the Golem Runtime API to trigger it from Golem workers.
+
+In all the above methods, the update requires three parameters:
+
+- The _worker ID_ identifying the worker to be updated
+- The _target version_
+- The _update mode_ - see blow
+
+The update is always asynchronous, and to observe its result the worker metadata API can be used to poll the worker's status.
+
+## Automatic update
+
+The automatic update mode has no further requirements towards the worker, but it is not guaranteed to work in all cases. The worker will be updated as soon as possible, potentially interrupting an on-going invocation. If the update is not possible because the change is too big, the worker failed update attempt is recorded in the worker's metadata, and the worker continues to run the old version.
+
+## Manual snapshot-based update
+
+To support state transfer between arbitrary versions of a component, the manual update mode requires the old component to implement a `save-snapshot` function, and the new component to implement a `load-snapshot` function. The snapshot is an array of bytes and it is the responsible of the user to ensure that the snapshot is compatible between the two versions.
+
+When triggering a manual update for a worker, the update will be performed only after the active invocation has finished, if there is any. This is a limitation because the `save-snapshot` function needs to be called on the worker which is not possible while the worker is busy.
+
+There are two _interfaces_ defined in the `golem:api@0.2.0` WIT package the components must implement for this feature:
+
+```rust
+/// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
+/// when the new component incompatible with the old one.
+interface save-snapshot {
+  /// Saves the component's state into a user-defined snapshot
+  save: func() -> list<u8>;
+}
+
+/// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
+/// when the new component incompatible with the old one.
+interface load-snapshot {
+  /// Tries to load a user-defined snapshot, setting up the worker's state based on it.
+  /// The function can return with a failure to indicate that the update is not possible.
+  load: func(bytes: list<u8>) -> result<_, string>;
+}
+```
+
+To use them, **export** them from your component's `world`:
+
+```rust
+world my-component {
+  export golem:api/save-snapshot@0.2.0;
+  export golem:api/load-snapshot@0.2.0;
+
+  export api; // user-defined exported api
+  // ...
+}
+```
+
+The following is an example of how to implement these functions in Rust (using the `bytes` crate - for real world scenarios any preferred serialization format can be used):
+
+```rust
+struct State {
+    last: u64,
+}
+
+thread_local! {
+    static STATE: RefCell<State> = RefCell::new(State { last: 0 });
+}
+
+impl save_snapshot::Guest for Component {
+    fn save() -> Vec<u8> {
+        let mut result = Vec::new();
+        result.put_u64(STATE.with_borrow(|state| state.last));
+        result
+    }
+}
+
+impl load_snapshot::Guest for Component {
+    fn load(bytes: Vec<u8>) -> Result<(), String> {
+        if bytes.len() >= 8 {
+            STATE.with_borrow_mut(|state| {
+                state.last = Bytes::from(bytes).get_u64();
+            });
+            Ok(())
+        } else {
+            Err("Invalid snapshot - not enough bytes to read u64".to_string())
+        }
+    }
+}
+```

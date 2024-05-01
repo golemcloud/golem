@@ -129,21 +129,17 @@ struct State {
     items: Vec<ProductItem>,
 }
 
-static mut STATE: State = State {
-    user_id: String::new(),
-    items: vec![],
-};
-
-fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
-    let result = unsafe { f(&mut STATE) };
-
-    return result;
+thread_local! {
+    static STATE: RefCell<State> = RefCell::new(State {
+        user_id: String::new(),
+        items: vec![],
+    });
 }
 
 // ...
 
 fn add_item(item: ProductItem) {
-        with_state(|state| {
+        STATE.with_borrow_mut(|state| {
             println!(
                 "Adding item {:?} to the cart of user {}",
                 item, state.user_id
@@ -179,6 +175,23 @@ import wasi:http/types@0.2.0;
 import wasi:http/outgoing-handler@0.2.0;
 ```
 
+Alternatively you can depend on the `golem-rust` library (see below) which already imports all the WASI interfaces and exports the generated bindings for you.
+
+### Golem Rust Library
+
+The [golem-rust](https://crates.io/crates/golem-rust) library provides a set of higher level idiomatic Rust wrappers for Golem specific functionality, as well as exporting bindings for the official WASI interfaces.
+
+Using this library is optional when building Golem components in Rust, but it provides a nicer experience than doing everything manually.
+
+To use it, add the following dependency to your component's `Cargo.toml`:
+
+```toml
+[dependencies]
+golem-rust = "0.2.2"
+```
+
+See the [Transaction API](/docs/transaction-api) page for more information about what this library provides.
+
 ### HTTP
 
 Golem implements the WASI-HTTP interface so any library built on that could be used from Golem components to communicate with external services.
@@ -189,7 +202,7 @@ To use it, just add the following dependency to your component's `Cargo.toml`:
 
 ```toml
 [dependencies]
-reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-feb-2024", features = ["json"] }
+reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-apr-2024", features = ["json"] }
 ```
 
 There is no need to manually add the WASI-HTTP interfaces to your `wit/deps` folder.

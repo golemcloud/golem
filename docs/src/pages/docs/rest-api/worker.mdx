@@ -37,7 +37,7 @@ The parameters in the request are the following:
     "componentId": "196100ac-4eec-4fb6-a7f7-86c8b584771d",
     "workerName": "string"
   },
-  "componentVersionUsed": 0
+  "componentVersion": 0
 }
 ```
 
@@ -94,7 +94,17 @@ Returns metadata about an existing component workers:
       },
       "status": "Running",
       "componentVersion": 0,
-      "retryCount": 0
+      "retryCount": 0,
+      "pendingInvocationCount": 0,
+      "updates": [
+        {
+          "type": "pendingUpdate",
+          "timestamp": "2019-08-24T14:15:22Z",
+          "targetVersion": 0
+        }
+      ],
+      "createdAt": "2019-08-24T14:15:22Z",
+      "lastError": "string"
     }
   ],
   "cursor": 0
@@ -154,7 +164,17 @@ Returns metadata about an existing worker:
   },
   "status": "Running",
   "componentVersion": 0,
-  "retryCount": 0
+  "retryCount": 0,
+  "pendingInvocationCount": 0,
+  "updates": [
+    {
+      "type": "pendingUpdate",
+      "timestamp": "2019-08-24T14:15:22Z",
+      "targetVersion": 0
+    }
+  ],
+  "createdAt": "2019-08-24T14:15:22Z",
+  "lastError": "string"
 }
 ```
 
@@ -346,7 +366,17 @@ Returns metadata about an existing component workers:
       },
       "status": "Running",
       "componentVersion": 0,
-      "retryCount": 0
+      "retryCount": 0,
+      "pendingInvocationCount": 0,
+      "updates": [
+        {
+          "type": "pendingUpdate",
+          "timestamp": "2019-08-24T14:15:22Z",
+          "targetVersion": 0
+        }
+      ],
+      "createdAt": "2019-08-24T14:15:22Z",
+      "lastError": "string"
     }
   ],
   "cursor": 0
@@ -358,6 +388,27 @@ Returns metadata about an existing component workers:
 | Path                                                         | Method | Protected |
 | ------------------------------------------------------------ | ------ | --------- |
 | `/v2/components/{component_id}/workers/{worker_name}/resume` | POST   | Yes       |
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Update a worker
+
+| Path                                                         | Method | Protected |
+| ------------------------------------------------------------ | ------ | --------- |
+| `/v2/components/{component_id}/workers/{worker_name}/update` | POST   | Yes       |
+
+**Example Request JSON**
+
+```json copy
+{
+  "mode": "Automatic",
+  "targetVersion": 0
+}
+```
 
 **Example Response JSON**
 
