@@ -22,6 +22,7 @@ pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinition, String>
         id: api_definition_id,
         version: api_definition_version,
         routes,
+        draft: true,
     })
 }
 

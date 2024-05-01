@@ -97,6 +97,18 @@ fn api_deployment_deploy(
     assert_eq!(deployment.api_definition_id, definition.id);
     assert_eq!(deployment.version, definition.version);
 
+    let updated_def: HttpApiDefinition = cli.run(&[
+        "api-definition",
+        "get",
+        &cfg.arg('i', "id"),
+        &deployment.api_definition_id,
+        &cfg.arg('V', "version"),
+        &deployment.version,
+    ])?;
+
+    assert!(definition.draft);
+    assert!(!updated_def.draft, "deploy makes definition immutable");
+
     Ok(())
 }
 

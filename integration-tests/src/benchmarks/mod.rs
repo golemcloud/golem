@@ -43,21 +43,22 @@ pub fn get_worker_ids(size: usize, component_id: &ComponentId, prefix: &str) -> 
 pub async fn setup_with(
     size: usize,
     component_name: &str,
+    worker_name_prefix: &str,
     start_workers: bool,
     deps: CliTestDependencies,
-) -> Context {
+) -> Vec<WorkerId> {
     // Initialize infrastructure
 
     // Upload test component
     let component_id = deps.store_component(component_name).await;
     // Create 'size' workers
-    let worker_ids = get_worker_ids(size, &component_id, "worker");
+    let worker_ids = get_worker_ids(size, &component_id, worker_name_prefix);
 
     if start_workers {
         start(worker_ids.clone(), deps.clone()).await
     }
 
-    Context { deps, worker_ids }
+    worker_ids
 }
 
 pub async fn start(worker_ids: Vec<WorkerId>, deps: CliTestDependencies) {
@@ -72,13 +73,16 @@ pub async fn setup(config: CliParams, component_name: &str, start_workers: bool)
     // Initialize infrastructure
     let deps = CliTestDependencies::new(config.clone()).await;
 
-    setup_with(
+    let worker_ids = setup_with(
         config.benchmark_config.size,
         component_name,
+        "worker",
         start_workers,
-        deps,
+        deps.clone(),
     )
-    .await
+    .await;
+
+    Context { deps, worker_ids }
 }
 
 pub async fn warmup_echo(context: &Context) {

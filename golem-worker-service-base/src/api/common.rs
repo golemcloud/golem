@@ -103,6 +103,7 @@ mod conversion {
                     ApiRegistrationRepoError::AlreadyExists(_) => {
                         ApiEndpointError::already_exists(error)
                     }
+                    ApiRegistrationRepoError::NotDraft(_) => ApiEndpointError::bad_request(error),
                     ApiRegistrationRepoError::NotFound(_) => ApiEndpointError::not_found(error),
                     ApiRegistrationRepoError::Internal(_) => ApiEndpointError::internal(error),
                 },
@@ -172,6 +173,11 @@ mod conversion {
                     },
                     ApiRegistrationRepoError::NotFound(_) => ApiDefinitionError {
                         error: Some(api_definition_error::Error::NotFound(ErrorBody {
+                            error: error.to_string(),
+                        })),
+                    },
+                    ApiRegistrationRepoError::NotDraft(_) => ApiDefinitionError {
+                        error: Some(api_definition_error::Error::NotDraft(ErrorBody {
                             error: error.to_string(),
                         })),
                     },
