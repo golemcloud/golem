@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use golem_service_base::model::ExportFunction;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::{get_json_from_typed_value, get_typed_value_from_json};
 use golem_wasm_rpc::TypeAnnotatedValue;
@@ -6,10 +7,9 @@ use http::StatusCode;
 use poem::Body;
 use serde_json::{json, to_string_pretty};
 use tracing::info;
-use golem_service_base::model::ExportFunction;
 
-use golem_service_base::type_inference::*;
 use crate::service::worker::TypedResult;
+use golem_service_base::type_inference::*;
 
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::ResponseMapping;
@@ -28,10 +28,18 @@ pub enum WorkerBridgeResponse {
 }
 
 impl WorkerBridgeResponse {
-    pub(crate) fn from_worker_response(worker_response: &WorkerResponse) -> Result<WorkerBridgeResponse, String> {
+    pub(crate) fn from_worker_response(
+        worker_response: &WorkerResponse,
+    ) -> Result<WorkerBridgeResponse, String> {
         let result = &worker_response.result.result;
 
-        if worker_response.result.function_result_types.iter().all(|r| r.name.is_none()) && result.len() > 0 {
+        if worker_response
+            .result
+            .function_result_types
+            .iter()
+            .all(|r| r.name.is_none())
+            && result.len() > 0
+        {
             match result {
                 TypeAnnotatedValue::Tuple { value, .. } => {
                     if value.len() == 1 {
@@ -71,7 +79,7 @@ impl WorkerBridgeResponse {
             }
         } else {
             let type_annotated_value = match self {
-                WorkerBridgeResponse::Unit =>  None,
+                WorkerBridgeResponse::Unit => None,
                 WorkerBridgeResponse::SingleResult(value) => Some(value.clone()),
                 WorkerBridgeResponse::MultipleResults(results) => {
                     let mut record = vec![];
@@ -91,11 +99,8 @@ impl WorkerBridgeResponse {
                     let body: Body = Body::from_json(json).unwrap();
                     poem::Response::builder().body(body)
                 }
-                None =>{
-                    poem::Response::builder().status(StatusCode::OK)
-                }
+                None => poem::Response::builder().status(StatusCode::OK),
             }
-
         }
     }
 }
@@ -142,11 +147,10 @@ impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
             get_typed_value_from_json(&sample_json_data, &analysed_type).unwrap();
 
         let worker_response = WorkerResponse {
-
             result: TypedResult {
                 result: type_anntoated_value,
                 function_result_types: vec![],
-            }
+            },
         };
 
         Ok(worker_response)
@@ -155,21 +159,19 @@ impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
 
 mod internal {
     use crate::api_definition::http::HttpResponseMapping;
-    use crate::evaluator::{EvaluationError, EvaluationResult};
     use crate::evaluator::Evaluator;
+    use crate::evaluator::{EvaluationError, EvaluationResult};
     use crate::expression::Expr;
     use crate::merge::Merge;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::ResponseMapping;
+    use crate::worker_bridge_execution::worker_response::WorkerBridgeResponse;
+    use golem_service_base::model::FunctionResult;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, StatusCode};
     use poem::{Body, ResponseParts};
     use std::collections::HashMap;
-    use golem_service_base::model::FunctionResult;
-    use crate::worker_bridge_execution::worker_response::WorkerBridgeResponse;
-
-
 
     pub(crate) struct IntermediateHttpResponse {
         body: EvaluationResult,
@@ -188,15 +190,17 @@ mod internal {
             let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
                 .map_err(EvaluationError::Message)?;
 
-            let status_code = get_status_code(&http_response_mapping.status, &type_annotated_value)?;
+            let status_code =
+                get_status_code(&http_response_mapping.status, &type_annotated_value)?;
 
             let headers = ResolvedResponseHeaders::from(
                 &http_response_mapping.headers,
                 &type_annotated_value,
             )?;
 
-            let response_body =
-                http_response_mapping.body.evaluate(&type_annotated_value, Some(worker_response))?;
+            let response_body = http_response_mapping
+                .body
+                .evaluate(&type_annotated_value, Some(worker_response))?;
 
             Ok(IntermediateHttpResponse {
                 body: response_body,
@@ -288,9 +292,10 @@ mod internal {
             let mut resolved_headers: HashMap<String, String> = HashMap::new();
 
             for (header_name, header_value_expr) in header_mapping {
-                let value = header_value_expr.evaluate(input, None)?.get_value().ok_or(
-                    "Unable to resolve header. Resulted in ()".to_string(),
-                )?;
+                let value = header_value_expr
+                    .evaluate(input, None)?
+                    .get_value()
+                    .ok_or("Unable to resolve header. Resulted in ()".to_string())?;
 
                 let value_str = value
                     .get_primitive()

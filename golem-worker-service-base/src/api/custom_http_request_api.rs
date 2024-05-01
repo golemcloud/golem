@@ -11,8 +11,8 @@ use crate::http::{ApiInputPath, InputHttpRequest};
 use crate::service::api_definition_lookup::ApiDefinitionLookup;
 
 use crate::worker_binding::WorkerBindingResolver;
-use crate::worker_bridge_execution::{WorkerBridgeResponse, WorkerRequest};
 use crate::worker_bridge_execution::WorkerRequestExecutor;
+use crate::worker_bridge_execution::{WorkerBridgeResponse, WorkerRequest};
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
@@ -115,17 +115,14 @@ impl CustomHttpRequestApi {
                     .await
                 {
                     Ok(worker_response) => {
-
                         let worker_bridge_response =
                             WorkerBridgeResponse::from_worker_response(&worker_response);
 
                         match worker_bridge_response {
-                            Ok(response) => {
-                                response.to_http_response(
-                                    &resolved_route.resolved_worker_binding_template.response,
-                                    &resolved_route.typed_value_from_input,
-                                )
-                            }
+                            Ok(response) => response.to_http_response(
+                                &resolved_route.resolved_worker_binding_template.response,
+                                &resolved_route.typed_value_from_input,
+                            ),
                             Err(e) => {
                                 error!(
                                     "API request id: {} - response error: {}",
@@ -136,10 +133,9 @@ impl CustomHttpRequestApi {
                                     .body(Body::from_string(
                                         format!("API request error {}", e).to_string(),
                                     ))
-
                             }
                         }
-                    },
+                    }
 
                     Err(e) => {
                         error!(

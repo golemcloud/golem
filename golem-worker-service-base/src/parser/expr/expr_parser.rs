@@ -76,7 +76,9 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                 previous_expression.build(expr);
             }
 
-            Token::MultiChar(MultiCharTokens::Worker) => previous_expression.build(Expr::WorkerResponse()),
+            Token::MultiChar(MultiCharTokens::Worker) => {
+                previous_expression.build(Expr::WorkerResponse())
+            }
 
             Token::MultiChar(MultiCharTokens::InterpolationStart) => {
                 let code_block = code_block::create_code_block(&mut tokenizer)?;

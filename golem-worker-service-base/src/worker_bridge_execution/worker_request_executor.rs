@@ -1,9 +1,9 @@
+use crate::service::worker::TypedResult;
 use crate::worker_bridge_execution::WorkerRequest;
 use async_trait::async_trait;
-use std::fmt::Display;
-use golem_wasm_rpc::TypeAnnotatedValue;
 use golem_service_base::model::FunctionResult;
-use crate::service::worker::TypedResult;
+use golem_wasm_rpc::TypeAnnotatedValue;
+use std::fmt::Display;
 
 #[async_trait]
 pub trait WorkerRequestExecutor<Response> {
@@ -21,10 +21,12 @@ pub struct WorkerResponse {
 
 impl WorkerResponse {
     pub fn new(result: TypeAnnotatedValue, function_result_types: Vec<FunctionResult>) -> Self {
-        WorkerResponse { result: TypedResult {
-            result,
-            function_result_types,
-        }}
+        WorkerResponse {
+            result: TypedResult {
+                result,
+                function_result_types,
+            },
+        }
     }
 }
 

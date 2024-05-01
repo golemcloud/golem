@@ -2,7 +2,6 @@ use crate::evaluator::{EvaluationError, EvaluationResult};
 use crate::primitive::{GetPrimitive, Primitive};
 use golem_wasm_rpc::TypeAnnotatedValue;
 
-
 pub(crate) fn compare_typed_value<F>(
     left: &TypeAnnotatedValue,
     right: &TypeAnnotatedValue,
@@ -22,7 +21,6 @@ where
     }
 }
 
-
 pub(crate) fn compare_eval_result<F>(
     left: &EvaluationResult,
     right: &EvaluationResult,
@@ -34,7 +32,6 @@ where
     if left.is_unit() && right.is_unit() {
         Ok(TypeAnnotatedValue::Bool(true).into())
     } else {
-
         match (left.get_value(), right.get_value()) {
             (Some(left), Some(right)) => {
                 let result = compare_typed_value(&left, &right, compare)?;
@@ -44,6 +41,5 @@ where
                 "Unsupported type to compare".to_string(),
             )),
         }
-
     }
 }
