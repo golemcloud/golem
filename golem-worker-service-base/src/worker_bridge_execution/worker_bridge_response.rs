@@ -151,7 +151,7 @@ mod internal {
     use crate::expression::Expr;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::ResponseMapping;
-    use crate::worker_bridge_execution::worker_response::WorkerBridgeResponse;
+    use crate::worker_bridge_execution::worker_bridge_response::WorkerBridgeResponse;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, StatusCode};
