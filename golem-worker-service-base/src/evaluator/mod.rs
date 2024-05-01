@@ -506,6 +506,7 @@ mod tests {
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, Uri};
     use serde_json::{json, Value};
+    use golem_service_base::model::FunctionResult;
 
     use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::getter::GetError;
@@ -848,8 +849,11 @@ mod tests {
             get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type)))
                 .unwrap();
         let worker_response = WorkerBridgeResponse::from_worker_response(&WorkerResponse::new(
-            result_as_typed_value,
-            vec![],
+            TypeAnnotatedValue::Tuple { typ: vec![AnalysedType::from(&result_as_typed_value)], value: vec![result_as_typed_value] },
+            vec![FunctionResult {
+                name: None,
+                typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]).into(),
+            }],
         ))
         .unwrap();
 
