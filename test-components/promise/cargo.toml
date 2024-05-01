@@ -15,7 +15,7 @@ strip = true
 [dependencies]
 once_cell = "1.17.1"
 rand = "0.8.5"
-wit-bindgen = { version = "0.16.0", default-features = false, features = ["realloc"] }
+wit-bindgen = { version = "0.17.0", default-features = false, features = ["realloc"] }
 
 [package.metadata.component.target]
 path = "wit"
@@ -23,3 +23,6 @@ path = "wit"
 [package.metadata.component.target.dependencies]
 "golem:api" = { path = "wit/deps/golem" }
 "golem:rpc" = { path = "wit/deps/wasm-rpc" }
+"wasi:clocks" = { path = "wit/deps/clocks" }
+"wasi:io" = { path = "wit/deps/io" }
+

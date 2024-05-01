@@ -34,6 +34,11 @@ fn make(
             api_definition_update,
         ),
         Trial::test_in_context(
+            format!("api_definition_update_immutable{suffix}"),
+            ctx.clone(),
+            api_definition_update_immutable,
+        ),
+        Trial::test_in_context(
             format!("api_definition_list{suffix}"),
             ctx.clone(),
             api_definition_list,
@@ -102,6 +107,7 @@ fn golem_def_with_response(
     HttpApiDefinition {
         id: id.to_string(),
         version: "0.1.0".to_string(),
+        draft: true,
         routes: vec![Route {
             method: MethodPattern::Get,
             path: "/{user-id}/get-cart-contents".to_string(),
@@ -259,6 +265,30 @@ fn api_definition_update(
     let res: HttpApiDefinition = cli.run(&["api-definition", "update", path.to_str().unwrap()])?;
 
     assert_eq!(res, updated);
+
+    Ok(())
+}
+
+fn api_definition_update_immutable(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let component_name = format!("api_definition_update_immutable{name}");
+    let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+
+    let mut def = golem_def(&component_name, &component.component_id);
+    def.draft = false;
+    let path = make_golem_file(&def)?;
+    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+
+    let updated = golem_def_with_response(&component_name, &component.component_id, Some("${{headers: {ContentType: 'json', userid: 'bar'}, body: worker.response, status: 200}}".to_string()));
+    let path = make_golem_file(&updated)?;
+    let res = cli.run_string(&["api-definition", "update", path.to_str().unwrap()]);
+
+    assert!(res.is_err());
 
     Ok(())
 }
