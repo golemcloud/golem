@@ -178,34 +178,26 @@ impl Evaluator for Expr {
 
                 }
                 Expr::GreaterThan(left, right) => {
-                    let left = go(left, input, worker_response)?
-                        .ok_or(format!("{} is evaluated to none", left))?;
-                    let right = go(right, input, worker_response)?
-                        .ok_or(format!("{} is evaluated to none", right))?;
+                    let left = go(left, input, worker_response)?;
+                    let right = go(right, input, worker_response)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| left > right)
                 }
                 Expr::GreaterThanOrEqualTo(left, right) => {
-                    let left = go(left, input, worker_response)?
-                        .ok_or(format!("{} is evaluated to none", left))?;
-                    let right = go(right, input, worker_response)?
-                        .ok_or(format!("{} is evaluated to none", right))?;
+                    let left = go(left, input, worker_response)?;
+                    let right = go(right, input, worker_response)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| left >= right)
                 }
                 Expr::LessThan(left, right) => {
-                    let left = go(left, input, worker_response)?
-                        .ok_or(format!("{} is evaluated to none", left))?;
-                    let right = go(right, input, worker_response)?
-                        .ok_or(format!("{} is evaluated to none", right))?;
+                    let left = go(left, input, worker_response)?;
+                    let right = go(right, input, worker_response)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| left < right)
                 }
                 Expr::LessThanOrEqualTo(left, right) => {
-                    let left = go(left, input, worker_response)?
-                        .ok_or(format!("{} is evaluated to none", left))?;
-                    let right = go(right, input, worker_response)?
-                        .ok_or(format!("{} is evaluated to none", right))?;
+                    let left = go(left, input, worker_response)?;
+                    let right = go(right, input, worker_response)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| left <= right)
                 }
@@ -214,10 +206,10 @@ impl Evaluator for Expr {
                     let evaluated_expr = expr.evaluate(input, worker_response)?;
 
                     match evaluated_expr {
-                        EvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => Ok(TypeAnnotatedValue::Bool(!value)),
+                        EvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => Ok(EvaluationResult::Value(TypeAnnotatedValue::Bool(!value))),
                         _ => Err(EvaluationError::Message(format!(
                             "The expression is evaluated to {} but it is not a boolean value to apply not (!) operator on",
-                           &evaluated_expr.get_value().map_or("unit", |eval_result| get_json_from_typed_value(&eval_result))
+                           &evaluated_expr.get_value().map_or("unit".to_string(), |eval_result| get_json_from_typed_value(&eval_result).to_string())
                         ))),
                     }
                 }
@@ -237,7 +229,7 @@ impl Evaluator for Expr {
                         }
                         _ => Err(EvaluationError::Message(format!(
                             "The predicate expression is evaluated to {} but it is not a boolean value",
-                            &pred.get_value().map_or("unit", |eval_result| get_json_from_typed_value(&eval_result))
+                            &pred.get_value().map_or("unit".to_string(), |eval_result| get_json_from_typed_value(&eval_result).to_string())
                         ))),
                     }
                 }
@@ -344,7 +336,7 @@ impl Evaluator for Expr {
                                 if let Some(primitive) = value.get_primitive() {
                                     result.push_str(primitive.to_string().as_str())
                                 } else {
-                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} or unit to form text", get_json_from_typed_value(&value))));
+                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} or unit to form text", &value.get_value().map_or("unit".to_string(),  |v|  get_json_from_typed_value(&v).to_string()))));
                                 }
                             }
 
@@ -352,7 +344,7 @@ impl Evaluator for Expr {
                         }
                     }
 
-                    Ok(TypeAnnotatedValue::Str(result))
+                    Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(result)))
                 }
 
                 Expr::Literal(literal) => Ok(TypeAnnotatedValue::Str(literal.clone()).into()),
@@ -388,10 +380,10 @@ impl Evaluator for Expr {
                         }
 
                     }
-                    None => Ok(TypeAnnotatedValue::Option {
+                    None => Ok(EvaluationResult::Value(TypeAnnotatedValue::Option {
                         value: None,
                         typ: AnalysedType::Str,
-                    }),
+                    })),
                 },
 
                 Expr::Result(result_expr) => match result_expr {
@@ -448,10 +440,10 @@ impl Evaluator for Expr {
                     }.into())
                 }
 
-                Expr::Flags(flags) => Ok(TypeAnnotatedValue::Flags {
+                Expr::Flags(flags) => Ok(EvaluationResult::Value(TypeAnnotatedValue::Flags {
                     values: flags.clone(),
                     typ: flags.clone(),
-                }),
+                })),
             }
         }
 
