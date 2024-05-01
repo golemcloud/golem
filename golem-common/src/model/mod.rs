@@ -782,7 +782,7 @@ impl From<WorkerStatus> for i32 {
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum WorkerInvocation {
     ExportedFunction {
-        invocation_key: IdempotencyKey,
+        idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<golem_wasm_rpc::Value>,
         calling_convention: CallingConvention,

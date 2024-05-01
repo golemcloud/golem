@@ -109,7 +109,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
     /// Enqueue invocation of an exported function
     pub async fn enqueue(
         &self,
-        invocation_key: IdempotencyKey,
+        idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
         calling_convention: CallingConvention,
@@ -118,7 +118,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
             Some(running) => {
                 running
                     .enqueue(
-                        invocation_key,
+                        idempotency_key,
                         full_function_name,
                         function_input,
                         calling_convention,
@@ -131,7 +131,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
                     self.worker_id
                 );
                 let invocation = WorkerInvocation::ExportedFunction {
-                    invocation_key,
+                    idempotency_key,
                     full_function_name,
                     function_input,
                     calling_convention,
@@ -269,13 +269,13 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
 
     pub async fn enqueue(
         &self,
-        invocation_key: IdempotencyKey,
+        idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
         calling_convention: CallingConvention,
     ) {
         let invocation = WorkerInvocation::ExportedFunction {
-            invocation_key,
+            idempotency_key,
             full_function_name,
             function_input,
             calling_convention,
@@ -337,14 +337,14 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
 
                 match message.invocation {
                     WorkerInvocation::ExportedFunction {
-                        invocation_key,
+                        idempotency_key: invocation_key,
                         full_function_name,
                         function_input,
                         calling_convention,
                     } => {
                         store
                             .data_mut()
-                            .set_current_invocation_key(invocation_key)
+                            .set_current_idempotency_key(invocation_key)
                             .await;
 
                         // Make sure to update the pending invocation queue in the status record before
@@ -364,9 +364,10 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                     WorkerInvocation::ManualUpdate { target_version } => {
                         let invocation_key = {
                             let ctx = store.data_mut();
-                            let invocation_key = ctx.generate_new_invocation_key();
-                            ctx.set_current_invocation_key(invocation_key.clone()).await;
-                            invocation_key
+                            let idempotency_key = IdempotencyKey::fresh();
+                            ctx.set_current_idempotency_key(idempotency_key.clone())
+                                .await;
+                            idempotency_key
                         };
                         store.data_mut().begin_call_snapshotting_function();
                         let _ = invoke_worker(
@@ -381,7 +382,6 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                         store.data_mut().end_call_snapshotting_function();
                         let result = store.data_mut().lookup_invocation_result(&invocation_key);
                         match result {
-                            LookupResult::Invalid => {}
                             LookupResult::Pending => {}
                             LookupResult::Interrupted => {}
                             LookupResult::Complete(Ok(result)) => {

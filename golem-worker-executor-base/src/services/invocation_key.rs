@@ -20,17 +20,15 @@ use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tracing::debug;
-use uuid::Uuid;
 
 use crate::error::GolemError;
 use crate::metrics::invocation_keys::{
-    record_confirmed_invocation_keys_count, record_pending_invocation_keys_count,
+    record_confirmed_idempotency_keys_count, record_pending_idempotency_keys_count,
 };
 
 /// Service responsible for generating and looking up invocation keys
 #[async_trait]
 pub trait InvocationKeyService {
-    fn generate_key(&self, worker_id: &WorkerId) -> IdempotencyKey;
     fn lookup_key(&self, worker_id: &WorkerId, key: &IdempotencyKey) -> LookupResult;
     fn confirm_key(
         &self,
@@ -80,7 +78,6 @@ impl PendingStatus {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LookupResult {
-    Invalid,
     Pending,
     Interrupted,
     Complete(Result<Vec<Value>, GolemError>),
@@ -118,25 +115,21 @@ impl InvocationKeyServiceDefault {
             .pending_keys
             .retain(|_, v| v.started_at.elapsed() < self.pending_key_retention);
     }
-}
 
-#[async_trait]
-impl InvocationKeyService for InvocationKeyServiceDefault {
-    fn generate_key(&self, worker_id: &WorkerId) -> IdempotencyKey {
+    fn add_key(&self, worker_id: &WorkerId, key: IdempotencyKey) {
         self.cleanup();
         let mut state = self.state.lock().unwrap();
 
-        let uuid = Uuid::new_v4();
-        let key = IdempotencyKey::new(uuid.to_string());
         state
             .pending_keys
             .insert((worker_id.clone(), key.clone()), PendingStatus::new());
 
-        record_pending_invocation_keys_count(state.pending_keys.len());
-
-        key
+        record_pending_idempotency_keys_count(state.pending_keys.len());
     }
+}
 
+#[async_trait]
+impl InvocationKeyService for InvocationKeyServiceDefault {
     fn lookup_key(&self, worker_id: &WorkerId, key: &IdempotencyKey) -> LookupResult {
         self.cleanup();
         let key = (worker_id.clone(), key.clone());
@@ -151,7 +144,10 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
                         LookupResult::Pending
                     }
                 }
-                None => LookupResult::Invalid,
+                None => {
+                    self.add_key(worker_id, key.1.clone());
+                    LookupResult::Pending
+                }
             },
         }
     }
@@ -170,8 +166,8 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
             state.pending_keys.remove(&key);
             state.confirmed_keys.insert(key.clone(), vals);
 
-            record_pending_invocation_keys_count(state.pending_keys.len());
-            record_confirmed_invocation_keys_count(state.confirmed_keys.len());
+            record_pending_idempotency_keys_count(state.pending_keys.len());
+            record_confirmed_idempotency_keys_count(state.confirmed_keys.len());
         }
 
         self.confirm_sender
@@ -215,7 +211,6 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
         debug!("wait_for_confirmation for {worker_id}: {key:?}");
         loop {
             match self.lookup_key(worker_id, key) {
-                LookupResult::Invalid => break LookupResult::Invalid,
                 LookupResult::Interrupted => break LookupResult::Interrupted,
                 LookupResult::Pending => {
                     let expected_key: Option<(WorkerId, IdempotencyKey)> =
@@ -236,7 +231,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
 
 #[cfg(test)]
 mod tests {
-    use golem_common::model::{ComponentId, WorkerId};
+    use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
     use golem_wasm_rpc::Value;
 
     use crate::services::invocation_key::{
@@ -246,7 +241,7 @@ mod tests {
     #[cfg(test)]
     #[test]
     fn replay_in_same_order_works() {
-        let svc1 = InvocationKeyServiceDefault::default();
+        let _svc1 = InvocationKeyServiceDefault::default();
         let uuid = uuid::Uuid::parse_str("14e55083-2ff5-44ec-a414-595a748b19a0").unwrap();
 
         let worker_id = WorkerId {
@@ -254,9 +249,9 @@ mod tests {
             worker_name: "1".to_string(),
         };
 
-        let key1 = svc1.generate_key(&worker_id);
-        let key2 = svc1.generate_key(&worker_id);
-        let key3 = svc1.generate_key(&worker_id);
+        let key1 = IdempotencyKey::fresh();
+        let key2 = IdempotencyKey::fresh();
+        let key3 = IdempotencyKey::fresh();
 
         let svc2 = InvocationKeyServiceDefault::default();
         svc2.confirm_key(&worker_id, &key1, Ok(vec![Value::U32(1)]));

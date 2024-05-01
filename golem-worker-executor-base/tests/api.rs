@@ -479,39 +479,6 @@ async fn invoking_with_same_idempotency_key_is_idempotent() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn invoking_with_invalid_invocation_key_is_failure() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
-
-    let component_id = executor.store_component("shopping-cart").await;
-    let worker_id = executor
-        .start_worker(&component_id, "shopping-cart-3")
-        .await;
-
-    let invocation_key = IdempotencyKey {
-        value: "bad-invocation-key".to_string(),
-    };
-    let result = executor
-        .invoke_and_await_with_key(
-            &worker_id,
-            &invocation_key,
-            "golem:it/api/add-item",
-            vec![Value::Record(vec![
-                Value::String("G1000".to_string()),
-                Value::String("Golem T-Shirt M".to_string()),
-                Value::F32(100.0),
-                Value::U32(5),
-            ])],
-        )
-        .await;
-
-    drop(executor);
-
-    check!(result.is_err());
-}
-
-#[tokio::test]
-#[tracing::instrument]
 async fn invoking_with_same_idempotency_key_is_idempotent_after_restart() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
@@ -521,11 +488,11 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart() {
         .start_worker(&component_id, "shopping-cart-4")
         .await;
 
-    let invocation_key = IdempotencyKey::fresh();
+    let idempotency_key = IdempotencyKey::fresh();
     let _result = executor
         .invoke_and_await_with_key(
             &worker_id,
-            &invocation_key,
+            &idempotency_key,
             "golem:it/api/add-item",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
@@ -543,7 +510,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart() {
     let _result2 = executor
         .invoke_and_await_with_key(
             &worker_id,
-            &invocation_key,
+            &idempotency_key,
             "golem:it/api/add-item",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),

@@ -571,12 +571,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Looks up a given invocation key's current status.
     /// As the invocation key status is only stored in memory, we need to have an active
     /// instance (instance_details) to call this function.
-    pub fn lookup_result<T>(&self, this: &T, invocation_key: &IdempotencyKey) -> LookupResult
+    pub fn lookup_result<T>(&self, this: &T, idempotency_key: &IdempotencyKey) -> LookupResult
     where
         T: HasInvocationKeyService,
     {
         this.invocation_key_service()
-            .lookup_key(&self.metadata.worker_id, invocation_key)
+            .lookup_key(&self.metadata.worker_id, idempotency_key)
     }
 
     /// Marks the worker as interrupting - this should eventually make the worker interrupted.
@@ -775,7 +775,7 @@ fn validate_worker(
 pub async fn invoke<Ctx: WorkerCtx, T>(
     worker: Arc<Worker<Ctx>>,
     this: &T,
-    invocation_key: IdempotencyKey,
+    idempotency_key: IdempotencyKey,
     calling_convention: CallingConvention,
     full_function_name: String,
     function_input: Vec<Value>,
@@ -783,14 +783,10 @@ pub async fn invoke<Ctx: WorkerCtx, T>(
 where
     T: HasInvocationKeyService,
 {
-    let output = worker.lookup_result(this, &invocation_key);
+    let output = worker.lookup_result(this, &idempotency_key);
 
     match output {
         LookupResult::Complete(output) => Ok(Some(output)),
-        LookupResult::Invalid => Err(GolemError::invalid_request(format!(
-            "Invalid invocation key {} for {}",
-            invocation_key, worker.metadata.worker_id
-        ))),
         LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
         LookupResult::Pending => {
             if calling_convention == CallingConvention::StdioEventloop {
@@ -807,7 +803,7 @@ where
                         )),
                     }?;
 
-                    public_state.enqueue(bytes, invocation_key.clone()).await;
+                    public_state.enqueue(bytes, idempotency_key.clone()).await;
                     let execution_status = worker.execution_status.read().unwrap().clone();
                     !execution_status.is_running()
                 };
@@ -818,7 +814,7 @@ where
                         .public_state
                         .invocation_queue()
                         .enqueue(
-                            invocation_key,
+                            idempotency_key,
                             full_function_name,
                             vec![],
                             CallingConvention::Component,
@@ -832,7 +828,7 @@ where
                     .public_state
                     .invocation_queue()
                     .enqueue(
-                        invocation_key,
+                        idempotency_key,
                         full_function_name,
                         function_input,
                         calling_convention,
@@ -847,7 +843,7 @@ where
 pub async fn invoke_and_await<Ctx: WorkerCtx, T>(
     worker: Arc<Worker<Ctx>>,
     this: &T,
-    invocation_key: IdempotencyKey,
+    idempotency_key: IdempotencyKey,
     calling_convention: CallingConvention,
     full_function_name: String,
     function_input: Vec<Value>,
@@ -859,7 +855,7 @@ where
     match invoke(
         worker,
         this,
-        invocation_key.clone(),
+        idempotency_key.clone(),
         calling_convention,
         full_function_name,
         function_input,
@@ -871,21 +867,18 @@ where
         None => {
             debug!(
                 "Waiting for invocation key {} to complete for {worker_id}",
-                invocation_key
+                idempotency_key
             );
             let result = this
                 .invocation_key_service()
-                .wait_for_confirmation(&worker_id, &invocation_key)
+                .wait_for_confirmation(&worker_id, &idempotency_key)
                 .await;
 
             debug!(
                 "Invocation key {} lookup result for {worker_id}: {:?}",
-                invocation_key, result
+                idempotency_key, result
             );
             match result {
-                LookupResult::Invalid => Err(GolemError::invalid_request(format!(
-                    "Invalid invocation key {invocation_key} for {worker_id}"
-                ))),
                 LookupResult::Complete(Ok(output)) => Ok(output),
                 LookupResult::Complete(Err(err)) => Err(err),
                 LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
@@ -1127,16 +1120,18 @@ fn calculate_pending_invocations(
                     invocation: invocation.clone(),
                 });
             }
-            OplogEntry::ExportedFunctionInvoked { invocation_key, .. } => {
+            OplogEntry::ExportedFunctionInvoked {
+                idempotency_key, ..
+            } => {
                 result.retain(|invocation| match invocation {
                     TimestampedWorkerInvocation {
                         invocation:
                             WorkerInvocation::ExportedFunction {
-                                invocation_key: key,
+                                idempotency_key: key,
                                 ..
                             },
                         ..
-                    } => key != invocation_key,
+                    } => key != idempotency_key,
                     _ => true,
                 });
             }

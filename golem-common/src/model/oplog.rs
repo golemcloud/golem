@@ -35,7 +35,7 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         function_name: String,
         request: Vec<u8>,
-        invocation_key: IdempotencyKey,
+        idempotency_key: IdempotencyKey,
         calling_convention: Option<CallingConvention>,
     },
     /// The worker has completed an invocation
@@ -150,7 +150,7 @@ impl OplogEntry {
     pub fn exported_function_invoked<R: Encode>(
         function_name: String,
         request: &R,
-        invocation_key: IdempotencyKey,
+        idempotency_key: IdempotencyKey,
         calling_convention: Option<CallingConvention>,
     ) -> Result<OplogEntry, String> {
         let serialized_request = serialize(request)?.to_vec();
@@ -158,7 +158,7 @@ impl OplogEntry {
             timestamp: Timestamp::now_utc(),
             function_name,
             request: serialized_request,
-            invocation_key,
+            idempotency_key,
             calling_convention,
         })
     }
@@ -449,7 +449,7 @@ mod tests {
             "function_name".to_string(),
             &vec![val1.clone()],
             IdempotencyKey {
-                value: "invocation_key".to_string(),
+                value: "idempotency-key".to_string(),
             },
             Some(CallingConvention::Stdio),
         )

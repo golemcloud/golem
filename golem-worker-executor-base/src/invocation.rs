@@ -50,8 +50,11 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     let worker_id = store.data().worker_id().clone();
     debug!("invoke_worker: {worker_id}/{full_function_name}");
 
-    if let Some(invocation_key) = &store.data().get_current_invocation_key().await {
-        store.data_mut().resume_invocation_key(invocation_key).await
+    if let Some(idempotency_key) = &store.data().get_current_idempotency_key().await {
+        store
+            .data_mut()
+            .resume_idempotency_key(idempotency_key)
+            .await
     }
 
     let result = invoke_or_fail(
@@ -70,22 +73,22 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
         result
     );
 
-    let invocation_key = store.data().get_current_invocation_key().await;
+    let idempotency_key = store.data().get_current_idempotency_key().await;
     match result {
         Err(err) => {
             let trap_type = TrapType::from_error::<Ctx>(&err);
             match trap_type {
                 TrapType::Interrupt(InterruptKind::Interrupt) => {
                     // this invocation was interrupted and has to be resumed manually later
-                    match invocation_key {
-                        Some(invocation_key) => {
+                    match idempotency_key {
+                        Some(idempotency_key) => {
                             debug!(
                             "Storing interrupted status for invocation key {:?} in {worker_id}/{full_function_name}",
-                            &invocation_key
+                            &idempotency_key
                         );
                             store
                                 .data_mut()
-                                .interrupt_invocation_key(&invocation_key)
+                                .interrupt_idempotency_key(&idempotency_key)
                                 .await;
                         }
                         None => {
@@ -102,15 +105,15 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
                 }
                 TrapType::Exit => {
                     // this invocation finished by calling the WASI exit function
-                    match invocation_key {
-                        Some(invocation_key) => {
+                    match idempotency_key {
+                        Some(idempotency_key) => {
                             debug!(
                             "Storing exited result for invocation key {:?} in {worker_id}/{full_function_name}",
-                            &invocation_key
+                            &idempotency_key
                         );
                             store
                                 .data_mut()
-                                .confirm_invocation_key(&invocation_key, Err(err.into()))
+                                .confirm_idempotency_key(&idempotency_key, Err(err.into()))
                                 .await;
                         }
                         None => {
@@ -122,15 +125,15 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
                 }
                 _ => {
                     // this invocation failed it won't be retried later
-                    match invocation_key {
-                        Some(invocation_key) => {
+                    match idempotency_key {
+                        Some(idempotency_key) => {
                             debug!(
                             "Storing failed result for invocation key {:?} in {worker_id}/{full_function_name}",
-                            &invocation_key
+                            &idempotency_key
                         );
                             store
                                 .data_mut()
-                                .confirm_invocation_key(&invocation_key, Err(err.into()))
+                                .confirm_idempotency_key(&idempotency_key, Err(err.into()))
                                 .await;
                         }
                         None => {
@@ -391,15 +394,15 @@ async fn store_results<'a, Ctx: WorkerCtx>(
     output: &[Value],
     context: &str,
 ) {
-    if let Some(invocation_key) = store.data().get_current_invocation_key().await {
+    if let Some(idempotency_key) = store.data().get_current_idempotency_key().await {
         debug!(
             "Storing successful results for invocation key {:?} in {context}",
-            &invocation_key
+            &idempotency_key
         );
 
         store
             .data_mut()
-            .confirm_invocation_key(&invocation_key, Ok(output.to_vec()))
+            .confirm_idempotency_key(&idempotency_key, Ok(output.to_vec()))
             .await;
     } else {
         debug!("No invocation key for {context}");

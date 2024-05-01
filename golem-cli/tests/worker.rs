@@ -24,11 +24,6 @@ fn make(
             worker_new_instance,
         ),
         Trial::test_in_context(
-            format!("worker_get_invocation_key{suffix}"),
-            ctx.clone(),
-            worker_get_invocation_key,
-        ),
-        Trial::test_in_context(
             format!("worker_invoke_and_await{suffix}"),
             ctx.clone(),
             worker_invoke_and_await,
@@ -140,36 +135,6 @@ fn worker_new_instance(
 
     assert_eq!(worker_id.component_id.to_string(), component_id);
     assert_eq!(worker_id.worker_name, worker_name);
-    Ok(())
-}
-
-fn worker_get_invocation_key(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
-    let component_id =
-        make_component(deps, &format!("{name} worker invocation key"), &cli)?.component_id;
-    let worker_name = format!("{name}_worker_invocation_key");
-    let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
-        "worker",
-        "add",
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
-    ])?;
-    let _: IdempotencyKey = cli.run(&[
-        "worker",
-        "invocation-key",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-    ])?;
     Ok(())
 }
 

@@ -475,8 +475,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         function_params: Vec<WitValue>,
         account_id: &AccountId,
     ) -> Result<WitValue, RpcError> {
-        let idempotency_key =
-            idempotency_key.unwrap_or(self.invocation_key_service.generate_key(worker_id));
+        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
         if self.shard_service().check_worker(worker_id).is_ok() {
             debug!("Invoking local worker {worker_id} function {function_name} with parameters {function_params:?}");
@@ -521,8 +520,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         function_params: Vec<WitValue>,
         account_id: &AccountId,
     ) -> Result<(), RpcError> {
-        let idempotency_key =
-            idempotency_key.unwrap_or(self.invocation_key_service.generate_key(worker_id));
+        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
         if self.shard_service().check_worker(worker_id).is_ok() {
             debug!("Invoking local worker {worker_id} function {function_name} with parameters {function_params:?} without awaiting for the result");

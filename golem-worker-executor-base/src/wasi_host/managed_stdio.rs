@@ -54,7 +54,7 @@ enum State {
         dequeue: mpsc::Receiver<Event>,
         input: Bytes,
         pos: usize,
-        invocation_key: IdempotencyKey,
+        idempotency_key: IdempotencyKey,
         captured: Option<Vec<u8>>,
     },
 }
@@ -62,7 +62,7 @@ enum State {
 #[derive(Debug, Clone)]
 struct Event {
     input: Bytes,
-    invocation_key: IdempotencyKey,
+    idempotency_key: IdempotencyKey,
 }
 
 /// Maps to the type defined in the WASI IO package
@@ -89,10 +89,10 @@ impl ManagedStandardIo {
         }
     }
 
-    pub async fn enqueue(&self, message: Bytes, invocation_key: IdempotencyKey) {
+    pub async fn enqueue(&self, message: Bytes, idempotency_key: IdempotencyKey) {
         let event = Event {
             input: message,
-            invocation_key,
+            idempotency_key,
         };
         let mut current_enqueue = self.current_enqueue.lock().await;
         match &*current_enqueue {
@@ -136,8 +136,11 @@ impl ManagedStandardIo {
         });
     }
 
-    pub async fn get_current_invocation_key(&self) -> Option<IdempotencyKey> {
-        if let Some(State::EventLoopProcessing { invocation_key, .. }) = &*self.current.lock().await
+    pub async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+        if let Some(State::EventLoopProcessing {
+            idempotency_key: invocation_key,
+            ..
+        }) = &*self.current.lock().await
         {
             Some(invocation_key.clone())
         } else {
@@ -198,7 +201,7 @@ impl ManagedStandardIo {
                                 dequeue,
                                 input,
                                 pos,
-                                invocation_key: event.invocation_key,
+                                idempotency_key: event.idempotency_key,
                                 captured: Some(Vec::new()),
                             });
                             break Ok(result);
@@ -214,7 +217,7 @@ impl ManagedStandardIo {
                     dequeue,
                     input,
                     pos,
-                    invocation_key,
+                    idempotency_key: invocation_key,
                     captured,
                 } => {
                     let mut pos = pos;
@@ -225,7 +228,7 @@ impl ManagedStandardIo {
                             dequeue,
                             input,
                             pos,
-                            invocation_key,
+                            idempotency_key: invocation_key,
                             captured,
                         });
                         break Ok(result);
@@ -239,7 +242,7 @@ impl ManagedStandardIo {
                             dequeue,
                             input,
                             pos,
-                            invocation_key,
+                            idempotency_key: invocation_key,
                             captured,
                         });
                         break Err(must_write_first_error());
@@ -338,7 +341,7 @@ impl ManagedStandardIo {
                 dequeue,
                 input,
                 pos,
-                invocation_key,
+                idempotency_key,
                 captured,
             } => {
                 match captured {
@@ -359,7 +362,7 @@ impl ManagedStandardIo {
                                         });
                                     self.invocation_key_service.confirm_key(
                                         &self.worker_id,
-                                        &invocation_key,
+                                        &idempotency_key,
                                         result,
                                     );
                                     *current = Some(State::EventLoopProcessing {
@@ -367,7 +370,7 @@ impl ManagedStandardIo {
                                         dequeue,
                                         input,
                                         pos,
-                                        invocation_key,
+                                        idempotency_key,
                                         captured: None,
                                     });
                                     Ok(())
@@ -379,7 +382,7 @@ impl ManagedStandardIo {
                                     dequeue,
                                     input,
                                     pos,
-                                    invocation_key,
+                                    idempotency_key,
                                     captured: Some(captured),
                                 });
                                 Ok(())
@@ -391,7 +394,7 @@ impl ManagedStandardIo {
                                 dequeue,
                                 input,
                                 pos,
-                                invocation_key,
+                                idempotency_key,
                                 captured: Some(captured),
                             });
                             Ok(())
@@ -403,7 +406,7 @@ impl ManagedStandardIo {
                             dequeue,
                             input,
                             pos,
-                            invocation_key,
+                            idempotency_key,
                             captured,
                         });
                         Err(must_read_first_error())

@@ -50,8 +50,8 @@ use crate::model::{InterruptKind, LastError};
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{
-    worker_event, All, HasActiveWorkers, HasAll, HasInvocationKeyService, HasInvocationQueue,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    worker_event, All, HasActiveWorkers, HasAll, HasInvocationQueue, HasPromiseService,
+    HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::{invoke_and_await, PendingWorker, Worker};
@@ -494,15 +494,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let calling_convention = request.calling_convention();
         let worker_details = self.get_or_create(request).await?;
-        let invocation_key = request.idempotency_key()?.unwrap_or(
-            self.invocation_key_service()
-                .generate_key(&worker_details.metadata.worker_id),
-        );
+        let idempotency_key = request
+            .idempotency_key()?
+            .unwrap_or(IdempotencyKey::fresh());
 
         let values = invoke_and_await(
             worker_details,
             self,
-            invocation_key,
+            idempotency_key,
             calling_convention.into(),
             full_function_name,
             function_input,
@@ -611,7 +610,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let calling_convention = request.calling_convention();
 
-        let (invocation_queue, worker_id) = match self.get_or_create_pending(request).await? {
+        let (invocation_queue, _worker_id) = match self.get_or_create_pending(request).await? {
             PendingOrFinal::Pending(pending_worker) => (
                 pending_worker.invocation_queue.clone(),
                 pending_worker.worker_id.clone(),
@@ -622,13 +621,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ),
         };
 
-        let invocation_key = request
+        let idempotency_key = request
             .idempotency_key()?
-            .unwrap_or(self.invocation_key_service().generate_key(&worker_id));
+            .unwrap_or(IdempotencyKey::fresh());
 
         invocation_queue
             .enqueue(
-                invocation_key,
+                idempotency_key,
                 full_function_name,
                 function_input,
                 calling_convention,
@@ -1064,7 +1063,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = RecordedGrpcRequest::new(
             "invoke_and_await_worker",
             format!(
-                "worker_id={:?}, name={:?}, invocation_key={:?}, calling_convention={:?}, account_id={:?}",
+                "worker_id={:?}, name={:?}, idempotency_key={:?}, calling_convention={:?}, account_id={:?}",
                 request.worker_id, request.name, request.idempotency_key, request.calling_convention, request.account_id
             ),
         );
@@ -1703,12 +1702,10 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
     }
 
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError> {
-        self.idempotency_key
+        Ok(self
+            .idempotency_key
             .clone()
-            .ok_or(GolemError::invalid_request(
-                "invocation_key not found in InvokeAndAwaitWorkerRequest",
-            ))
-            .map(|key| Some(IdempotencyKey::from(key)))
+            .map(IdempotencyKey::from))
     }
 
     fn name(&self) -> String {

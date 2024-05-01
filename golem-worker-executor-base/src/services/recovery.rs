@@ -662,7 +662,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn enqueue(&self, _message: Bytes, _invocation_key: IdempotencyKey) {
+        async fn enqueue(&self, _message: Bytes, _idempotency_key: IdempotencyKey) {
             unimplemented!()
         }
     }
@@ -700,31 +700,27 @@ mod tests {
 
     #[async_trait]
     impl InvocationManagement for EmptyContext {
-        async fn set_current_invocation_key(&mut self, _invocation_key: IdempotencyKey) {
+        async fn set_current_idempotency_key(&mut self, _key: IdempotencyKey) {
             unimplemented!()
         }
 
-        async fn get_current_invocation_key(&self) -> Option<IdempotencyKey> {
+        async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
             unimplemented!()
         }
 
-        async fn interrupt_invocation_key(&mut self, _key: &IdempotencyKey) {
+        async fn interrupt_idempotency_key(&mut self, _key: &IdempotencyKey) {
             unimplemented!()
         }
 
-        async fn resume_invocation_key(&mut self, _key: &IdempotencyKey) {
+        async fn resume_idempotency_key(&mut self, _key: &IdempotencyKey) {
             unimplemented!()
         }
 
-        async fn confirm_invocation_key(
+        async fn confirm_idempotency_key(
             &mut self,
             _key: &IdempotencyKey,
             _vals: Result<Vec<Value>, GolemError>,
         ) {
-            unimplemented!()
-        }
-
-        fn generate_new_invocation_key(&mut self) -> IdempotencyKey {
             unimplemented!()
         }
 

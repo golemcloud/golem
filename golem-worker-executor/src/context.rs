@@ -144,34 +144,30 @@ impl ExternalOperations<Context> for Context {
 
 #[async_trait]
 impl InvocationManagement for Context {
-    async fn set_current_invocation_key(&mut self, invocation_key: IdempotencyKey) {
+    async fn set_current_idempotency_key(&mut self, idempotency_key: IdempotencyKey) {
         self.durable_ctx
-            .set_current_invocation_key(invocation_key)
+            .set_current_idempotency_key(idempotency_key)
             .await
     }
 
-    async fn get_current_invocation_key(&self) -> Option<IdempotencyKey> {
-        self.durable_ctx.get_current_invocation_key().await
+    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+        self.durable_ctx.get_current_idempotency_key().await
     }
 
-    async fn interrupt_invocation_key(&mut self, key: &IdempotencyKey) {
-        self.durable_ctx.interrupt_invocation_key(key).await
+    async fn interrupt_idempotency_key(&mut self, key: &IdempotencyKey) {
+        self.durable_ctx.interrupt_idempotency_key(key).await
     }
 
-    async fn resume_invocation_key(&mut self, key: &IdempotencyKey) {
-        self.durable_ctx.resume_invocation_key(key).await
+    async fn resume_idempotency_key(&mut self, key: &IdempotencyKey) {
+        self.durable_ctx.resume_idempotency_key(key).await
     }
 
-    async fn confirm_invocation_key(
+    async fn confirm_idempotency_key(
         &mut self,
         key: &IdempotencyKey,
         vals: Result<Vec<Value>, GolemError>,
     ) {
-        self.durable_ctx.confirm_invocation_key(key, vals).await
-    }
-
-    fn generate_new_invocation_key(&mut self) -> IdempotencyKey {
-        self.durable_ctx.generate_new_invocation_key()
+        self.durable_ctx.confirm_idempotency_key(key, vals).await
     }
 
     fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {

@@ -186,27 +186,24 @@ pub trait FuelManagement {
 #[async_trait]
 pub trait InvocationManagement {
     /// Sets the invocation key associated with the current invocation of the worker.
-    async fn set_current_invocation_key(&mut self, invocation_key: IdempotencyKey);
+    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey);
 
     /// Gets the invocation key associated with the current invocation of the worker.
-    async fn get_current_invocation_key(&self) -> Option<IdempotencyKey>;
+    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey>;
 
     /// Marks an invocation as interrupted
-    async fn interrupt_invocation_key(&mut self, key: &IdempotencyKey);
+    async fn interrupt_idempotency_key(&mut self, key: &IdempotencyKey);
 
     /// Marks a previously interrupted invocation as resumed
-    async fn resume_invocation_key(&mut self, key: &IdempotencyKey);
+    async fn resume_idempotency_key(&mut self, key: &IdempotencyKey);
 
     /// Marks an invocation as finished. The `vals` parameter is either the result values or
     /// an error if the invocation failed.
-    async fn confirm_invocation_key(
+    async fn confirm_idempotency_key(
         &mut self,
         key: &IdempotencyKey,
         vals: Result<Vec<Value>, GolemError>,
     );
-
-    /// Sets the invocation key associated with the current invocation to a fresh key
-    fn generate_new_invocation_key(&mut self) -> IdempotencyKey;
 
     /// Gets the result associated with an invocation key of the worker
     fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult;
@@ -392,5 +389,5 @@ pub trait PublicWorkerIo {
 
     /// Enqueues a message to the worker's event loop when it is running
     /// in the stdio-eventloop mode.
-    async fn enqueue(&self, message: Bytes, invocation_key: IdempotencyKey);
+    async fn enqueue(&self, message: Bytes, idempotency_key: IdempotencyKey);
 }
