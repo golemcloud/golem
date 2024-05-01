@@ -59,7 +59,7 @@ impl<C: golem_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClien
             version: version.0.to_string(),
             site: ApiSite {
                 host: host.to_string(),
-                subdomain
+                subdomain,
             },
         };
 
