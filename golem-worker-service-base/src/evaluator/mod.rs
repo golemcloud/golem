@@ -71,7 +71,7 @@ pub enum EvaluationError {
     Message(String),
 }
 
-impl<T : AsRef<str>> From<T> for EvaluationError {
+impl<T: AsRef<str>> From<T> for EvaluationError {
     fn from(value: T) -> Self {
         EvaluationError::Message(value.as_ref().to_string())
     }
@@ -942,9 +942,15 @@ mod tests {
         assert_eq!(
             (result1, result2, result3),
             (
-                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str("bar".to_string()))),
-                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str("baz".to_string()))),
-                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str("empty".to_string())))
+                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(
+                    "bar".to_string()
+                ))),
+                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(
+                    "baz".to_string()
+                ))),
+                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(
+                    "empty".to_string()
+                )))
             )
         );
     }
@@ -1376,8 +1382,7 @@ mod tests {
             "${match worker_response { Foo(none) => 'not found',  Foo(some(value)) => value.id }}",
         )
         .unwrap();
-        let result =
-            expr.evaluate_worker_bridge_response(&worker_response);
+        let result = expr.evaluate_worker_bridge_response(&worker_response);
 
         let expected = TypeAnnotatedValue::Str("not found".to_string());
 
