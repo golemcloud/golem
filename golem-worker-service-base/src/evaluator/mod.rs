@@ -475,23 +475,37 @@ mod tests {
     use crate::evaluator::{EvaluationError, Evaluator};
     use crate::expression;
     use crate::merge::Merge;
-    use crate::worker_bridge_execution::WorkerResponse;
+    use crate::worker_bridge_execution::{WorkerBridgeResponse, WorkerResponse};
     use test_utils::*;
 
-    trait EvaluatorExt {
+    trait EvaluatorTestExt {
       fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
-      fn evaluate_worker_bridge_response(&self, worker_bridge_response: &WorkerResponse) -> Result<TypeAnnotatedValue, EvaluationError>;
+      fn evaluate_worker_bridge_response(&self, worker_bridge_response: &WorkerBridgeResponse) -> Result<TypeAnnotatedValue, EvaluationError>;
     }
 
-    impl<T : Evaluator> EvaluatorExt for T {
+    impl<T : Evaluator> EvaluatorTestExt for T {
         fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
             let eval_result = self.evaluate(input, None)?;
             Ok(eval_result.get_value().ok_or("The expression is evaluated to unit and doesn't have a value")?)
         }
 
-        fn evaluate_worker_bridge_response(&self, worker_bridge_response: &WorkerResponse) -> Result<TypeAnnotatedValue, EvaluationError> {
-            let eval_result = self.evaluate_worker_bridge_response(worker_bridge_response)?;
+        fn evaluate_worker_bridge_response(&self, worker_bridge_response: &WorkerBridgeResponse) -> Result<TypeAnnotatedValue, EvaluationError> {
+            let empty_input = TypeAnnotatedValue::Record {
+                value: vec![],
+                typ: vec![],
+            };
+            let eval_result = self.evaluate(&empty_input, Some(worker_bridge_response))?;
             Ok(eval_result.get_value().ok_or("The expression is evaluated to unit and doesn't have a value")?)
+        }
+    }
+
+    trait WorkerBridgeExt {
+        fn to_test_worker_bridge_response(&self) -> WorkerBridgeResponse;
+    }
+
+    impl WorkerBridgeExt for WorkerResponse {
+        fn to_test_worker_bridge_response(&self) -> WorkerBridgeResponse {
+            WorkerBridgeResponse::SingleResult(self.result.result.clone())
         }
     }
 
@@ -780,13 +794,14 @@ mod tests {
         let result_as_typed_value =
             get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type)))
                 .unwrap();
-        let worker_response = WorkerResponse::new(result_as_typed_value, vec![]);
+        let worker_response =
+            WorkerBridgeResponse::from_worker_response(&WorkerResponse::new(result_as_typed_value, vec![])).unwrap();
 
         let expr = expression::from_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate_worker_bridge_response(&&worker_response);
+        let result = expr.evaluate_worker_bridge_response(&worker_response);
         assert_eq!(
             result,
             Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
@@ -1171,7 +1186,7 @@ mod tests {
         let expr =
             expression::from_string("${match worker.response { Foo(value) => ok(value.id) }}")
                 .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result = expr.evaluate_worker_bridge_response(&worker_response.result_with_worker_response_key());
 
         let expected = TypeAnnotatedValue::Result {
             value: Ok(Some(Box::new(TypeAnnotatedValue::Str("pId".to_string())))),
@@ -1208,13 +1223,14 @@ mod tests {
             ],
         };
 
-        let worker_response = WorkerResponse { result: output };
+        let worker_bridge_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { Foo(some(value)) => value.id, err(msg) => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+
+        let result = expr.evaluate_worker_bridge_response(&worker_bridge_response);
 
         let expected = TypeAnnotatedValue::Str("pId".to_string());
 
@@ -1225,13 +1241,13 @@ mod tests {
     fn test_evaluation_with_pattern_match_variant_nested_with_some_result() {
         let output = get_complex_variant_typed_value();
 
-        let worker_response = WorkerResponse { result: output };
+        let worker_bridge_response = WorkerResponse::new(output).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => 'not found' }}",
         )
             .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result = expr.evaluate_worker_bridge_response(&worker_bridge_response);
 
         let expected = TypeAnnotatedValue::Str("pId".to_string());
 
