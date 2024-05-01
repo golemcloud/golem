@@ -14,6 +14,7 @@ message ApiDefinitionError {
     golem.common.ErrorBody not_found = 5;
     golem.common.ErrorBody already_exists = 6;
     golem.common.ErrorBody internal_error = 7;
+    golem.common.ErrorBody not_draft = 8;
   }
 }
 

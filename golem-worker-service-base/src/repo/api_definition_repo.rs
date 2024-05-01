@@ -10,7 +10,7 @@ use tracing::{debug, info};
 use golem_common::config::RedisConfig;
 use golem_common::redis::{RedisError, RedisPool};
 
-use crate::api_definition::ApiDefinitionId;
+use crate::api_definition::{ApiDefinitionId, HasIsDraft};
 use crate::repo::api_namespace::ApiNamespace;
 use crate::service::api_definition::ApiDefinitionKey;
 
@@ -26,6 +26,11 @@ pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {
         &self,
         definition: &ApiDefinition,
         key: &ApiDefinitionKey<Namespace>,
+    ) -> Result<(), ApiRegistrationRepoError>;
+
+    async fn set_not_draft(
+        &self,
+        api_definition_key: &ApiDefinitionKey<Namespace>,
     ) -> Result<(), ApiRegistrationRepoError>;
 
     async fn get(
@@ -54,6 +59,8 @@ pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {
 pub enum ApiRegistrationRepoError {
     #[error("AlreadyExists: ApiDefinition with id: {} and version: {} already exists in the namespace {}", .0.id, .0.version, .0.namespace)]
     AlreadyExists(ApiDefinitionKey<String>),
+    #[error("NotDraft: ApiDefinition with id: {} and version: {} in namespace {} can not be updated", .0.id, .0.version, .0.namespace)]
+    NotDraft(ApiDefinitionKey<String>),
     #[error("NotFound: ApiDefinition with id: {} and version: {} not found in the namespace {}", .0.id, .0.version, .0.namespace)]
     NotFound(ApiDefinitionKey<String>),
     #[error(transparent)]
@@ -79,7 +86,7 @@ impl<Namespace, ApiDefinition> Default for InMemoryRegistry<Namespace, ApiDefini
 }
 
 #[async_trait]
-impl<Namespace: ApiNamespace, ApiDefinition: Send + Clone + Sync>
+impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send + Clone + Sync>
     ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition>
 {
     async fn create(
@@ -104,9 +111,29 @@ impl<Namespace: ApiNamespace, ApiDefinition: Send + Clone + Sync>
     ) -> Result<(), ApiRegistrationRepoError> {
         match self.get(key).await? {
             None => Err(ApiRegistrationRepoError::NotFound(key.displayed())),
+            Some(old) if !old.is_draft() => {
+                Err(ApiRegistrationRepoError::NotDraft(key.displayed()))
+            }
             Some(_) => {
                 let mut registry = self.registry.lock().unwrap();
                 registry.insert(key.clone(), definition.clone());
+                Ok(())
+            }
+        }
+    }
+
+    async fn set_not_draft(
+        &self,
+        key: &ApiDefinitionKey<Namespace>,
+    ) -> Result<(), ApiRegistrationRepoError> {
+        match self.get(key).await? {
+            None => Err(ApiRegistrationRepoError::NotFound(key.displayed())),
+            Some(old) if !old.is_draft() => Ok(()),
+            Some(_) => {
+                let mut registry = self.registry.lock().unwrap();
+                registry
+                    .entry(key.clone())
+                    .and_modify(|v| v.set_not_draft());
                 Ok(())
             }
         }
@@ -176,7 +203,7 @@ impl RedisApiRegistry {
 impl<Namespace, ApiDefinition> ApiDefinitionRepo<Namespace, ApiDefinition> for RedisApiRegistry
 where
     Namespace: ApiNamespace,
-    ApiDefinition: bincode::Decode + bincode::Encode + DeserializeOwned + Send + Sync,
+    ApiDefinition: HasIsDraft + bincode::Decode + bincode::Encode + DeserializeOwned + Send + Sync,
 {
     async fn create(
         &self,
@@ -229,9 +256,37 @@ where
         let current: Option<ApiDefinition> = self.get(key).await?;
         match current {
             None => Err(ApiRegistrationRepoError::NotFound(key.displayed())),
+            Some(old) if !old.is_draft() => {
+                Err(ApiRegistrationRepoError::NotDraft(key.displayed()))
+            }
             Some(_) => {
                 let definition_key = redis_keys::api_definition_key(key);
                 let definition = self.serialize(definition)?;
+
+                // We don't need transaction b/c the value should already exist in the namespace set.
+                let _ = self
+                    .pool
+                    .with("persistance", "update_definition")
+                    .set(definition_key, definition, None, None, false)
+                    .await?;
+
+                Ok(())
+            }
+        }
+    }
+
+    async fn set_not_draft(
+        &self,
+        key: &ApiDefinitionKey<Namespace>,
+    ) -> Result<(), ApiRegistrationRepoError> {
+        let mut current: Option<ApiDefinition> = self.get(key).await?;
+        match &mut current {
+            None => Err(ApiRegistrationRepoError::NotFound(key.displayed())),
+            Some(old) if !old.is_draft() => Ok(()),
+            Some(current) => {
+                current.set_not_draft();
+                let definition_key = redis_keys::api_definition_key(key);
+                let definition = self.serialize(current)?;
 
                 // We don't need transaction b/c the value should already exist in the namespace set.
                 let _ = self

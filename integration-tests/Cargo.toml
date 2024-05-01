@@ -66,3 +66,7 @@ path = "src/benchmarks/latency_medium.rs"
 name = "benchmark_latency_large"
 path = "src/benchmarks/latency_large.rs"
 
+[[bin]]
+name = "benchmark_durability_overhead"
+path = "src/benchmarks/durability_overhead.rs"
+
