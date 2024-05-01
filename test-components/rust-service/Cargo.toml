@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "http-service",
+    "component-service"
+]
+
+exclude = [
+#    "http-service",
+#    "component-service"
+]

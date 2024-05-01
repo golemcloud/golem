@@ -1,0 +1,14 @@
+[package]
+name = "rust-http-service"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+
+[dependencies]
+poem-openapi = { version = "4.0.0" }
+poem = { version = "3.0.0" }
+common = { path = "../common" }
+
+tokio = { version = "1.28.0", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }

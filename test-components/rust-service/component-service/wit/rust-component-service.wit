@@ -1,0 +1,12 @@
+package golem:it;
+
+interface api {
+
+  echo: func(input: string) -> string;
+
+  calculate: func(input: u64) -> u64;
+}
+
+world rust-component-service {
+  export api;
+}

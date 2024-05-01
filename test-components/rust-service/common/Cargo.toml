@@ -1,0 +1,13 @@
+[package]
+name = "common"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+
+[dependencies]
+serde_json = { version = "1.0.116" }
+serde = { version = "1.0.200", features = ["derive"] }
+
+[lib]
+path = "src/lib.rs"
