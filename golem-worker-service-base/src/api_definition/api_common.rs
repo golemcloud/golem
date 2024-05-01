@@ -58,17 +58,15 @@ pub struct ApiDeployment<Namespace> {
 #[derive(Debug, Eq, Clone, Hash, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
 pub struct ApiSite {
     pub host: String,
-    pub subdomain: String,
+    pub subdomain: Option<String>,
 }
 
 impl Display for ApiSite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Need to see how to remove the need of subdomain for localhost , as subdomains are not allowed for localhost
-        let host = &self.host;
-        if host.contains("localhost") || host.contains("127.0.0.1") {
-            write!(f, "{}", self.host)
-        } else {
-            write!(f, "{}.{}", self.subdomain, self.host)
+        match &self.subdomain {
+            Some(subdomain) => write!(f, "{}.{}", subdomain, self.host),
+            None => write!(f, "{}", self.host),
         }
     }
 }
