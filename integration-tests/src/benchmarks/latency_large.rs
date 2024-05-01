@@ -15,11 +15,12 @@
 use async_trait::async_trait;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
-use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder};
+use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use integration_tests::benchmarks::{run_benchmark, run_echo, setup, warmup_echo, Context};
 
 struct WorkerLatencyLarge {
-    config: CliParams,
+    params: CliParams,
+    config: RunConfig,
 }
 
 #[async_trait]
@@ -30,12 +31,12 @@ impl Benchmark for WorkerLatencyLarge {
         "latency-large"
     }
 
-    async fn create(config: CliParams) -> Self {
-        Self { config }
+    async fn create(params: CliParams, config: RunConfig) -> Self {
+        Self { params, config }
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.config.clone(), "py-echo", true).await
+        setup(self.params.clone(), self.config.clone(), "py-echo", true).await
     }
 
     async fn warmup(&self, context: &Self::IterationContext) {
@@ -43,7 +44,7 @@ impl Benchmark for WorkerLatencyLarge {
     }
 
     async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
-        run_echo(self.config.benchmark_config.length, context, recorder).await
+        run_echo(self.config.length, context, recorder).await
     }
 
     async fn cleanup_iteration(&self, context: Self::IterationContext) {

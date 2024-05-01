@@ -18,12 +18,13 @@ use async_trait::async_trait;
 use golem_wasm_rpc::Value;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
-use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder};
+use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
 use integration_tests::benchmarks::{run_benchmark, setup, Context};
 
 struct SimpleWorkerEcho {
-    config: CliParams,
+    params: CliParams,
+    config: RunConfig,
 }
 
 #[async_trait]
@@ -34,12 +35,18 @@ impl Benchmark for SimpleWorkerEcho {
         "simple-worker-echo"
     }
 
-    async fn create(config: CliParams) -> Self {
-        Self { config }
+    async fn create(params: CliParams, config: RunConfig) -> Self {
+        Self { params, config }
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.config.clone(), "option-service", true).await
+        setup(
+            self.params.clone(),
+            self.config.clone(),
+            "option-service",
+            true,
+        )
+        .await
     }
 
     async fn warmup(&self, context: &Self::IterationContext) {
@@ -78,7 +85,7 @@ impl Benchmark for SimpleWorkerEcho {
             let context_clone = context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
-            let length = self.config.benchmark_config.length;
+            let length = self.config.length;
             let fiber = tokio::task::spawn(async move {
                 for _ in 0..length {
                     let start = SystemTime::now();

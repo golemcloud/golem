@@ -19,7 +19,7 @@ use golem_wasm_rpc::Value;
 
 use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::config::{CliParams, CliTestDependencies};
-use golem_test_framework::dsl::benchmark::{BenchmarkApi, BenchmarkRecorder};
+use golem_test_framework::dsl::benchmark::{BenchmarkApi, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
 
 #[derive(Clone)]
@@ -69,12 +69,17 @@ pub async fn start(worker_ids: Vec<WorkerId>, deps: CliTestDependencies) {
     }
 }
 
-pub async fn setup(config: CliParams, component_name: &str, start_workers: bool) -> Context {
+pub async fn setup(
+    params: CliParams,
+    config: RunConfig,
+    component_name: &str,
+    start_workers: bool,
+) -> Context {
     // Initialize infrastructure
-    let deps = CliTestDependencies::new(config.clone()).await;
+    let deps = CliTestDependencies::new(params.clone(), config.clone()).await;
 
     let worker_ids = setup_with(
-        config.benchmark_config.size,
+        config.size,
         component_name,
         "worker",
         start_workers,
@@ -145,5 +150,5 @@ pub async fn run_benchmark<A: BenchmarkApi>() {
     let params = CliParams::parse();
     CliTestDependencies::init_logging(&params);
     let result = A::run_benchmark(params).await;
-    println!("{}", result);
+    println!("{}", result.view());
 }

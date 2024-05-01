@@ -16,13 +16,14 @@ use async_trait::async_trait;
 use golem_common::model::WorkerId;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
-use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder};
+use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use integration_tests::benchmarks::{
     get_worker_ids, run_benchmark, run_echo, setup, start, Context,
 };
 
 struct ColdStartEchoSmall {
-    config: CliParams,
+    params: CliParams,
+    config: RunConfig,
 }
 
 #[async_trait]
@@ -33,12 +34,12 @@ impl Benchmark for ColdStartEchoSmall {
         "cold-start-small"
     }
 
-    async fn create(config: CliParams) -> Self {
-        Self { config }
+    async fn create(params: CliParams, config: RunConfig) -> Self {
+        Self { params, config }
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.config.clone(), "rust-echo", false).await
+        setup(self.params.clone(), self.config.clone(), "rust-echo", false).await
     }
 
     async fn warmup(&self, context: &Self::IterationContext) {
