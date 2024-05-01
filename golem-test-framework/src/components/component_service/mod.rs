@@ -301,14 +301,18 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
 fn env_vars(
     http_port: u16,
     grpc_port: u16,
+    component_compilation_service_host: &str,
+    component_compilation_service_port: u16,
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     verbosity: Level,
 ) -> HashMap<String, String> {
     let log_level = verbosity.as_str().to_lowercase();
-
     let vars: &[(&str, &str)] = &[
         ("RUST_LOG"                     , &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
         ("RUST_BACKTRACE"               , "1"),
+        ("GOLEM__COMPILATION__TYPE", "Enabled"),
+        ("GOLEM__COMPILATION__CONFIG__HOST", component_compilation_service_host),
+        ("GOLEM__COMPILATION__CONFIG__PORT", &component_compilation_service_port.to_string()),
         ("GOLEM__COMPONENT_STORE__TYPE", "Local"),
         ("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", ""),
         ("GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH", "/tmp/ittest-local-object-store/golem"),
