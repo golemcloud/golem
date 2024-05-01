@@ -175,11 +175,10 @@ impl Evaluator for Expr {
                     evaluation_result
                         .get_value()
                         .ok_or(
-                            format!(
+                            EvaluationError::Message(format!(
                                 "The expression is evaluated to unit and doesn't have an index {}",
                                 index
-                            )
-                            .into(),
+                            )),
                         )?
                         .get(&Path::from_index(*index))
                         .map(|r| r.into())
@@ -188,11 +187,10 @@ impl Evaluator for Expr {
 
                 Expr::SelectField(expr, field_name) => {
                     let evaluation_result = go(expr, input, worker_response)?.get_value().ok_or(
-                        format!(
+                        EvaluationError::Message(format!(
                             "The expression is evaluated to unit and doesn't have an field {}",
                             field_name
-                        )
-                        .into(),
+                        )),
                     )?;
 
                     evaluation_result
