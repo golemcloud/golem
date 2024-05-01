@@ -1948,7 +1948,6 @@ components:
           type: string
       required:
       - host
-      - subdomain
     CallingConvention:
       type: string
       enum:
