@@ -771,7 +771,7 @@ mod tests {
             &HeaderMap::new(),
         );
 
-        let expr = expression::from_string("${worker.response.address.street}").unwrap();
+        let expr = expression::from_string("${worker_response.address.street}").unwrap();
         let expected_evaluated_result =
             EvaluationError::InvalidReference(GetError::KeyNotFound("worker".to_string()));
         let result = expr.evaluate(&resolved_variables);
@@ -798,7 +798,7 @@ mod tests {
             WorkerBridgeResponse::from_worker_response(&WorkerResponse::new(result_as_typed_value, vec![])).unwrap();
 
         let expr = expression::from_string(
-            "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
+            "${match worker_response { some(value) => 'personal-id', none => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate_worker_bridge_response(&worker_response);
@@ -814,7 +814,7 @@ mod tests {
             get_worker_response(Value::Null.to_string().as_str()).result_with_worker_response_key();
 
         let expr = expression::from_string(
-            "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
+            "${match worker_response { some(value) => 'personal-id', none => 'not found' }}",
         )
         .unwrap();
 
@@ -847,7 +847,7 @@ mod tests {
         );
 
         let expr1 = expression::from_string(
-            "${if request.path.id == 'foo' then 'bar' else match worker.response { ok(value) => value.id, err(msg) => 'empty' }}",
+            "${if request.path.id == 'foo' then 'bar' else match worker_response { ok(value) => value.id, err(msg) => 'empty' }}",
         )
             .unwrap();
 
@@ -855,7 +855,7 @@ mod tests {
 
         // Intentionally bringing an curly brace
         let expr2 = expression::from_string(
-            "${if request.path.id == 'bar' then 'foo' else match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }}",
+            "${if request.path.id == 'bar' then 'foo' else match worker_response { ok(foo) => foo.id, err(msg) => 'empty' }}",
 
         ).unwrap();
 
@@ -877,7 +877,7 @@ mod tests {
             .merge(&error_worker_response.result_with_worker_response_key());
 
         let expr3 = expression::from_string(
-            "${if request.path.id == 'bar' then 'foo' else match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }}",
+            "${if request.path.id == 'bar' then 'foo' else match worker_response { ok(foo) => foo.id, err(msg) => 'empty' }}",
 
         ).unwrap();
 
@@ -905,7 +905,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => 'personal-id', err(msg) => 'not found' }}",
+            "${match worker_response { ok(value) => 'personal-id', err(msg) => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -927,7 +927,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => value, err(msg) => 'not found' }}",
+            "${match worker_response { ok(value) => value, err(msg) => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -952,7 +952,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => value.id, err(msg) => 'not found' }}",
+            "${match worker_response { ok(value) => value.id, err(msg) => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -971,7 +971,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => value.ids[0], err(msg) => 'not found' }}",
+            "${match worker_response { ok(value) => value.ids[0], err(msg) => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -990,7 +990,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => some(value.ids[0]), err(msg) => 'not found' }}",
+            "${match worker_response { ok(value) => some(value.ids[0]), err(msg) => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -1013,7 +1013,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => none, none => 'not found' }}",
+            "${match worker_response { ok(value) => none, none => 'not found' }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -1036,7 +1036,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => some(none), none => none }}",
+            "${match worker_response { ok(value) => some(none), none => none }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -1062,7 +1062,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => ok(1), none => err(2) }}",
+            "${match worker_response { ok(value) => ok(1), none => err(2) }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -1086,7 +1086,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => ok(1), err(msg) => err(2) }}",
+            "${match worker_response { ok(value) => ok(1), err(msg) => err(2) }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -1111,7 +1111,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(_) => ok(1), err(_) => err(2) }}",
+            "${match worker_response { ok(_) => ok(1), err(_) => err(2) }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -1138,7 +1138,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { a @ ok(b @ _) => ok(1), c @ err(d @ ok(e)) => {p : c, q: d, r: e.id} }}",
+            "${match worker_response { a @ ok(b @ _) => ok(1), c @ err(d @ ok(e)) => {p : c, q: d, r: e.id} }}",
         )
             .unwrap();
         let result = expr
@@ -1184,7 +1184,7 @@ mod tests {
             }, vec![]);
 
         let expr =
-            expression::from_string("${match worker.response { Foo(value) => ok(value.id) }}")
+            expression::from_string("${match worker_response { Foo(value) => ok(value.id) }}")
                 .unwrap();
         let result = expr.evaluate_worker_bridge_response(&worker_response.result_with_worker_response_key());
 
@@ -1226,7 +1226,7 @@ mod tests {
         let worker_bridge_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
-            "${match worker.response { Foo(some(value)) => value.id, err(msg) => 'not found' }}",
+            "${match worker_response { Foo(some(value)) => value.id, err(msg) => 'not found' }}",
         )
         .unwrap();
 
@@ -1244,7 +1244,7 @@ mod tests {
         let worker_bridge_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
-            "${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => 'not found' }}",
+            "${match worker_response { Foo(some(ok(value))) => value.id, err(msg) => 'not found' }}",
         )
             .unwrap();
         let result = expr.evaluate_worker_bridge_response(&worker_bridge_response);
@@ -1261,7 +1261,7 @@ mod tests {
         let worker_bridge_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
-            "${match worker.response { Foo(ok(some(value))) => value.id, err(msg) => 'not found' }}",
+            "${match worker_response { Foo(ok(some(value))) => value.id, err(msg) => 'not found' }}",
         )
             .unwrap();
         let result = expr.evaluate(&worker_bridge_response.result_with_worker_response_key());
@@ -1300,7 +1300,7 @@ mod tests {
         let worker_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
-            "${match worker.response { Foo(none) => 'not found',  Foo(some(value)) => value.id }}",
+            "${match worker_response { Foo(none) => 'not found',  Foo(some(value)) => value.id }}",
         )
         .unwrap();
         let result = expr.evaluate(&worker_response.result_with_worker_response_key());
@@ -1638,7 +1638,7 @@ mod tests {
         fn expr_to_string_round_trip_match_expr_err() {
             let worker_response = get_err_worker_response();
 
-            let expr1_string = "${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
+            let expr1_string = "${match worker_response { ok(x) => 'foo', err(msg) => 'error' }}";
             let expr1 = expression::from_string(expr1_string).unwrap();
             let value1 = expr1
                 .evaluate(&worker_response.result_with_worker_response_key())
@@ -1659,7 +1659,7 @@ mod tests {
             let worker_response = get_err_worker_response().to_test_worker_bridge_response();
 
             let expr1_string =
-                "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
+                "append-${match worker_response { ok(x) => 'foo', err(msg) => 'error' }}";
             let expr1 = expression::from_string(expr1_string).unwrap();
             let value1 = expr1
                 .evaluate_worker_bridge_response(&worker_response)
@@ -1680,7 +1680,7 @@ mod tests {
             let worker_response = get_err_worker_response();
 
             let expr1_string =
-                "prefix-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
+                "prefix-${match worker_response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
             let expr1 = expression::from_string(expr1_string).unwrap();
             let value1 = expr1
                 .evaluate(&worker_response.result_with_worker_response_key())
