@@ -1,10 +1,11 @@
-use crate::evaluator::EvaluationError;
+use crate::evaluator::{EvaluationError, EvaluationResult};
 use crate::evaluator::Evaluator;
 use crate::expression::{ArmPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, MatchArm};
 use crate::merge::Merge;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::ops::Deref;
+use crate::worker_bridge_execution::WorkerBridgeResponse;
 
 struct BindingVariable(String);
 
@@ -28,15 +29,16 @@ pub(crate) fn evaluate_pattern_match(
     match_expr: &Expr,
     arms: &Vec<MatchArm>,
     input: &mut TypeAnnotatedValue,
-) -> Result<TypeAnnotatedValue, EvaluationError> {
-    let match_evaluated = match_expr.evaluate(input)?;
+    worker_bridge_response: &Option<WorkerBridgeResponse>,
+) -> Result<EvaluationResult, EvaluationError> {
+    let match_evaluated = match_expr.evaluate(input, worker_bridge_response.as_ref())?;
 
-    let mut resolved: Option<TypeAnnotatedValue> = None;
+    let mut resolved: Option<EvaluationResult> = None;
 
     for arm in arms {
         let constructor_pattern = &arm.0 .0;
         let match_arm_evaluated =
-            evaluate_arm_pattern(constructor_pattern, &match_evaluated, input, None)?;
+            evaluate_arm_pattern(constructor_pattern, &match_evaluated.get_value().ok_or("Unit cannot be part of match expression".to_string())?, input, None)?;
 
         match match_arm_evaluated {
             ArmPatternOutput::Matched(match_result) => {
@@ -51,7 +53,7 @@ pub(crate) fn evaluate_pattern_match(
 
                 let arm_body = &arm.0 .1;
 
-                resolved = Some(arm_body.evaluate(input)?);
+                resolved = Some(arm_body.evaluate(input, worker_bridge_response)?);
                 break;
             }
             ArmPatternOutput::TypeMisMatch(type_mismatch) => {
