@@ -1,17 +1,14 @@
 use async_trait::async_trait;
-use golem_service_base::model::ExportFunction;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::{get_json_from_typed_value, get_typed_value_from_json};
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::StatusCode;
 use poem::Body;
-use serde_json::{json, to_string_pretty};
+use serde_json::{json};
 use tracing::info;
 
 use crate::service::worker::TypedResult;
 use golem_service_base::type_inference::*;
-
-use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::ResponseMapping;
 use crate::worker_bridge_execution::worker_request_executor::{
     WorkerRequestExecutor, WorkerRequestExecutorError,
@@ -32,13 +29,12 @@ impl WorkerBridgeResponse {
         worker_response: &WorkerResponse,
     ) -> Result<WorkerBridgeResponse, String> {
         let result = &worker_response.result.result;
+        let function_result_types = &worker_response.result.function_result_types;
 
-        if worker_response
-            .result
-            .function_result_types
+        if function_result_types
             .iter()
             .all(|r| r.name.is_none())
-            && result.len() > 0
+            && function_result_types.len() > 0
         {
             match result {
                 TypeAnnotatedValue::Tuple { value, .. } => {
@@ -46,18 +42,20 @@ impl WorkerBridgeResponse {
                         Ok(WorkerBridgeResponse::SingleResult(value[0].clone()))
                     } else if value.len() == 0 {
                         Ok(WorkerBridgeResponse::Unit)
+                    } else {
+                        Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple with 1 element if results are unnamed. Obtained {:?}", AnalysedType::from(result)))
                     }
                 }
                 ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple if results ae unnamed. Obtained {:?}", AnalysedType::from(ty))),
             }
         } else {
-            match worker_response  {
+            match &worker_response.result.result  {
                 TypeAnnotatedValue::Record { .. } => {
-                    Ok(WorkerBridgeResponse::MultipleResults(worker_response.clone()))
+                    Ok(WorkerBridgeResponse::MultipleResults(worker_response.result.result.clone()))
                 }
 
                 // See wasm-rpc implementations for more details
-                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Record if results are named. Obtained {:?}", AnalysedType::from(ty))),
+                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Record if results are named. Obtained {:?}", AnalysedType::from(&ty))),
             }
         }
     }
@@ -81,16 +79,7 @@ impl WorkerBridgeResponse {
             let type_annotated_value = match self {
                 WorkerBridgeResponse::Unit => None,
                 WorkerBridgeResponse::SingleResult(value) => Some(value.clone()),
-                WorkerBridgeResponse::MultipleResults(results) => {
-                    let mut record = vec![];
-                    for (key, value) in results {
-                        record.push((key.clone(), value.clone()));
-                    }
-                    TypeAnnotatedValue::Record {
-                        typ: vec![],
-                        value: record,
-                    }
-                }
+                WorkerBridgeResponse::MultipleResults(results) => Some(results.clone())
             };
 
             match type_annotated_value {
@@ -99,7 +88,7 @@ impl WorkerBridgeResponse {
                     let body: Body = Body::from_json(json).unwrap();
                     poem::Response::builder().body(body)
                 }
-                None => poem::Response::builder().status(StatusCode::OK),
+                None => poem::Response::builder().status(StatusCode::OK).finish(),
             }
         }
     }
@@ -162,11 +151,9 @@ mod internal {
     use crate::evaluator::Evaluator;
     use crate::evaluator::{EvaluationError, EvaluationResult};
     use crate::expression::Expr;
-    use crate::merge::Merge;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::ResponseMapping;
     use crate::worker_bridge_execution::worker_response::WorkerBridgeResponse;
-    use golem_service_base::model::FunctionResult;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, StatusCode};

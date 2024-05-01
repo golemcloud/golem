@@ -76,12 +76,18 @@ pub enum EvaluationError {
     Message(String),
 }
 
+impl From<String> for EvaluationError {
+    fn from(value: String) -> Self {
+        EvaluationError::Message(value)
+    }
+}
+
 pub struct RawString<'t> {
     pub input: &'t str,
 }
 
 // When we expect only primitives within a string, and uses ${} not as an expr,
-// but as a mere place holder. This type disallows complex structures to end up
+// but as a mere place-holder. This type disallows complex structures to end up
 // in values such as function-name.
 impl<'t> RawString<'t> {
     pub fn new(str: &'t str) -> RawString<'t> {
@@ -911,8 +917,7 @@ mod tests {
             .unwrap();
 
         let result1 = expr1.evaluate(success_response_with_input_variables);
-
-        // Intentionally bringing an curly brace
+        
         let expr2 = expression::from_string(
             "${if request.path.id == 'bar' then 'foo' else match worker_response { ok(foo) => foo.id, err(msg) => 'empty' }}",
 

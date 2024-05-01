@@ -108,7 +108,6 @@ impl CustomHttpRequestApi {
                         }
                     };
 
-                // Execute the request using a executor
                 match self
                     .worker_to_http_response_service
                     .execute(resolved_worker_request.clone())

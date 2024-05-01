@@ -27,7 +27,7 @@ fn read_wasm_wave_string_internal(
             value: vec![],
         },
         None,
-    )?;
+    ).map_err(|err| err.to_string())?;
 
     result
         .get_value()
