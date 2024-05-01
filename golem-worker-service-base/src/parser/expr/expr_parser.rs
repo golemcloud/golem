@@ -352,10 +352,7 @@ mod tests {
 
         let result = expression_parser.parse("${worker_response.input[0]}");
         let worker = Expr::WorkerResponse();
-        let select_input = Expr::SelectField(
-            Box::new(Expr::SelectField(Box::new(worker), "response".to_string())),
-            "input".to_string(),
-        );
+        let select_input = Expr::SelectField(Box::new(worker), "input".to_string());
         let first_index = Expr::SelectIndex(Box::new(select_input), 0);
 
         assert_eq!(result, Ok(first_index));
@@ -873,10 +870,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField(
-                Box::new(Expr::WorkerResponse()),
-                "response".to_string(),
-            )),
+            Box::new(Expr::WorkerResponse()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -907,10 +901,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField(
-                Box::new(Expr::WorkerResponse()),
-                "response".to_string(),
-            )),
+            Box::new(Expr::WorkerResponse()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -947,10 +938,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField(
-                Box::new(Expr::WorkerResponse()),
-                "response".to_string(),
-            )),
+            Box::new(Expr::WorkerResponse()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -960,10 +948,7 @@ mod tests {
                         )))],
                     )
                     .unwrap(),
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::WorkerResponse()),
-                        "response".to_string(),
-                    )),
+                    Box::new(Expr::WorkerResponse()),
                 )),
                 MatchArm((
                     ArmPattern::from("none", vec![]).unwrap(),
@@ -984,10 +969,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField(
-                Box::new(Expr::WorkerResponse()),
-                "response".to_string(),
-            )),
+            Box::new(Expr::WorkerResponse()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1001,10 +983,7 @@ mod tests {
                         .unwrap()],
                     )
                     .unwrap(),
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::WorkerResponse()),
-                        "response".to_string(),
-                    )),
+                    Box::new(Expr::WorkerResponse()),
                 )),
                 MatchArm((
                     ArmPattern::from("none", vec![]).unwrap(),
@@ -1024,10 +1003,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField(
-                Box::new(Expr::WorkerResponse()),
-                "response".to_string(),
-            )),
+            Box::new(Expr::WorkerResponse()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1064,10 +1040,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField(
-                Box::new(Expr::WorkerResponse()),
-                "response".to_string(),
-            )),
+            Box::new(Expr::WorkerResponse()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1105,10 +1078,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::SelectField(
-                Box::new(Expr::WorkerResponse()),
-                "response".to_string(),
-            )),
+            Box::new(Expr::WorkerResponse()),
             vec![
                 MatchArm((
                     ArmPattern::from(

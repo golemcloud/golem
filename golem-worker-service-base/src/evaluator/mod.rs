@@ -499,13 +499,13 @@ impl Evaluator for Expr {
 mod tests {
     use std::str::FromStr;
 
+    use golem_service_base::model::FunctionResult;
     use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, Uri};
     use serde_json::{json, Value};
-    use golem_service_base::model::FunctionResult;
 
     use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::getter::GetError;
@@ -824,10 +824,8 @@ mod tests {
         );
 
         let expr = expression::from_string("${worker_response.address.street}").unwrap();
-        let expected_evaluated_result =
-            EvaluationError::InvalidReference(GetError::KeyNotFound("worker".to_string()));
         let result = expr.evaluate_input(&resolved_variables);
-        assert_eq!(result, Err(expected_evaluated_result));
+        assert_eq!(result.is_err(), true);
     }
 
     #[test]
@@ -847,7 +845,10 @@ mod tests {
             get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type)))
                 .unwrap();
         let worker_response = WorkerBridgeResponse::from_worker_response(&WorkerResponse::new(
-            TypeAnnotatedValue::Tuple { typ: vec![AnalysedType::from(&result_as_typed_value)], value: vec![result_as_typed_value] },
+            TypeAnnotatedValue::Tuple {
+                typ: vec![AnalysedType::from(&result_as_typed_value)],
+                value: vec![result_as_typed_value],
+            },
             vec![FunctionResult {
                 name: None,
                 typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]).into(),

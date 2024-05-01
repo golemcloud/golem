@@ -322,10 +322,7 @@ mod tests {
                                     )
                                 ])),
                             ),
-                            (
-                                "body".to_string(),
-                                Box::new(Expr::WorkerResponse()),
-                            ),
+                            ("body".to_string(), Box::new(Expr::WorkerResponse()),),
                             (
                                 "status".to_string(),
                                 Box::new(Expr::Number(InnerNumber::UnsignedInteger(200)))
