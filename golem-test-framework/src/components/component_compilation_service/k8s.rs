@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{env_vars, wait_for_startup, ComponentService};
+use crate::components::component_compilation_service::{
+    env_vars, wait_for_startup, ComponentCompilationService,
+};
+use crate::components::component_service::ComponentService;
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
-use crate::components::rdb::Rdb;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use k8s_openapi::api::core::v1::{Pod, Service};
@@ -29,7 +31,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{info, Level};
 
-pub struct K8sComponentService {
+pub struct K8sComponentCompilationService {
     namespace: K8sNamespace,
     local_host: String,
     local_port: u16,
@@ -38,29 +40,25 @@ pub struct K8sComponentService {
     routing: Arc<Mutex<K8sRouting>>,
 }
 
-impl K8sComponentService {
-    const GRPC_PORT: u16 = 9091;
-    const HTTP_PORT: u16 = 8081;
-    const NAME: &'static str = "golem-component-service";
+impl K8sComponentCompilationService {
+    pub const GRPC_PORT: u16 = 9094;
+    pub const HTTP_PORT: u16 = 8083;
+    pub const NAME: &'static str = "golem-component-compilation-service";
 
     pub async fn new(
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         verbosity: Level,
-        component_compilation_service_host: &str,
-        component_compilation_service_port: u16,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
-        info!("Starting Golem Component Service pod");
+        info!("Starting Golem Component Compilation Service pod");
 
         let env_vars = env_vars(
             Self::HTTP_PORT,
             Self::GRPC_PORT,
-            component_compilation_service_host,
-            component_compilation_service_port,
-            rdb,
+            component_service,
             verbosity,
         );
         let env_vars = env_vars
@@ -104,7 +102,7 @@ impl K8sComponentService {
                 ],
                 "containers": [{
                     "name": "service",
-                    "image": format!("golemservices/golem-component-service:latest"),
+                    "image": format!("golemservices/golem-component-compilation-service:latest"),
                     "env": env_vars
                 }]
             }
@@ -161,7 +159,7 @@ impl K8sComponentService {
 
         wait_for_startup(&local_host, local_port, timeout).await;
 
-        info!("Golem Component Service pod started");
+        info!("Golem Component Compilation Service pod started");
 
         Self {
             namespace: namespace.clone(),
@@ -174,7 +172,7 @@ impl K8sComponentService {
     }
 }
 
-impl ComponentService for K8sComponentService {
+impl ComponentCompilationService for K8sComponentCompilationService {
     fn private_host(&self) -> String {
         format!("{}.{}.svc.cluster.local", Self::NAME, &self.namespace.0)
     }
