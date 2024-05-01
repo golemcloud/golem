@@ -65,7 +65,7 @@ impl<W: Write> Writer<W> {
                 self.write_expr(expr)?;
                 self.write_display(Token::SemiColon)
             }
-            Expr::Worker() => self.write_display(Token::MultiChar(MultiCharTokens::Worker)),
+            Expr::WorkerResponse() => self.write_display(Token::MultiChar(MultiCharTokens::Worker)),
             Expr::SelectField(expr, field_name) => {
                 self.write_expr(expr)?;
                 self.write_str(".")?;

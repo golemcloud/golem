@@ -1,7 +1,7 @@
-use crate::worker_bridge_execution::worker_response::WorkerResponse;
 use crate::worker_bridge_execution::WorkerRequest;
 use async_trait::async_trait;
 use std::fmt::Display;
+use crate::service::worker::TypedResult;
 
 #[async_trait]
 pub trait WorkerRequestExecutor<Response> {
@@ -10,6 +10,13 @@ pub trait WorkerRequestExecutor<Response> {
         resolved_worker_request: WorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError>;
 }
+
+// The result of a worker execution from worker-bridge,
+// which is a combination of function metadata and the type-annotated-value representing the actual result
+pub struct WorkerResponse {
+    pub result: TypedResult,
+}
+
 
 #[derive(Clone, Debug)]
 pub struct WorkerRequestExecutorError(String);

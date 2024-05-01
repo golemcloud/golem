@@ -325,7 +325,7 @@ mod tests {
                             (
                                 "body".to_string(),
                                 Box::new(Expr::SelectField(
-                                    Box::new(Expr::Worker()),
+                                    Box::new(Expr::WorkerResponse()),
                                     "response".to_string(),
                                 )),
                             ),

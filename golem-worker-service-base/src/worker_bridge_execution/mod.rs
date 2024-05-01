@@ -49,7 +49,7 @@ impl WorkerRequest {
                 .resolved_worker_binding_template
                 .function_name,
         )
-        .evaluate(&resolved_route.typed_value_from_input)
+        .evaluate(&resolved_route.typed_value_from_input, None)
         .map_err(|err| err.to_string())?;
 
         let function_name = match function_name_value {
@@ -69,7 +69,7 @@ impl WorkerRequest {
             .function_params
         {
             let type_annotated_value = expr
-                .evaluate(&resolved_route.typed_value_from_input)
+                .evaluate(&resolved_route.typed_value_from_input, None)
                 .map_err(|err| err.to_string())?;
 
             let json = get_json_from_typed_value(&type_annotated_value);

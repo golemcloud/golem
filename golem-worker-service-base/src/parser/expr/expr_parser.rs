@@ -76,7 +76,7 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                 previous_expression.build(expr);
             }
 
-            Token::MultiChar(MultiCharTokens::Worker) => previous_expression.build(Expr::Worker()),
+            Token::MultiChar(MultiCharTokens::Worker) => previous_expression.build(Expr::WorkerResponse()),
 
             Token::MultiChar(MultiCharTokens::InterpolationStart) => {
                 let code_block = code_block::create_code_block(&mut tokenizer)?;
@@ -349,7 +349,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser.parse("${worker.response.input[0]}");
-        let worker = Expr::Worker();
+        let worker = Expr::WorkerResponse();
         let select_input = Expr::SelectField(
             Box::new(Expr::SelectField(Box::new(worker), "response".to_string())),
             "input".to_string(),
@@ -872,7 +872,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::WorkerResponse()),
                 "response".to_string(),
             )),
             vec![
@@ -906,7 +906,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::WorkerResponse()),
                 "response".to_string(),
             )),
             vec![
@@ -946,7 +946,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::WorkerResponse()),
                 "response".to_string(),
             )),
             vec![
@@ -959,7 +959,7 @@ mod tests {
                     )
                     .unwrap(),
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Worker()),
+                        Box::new(Expr::WorkerResponse()),
                         "response".to_string(),
                     )),
                 )),
@@ -983,7 +983,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::WorkerResponse()),
                 "response".to_string(),
             )),
             vec![
@@ -1000,7 +1000,7 @@ mod tests {
                     )
                     .unwrap(),
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Worker()),
+                        Box::new(Expr::WorkerResponse()),
                         "response".to_string(),
                     )),
                 )),
@@ -1023,7 +1023,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::WorkerResponse()),
                 "response".to_string(),
             )),
             vec![
@@ -1063,7 +1063,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::WorkerResponse()),
                 "response".to_string(),
             )),
             vec![
@@ -1104,7 +1104,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::WorkerResponse()),
                 "response".to_string(),
             )),
             vec![

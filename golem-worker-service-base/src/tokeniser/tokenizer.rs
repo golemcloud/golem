@@ -56,7 +56,7 @@ impl Token {
         Token::MultiChar(MultiCharTokens::InterpolationStart)
     }
 
-    pub fn worker() -> Token {
+    pub fn worker_response() -> Token {
         Token::MultiChar(MultiCharTokens::Worker)
     }
 
@@ -166,7 +166,7 @@ impl Display for Token {
                     MultiCharTokens::LessThanOrEqualTo => "<=",
                     MultiCharTokens::If => "if",
                     MultiCharTokens::Then => "then",
-                    MultiCharTokens::Worker => "worker",
+                    MultiCharTokens::Worker => "worker_response",
                     MultiCharTokens::Request => "request",
                     MultiCharTokens::Ok => "ok",
                     MultiCharTokens::Err => "err",
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn test_worker_response() {
         let tokens: Vec<Token> = Tokenizer::new("worker.").collect();
-        assert_eq!(tokens, vec![Token::worker(), Token::Dot]);
+        assert_eq!(tokens, vec![Token::worker_response(), Token::Dot]);
     }
 
     #[test]
@@ -1032,7 +1032,7 @@ else${z}
                 Token::interpolation_start(),
                 Token::match_token(),
                 Token::Space,
-                Token::worker(),
+                Token::worker_response(),
                 Token::Dot,
                 Token::raw_string("response"),
                 Token::Space,
@@ -1045,7 +1045,7 @@ else${z}
                 Token::Space,
                 Token::arrow(),
                 Token::Space,
-                Token::worker(),
+                Token::worker_response(),
                 Token::Dot,
                 Token::raw_string("response"),
                 Token::Comma,

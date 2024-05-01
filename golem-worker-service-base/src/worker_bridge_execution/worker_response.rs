@@ -16,25 +16,19 @@ use crate::worker_binding::ResponseMapping;
 use crate::worker_bridge_execution::worker_request_executor::{
     WorkerRequestExecutor, WorkerRequestExecutorError,
 };
-use crate::worker_bridge_execution::WorkerRequest;
-
-// The result of a worker execution from worker-bridge,
-// which is a combination of function metadata and the type-annotated-value representing the actual result
-pub struct WorkerResponse {
-    pub result: TypedResult,
-}
+use crate::worker_bridge_execution::{WorkerRequest, WorkerResponse};
 
 // Worker Bridge response is different from WorkerResponse, because,
 // it ensures that we are not returing a vector of result if they are not named results
 // or unit
-enum WorkerBridgeResponse {
+pub enum WorkerBridgeResponse {
     Unit,
     SingleResult(TypeAnnotatedValue),
-    MultipleResults(Vec<(String, TypeAnnotatedValue)>),
+    MultipleResults(TypeAnnotatedValue),
 }
 
 impl WorkerBridgeResponse {
-    fn from_worker_response(worker_response: &WorkerResponse) -> Result<WorkerBridgeResponse, String> {
+    pub(crate) fn from_worker_response(worker_response: &WorkerResponse) -> Result<WorkerBridgeResponse, String> {
         let result = &worker_response.result.result;
 
         if worker_response.result.function_result_types.iter().all(|r| r.name.is_none()) && result.len() > 0 {
@@ -50,8 +44,8 @@ impl WorkerBridgeResponse {
             }
         } else {
             match worker_response  {
-                TypeAnnotatedValue::Record { value, .. } => {
-                    Ok(WorkerBridgeResponse::MultipleResults(value.clone()))
+                TypeAnnotatedValue::Record { .. } => {
+                    Ok(WorkerBridgeResponse::MultipleResults(worker_response.clone()))
                 }
 
                 // See wasm-rpc implementations for more details
@@ -60,16 +54,6 @@ impl WorkerBridgeResponse {
         }
     }
 
-    pub(crate) fn to_http_response(
-        &self,
-        response_mapping: &Option<ResponseMapping>,
-        input_request: &TypeAnnotatedValue,
-    ) -> poem::Response {
-
-    }
-}
-
-impl WorkerResponse {
     pub(crate) fn to_http_response(
         &self,
         response_mapping: &Option<ResponseMapping>,
@@ -86,40 +70,35 @@ impl WorkerResponse {
                     ))),
             }
         } else {
-            let json = get_json_from_typed_value(&self.result.result);
-            let body: Body = Body::from_json(json).unwrap();
-            poem::Response::builder().body(body)
+            let type_annotated_value = match self {
+                WorkerBridgeResponse::Unit =>  None,
+                WorkerBridgeResponse::SingleResult(value) => Some(value.clone()),
+                WorkerBridgeResponse::MultipleResults(results) => {
+                    let mut record = vec![];
+                    for (key, value) in results {
+                        record.push((key.clone(), value.clone()));
+                    }
+                    TypeAnnotatedValue::Record {
+                        typ: vec![],
+                        value: record,
+                    }
+                }
+            };
+
+            match type_annotated_value {
+                Some(value) => {
+                    let json = get_json_from_typed_value(&value);
+                    let body: Body = Body::from_json(json).unwrap();
+                    poem::Response::builder().body(body)
+                }
+                None =>{
+                    poem::Response::builder().status(StatusCode::OK)
+                }
+            }
+
         }
     }
-
-    // This makes sure that the result is injected into the worker.response field
-    // So that clients can refer to the worker response using worker.response keyword
-    pub(crate) fn result_with_worker_response_key(&self) -> Result<String, Option<TypeAnnotatedValue>> {
-        let worker_response_value = &self.result;
-        let worker_response_typ = AnalysedType::from(worker_response_value);
-        let response_key = "response".to_string();
-
-        let response_type = vec![(response_key.clone(), worker_response_typ.clone())];
-
-        let resolved_response =
-            internal::resolve_results(&worker_response_value.function_result_types, &worker_response_value.result).unwrap();
-
-        resolved_response.map(|response| TypeAnnotatedValue::Record {
-            typ: vec![(
-                Token::worker().to_string(),
-                AnalysedType::Record(response_type.clone()),
-            )],
-            value: vec![(
-                Token::worker().to_string(),
-                TypeAnnotatedValue::Record {
-                    typ: response_type.clone(),
-                    value: vec![(response_key.clone(), response)],
-                },
-            )],
-        })
-    }
 }
-
 
 pub struct NoOpWorkerRequestExecutor {}
 
@@ -182,31 +161,15 @@ mod internal {
     use crate::merge::Merge;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::ResponseMapping;
-    use crate::worker_bridge_execution::WorkerResponse;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, StatusCode};
     use poem::{Body, ResponseParts};
     use std::collections::HashMap;
     use golem_service_base::model::FunctionResult;
+    use crate::worker_bridge_execution::worker_response::WorkerBridgeResponse;
 
 
-
-    pub(crate) fn resolve_results(result: &Vec<FunctionResult>, worker_response: &TypeAnnotatedValue) -> Result<Option<TypeAnnotatedValue>, String> {
-        if result.iter().all(|r| r.name.is_none()) && result.len() > 0 {
-            match worker_response {
-                TypeAnnotatedValue::Tuple { typ, value } => {
-                    Ok(Some(value[0].clone()))
-                },
-                _ => Err("Internal error when trying to resolve the function resulttype".to_string())
-            }
-        }else if result.len() == 0 {
-            Ok(None)
-        } else {
-            Ok(Some(worker_response))
-        }
-
-    }
 
     pub(crate) struct IntermediateHttpResponse {
         body: TypeAnnotatedValue,
@@ -216,7 +179,7 @@ mod internal {
 
     impl IntermediateHttpResponse {
         pub(crate) fn from(
-            worker_response: &WorkerResponse,
+            worker_response: &WorkerBridgeResponse,
             response_mapping: &ResponseMapping,
             input_request: &TypeAnnotatedValue,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {

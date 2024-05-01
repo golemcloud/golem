@@ -6,6 +6,7 @@ use crate::primitive::GetPrimitive;
 use getter::GetError;
 use getter::Getter;
 use path::Path;
+use crate::worker_bridge_execution::{W, WorkerBridgeResponse}
 
 use crate::expression::{Expr, InnerNumber};
 use crate::merge::Merge;
@@ -18,7 +19,7 @@ mod path;
 mod pattern_match_evaluator;
 
 pub trait Evaluator {
-    fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
+    fn evaluate(&self, input_request: &TypeAnnotatedValue, worker_bridge_response: Option<&WorkerBridgeResponse>) -> Result<Option<TypeAnnotatedValue>, EvaluationError>;
 }
 
 #[derive(Debug, PartialEq, thiserror::Error)]
@@ -44,7 +45,7 @@ impl<'t> RawString<'t> {
 
 // Foo/{user-id}
 impl<'t> Evaluator for RawString<'t> {
-    fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
+    fn evaluate(&self, input: &TypeAnnotatedValue, _worker_bridge_response: Option<WorkerBridgeResponse>) -> Result<TypeAnnotatedValue, EvaluationError> {
         let mut combined_string = String::new();
         let mut tokenizer: Tokenizer = Tokenizer::new(self.input);
 
@@ -80,7 +81,7 @@ impl<'t> Evaluator for RawString<'t> {
 }
 
 impl Evaluator for Expr {
-    fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
+    fn evaluate(&self, input: &TypeAnnotatedValue, worker_response: Option<&WorkerBridgeResponse>) -> Result<Option<TypeAnnotatedValue>, EvaluationError> {
         let expr: &Expr = self;
 
         // An expression evaluation needs to be careful with string values
@@ -88,19 +89,29 @@ impl Evaluator for Expr {
         fn go(
             expr: &Expr,
             input: &mut TypeAnnotatedValue,
-        ) -> Result<TypeAnnotatedValue, EvaluationError> {
+            worker_response: &Option<WorkerBridgeResponse>
+        ) -> Result<Option<TypeAnnotatedValue>, EvaluationError> {
             match expr {
                 Expr::Request() => input
                     .get(&Path::from_key(Token::request().to_string().as_str()))
+                    .map(Some)
                     .map_err(|err| err.into()),
-                Expr::Worker() => input
-                    .get(&Path::from_key(Token::worker().to_string().as_str()))
-                    .map_err(|err| err.into()),
+                Expr::WorkerResponse() => {
+                   let result = match worker_response {
+                        Some(WorkerBridgeResponse::MultipleResults(results)) => Some(results.clone()),
+                        Some(WorkerBridgeResponse::SingleResult(result)) => Some(result.clone()),
+                        Some(WorkerBridgeResponse::Unit) => None,
+                        None => None
+                    };
+
+                    Ok(result)
+                },
 
                 Expr::SelectIndex(expr, index) => {
                     let evaluation_result = go(expr, input)?;
                     evaluation_result
                         .get(&Path::from_index(*index))
+                        .map(Some)
                         .map_err(|err| err.into())
                 }
 
@@ -109,41 +120,57 @@ impl Evaluator for Expr {
 
                     evaluation_result
                         .get(&Path::from_key(field_name.as_str()))
+                        .map(Some)
                         .map_err(|err| err.into())
                 }
 
                 Expr::EqualTo(left, right) => {
-                    let left = go(left, input)?;
-                    let right = go(right, input)?;
+                    let left = go(left, input, worker_response)?
+                        .ok_or(format!("{} is evaluated to none", left))?;
+                    let right = go(right, input, worker_response)?
+                        .ok_or(format!("{} is evaluated to none", right))?;
 
                     math_op_evaluator::evaluate_math_op(&left, &right, |left, right| left == right)
+                        .map(Some)
                 }
                 Expr::GreaterThan(left, right) => {
-                    let left = go(left, input)?;
-                    let right = go(right, input)?;
+                    let left = go(left, input, worker_response)?
+                        .ok_or(format!("{} is evaluated to none", left))?;
+                    let right = go(right, input, worker_response)?
+                        .ok_or(format!("{} is evaluated to none", right))?;
+
                     math_op_evaluator::evaluate_math_op(&left, &right, |left, right| left > right)
+                        .map(Some)
                 }
                 Expr::GreaterThanOrEqualTo(left, right) => {
-                    let left = go(left, input)?;
-                    let right = go(right, input)?;
+                    let left = go(left, input, worker_response)?
+                        .ok_or(format!("{} is evaluated to none", left))?;
+                    let right = go(right, input, worker_response)?
+                        .ok_or(format!("{} is evaluated to none", right))?;
 
                     math_op_evaluator::evaluate_math_op(&left, &right, |left, right| left >= right)
+                        .map(Some)
                 }
                 Expr::LessThan(left, right) => {
-                    let left = go(left, input)?;
-                    let right = go(right, input)?;
+                    let left = go(left, input, worker_response)?
+                        .ok_or(format!("{} is evaluated to none", left))?;
+                    let right = go(right, input, worker_response)?
+                        .ok_or(format!("{} is evaluated to none", right))?;
 
                     math_op_evaluator::evaluate_math_op(&left, &right, |left, right| left < right)
+                        .map(Some)
                 }
                 Expr::LessThanOrEqualTo(left, right) => {
-                    let left = go(left, input)?;
-                    let right = go(right, input)?;
+                    let left = go(left, input, worker_response)?
+                        .ok_or(format!("{} is evaluated to none", left))?;
+                    let right = go(right, input, worker_response)?
+                        .ok_or(format!("{} is evaluated to none", right))?;
 
                     math_op_evaluator::evaluate_math_op(&left, &right, |left, right| left <= right)
                 }
 
                 Expr::Not(expr) => {
-                    let evaluated_expr = expr.evaluate(input)?;
+                    let evaluated_expr = expr.evaluate(input, worker_response.as_ref())?;
 
                     match evaluated_expr {
                         TypeAnnotatedValue::Bool(value) => Ok(TypeAnnotatedValue::Bool(!value)),
