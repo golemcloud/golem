@@ -26,7 +26,7 @@ pub trait ApiDeploymentClient {
         api_definition_id: &ApiDefinitionId,
         version: &ApiDefinitionVersion,
         host: &str,
-        subdomain: &str,
+        subdomain: Option<String>,
     ) -> Result<ApiDeployment, GolemError>;
     async fn list(
         &self,
@@ -50,7 +50,7 @@ impl<C: golem_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClien
         api_definition_id: &ApiDefinitionId,
         version: &ApiDefinitionVersion,
         host: &str,
-        subdomain: &str,
+        subdomain: Option<String>,
     ) -> Result<ApiDeployment, GolemError> {
         info!("Deploying definition {api_definition_id}/{version}, host {host}, subdomain {subdomain}");
 
@@ -59,7 +59,7 @@ impl<C: golem_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClien
             version: version.0.to_string(),
             site: ApiSite {
                 host: host.to_string(),
-                subdomain: subdomain.to_string(),
+                subdomain
             },
         };
 
