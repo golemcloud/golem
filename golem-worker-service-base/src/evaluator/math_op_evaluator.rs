@@ -27,7 +27,7 @@ pub(crate) fn compare_eval_result<F>(
     compare: F,
 ) -> Result<EvaluationResult, EvaluationError>
 where
-    F: Fn(&Primitive, &Primitive) -> bool,
+    F: Fn(Primitive, Primitive) -> bool,
 {
     if left.is_unit() && right.is_unit() {
         Ok(TypeAnnotatedValue::Bool(true).into())

@@ -55,7 +55,7 @@ impl WorkerBridgeResponse {
                 }
 
                 // See wasm-rpc implementations for more details
-                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Record if results are named. Obtained {:?}", AnalysedType::from(&ty))),
+                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Record if results are named. Obtained {:?}", AnalysedType::from(ty))),
             }
         }
     }

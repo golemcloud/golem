@@ -322,7 +322,7 @@ impl Evaluator for Expr {
                                 if let Some(value) = eval_result.get_value() {
                                     result.push(value);
                                 } else {
-                                    return Err(format!("The expression {} is evaluated to unit and cannot be part of a record", expression::to_string(expr).unwrap()));
+                                    return Err(format!("The expression {} is evaluated to unit and cannot be part of a record", expression::to_string(expr).unwrap()).into());
                                 }
                             }
                             Err(result) => return Err(result),
@@ -352,7 +352,7 @@ impl Evaluator for Expr {
                                 if let Some(value) = expr_result.get_value() {
                                     values.push((key.to_string(), value));
                                 } else {
-                                    return Err(format!("The expression for key {} is evaluated to unit and cannot be part of a record", key));
+                                    return Err(format!("The expression for key {} is evaluated to unit and cannot be part of a record", key).into());
                                 }
                             }
 
@@ -917,7 +917,7 @@ mod tests {
             .unwrap();
 
         let result1 = expr1.evaluate(success_response_with_input_variables);
-        
+
         let expr2 = expression::from_string(
             "${if request.path.id == 'bar' then 'foo' else match worker_response { ok(foo) => foo.id, err(msg) => 'empty' }}",
 
