@@ -1407,10 +1407,13 @@ where
         _calling_convention: &CallingConvention,
         _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<TypeAnnotatedValue> {
-        Ok(TypeAnnotatedValue::Tuple {
-            value: vec![],
-            typ: vec![],
+    ) -> WorkerResult<TypedResult> {
+        Ok(TypedResult {
+            result: TypeAnnotatedValue::Tuple {
+                value: vec![],
+                typ: vec![],
+            },
+            function_result_types: vec![],
         })
     }
 

@@ -172,7 +172,7 @@ mod internal {
             response_mapping: &ResponseMapping,
             input_request: &TypeAnnotatedValue,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
-            let mut type_annotated_value = input_request.clone();
+            let type_annotated_value = input_request.clone();
 
             let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
                 .map_err(EvaluationError::Message)?;

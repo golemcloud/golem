@@ -48,12 +48,6 @@ impl EvaluationResult {
         }
     }
 
-    pub fn is_value(&self) -> bool {
-        match self {
-            EvaluationResult::Value(_) => true,
-            _ => false,
-        }
-    }
     pub fn get_value(&self) -> Option<TypeAnnotatedValue> {
         match self {
             EvaluationResult::Value(value) => Some(value.clone()),
