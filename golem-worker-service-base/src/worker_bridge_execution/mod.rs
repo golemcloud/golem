@@ -7,11 +7,11 @@ use golem_common::model::ComponentId;
 use crate::evaluator::{EvaluationResult, Evaluator, RawString};
 use crate::worker_binding::ResolvedWorkerBinding;
 
-mod worker_request_executor;
 mod worker_bridge_response;
+mod worker_request_executor;
 
-pub use worker_request_executor::*;
 pub use worker_bridge_response::*;
+pub use worker_request_executor::*;
 
 // Every input request can be resolved to a worker request,
 // along with the value of any variables that's associated with it.
