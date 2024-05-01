@@ -282,7 +282,9 @@ mod internal {
             let mut resolved_headers: HashMap<String, String> = HashMap::new();
 
             for (header_name, header_value_expr) in header_mapping {
-                let value = header_value_expr.evaluate(input)?;
+                let value = header_value_expr.evaluate(input, None)?.get_value().ok_or(
+                    "Unable to resolve header. Resulted in ()".to_string(),
+                )?;
 
                 let value_str = value
                     .get_primitive()

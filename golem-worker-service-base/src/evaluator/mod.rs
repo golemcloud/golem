@@ -24,6 +24,7 @@ pub trait Evaluator {
     fn evaluate(&self, input_request: &TypeAnnotatedValue, worker_bridge_response: Option<&WorkerBridgeResponse>) -> Result<EvaluationResult, EvaluationError>;
 }
 
+#[derive(Debug, Clone)]
 pub enum EvaluationResult {
     Value(TypeAnnotatedValue),
     Unit,
@@ -88,7 +89,7 @@ impl<'t> RawString<'t> {
 
 // Foo/{user-id}
 impl<'t> Evaluator for RawString<'t> {
-    fn evaluate(&self, input: &TypeAnnotatedValue, _worker_bridge_response: Option<WorkerBridgeResponse>) -> Result<EvaluationResult, EvaluationError> {
+    fn evaluate(&self, input: &TypeAnnotatedValue, _worker_bridge_response: Option<&WorkerBridgeResponse>) -> Result<EvaluationResult, EvaluationError> {
         let mut combined_string = String::new();
         let mut tokenizer: Tokenizer = Tokenizer::new(self.input);
 

@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use golem_common::model::ComponentId;
 
-use crate::evaluator::{Evaluator, RawString};
+use crate::evaluator::{EvaluationResult, Evaluator, RawString};
 use crate::worker_binding::ResolvedWorkerBinding;
 
 mod worker_request_executor;
@@ -31,8 +31,8 @@ impl WorkerRequest {
         let worker_id_value: TypeAnnotatedValue = resolved_route
             .resolved_worker_binding_template
             .worker_id
-            .evaluate(&resolved_route.typed_value_from_input)
-            .map_err(|err| err.to_string())?;
+            .evaluate(&resolved_route.typed_value_from_input, None)
+            .map_err(|err| err.to_string())?.get_value().ok_or("Worker id is not a text value".to_string())?;
 
         let worker_id = match worker_id_value {
             TypeAnnotatedValue::Str(value) => value,
@@ -53,11 +53,14 @@ impl WorkerRequest {
         .map_err(|err| err.to_string())?;
 
         let function_name = match function_name_value {
-            TypeAnnotatedValue::Str(value) => value,
+            EvaluationResult::Value(TypeAnnotatedValue::Str(value)) => value,
             _ => {
                 return Err(format!(
-                    "Function name is not a string. {}",
-                    get_json_from_typed_value(&function_name_value)
+                    "Function name is evaluated to {}, which is not a string",
+                    function_name_value
+                        .get_value()
+                        .map_or("()".to_string(), |v| get_json_from_typed_value(&v).to_string())
+                    
                 ))
             }
         };
@@ -70,7 +73,7 @@ impl WorkerRequest {
         {
             let type_annotated_value = expr
                 .evaluate(&resolved_route.typed_value_from_input, None)
-                .map_err(|err| err.to_string())?;
+                .map_err(|err| err.to_string())?.get_value().ok_or("Failed to evaluate Route expression".to_string())?;;
 
             let json = get_json_from_typed_value(&type_annotated_value);
 

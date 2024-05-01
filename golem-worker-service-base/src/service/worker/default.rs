@@ -394,7 +394,7 @@ where
             )
             .await?;
 
-        Ok(get_json_from_typed_value(&typed_value))
+        Ok(get_json_from_typed_value(&typed_value.result))
     }
 
     async fn invoke_and_await_function_typed_value(
@@ -406,7 +406,7 @@ where
         calling_convention: &CallingConvention,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<TypeAnnotatedValue> {
+    ) -> WorkerResult<TypedResult> {
         let component_details = self
             .try_get_component_for_worker(worker_id, auth_ctx)
             .await?;

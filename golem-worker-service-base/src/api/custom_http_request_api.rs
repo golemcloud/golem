@@ -11,7 +11,7 @@ use crate::http::{ApiInputPath, InputHttpRequest};
 use crate::service::api_definition_lookup::ApiDefinitionLookup;
 
 use crate::worker_binding::WorkerBindingResolver;
-use crate::worker_bridge_execution::WorkerRequest;
+use crate::worker_bridge_execution::{WorkerBridgeResponse, WorkerRequest};
 use crate::worker_bridge_execution::WorkerRequestExecutor;
 
 // Executes custom request with the help of worker_request_executor and definition_service
@@ -114,10 +114,32 @@ impl CustomHttpRequestApi {
                     .execute(resolved_worker_request.clone())
                     .await
                 {
-                    Ok(worker_response) => worker_response.to_http_response(
-                        &resolved_route.resolved_worker_binding_template.response,
-                        &resolved_route.typed_value_from_input,
-                    ),
+                    Ok(worker_response) => {
+
+                        let worker_bridge_response =
+                            WorkerBridgeResponse::from_worker_response(&worker_response);
+
+                        match worker_bridge_response {
+                            Ok(response) => {
+                                response.to_http_response(
+                                    &resolved_route.resolved_worker_binding_template.response,
+                                    &resolved_route.typed_value_from_input,
+                                )
+                            }
+                            Err(e) => {
+                                error!(
+                                    "API request id: {} - response error: {}",
+                                    &api_definition.id, e
+                                );
+                                Response::builder()
+                                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                    .body(Body::from_string(
+                                        format!("API request error {}", e).to_string(),
+                                    ))
+
+                            }
+                        }
+                    },
 
                     Err(e) => {
                         error!(

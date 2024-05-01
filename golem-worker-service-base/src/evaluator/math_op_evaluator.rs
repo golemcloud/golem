@@ -29,16 +29,16 @@ pub(crate) fn compare_eval_result<F>(
     compare: F,
 ) -> Result<EvaluationResult, EvaluationError>
 where
-    F: Fn(&TypeAnnotatedValue, &TypeAnnotatedValue) -> bool,
+    F: Fn(&Primitive, &Primitive) -> bool,
 {
-    if (left.is_unit() && right.is_unit()) {
+    if left.is_unit() && right.is_unit() {
         Ok(TypeAnnotatedValue::Bool(true).into())
     } else {
 
         match (left.get_value(), right.get_value()) {
             (Some(left), Some(right)) => {
-                let result = compare_typed_value(&left, &right, compare);
-                Ok(result.into())
+                let result = compare_typed_value(&left, &right, compare)?;
+                Ok(EvaluationResult::Value(result))
             }
             _ => Err(EvaluationError::Message(
                 "Unsupported type to compare".to_string(),
