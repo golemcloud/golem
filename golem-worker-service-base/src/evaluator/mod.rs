@@ -1241,7 +1241,7 @@ mod tests {
     fn test_evaluation_with_pattern_match_variant_nested_with_some_result() {
         let output = get_complex_variant_typed_value();
 
-        let worker_bridge_response = WorkerResponse::new(output).to_test_worker_bridge_response();
+        let worker_bridge_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => 'not found' }}",
@@ -1258,13 +1258,13 @@ mod tests {
     fn test_evaluation_with_pattern_match_variant_nested_type_mismatch() {
         let output = get_complex_variant_typed_value();
 
-        let worker_response = WorkerResponse { result: output };
+        let worker_bridge_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { Foo(ok(some(value))) => value.id, err(msg) => 'not found' }}",
         )
             .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result = expr.evaluate(&worker_bridge_response.result_with_worker_response_key());
 
         assert!(result
             .err()
@@ -1297,7 +1297,7 @@ mod tests {
             ],
         };
 
-        let worker_response = WorkerResponse { result: output };
+        let worker_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { Foo(none) => 'not found',  Foo(some(value)) => value.id }}",
@@ -1505,6 +1505,7 @@ mod tests {
         use http::{HeaderMap, Method, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;
+        use crate::evaluator::tests::{EvaluatorTestExt, WorkerBridgeExt};
 
         pub(crate) fn get_complex_variant_typed_value() -> TypeAnnotatedValue {
             TypeAnnotatedValue::Variant {
@@ -1570,9 +1571,7 @@ mod tests {
             )
             .unwrap();
 
-            WorkerResponse {
-                result: worker_response_value,
-            }
+            WorkerResponse::new(worker_response_value, vec![])
         }
 
         pub(crate) fn get_worker_response(input: &str) -> WorkerResponse {
@@ -1580,9 +1579,7 @@ mod tests {
 
             let expected_type = infer_analysed_type(&value);
             let result_as_typed_value = get_typed_value_from_json(&value, &expected_type).unwrap();
-            WorkerResponse {
-                result: result_as_typed_value,
-            }
+            WorkerResponse::new(result_as_typed_value, vec![])
         }
 
         pub(crate) fn resolved_variables_from_request_body(
@@ -1659,19 +1656,19 @@ mod tests {
 
         #[test]
         fn expr_to_string_round_trip_match_expr_append() {
-            let worker_response = get_err_worker_response();
+            let worker_response = get_err_worker_response().to_test_worker_bridge_response();
 
             let expr1_string =
                 "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
             let expr1 = expression::from_string(expr1_string).unwrap();
             let value1 = expr1
-                .evaluate(&worker_response.result_with_worker_response_key())
+                .evaluate_worker_bridge_response(&worker_response)
                 .unwrap();
 
             let expr2_string = expr1.to_string();
             let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
             let value2 = expr2
-                .evaluate(&worker_response.result_with_worker_response_key())
+                .evaluate_worker_bridge_response(&worker_response)
                 .unwrap();
 
             let expected = TypeAnnotatedValue::Str("append-error".to_string());
