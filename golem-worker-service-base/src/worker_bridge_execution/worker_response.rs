@@ -31,7 +31,8 @@ impl WorkerBridgeResponse {
         let result = &worker_response.result.result;
         let function_result_types = &worker_response.result.function_result_types;
 
-        if function_result_types.iter().all(|r| r.name.is_none()) && !function_result_types.is_empty()
+        if function_result_types.iter().all(|r| r.name.is_none())
+            && !function_result_types.is_empty()
         {
             match result {
                 TypeAnnotatedValue::Tuple { value, .. } => {
