@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use bytes::{Buf, BufMut, Bytes};
-use golem_common::model::{InvocationKey, WorkerId};
+use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_wasm_rpc::Value;
 use tokio::sync::{mpsc, Mutex};
 
@@ -54,7 +54,7 @@ enum State {
         dequeue: mpsc::Receiver<Event>,
         input: Bytes,
         pos: usize,
-        invocation_key: InvocationKey,
+        invocation_key: IdempotencyKey,
         captured: Option<Vec<u8>>,
     },
 }
@@ -62,7 +62,7 @@ enum State {
 #[derive(Debug, Clone)]
 struct Event {
     input: Bytes,
-    invocation_key: InvocationKey,
+    invocation_key: IdempotencyKey,
 }
 
 /// Maps to the type defined in the WASI IO package
@@ -89,7 +89,7 @@ impl ManagedStandardIo {
         }
     }
 
-    pub async fn enqueue(&self, message: Bytes, invocation_key: InvocationKey) {
+    pub async fn enqueue(&self, message: Bytes, invocation_key: IdempotencyKey) {
         let event = Event {
             input: message,
             invocation_key,
@@ -136,7 +136,7 @@ impl ManagedStandardIo {
         });
     }
 
-    pub async fn get_current_invocation_key(&self) -> Option<InvocationKey> {
+    pub async fn get_current_invocation_key(&self) -> Option<IdempotencyKey> {
         if let Some(State::EventLoopProcessing { invocation_key, .. }) = &*self.current.lock().await
         {
             Some(invocation_key.clone())

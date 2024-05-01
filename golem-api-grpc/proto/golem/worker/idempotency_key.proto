@@ -3,6 +3,6 @@ syntax = "proto3";
 package golem.worker;
 
 
-message InvocationKey {
+message IdempotencyKey {
   string value = 1;
 }

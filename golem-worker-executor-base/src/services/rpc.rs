@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tracing::debug;
 
-use golem_common::model::{AccountId, WorkerId};
+use golem_common::model::{AccountId, IdempotencyKey, WorkerId};
 
 use crate::error::GolemError;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
@@ -45,6 +45,7 @@ pub trait Rpc {
     async fn invoke_and_await(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
         account_id: &AccountId,
@@ -53,6 +54,7 @@ pub trait Rpc {
     async fn invoke(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
         account_id: &AccountId,
@@ -174,26 +176,40 @@ impl Rpc for RemoteInvocationRpc {
     async fn invoke_and_await(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
         account_id: &AccountId,
     ) -> Result<WitValue, RpcError> {
         Ok(self
             .worker_proxy
-            .invoke_and_await(worker_id, function_name, function_params, account_id)
+            .invoke_and_await(
+                worker_id,
+                idempotency_key,
+                function_name,
+                function_params,
+                account_id,
+            )
             .await?)
     }
 
     async fn invoke(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
         account_id: &AccountId,
     ) -> Result<(), RpcError> {
         Ok(self
             .worker_proxy
-            .invoke(worker_id, function_name, function_params, account_id)
+            .invoke(
+                worker_id,
+                idempotency_key,
+                function_name,
+                function_params,
+                account_id,
+            )
             .await?)
     }
 }
@@ -454,10 +470,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn invoke_and_await(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
         account_id: &AccountId,
     ) -> Result<WitValue, RpcError> {
+        let idempotency_key =
+            idempotency_key.unwrap_or(self.invocation_key_service.generate_key(worker_id));
+
         if self.shard_service().check_worker(worker_id).is_ok() {
             debug!("Invoking local worker {worker_id} function {function_name} with parameters {function_params:?}");
 
@@ -465,7 +485,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .into_iter()
                 .map(|wit_value| wit_value.into())
                 .collect();
-            let invocation_key = self.invocation_key_service.generate_key(worker_id);
 
             let worker =
                 Worker::get_or_create(self, worker_id, None, None, None, account_id.clone())
@@ -474,7 +493,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             let result_values = invoke_and_await(
                 worker,
                 self,
-                invocation_key,
+                idempotency_key,
                 golem_common::model::CallingConvention::Component,
                 function_name,
                 input_values,
@@ -483,7 +502,13 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             Ok(Value::Tuple(result_values).into())
         } else {
             self.remote_rpc
-                .invoke_and_await(worker_id, function_name, function_params, account_id)
+                .invoke_and_await(
+                    worker_id,
+                    Some(idempotency_key),
+                    function_name,
+                    function_params,
+                    account_id,
+                )
                 .await
         }
     }
@@ -491,10 +516,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn invoke(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
         account_id: &AccountId,
     ) -> Result<(), RpcError> {
+        let idempotency_key =
+            idempotency_key.unwrap_or(self.invocation_key_service.generate_key(worker_id));
+
         if self.shard_service().check_worker(worker_id).is_ok() {
             debug!("Invoking local worker {worker_id} function {function_name} with parameters {function_params:?} without awaiting for the result");
 
@@ -502,7 +531,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .into_iter()
                 .map(|wit_value| wit_value.into())
                 .collect();
-            let invocation_key = self.invocation_key_service.generate_key(worker_id);
 
             let worker =
                 Worker::get_or_create(self, worker_id, None, None, None, account_id.clone())
@@ -511,7 +539,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             invoke(
                 worker,
                 self,
-                invocation_key,
+                idempotency_key,
                 golem_common::model::CallingConvention::Component,
                 function_name,
                 input_values,
@@ -520,7 +548,13 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             Ok(())
         } else {
             self.remote_rpc
-                .invoke(worker_id, function_name, function_params, account_id)
+                .invoke(
+                    worker_id,
+                    Some(idempotency_key),
+                    function_name,
+                    function_params,
+                    account_id,
+                )
                 .await
         }
     }
@@ -555,6 +589,7 @@ impl Rpc for RpcMock {
     async fn invoke_and_await(
         &self,
         _worker_id: &WorkerId,
+        _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
         _account_id: &AccountId,
@@ -565,6 +600,7 @@ impl Rpc for RpcMock {
     async fn invoke(
         &self,
         _worker_id: &WorkerId,
+        _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
         _account_id: &AccountId,

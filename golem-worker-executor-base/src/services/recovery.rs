@@ -629,7 +629,7 @@ mod tests {
     use golem_common::config::RetryConfig;
     use golem_common::model::oplog::WorkerError;
     use golem_common::model::{
-        AccountId, CallingConvention, ComponentId, ComponentVersion, InvocationKey, WorkerId,
+        AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, WorkerId,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -662,7 +662,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn enqueue(&self, _message: Bytes, _invocation_key: InvocationKey) {
+        async fn enqueue(&self, _message: Bytes, _invocation_key: IdempotencyKey) {
             unimplemented!()
         }
     }
@@ -700,35 +700,35 @@ mod tests {
 
     #[async_trait]
     impl InvocationManagement for EmptyContext {
-        async fn set_current_invocation_key(&mut self, _invocation_key: InvocationKey) {
+        async fn set_current_invocation_key(&mut self, _invocation_key: IdempotencyKey) {
             unimplemented!()
         }
 
-        async fn get_current_invocation_key(&self) -> Option<InvocationKey> {
+        async fn get_current_invocation_key(&self) -> Option<IdempotencyKey> {
             unimplemented!()
         }
 
-        async fn interrupt_invocation_key(&mut self, _key: &InvocationKey) {
+        async fn interrupt_invocation_key(&mut self, _key: &IdempotencyKey) {
             unimplemented!()
         }
 
-        async fn resume_invocation_key(&mut self, _key: &InvocationKey) {
+        async fn resume_invocation_key(&mut self, _key: &IdempotencyKey) {
             unimplemented!()
         }
 
         async fn confirm_invocation_key(
             &mut self,
-            _key: &InvocationKey,
+            _key: &IdempotencyKey,
             _vals: Result<Vec<Value>, GolemError>,
         ) {
             unimplemented!()
         }
 
-        fn generate_new_invocation_key(&mut self) -> InvocationKey {
+        fn generate_new_invocation_key(&mut self) -> IdempotencyKey {
             unimplemented!()
         }
 
-        fn lookup_invocation_result(&self, _key: &InvocationKey) -> LookupResult {
+        fn lookup_invocation_result(&self, _key: &IdempotencyKey) -> LookupResult {
             unimplemented!()
         }
     }

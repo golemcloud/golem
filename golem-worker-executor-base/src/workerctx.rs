@@ -18,7 +18,7 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentVersion, InvocationKey, WorkerId, WorkerMetadata,
+    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -186,30 +186,30 @@ pub trait FuelManagement {
 #[async_trait]
 pub trait InvocationManagement {
     /// Sets the invocation key associated with the current invocation of the worker.
-    async fn set_current_invocation_key(&mut self, invocation_key: InvocationKey);
+    async fn set_current_invocation_key(&mut self, invocation_key: IdempotencyKey);
 
     /// Gets the invocation key associated with the current invocation of the worker.
-    async fn get_current_invocation_key(&self) -> Option<InvocationKey>;
+    async fn get_current_invocation_key(&self) -> Option<IdempotencyKey>;
 
     /// Marks an invocation as interrupted
-    async fn interrupt_invocation_key(&mut self, key: &InvocationKey);
+    async fn interrupt_invocation_key(&mut self, key: &IdempotencyKey);
 
     /// Marks a previously interrupted invocation as resumed
-    async fn resume_invocation_key(&mut self, key: &InvocationKey);
+    async fn resume_invocation_key(&mut self, key: &IdempotencyKey);
 
     /// Marks an invocation as finished. The `vals` parameter is either the result values or
     /// an error if the invocation failed.
     async fn confirm_invocation_key(
         &mut self,
-        key: &InvocationKey,
+        key: &IdempotencyKey,
         vals: Result<Vec<Value>, GolemError>,
     );
 
     /// Sets the invocation key associated with the current invocation to a fresh key
-    fn generate_new_invocation_key(&mut self) -> InvocationKey;
+    fn generate_new_invocation_key(&mut self) -> IdempotencyKey;
 
     /// Gets the result associated with an invocation key of the worker
-    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult;
+    fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult;
 }
 
 /// The IoCapturing interface of a worker context is used by the Stdio calling convention to
@@ -392,5 +392,5 @@ pub trait PublicWorkerIo {
 
     /// Enqueues a message to the worker's event loop when it is running
     /// in the stdio-eventloop mode.
-    async fn enqueue(&self, message: Bytes, invocation_key: InvocationKey);
+    async fn enqueue(&self, message: Bytes, invocation_key: IdempotencyKey);
 }

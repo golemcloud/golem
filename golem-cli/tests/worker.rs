@@ -1,6 +1,6 @@
 use crate::cli::{Cli, CliLive};
 use golem_cli::model::component::ComponentView;
-use golem_cli::model::{Format, InvocationKey};
+use golem_cli::model::{Format, IdempotencyKey};
 use golem_client::model::{UpdateRecord, WorkerId, WorkersMetadataResponse};
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
@@ -162,7 +162,7 @@ fn worker_get_invocation_key(
         &cfg.arg('C', "component-id"),
         &component_id,
     ])?;
-    let _: InvocationKey = cli.run(&[
+    let _: IdempotencyKey = cli.run(&[
         "worker",
         "invocation-key",
         &cfg.arg('C', "component-id"),
@@ -195,7 +195,7 @@ fn worker_invoke_and_await(
         "TEST_ENV=test-value",
         "test-arg",
     ])?;
-    let args_key: InvocationKey = cli.run(&[
+    let args_key: IdempotencyKey = cli.run(&[
         "worker",
         "invocation-key",
         &cfg.arg('C', "component-id"),
@@ -222,7 +222,7 @@ fn worker_invoke_and_await(
 
     assert_eq!(args, expected_args);
 
-    let env_key: InvocationKey = cli.run(&[
+    let env_key: IdempotencyKey = cli.run(&[
         "worker",
         "invocation-key",
         &cfg.arg('C', "component-id"),

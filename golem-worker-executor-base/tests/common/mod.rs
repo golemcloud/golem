@@ -16,7 +16,7 @@ use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, InvocationKey, WorkerFilter, WorkerId,
+    AccountId, ComponentId, ComponentVersion, IdempotencyKey, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
@@ -436,37 +436,37 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
 
 #[async_trait]
 impl InvocationManagement for TestWorkerCtx {
-    async fn set_current_invocation_key(&mut self, invocation_key: InvocationKey) {
+    async fn set_current_invocation_key(&mut self, invocation_key: IdempotencyKey) {
         self.durable_ctx
             .set_current_invocation_key(invocation_key)
             .await
     }
 
-    async fn get_current_invocation_key(&self) -> Option<InvocationKey> {
+    async fn get_current_invocation_key(&self) -> Option<IdempotencyKey> {
         self.durable_ctx.get_current_invocation_key().await
     }
 
-    async fn interrupt_invocation_key(&mut self, key: &InvocationKey) {
+    async fn interrupt_invocation_key(&mut self, key: &IdempotencyKey) {
         self.durable_ctx.interrupt_invocation_key(key).await
     }
 
-    async fn resume_invocation_key(&mut self, key: &InvocationKey) {
+    async fn resume_invocation_key(&mut self, key: &IdempotencyKey) {
         self.durable_ctx.resume_invocation_key(key).await
     }
 
     async fn confirm_invocation_key(
         &mut self,
-        key: &InvocationKey,
+        key: &IdempotencyKey,
         vals: Result<Vec<Value>, GolemError>,
     ) {
         self.durable_ctx.confirm_invocation_key(key, vals).await
     }
 
-    fn generate_new_invocation_key(&mut self) -> InvocationKey {
+    fn generate_new_invocation_key(&mut self) -> IdempotencyKey {
         self.durable_ctx.generate_new_invocation_key()
     }
 
-    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult {
+    fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         self.durable_ctx.lookup_invocation_result(key)
     }
 }

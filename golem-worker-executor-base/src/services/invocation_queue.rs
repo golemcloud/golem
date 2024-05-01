@@ -35,7 +35,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    CallingConvention, ComponentVersion, InvocationKey, TimestampedWorkerInvocation, WorkerId,
+    CallingConvention, ComponentVersion, IdempotencyKey, TimestampedWorkerInvocation, WorkerId,
     WorkerInvocation,
 };
 
@@ -109,7 +109,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
     /// Enqueue invocation of an exported function
     pub async fn enqueue(
         &self,
-        invocation_key: InvocationKey,
+        invocation_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
         calling_convention: CallingConvention,
@@ -269,7 +269,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
 
     pub async fn enqueue(
         &self,
-        invocation_key: InvocationKey,
+        invocation_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
         calling_convention: CallingConvention,

@@ -26,7 +26,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, FailedUpdateRecord, InvocationKey, SuccessfulUpdateRecord,
+    AccountId, CallingConvention, FailedUpdateRecord, IdempotencyKey, SuccessfulUpdateRecord,
     Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
@@ -571,7 +571,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Looks up a given invocation key's current status.
     /// As the invocation key status is only stored in memory, we need to have an active
     /// instance (instance_details) to call this function.
-    pub fn lookup_result<T>(&self, this: &T, invocation_key: &InvocationKey) -> LookupResult
+    pub fn lookup_result<T>(&self, this: &T, invocation_key: &IdempotencyKey) -> LookupResult
     where
         T: HasInvocationKeyService,
     {
@@ -775,7 +775,7 @@ fn validate_worker(
 pub async fn invoke<Ctx: WorkerCtx, T>(
     worker: Arc<Worker<Ctx>>,
     this: &T,
-    invocation_key: InvocationKey,
+    invocation_key: IdempotencyKey,
     calling_convention: CallingConvention,
     full_function_name: String,
     function_input: Vec<Value>,
@@ -847,7 +847,7 @@ where
 pub async fn invoke_and_await<Ctx: WorkerCtx, T>(
     worker: Arc<Worker<Ctx>>,
     this: &T,
-    invocation_key: InvocationKey,
+    invocation_key: IdempotencyKey,
     calling_convention: CallingConvention,
     full_function_name: String,
     function_input: Vec<Value>,

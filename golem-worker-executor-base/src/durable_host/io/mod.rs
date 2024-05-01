@@ -331,7 +331,7 @@ mod tests {
     use crate::services::invocation_key::InvocationKeyServiceDefault;
     use crate::wasi_host::managed_stdio::ManagedStandardIo;
     use bytes::{BufMut, Bytes};
-    use golem_common::model::{ComponentId, InvocationKey, WorkerId};
+    use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
     use uuid::Uuid;
     use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, StreamError, Subscribe};
 
@@ -345,10 +345,10 @@ mod tests {
         let stdio = ManagedStandardIo::new(worker_id, invocation_key_service);
 
         let msg1 = Bytes::from("hello\n".to_string());
-        let key1 = InvocationKey::new("key1".to_string());
+        let key1 = IdempotencyKey::new("key1".to_string());
 
         let msg2 = Bytes::from("world\n".to_string());
-        let key2 = InvocationKey::new("key2".to_string());
+        let key2 = IdempotencyKey::new("key2".to_string());
 
         stdio.enqueue(msg1, key1).await;
         stdio.enqueue(msg2, key2).await;
@@ -382,10 +382,10 @@ mod tests {
         let stdio = ManagedStandardIo::new(worker_id, invocation_key_service);
 
         let msg1 = Bytes::from("hello\n".to_string());
-        let key1 = InvocationKey::new("key1".to_string());
+        let key1 = IdempotencyKey::new("key1".to_string());
 
         let msg2 = Bytes::from("world\n".to_string());
-        let key2 = InvocationKey::new("key2".to_string());
+        let key2 = IdempotencyKey::new("key2".to_string());
 
         stdio.enqueue(msg1, key1).await;
 

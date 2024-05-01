@@ -16,7 +16,7 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
 use golem_common::model::{
-    AccountId, ComponentId, FilterComparator, InvocationKey, PromiseId, StringFilterComparator,
+    AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, StringFilterComparator,
     WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use golem_wasm_rpc::Value;
@@ -419,7 +419,7 @@ async fn get_workers_from_worker() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn invoking_with_same_invocation_key_is_idempotent() {
+async fn invoking_with_same_idempotency_key_is_idempotent() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
@@ -428,11 +428,11 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
         .start_worker(&component_id, "shopping-cart-2")
         .await;
 
-    let invocation_key = executor.get_invocation_key(&worker_id).await;
+    let idempotency_key = IdempotencyKey::fresh();
     let _result = executor
         .invoke_and_await_with_key(
             &worker_id,
-            &invocation_key,
+            &idempotency_key,
             "golem:it/api/add-item",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
@@ -447,7 +447,7 @@ async fn invoking_with_same_invocation_key_is_idempotent() {
     let _result2 = executor
         .invoke_and_await_with_key(
             &worker_id,
-            &invocation_key,
+            &idempotency_key,
             "golem:it/api/add-item",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
@@ -488,7 +488,7 @@ async fn invoking_with_invalid_invocation_key_is_failure() {
         .start_worker(&component_id, "shopping-cart-3")
         .await;
 
-    let invocation_key = InvocationKey {
+    let invocation_key = IdempotencyKey {
         value: "bad-invocation-key".to_string(),
     };
     let result = executor
@@ -512,7 +512,7 @@ async fn invoking_with_invalid_invocation_key_is_failure() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
+async fn invoking_with_same_idempotency_key_is_idempotent_after_restart() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
@@ -521,7 +521,7 @@ async fn invoking_with_same_invocation_key_is_idempotent_after_restart() {
         .start_worker(&component_id, "shopping-cart-4")
         .await;
 
-    let invocation_key = executor.get_invocation_key(&worker_id).await;
+    let invocation_key = IdempotencyKey::fresh();
     let _result = executor
         .invoke_and_await_with_key(
             &worker_id,

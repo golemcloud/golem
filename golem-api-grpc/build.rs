@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/componentcompilation/template_compilation_service.proto",
                 "proto/golem/worker/calling_convention.proto",
                 "proto/golem/worker/complete_parameters.proto",
-                "proto/golem/worker/invocation_key.proto",
+                "proto/golem/worker/idempotency_key.proto",
                 "proto/golem/worker/invoke_parameters.proto",
                 "proto/golem/worker/invoke_result.proto",
                 "proto/golem/worker/log_event.proto",

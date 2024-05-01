@@ -52,8 +52,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord, InvocationKey,
-    SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
+    IdempotencyKey, SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -349,7 +349,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state.managed_stdio.clone()
     }
 
-    pub async fn get_current_invocation_key(&self) -> Option<InvocationKey> {
+    pub async fn get_current_invocation_key(&self) -> Option<IdempotencyKey> {
         self.get_stdio()
             .get_current_invocation_key()
             .await
@@ -507,37 +507,37 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
-    async fn set_current_invocation_key(&mut self, invocation_key: InvocationKey) {
+    async fn set_current_invocation_key(&mut self, invocation_key: IdempotencyKey) {
         self.state.set_current_invocation_key(invocation_key)
     }
 
-    async fn get_current_invocation_key(&self) -> Option<InvocationKey> {
+    async fn get_current_invocation_key(&self) -> Option<IdempotencyKey> {
         self.get_current_invocation_key().await
     }
 
-    async fn interrupt_invocation_key(&mut self, key: &InvocationKey) {
+    async fn interrupt_invocation_key(&mut self, key: &IdempotencyKey) {
         self.state.interrupt_invocation_key(key).await
     }
 
-    async fn resume_invocation_key(&mut self, key: &InvocationKey) {
+    async fn resume_invocation_key(&mut self, key: &IdempotencyKey) {
         self.state.resume_invocation_key(key).await
     }
 
     async fn confirm_invocation_key(
         &mut self,
-        key: &InvocationKey,
+        key: &IdempotencyKey,
         vals: Result<Vec<Value>, GolemError>,
     ) {
         self.state.confirm_invocation_key(key, vals).await
     }
 
-    fn generate_new_invocation_key(&mut self) -> InvocationKey {
+    fn generate_new_invocation_key(&mut self) -> IdempotencyKey {
         self.state
             .invocation_key_service
             .generate_key(&self.worker_id)
     }
 
-    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult {
+    fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         self.state
             .invocation_key_service
             .lookup_key(&self.worker_id, key)
@@ -1051,7 +1051,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     config: Arc<GolemConfig>,
     worker_id: WorkerId,
     account_id: AccountId,
-    current_invocation_key: Option<InvocationKey>,
+    current_invocation_key: Option<IdempotencyKey>,
     active_workers: Arc<ActiveWorkers<Ctx>>,
     recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
     rpc: Arc<dyn Rpc + Send + Sync>,
@@ -1217,8 +1217,15 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     async fn get_oplog_entry_exported_function_invoked(
         &mut self,
-    ) -> Result<Option<(String, Vec<Value>, InvocationKey, Option<CallingConvention>)>, GolemError>
-    {
+    ) -> Result<
+        Option<(
+            String,
+            Vec<Value>,
+            IdempotencyKey,
+            Option<CallingConvention>,
+        )>,
+        GolemError,
+    > {
         loop {
             if self.is_replay() {
                 let oplog_entry = self.get_oplog_entry().await;
@@ -1334,27 +1341,27 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     pub async fn confirm_invocation_key(
         &mut self,
-        key: &InvocationKey,
+        key: &IdempotencyKey,
         vals: Result<Vec<Value>, GolemError>,
     ) {
         self.invocation_key_service
             .confirm_key(&self.worker_id, key, vals)
     }
 
-    pub async fn interrupt_invocation_key(&mut self, key: &InvocationKey) {
+    pub async fn interrupt_invocation_key(&mut self, key: &IdempotencyKey) {
         self.invocation_key_service
             .interrupt_key(&self.worker_id, key)
     }
 
-    pub async fn resume_invocation_key(&mut self, key: &InvocationKey) {
+    pub async fn resume_invocation_key(&mut self, key: &IdempotencyKey) {
         self.invocation_key_service.resume_key(&self.worker_id, key)
     }
 
-    pub fn get_current_invocation_key(&self) -> Option<InvocationKey> {
+    pub fn get_current_invocation_key(&self) -> Option<IdempotencyKey> {
         self.current_invocation_key.clone()
     }
 
-    pub fn set_current_invocation_key(&mut self, invocation_key: InvocationKey) {
+    pub fn set_current_invocation_key(&mut self, invocation_key: IdempotencyKey) {
         self.current_invocation_key = Some(invocation_key);
     }
 
@@ -1441,7 +1448,7 @@ impl<Ctx: WorkerCtx> PublicWorkerIo for PublicDurableWorkerState<Ctx> {
         self.event_service.clone()
     }
 
-    async fn enqueue(&self, message: Bytes, invocation_key: InvocationKey) {
+    async fn enqueue(&self, message: Bytes, invocation_key: IdempotencyKey) {
         self.managed_stdio.enqueue(message, invocation_key).await
     }
 }

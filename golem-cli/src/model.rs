@@ -231,7 +231,7 @@ pub enum ComponentIdOrName {
 pub struct WorkerName(pub String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize, Deserialize)]
-pub struct InvocationKey(pub String); // TODO: Validate
+pub struct IdempotencyKey(pub String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 pub struct ApiDefinitionId(pub String); // TODO: Validate

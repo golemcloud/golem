@@ -24,6 +24,7 @@ use golem_client::Context;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
+use uuid::Uuid;
 
 use crate::clients::worker::{WorkerClient, WorkerClientLive};
 use crate::component::{ComponentHandler, ComponentHandlerLive};
@@ -32,7 +33,7 @@ use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::WorkerAddView;
 use crate::model::wave::type_to_analysed;
 use crate::model::{
-    ComponentId, ComponentIdOrName, Format, GolemError, GolemResult, InvocationKey,
+    ComponentId, ComponentIdOrName, Format, GolemError, GolemResult, IdempotencyKey,
     JsonValueParser, WorkerName, WorkerUpdateMode,
 };
 use crate::parse_key_val;
@@ -60,17 +61,9 @@ pub enum WorkerSubcommand {
         args: Vec<String>,
     },
 
-    /// Generates an invocation ID for achieving at-most-one invocation when doing retries
+    /// Generates an idempotency key for achieving at-most-one invocation when doing retries
     #[command()]
-    InvocationKey {
-        /// The Golem component the worker to be invoked belongs to
-        #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
-
-        /// Name of the worker
-        #[arg(short, long)]
-        worker_name: WorkerName,
-    },
+    IdempotencyKey {},
 
     /// Invokes a worker and waits for its completion
     #[command()]
@@ -83,9 +76,9 @@ pub enum WorkerSubcommand {
         #[arg(short, long)]
         worker_name: WorkerName,
 
-        /// A pre-generated invocation key, if not provided, a new one will be generated
+        /// A pre-generated idempotency key
         #[arg(short = 'k', long)]
-        invocation_key: Option<InvocationKey>,
+        idempotency_key: Option<IdempotencyKey>,
 
         /// Name of the function to be invoked
         #[arg(short, long)]
@@ -121,6 +114,10 @@ pub enum WorkerSubcommand {
         /// Name of the worker
         #[arg(short, long)]
         worker_name: WorkerName,
+
+        /// A pre-generated idempotency key
+        #[arg(short = 'k', long)]
+        idempotency_key: Option<IdempotencyKey>,
 
         /// Name of the function to be invoked
         #[arg(short, long)]
@@ -474,23 +471,14 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
 
                 Ok(GolemResult::Ok(Box::new(WorkerAddView(inst))))
             }
-            WorkerSubcommand::InvocationKey {
-                component_id_or_name,
-                worker_name,
-            } => {
-                let component_id = self.components.resolve_id(component_id_or_name).await?;
-
-                let key = self
-                    .client
-                    .get_invocation_key(&worker_name, &component_id)
-                    .await?;
-
+            WorkerSubcommand::IdempotencyKey {} => {
+                let key = IdempotencyKey(Uuid::new_v4().to_string());
                 Ok(GolemResult::Ok(Box::new(key)))
             }
             WorkerSubcommand::InvokeAndAwait {
                 component_id_or_name,
                 worker_name,
-                invocation_key,
+                idempotency_key,
                 function,
                 parameters,
                 wave,
@@ -526,15 +514,6 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
                     AsyncComponentRequest::Empty
                 };
 
-                let invocation_key = match invocation_key {
-                    None => {
-                        self.client
-                            .get_invocation_key(&worker_name, &component_id)
-                            .await?
-                    }
-                    Some(key) => key,
-                };
-
                 let res = self
                     .client
                     .invoke_and_await(
@@ -542,7 +521,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
                         component_id.clone(),
                         function.clone(),
                         InvokeParameters { params: parameters },
-                        invocation_key,
+                        idempotency_key,
                         use_stdio,
                     )
                     .await?;
@@ -567,6 +546,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
             WorkerSubcommand::Invoke {
                 component_id_or_name,
                 worker_name,
+                idempotency_key,
                 function,
                 parameters,
                 wave,
@@ -590,6 +570,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
                         component_id,
                         function,
                         InvokeParameters { params: parameters },
+                        idempotency_key,
                     )
                     .await?;
 

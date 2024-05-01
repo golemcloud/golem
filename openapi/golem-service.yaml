@@ -287,72 +287,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/key:
-    post:
-      tags:
-      - Worker
-      operationId: get_invocation_key
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: worker_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvocationKey'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/GolemErrorBody'
   /v2/components/{component_id}/workers/{worker_name}/invoke-and-await:
     post:
       tags:
@@ -377,8 +311,7 @@ paths:
         explode: true
         style: simple
       - in: query
-        name: invocation-key
-        required: true
+        name: idempotency-key
         deprecated: false
         schema:
           type: string
@@ -471,6 +404,13 @@ paths:
           type: string
         explode: true
         style: simple
+      - in: query
+        name: idempotency-key
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
       - in: query
         name: function
         required: true
@@ -2488,13 +2428,6 @@ components:
       - draft
     InterruptResponse:
       type: object
-    InvocationKey:
-      type: object
-      properties:
-        value:
-          type: string
-      required:
-      - value
     InvokeParameters:
       type: object
       properties:

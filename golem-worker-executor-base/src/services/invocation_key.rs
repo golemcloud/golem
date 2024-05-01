@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use golem_common::model::{InvocationKey, WorkerId};
+use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tracing::debug;
@@ -30,20 +30,20 @@ use crate::metrics::invocation_keys::{
 /// Service responsible for generating and looking up invocation keys
 #[async_trait]
 pub trait InvocationKeyService {
-    fn generate_key(&self, worker_id: &WorkerId) -> InvocationKey;
-    fn lookup_key(&self, worker_id: &WorkerId, key: &InvocationKey) -> LookupResult;
+    fn generate_key(&self, worker_id: &WorkerId) -> IdempotencyKey;
+    fn lookup_key(&self, worker_id: &WorkerId, key: &IdempotencyKey) -> LookupResult;
     fn confirm_key(
         &self,
         worker_id: &WorkerId,
-        key: &InvocationKey,
+        key: &IdempotencyKey,
         vals: Result<Vec<Value>, GolemError>,
     );
-    fn interrupt_key(&self, worker_id: &WorkerId, key: &InvocationKey);
-    fn resume_key(&self, worker_id: &WorkerId, key: &InvocationKey);
+    fn interrupt_key(&self, worker_id: &WorkerId, key: &IdempotencyKey);
+    fn resume_key(&self, worker_id: &WorkerId, key: &IdempotencyKey);
     async fn wait_for_confirmation(
         &self,
         worker_id: &WorkerId,
-        key: &InvocationKey,
+        key: &IdempotencyKey,
     ) -> LookupResult;
 }
 
@@ -51,16 +51,16 @@ pub trait InvocationKeyService {
 pub struct InvocationKeyServiceDefault {
     state: Arc<Mutex<State>>,
     #[allow(unused)]
-    confirm_receiver: Receiver<(WorkerId, InvocationKey)>,
-    confirm_sender: Sender<(WorkerId, InvocationKey)>,
+    confirm_receiver: Receiver<(WorkerId, IdempotencyKey)>,
+    confirm_sender: Sender<(WorkerId, IdempotencyKey)>,
     pending_key_retention: Duration,
 }
 
 #[derive(Debug)]
 struct State {
-    pending_keys: std::collections::HashMap<(WorkerId, InvocationKey), PendingStatus>,
+    pending_keys: std::collections::HashMap<(WorkerId, IdempotencyKey), PendingStatus>,
     confirmed_keys:
-        std::collections::HashMap<(WorkerId, InvocationKey), Result<Vec<Value>, GolemError>>,
+        std::collections::HashMap<(WorkerId, IdempotencyKey), Result<Vec<Value>, GolemError>>,
 }
 
 #[derive(Clone, Debug)]
@@ -122,12 +122,12 @@ impl InvocationKeyServiceDefault {
 
 #[async_trait]
 impl InvocationKeyService for InvocationKeyServiceDefault {
-    fn generate_key(&self, worker_id: &WorkerId) -> InvocationKey {
+    fn generate_key(&self, worker_id: &WorkerId) -> IdempotencyKey {
         self.cleanup();
         let mut state = self.state.lock().unwrap();
 
         let uuid = Uuid::new_v4();
-        let key = InvocationKey::new(uuid.to_string());
+        let key = IdempotencyKey::new(uuid.to_string());
         state
             .pending_keys
             .insert((worker_id.clone(), key.clone()), PendingStatus::new());
@@ -137,7 +137,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
         key
     }
 
-    fn lookup_key(&self, worker_id: &WorkerId, key: &InvocationKey) -> LookupResult {
+    fn lookup_key(&self, worker_id: &WorkerId, key: &IdempotencyKey) -> LookupResult {
         self.cleanup();
         let key = (worker_id.clone(), key.clone());
         let state = self.state.lock().unwrap();
@@ -159,7 +159,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
     fn confirm_key(
         &self,
         worker_id: &WorkerId,
-        key: &InvocationKey,
+        key: &IdempotencyKey,
         vals: Result<Vec<Value>, GolemError>,
     ) {
         self.cleanup();
@@ -179,7 +179,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
             .expect("failed to send confirmation");
     }
 
-    fn interrupt_key(&self, worker_id: &WorkerId, key: &InvocationKey) {
+    fn interrupt_key(&self, worker_id: &WorkerId, key: &IdempotencyKey) {
         self.cleanup();
         let key = (worker_id.clone(), key.clone());
         let confirm = {
@@ -198,7 +198,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
         }
     }
 
-    fn resume_key(&self, worker_id: &WorkerId, key: &InvocationKey) {
+    fn resume_key(&self, worker_id: &WorkerId, key: &IdempotencyKey) {
         self.cleanup();
         let key = (worker_id.clone(), key.clone());
         let mut state = self.state.lock().unwrap();
@@ -210,7 +210,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
     async fn wait_for_confirmation(
         &self,
         worker_id: &WorkerId,
-        key: &InvocationKey,
+        key: &IdempotencyKey,
     ) -> LookupResult {
         debug!("wait_for_confirmation for {worker_id}: {key:?}");
         loop {
@@ -218,7 +218,7 @@ impl InvocationKeyService for InvocationKeyServiceDefault {
                 LookupResult::Invalid => break LookupResult::Invalid,
                 LookupResult::Interrupted => break LookupResult::Interrupted,
                 LookupResult::Pending => {
-                    let expected_key: Option<(WorkerId, InvocationKey)> =
+                    let expected_key: Option<(WorkerId, IdempotencyKey)> =
                         Some((worker_id.clone(), key.clone()));
                     let mut receiver = self.confirm_sender.subscribe();
                     let confirmed_key = receiver.recv().await.ok();

@@ -20,11 +20,10 @@ use golem_api_grpc::proto::golem::common::ErrorsBody;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::{
-    get_invocation_key_response, get_worker_metadata_response, get_workers_metadata_response,
-    interrupt_worker_response, invoke_and_await_response, invoke_response,
-    launch_new_worker_response, log_event, resume_worker_response, update_worker_response,
-    worker_execution_error, CallingConvention, ConnectWorkerRequest, DeleteWorkerRequest,
-    GetInvocationKeyRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
+    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
+    invoke_and_await_response, invoke_response, launch_new_worker_response, log_event,
+    resume_worker_response, update_worker_response, worker_execution_error, CallingConvention,
+    ConnectWorkerRequest, DeleteWorkerRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
     GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
     InvokeAndAwaitRequest, InvokeParameters, InvokeRequest, LaunchNewWorkerRequest, LogEvent,
     ResumeWorkerRequest, StdErrLog, StdOutLog, UpdateMode, UpdateWorkerRequest,
@@ -33,7 +32,7 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    ComponentId, ComponentVersion, FailedUpdateRecord, InvocationKey, SuccessfulUpdateRecord,
+    ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey, SuccessfulUpdateRecord,
     WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_wasm_ast::analysis::AnalysisContext;
@@ -82,10 +81,17 @@ pub trait TestDsl {
         precise: bool,
     ) -> (Option<u64>, Vec<WorkerMetadata>);
     async fn delete_worker(&self, worker_id: &WorkerId);
-    async fn get_invocation_key(&self, worker_id: &WorkerId) -> InvocationKey;
+
     async fn invoke(
         &self,
         worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<(), Error>;
+    async fn invoke_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<(), Error>;
@@ -98,7 +104,7 @@ pub trait TestDsl {
     async fn invoke_and_await_with_key(
         &self,
         worker_id: &WorkerId,
-        invocation_key: &InvocationKey,
+        idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<Vec<Value>, Error>;
@@ -124,7 +130,7 @@ pub trait TestDsl {
     async fn invoke_and_await_custom_with_key(
         &self,
         worker_id: &WorkerId,
-        invocation_key: &InvocationKey,
+        idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
         cc: CallingConvention,
@@ -301,23 +307,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .await;
     }
 
-    async fn get_invocation_key(&self, worker_id: &WorkerId) -> InvocationKey {
-        match self
-            .worker_service()
-            .get_invocation_key(GetInvocationKeyRequest {
-                worker_id: Some(worker_id.clone().into()),
-            })
-            .await
-            .result
-            .expect("Invocation key response is empty")
-        {
-            get_invocation_key_response::Result::Success(response) => response.into(),
-            get_invocation_key_response::Result::Error(error) => {
-                panic!("Failed to get invocation key: {error:?}")
-            }
-        }
-    }
-
     async fn invoke(
         &self,
         worker_id: &WorkerId,
@@ -328,6 +317,36 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .worker_service()
             .invoke(InvokeRequest {
                 worker_id: Some(worker_id.clone().into()),
+                idempotency_key: None,
+                function: function_name.to_string(),
+                invoke_parameters: Some(InvokeParameters {
+                    params: params.into_iter().map(|v| v.into()).collect(),
+                }),
+            })
+            .await;
+
+        match invoke_response.result {
+            None => panic!("No response from invoke_worker"),
+            Some(invoke_response::Result::Success(_)) => Ok(()),
+            Some(invoke_response::Result::Error(WorkerError { error: Some(error) })) => Err(error),
+            Some(invoke_response::Result::Error(_)) => {
+                panic!("Empty error response from invoke_worker")
+            }
+        }
+    }
+
+    async fn invoke_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<(), Error> {
+        let invoke_response = self
+            .worker_service()
+            .invoke(InvokeRequest {
+                worker_id: Some(worker_id.clone().into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
                 function: function_name.to_string(),
                 invoke_parameters: Some(InvokeParameters {
                     params: params.into_iter().map(|v| v.into()).collect(),
@@ -363,13 +382,13 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn invoke_and_await_with_key(
         &self,
         worker_id: &WorkerId,
-        invocation_key: &InvocationKey,
+        idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<Vec<Value>, Error> {
         self.invoke_and_await_custom_with_key(
             worker_id,
-            invocation_key,
+            idempotency_key,
             function_name,
             params,
             CallingConvention::Component,
@@ -461,15 +480,21 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         params: Vec<Value>,
         cc: CallingConvention,
     ) -> Result<Vec<Value>, Error> {
-        let invocation_key = self.get_invocation_key(worker_id).await;
-        self.invoke_and_await_custom_with_key(worker_id, &invocation_key, function_name, params, cc)
-            .await
+        let idempotency_key = IdempotencyKey::fresh();
+        self.invoke_and_await_custom_with_key(
+            worker_id,
+            &idempotency_key,
+            function_name,
+            params,
+            cc,
+        )
+        .await
     }
 
     async fn invoke_and_await_custom_with_key(
         &self,
         worker_id: &WorkerId,
-        invocation_key: &InvocationKey,
+        idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
         cc: CallingConvention,
@@ -478,11 +503,11 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .worker_service()
             .invoke_and_await(InvokeAndAwaitRequest {
                 worker_id: Some(worker_id.clone().into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
                 function: function_name.to_string(),
                 invoke_parameters: Some(InvokeParameters {
                     params: params.into_iter().map(|v| v.into()).collect(),
                 }),
-                invocation_key: Some(invocation_key.clone().into()),
                 calling_convention: cc.into(),
             })
             .await;
