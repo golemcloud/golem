@@ -50,8 +50,9 @@ use crate::components::worker_service::provided::ProvidedWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
 use crate::config::TestDependencies;
-use crate::dsl::benchmark::BenchmarkConfig;
+use crate::dsl::benchmark::{BenchmarkConfig, RunConfig};
 use clap::{Parser, Subcommand};
+use itertools::Itertools;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -114,6 +115,55 @@ impl CliParams {
             Level::INFO
         }
     }
+
+    pub fn runs(&self) -> Vec<RunConfig> {
+        let cluster_size: Vec<usize> = match self.mode {
+            TestMode::Provided { .. } => {
+                vec![0]
+            }
+            _ => self
+                .benchmark_config
+                .cluster_size
+                .iter()
+                .copied()
+                .unique()
+                .sorted()
+                .collect(),
+        };
+
+        let size = self
+            .benchmark_config
+            .size
+            .iter()
+            .copied()
+            .unique()
+            .sorted()
+            .collect::<Vec<_>>();
+        let length = self
+            .benchmark_config
+            .length
+            .iter()
+            .copied()
+            .unique()
+            .sorted()
+            .collect::<Vec<_>>();
+
+        let mut res = Vec::new();
+
+        for cluster_size in cluster_size {
+            for &size in &size {
+                for &length in &length {
+                    res.push(RunConfig {
+                        cluster_size,
+                        size,
+                        length,
+                    })
+                }
+            }
+        }
+
+        res
+    }
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -164,8 +214,6 @@ pub enum TestMode {
     },
     #[command()]
     Docker {
-        #[arg(long, default_value = "3")]
-        cluster_size: usize,
         #[arg(long, default_value = "")]
         redis_prefix: String,
         #[arg(long, default_value = "9000")]
@@ -179,8 +227,6 @@ pub enum TestMode {
         workspace_root: String,
         #[arg(long, default_value = "target/debug")]
         build_target: String,
-        #[arg(long, default_value = "3")]
-        cluster_size: usize,
         #[arg(long, default_value = "6379")]
         redis_port: u16,
         #[arg(long, default_value = "")]
@@ -212,8 +258,6 @@ pub enum TestMode {
     Minikube {
         #[arg(long, default_value = "default")]
         namespace: String,
-        #[arg(long, default_value = "3")]
-        cluster_size: usize,
         #[arg(long, default_value = "")]
         redis_prefix: String,
     },
@@ -221,8 +265,6 @@ pub enum TestMode {
     Aws {
         #[arg(long, default_value = "default")]
         namespace: String,
-        #[arg(long, default_value = "3")]
-        cluster_size: usize,
         #[arg(long, default_value = "")]
         redis_prefix: String,
     },
@@ -239,7 +281,7 @@ impl CliTestDependencies {
         tracing_subscriber::registry().with(ansi_layer).init();
     }
 
-    pub async fn new(params: CliParams) -> Self {
+    pub async fn new(params: CliParams, config: RunConfig) -> Self {
         match &params.mode {
             TestMode::Provided {
                 postgres,
@@ -320,7 +362,6 @@ impl CliTestDependencies {
                 }
             }
             TestMode::Docker {
-                cluster_size,
                 redis_prefix,
                 worker_executor_base_http_port,
                 worker_executor_base_grpc_port,
@@ -359,7 +400,7 @@ impl CliTestDependencies {
                 let worker_executor_cluster: Arc<
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(DockerWorkerExecutorCluster::new(
-                    *cluster_size,
+                    config.cluster_size,
                     *worker_executor_base_http_port,
                     *worker_executor_base_grpc_port,
                     redis.clone(),
@@ -384,7 +425,6 @@ impl CliTestDependencies {
             TestMode::Spawned {
                 workspace_root,
                 build_target,
-                cluster_size,
                 redis_port,
                 redis_prefix,
                 shard_manager_http_port,
@@ -476,7 +516,7 @@ impl CliTestDependencies {
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(
                     SpawnedWorkerExecutorCluster::new(
-                        *cluster_size,
+                        config.cluster_size,
                         *worker_executor_base_http_port,
                         *worker_executor_base_grpc_port,
                         &build_root.join("worker-executor"),
@@ -506,7 +546,6 @@ impl CliTestDependencies {
             }
             TestMode::Minikube {
                 namespace,
-                cluster_size,
                 redis_prefix,
             } => {
                 let routing_type = K8sRoutingType::Minikube;
@@ -583,7 +622,7 @@ impl CliTestDependencies {
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(
                     K8sWorkerExecutorCluster::new(
-                        *cluster_size,
+                        config.cluster_size,
                         &namespace,
                         &routing_type,
                         redis.clone(),
@@ -611,7 +650,6 @@ impl CliTestDependencies {
             }
             TestMode::Aws {
                 namespace,
-                cluster_size,
                 redis_prefix,
             } => {
                 let routing_type = K8sRoutingType::Service;
@@ -696,7 +734,7 @@ impl CliTestDependencies {
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(
                     K8sWorkerExecutorCluster::new(
-                        *cluster_size,
+                        config.cluster_size,
                         &namespace,
                         &routing_type,
                         redis.clone(),

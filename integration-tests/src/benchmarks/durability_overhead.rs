@@ -19,12 +19,13 @@ use golem_common::model::WorkerId;
 use golem_wasm_rpc::Value;
 
 use golem_test_framework::config::{CliParams, CliTestDependencies, TestDependencies};
-use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder};
+use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
 use integration_tests::benchmarks::{run_benchmark, setup_with};
 
 struct DurabilityOverhead {
-    config: CliParams,
+    params: CliParams,
+    config: RunConfig,
 }
 
 #[derive(Clone)]
@@ -42,15 +43,15 @@ impl Benchmark for DurabilityOverhead {
         "durability-overhead"
     }
 
-    async fn create(config: CliParams) -> Self {
-        Self { config }
+    async fn create(params: CliParams, config: RunConfig) -> Self {
+        Self { params, config }
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        let deps = CliTestDependencies::new(self.config.clone()).await;
+        let deps = CliTestDependencies::new(self.params.clone(), self.config.clone()).await;
 
         let durable_worker_ids = setup_with(
-            self.config.benchmark_config.size,
+            self.config.size,
             "shopping-cart",
             "durable-worker",
             true,
@@ -59,7 +60,7 @@ impl Benchmark for DurabilityOverhead {
         .await;
 
         let not_durable_worker_ids = setup_with(
-            self.config.benchmark_config.size,
+            self.config.size,
             "shopping-cart",
             "not-durable-worker",
             true,
@@ -171,7 +172,7 @@ impl Benchmark for DurabilityOverhead {
         run_for(
             context.durable_worker_ids.clone(),
             "durable".to_string(),
-            self.config.benchmark_config.length,
+            self.config.length,
             context,
             &recorder,
         )
@@ -180,7 +181,7 @@ impl Benchmark for DurabilityOverhead {
         run_for(
             context.not_durable_worker_ids.clone(),
             "not-durable".to_string(),
-            self.config.benchmark_config.length,
+            self.config.length,
             context,
             &recorder,
         )
