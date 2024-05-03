@@ -90,7 +90,7 @@ impl Benchmark for Throughput {
                         .invoke_and_await(
                             &worker_id_clone,
                             "golem:it/api/calculate",
-                            vec![Value::U64(20000)]
+                            vec![Value::U64(20000)],
                         )
                         .await
                         .expect("invoke_and_await failed");
