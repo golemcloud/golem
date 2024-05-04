@@ -12,7 +12,7 @@ fn echo(Path(input): Path<String>) -> String {
 
 #[handler]
 fn calculate(Path(input): Path<u64>) -> Json<u64> {
-    let _ = common::loop_fibonacci(50, input);
+    common::loop_fibonacci(50, input);
     Json(input)
 }
 

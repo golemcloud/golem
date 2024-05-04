@@ -164,9 +164,38 @@ impl Benchmark for Throughput {
 
     async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
         let calculate_iter: u64 = 200000;
-        // Invoke each worker a 'length' times in parallel and record the duration
+
         let mut fibers = Vec::new();
-        for (n, worker_id) in context.worker_ids.iter().enumerate() {
+        for worker_id in context.worker_ids.iter() {
+            let context_clone = context.clone();
+            let worker_id_clone = worker_id.clone();
+            let recorder_clone = recorder.clone();
+            let length = self.config.length;
+            let fiber = tokio::task::spawn(async move {
+                for _ in 0..length {
+                    let start = SystemTime::now();
+                    context_clone
+                        .deps
+                        .invoke_and_await(
+                            &worker_id_clone,
+                            "golem:it/api/echo",
+                            vec![Value::String("hello".to_string())],
+                        )
+                        .await
+                        .expect("invoke_and_await failed");
+                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
+                    recorder_clone.duration(&"worker-echo-invocation".to_string(), elapsed);
+                }
+            });
+            fibers.push(fiber);
+        }
+
+        for fiber in fibers {
+            fiber.await.expect("fiber failed");
+        }
+
+        let mut fibers = Vec::new();
+        for worker_id in context.worker_ids.iter() {
             let context_clone = context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
@@ -184,8 +213,27 @@ impl Benchmark for Throughput {
                         .await
                         .expect("invoke_and_await failed");
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"worker-invocation".to_string(), elapsed);
-                    recorder_clone.duration(&format!("worker-{n}"), elapsed);
+                    recorder_clone.duration(&"worker-calculate-invocation".to_string(), elapsed);
+                }
+            });
+            fibers.push(fiber);
+        }
+
+        for fiber in fibers {
+            fiber.await.expect("fiber failed");
+        }
+
+        let mut fibers = Vec::new();
+        for _ in context.worker_ids.iter() {
+            let context_clone = context.clone();
+            let recorder_clone = recorder.clone();
+            let length = self.config.length;
+            let fiber = tokio::task::spawn(async move {
+                for _ in 0..length {
+                    let start = SystemTime::now();
+                    context_clone.rust_client.echo("hello").await;
+                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
+                    recorder_clone.duration(&"rust-http-echo-invocation".to_string(), elapsed);
                 }
             });
             fibers.push(fiber);
@@ -205,7 +253,7 @@ impl Benchmark for Throughput {
                     let start = SystemTime::now();
                     context_clone.rust_client.calculate(calculate_iter).await;
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"rust-http-invocation".to_string(), elapsed);
+                    recorder_clone.duration(&"rust-http-calculate-invocation".to_string(), elapsed);
                 }
             });
             fibers.push(fiber);
