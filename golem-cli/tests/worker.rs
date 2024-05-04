@@ -160,14 +160,7 @@ fn worker_invoke_and_await(
         "TEST_ENV=test-value",
         "test-arg",
     ])?;
-    let args_key: IdempotencyKey = cli.run(&[
-        "worker",
-        "invocation-key",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-    ])?;
+    let args_key: IdempotencyKey = IdempotencyKey::fresh();
     let args = cli.run_json(&[
         "worker",
         "invoke-and-await",
@@ -179,7 +172,7 @@ fn worker_invoke_and_await(
         "golem:it/api/get-arguments",
         &cfg.arg('j', "parameters"),
         "[]",
-        &cfg.arg('k', "invocation-key"),
+        &cfg.arg('k', "idempotency-key"),
         &args_key.0,
     ])?;
 
@@ -187,14 +180,7 @@ fn worker_invoke_and_await(
 
     assert_eq!(args, expected_args);
 
-    let env_key: IdempotencyKey = cli.run(&[
-        "worker",
-        "invocation-key",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-    ])?;
+    let env_key: IdempotencyKey = IdempotencyKey::fresh();
 
     let env = cli.run_json(&[
         "worker",
@@ -205,7 +191,7 @@ fn worker_invoke_and_await(
         &worker_name,
         &cfg.arg('f', "function"),
         "golem:it/api/get-environment",
-        &cfg.arg('k', "invocation-key"),
+        &cfg.arg('k', "idempotency-key"),
         &env_key.0,
     ])?;
 

@@ -272,7 +272,7 @@ impl TextFormat for IdempotencyKey {
             "
             Invocation key: {}
             You can use it in invoke-and-await command this way:
-            invoke-and-await --invocation-key {} ...
+            invoke-and-await --idempotency-key {} ...
             ",
             self.0,
             self.0
