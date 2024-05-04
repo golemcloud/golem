@@ -101,6 +101,7 @@ prost = "0.12.3"
 prost-types = "0.12.3"
 rustls = { version = "0.22.2" }
 rand = "0.8.5"
+reqwest = { version = "^0.11", features = ["json", "multipart", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 tempfile = "3.9.0"

@@ -36,3 +36,15 @@ pub fn loop_factorial(num: u128, loops: u64) {
         let _ = factorial(num);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::fibonacci;
+
+    #[test]
+    pub fn fibonacci_test() {
+        let v = fibonacci(50);
+
+        println!("{v}");
+    }
+}

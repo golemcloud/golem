@@ -25,6 +25,8 @@ use golem_test_framework::config::{
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
 use integration_tests::benchmarks::{run_benchmark, setup_with};
+use reqwest::Client;
+use reqwest::Url;
 
 struct Throughput {
     params: CliParams,
@@ -35,7 +37,63 @@ struct Throughput {
 pub struct Context {
     pub deps: CliTestDependencies,
     pub rust_service: CliTestService,
+    pub rust_client: RustServiceClient,
     pub worker_ids: Vec<WorkerId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RustServiceClient {
+    client: Client,
+    base_url: Url,
+}
+
+impl RustServiceClient {
+    pub fn new(url: &str) -> Self {
+        let base_url = Url::parse(url).unwrap();
+        let client = Client::builder().connection_verbose(true).build().unwrap();
+
+        Self { client, base_url }
+    }
+
+    async fn calculate(&self, input: u64) -> u64 {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .unwrap()
+            .push("calculate")
+            .push(&input.to_string());
+
+        let request = self.client.get(url.clone());
+
+        let response = request
+            .send()
+            .await
+            .expect("calculate - unexpected response");
+
+        let status = response.status().as_u16();
+        match status {
+            200 => response
+                .json::<u64>()
+                .await
+                .expect("calculate - unexpected response"),
+            _ => panic!("calculate - unexpected response: {status}"),
+        }
+    }
+
+    async fn echo(&self, input: &str) -> String {
+        let mut url = self.base_url.clone();
+
+        url.path_segments_mut().unwrap().push("echo").push(input);
+
+        let request = self.client.get(url.clone());
+
+        let response = request.send().await.expect("echo - unexpected response");
+
+        let status = response.status().as_u16();
+        match status {
+            200 => response.text().await.expect("echo - unexpected response"),
+            _ => panic!("echo - unexpected response: {status}"),
+        }
+    }
 }
 
 #[async_trait]
@@ -51,6 +109,7 @@ impl Benchmark for Throughput {
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
+        let rust_client = RustServiceClient::new("http://localhost:3000");
         let rust_service = CliTestService::new(
             self.params.clone(),
             "rust-http-service".to_string(),
@@ -60,7 +119,7 @@ impl Benchmark for Throughput {
 
         let deps = CliTestDependencies::new(self.params.clone(), self.config.clone()).await;
         let worker_ids = setup_with(
-            self.config.size,
+            1, //self.config.size,
             "rust_component_service",
             "worker",
             true,
@@ -71,6 +130,7 @@ impl Benchmark for Throughput {
         Context {
             deps,
             rust_service,
+            rust_client,
             worker_ids,
         }
     }
@@ -98,9 +158,12 @@ impl Benchmark for Throughput {
         for fiber in fibers {
             fiber.await.expect("fiber failed");
         }
+
+        context.rust_client.echo("hello").await;
     }
 
     async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
+        let calculate_iter: u64 = 200000;
         // Invoke each worker a 'length' times in parallel and record the duration
         let mut fibers = Vec::new();
         for (n, worker_id) in context.worker_ids.iter().enumerate() {
@@ -116,13 +179,33 @@ impl Benchmark for Throughput {
                         .invoke_and_await(
                             &worker_id_clone,
                             "golem:it/api/calculate",
-                            vec![Value::U64(20000)],
+                            vec![Value::U64(calculate_iter)],
                         )
                         .await
                         .expect("invoke_and_await failed");
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"invocation".to_string(), elapsed);
+                    recorder_clone.duration(&"worker-invocation".to_string(), elapsed);
                     recorder_clone.duration(&format!("worker-{n}"), elapsed);
+                }
+            });
+            fibers.push(fiber);
+        }
+
+        for fiber in fibers {
+            fiber.await.expect("fiber failed");
+        }
+
+        let mut fibers = Vec::new();
+        for _ in context.worker_ids.iter() {
+            let context_clone = context.clone();
+            let recorder_clone = recorder.clone();
+            let length = self.config.length;
+            let fiber = tokio::task::spawn(async move {
+                for _ in 0..length {
+                    let start = SystemTime::now();
+                    context_clone.rust_client.calculate(calculate_iter).await;
+                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
+                    recorder_clone.duration(&"rust-http-invocation".to_string(), elapsed);
                 }
             });
             fibers.push(fiber);
