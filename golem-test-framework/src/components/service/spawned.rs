@@ -31,7 +31,7 @@ pub struct SpawnedService {
 }
 
 impl SpawnedService {
-    pub async fn new(
+    pub fn new(
         name: String,
         executable: &Path,
         working_directory: &Path,

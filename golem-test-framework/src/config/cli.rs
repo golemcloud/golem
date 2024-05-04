@@ -34,6 +34,8 @@ use crate::components::redis::spawned::SpawnedRedis;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use crate::components::redis_monitor::RedisMonitor;
+use crate::components::service::spawned::SpawnedService;
+use crate::components::service::Service;
 use crate::components::shard_manager::docker::DockerShardManager;
 use crate::components::shard_manager::k8s::K8sShardManager;
 use crate::components::shard_manager::provided::ProvidedShardManager;
@@ -49,10 +51,11 @@ use crate::components::worker_service::k8s::K8sWorkerService;
 use crate::components::worker_service::provided::ProvidedWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
-use crate::config::TestDependencies;
+use crate::config::{TestDependencies, TestService};
 use crate::dsl::benchmark::{BenchmarkConfig, RunConfig};
 use clap::{Parser, Subcommand};
 use itertools::Itertools;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -810,5 +813,54 @@ impl TestDependencies for CliTestDependencies {
 
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         self.worker_executor_cluster.clone()
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone)]
+pub struct CliTestService {
+    service: Arc<dyn Service + Send + Sync + 'static>,
+}
+
+impl CliTestService {
+    pub fn new(
+        params: CliParams,
+        name: String,
+        env_vars: HashMap<String, String>,
+        service_build_target: Option<String>,
+    ) -> Self {
+        match &params.mode {
+            TestMode::Spawned {
+                workspace_root,
+                build_target,
+                ..
+            } => {
+                let workspace_root = Path::new(workspace_root);
+                let build_root =
+                    workspace_root.join(service_build_target.unwrap_or(build_target.clone()));
+
+                let service: Arc<dyn Service + Send + Sync + 'static> =
+                    Arc::new(SpawnedService::new(
+                        name.clone(),
+                        &build_root.join(name.clone()),
+                        &workspace_root.join(name.clone()),
+                        env_vars,
+                        params.service_verbosity(),
+                        Level::INFO,
+                        Level::ERROR,
+                    ));
+
+                Self { service }
+            }
+            _ => {
+                panic!("Test mode {:?} not supported", &params.mode)
+            }
+        }
+    }
+}
+
+impl TestService for CliTestService {
+    fn service(&self) -> Arc<dyn Service + Send + Sync + 'static> {
+        self.service.clone()
     }
 }
