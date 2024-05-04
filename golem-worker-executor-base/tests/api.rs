@@ -283,7 +283,6 @@ async fn promise() {
         executor_clone
             .invoke_and_await(&worker_id_clone, "run", vec![])
             .await
-            .unwrap()
     });
 
     sleep(Duration::from_secs(10)).await;
@@ -308,7 +307,7 @@ async fn promise() {
 
     drop(executor);
 
-    check!(result == vec![Value::List(vec![Value::U8(42)])]);
+    check!(result == Ok(vec![Value::List(vec![Value::U8(42)])]));
 }
 
 #[tokio::test]

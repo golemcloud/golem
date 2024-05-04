@@ -23,8 +23,8 @@ use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
+use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::invocation_key::InvocationKeyService;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::OplogService;
 use golem_worker_executor_base::services::promise::PromiseService;
@@ -72,7 +72,6 @@ impl Bootstrap<Context> for ServerBootstrap {
         running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         golem_config: Arc<GolemConfig>,
-        invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
@@ -80,6 +79,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        events: Arc<Events>,
     ) -> anyhow::Result<All<Context>> {
         let additional_deps = AdditionalDeps {};
 
@@ -95,7 +95,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             running_worker_enumeration_service.clone(),
             promise_service.clone(),
             golem_config.clone(),
-            invocation_key_service.clone(),
             shard_service.clone(),
             shard_manager_service.clone(),
             key_value_service.clone(),
@@ -103,6 +102,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             oplog_service.clone(),
             scheduler_service.clone(),
             worker_activator.clone(),
+            events.clone(),
             additional_deps.clone(),
         ));
         let recovery_management = Arc::new(RecoveryManagementDefault::new(
@@ -117,12 +117,12 @@ impl Bootstrap<Context> for ServerBootstrap {
             oplog_service.clone(),
             promise_service.clone(),
             scheduler_service.clone(),
-            invocation_key_service.clone(),
             key_value_service.clone(),
             blob_store_service.clone(),
             rpc.clone(),
             worker_activator.clone(),
             worker_proxy.clone(),
+            events.clone(),
             golem_config.clone(),
             additional_deps.clone(),
         ));
@@ -140,7 +140,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             running_worker_enumeration_service,
             promise_service,
             golem_config.clone(),
-            invocation_key_service,
             shard_service,
             key_value_service,
             blob_store_service,
@@ -150,6 +149,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             scheduler_service,
             worker_activator.clone(),
             worker_proxy.clone(),
+            events.clone(),
             additional_deps,
         ))
     }

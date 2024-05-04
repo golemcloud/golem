@@ -42,7 +42,7 @@ impl TypeCheckIn for Value {
                     .map(|value| value.into())
                     .collect())
             }
-            CallingConvention::Stdio | CallingConvention::StdioEventloop => {
+            CallingConvention::Stdio => {
                 if expected_parameters.is_empty() {
                     let vval: Val = Val {
                         val: Some(val::Val::String(self.to_string())),
@@ -68,7 +68,7 @@ impl TypeCheckIn for Vec<Val> {
                 protobuf::function_parameters(&self, expected_parameters)?;
                 Ok(self)
             }
-            CallingConvention::Stdio | CallingConvention::StdioEventloop => {
+            CallingConvention::Stdio => {
                 if expected_parameters.is_empty() {
                     if self.len() == 1 {
                         match &self[0].val {
@@ -122,7 +122,7 @@ impl TypeCheckOut for Vec<Val> {
                 }
             }
 
-            CallingConvention::Stdio | CallingConvention::StdioEventloop => {
+            CallingConvention::Stdio => {
                 if self.len() == 1 {
                     let value_opt = &self[0].val;
 

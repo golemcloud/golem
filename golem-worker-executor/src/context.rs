@@ -29,12 +29,13 @@ use golem_worker_executor_base::durable_host::{
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, LookupResult, TrapType,
+    WorkerConfig,
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
+use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::invocation_key::{InvocationKeyService, LookupResult};
 use golem_worker_executor_base::services::invocation_queue::InvocationQueue;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
@@ -154,24 +155,8 @@ impl InvocationManagement for Context {
         self.durable_ctx.get_current_idempotency_key().await
     }
 
-    async fn interrupt_idempotency_key(&mut self, key: &IdempotencyKey) {
-        self.durable_ctx.interrupt_idempotency_key(key).await
-    }
-
-    async fn resume_idempotency_key(&mut self, key: &IdempotencyKey) {
-        self.durable_ctx.resume_idempotency_key(key).await
-    }
-
-    async fn confirm_idempotency_key(
-        &mut self,
-        key: &IdempotencyKey,
-        vals: Result<Vec<Value>, GolemError>,
-    ) {
-        self.durable_ctx.confirm_idempotency_key(key, vals).await
-    }
-
-    fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        self.durable_ctx.lookup_invocation_result(key)
+    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
+        self.durable_ctx.lookup_invocation_result(key).await
     }
 }
 
@@ -297,7 +282,7 @@ impl WorkerCtx for Context {
         worker_id: WorkerId,
         account_id: AccountId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
+        events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -322,7 +307,7 @@ impl WorkerCtx for Context {
             worker_id,
             account_id,
             promise_service,
-            invocation_key_service,
+            events,
             worker_service,
             worker_enumeration_service,
             key_value_service,

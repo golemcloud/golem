@@ -14,7 +14,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::str::FromStr;
@@ -566,7 +566,6 @@ impl Display for IdempotencyKey {
 pub enum CallingConvention {
     Component,
     Stdio,
-    StdioEventloop,
 }
 
 impl TryFrom<i32> for CallingConvention {
@@ -576,7 +575,6 @@ impl TryFrom<i32> for CallingConvention {
         match value {
             0 => Ok(CallingConvention::Component),
             1 => Ok(CallingConvention::Stdio),
-            2 => Ok(CallingConvention::StdioEventloop),
             _ => Err(format!("Unknown calling convention: {}", value)),
         }
     }
@@ -591,9 +589,6 @@ impl From<golem_api_grpc::proto::golem::worker::CallingConvention> for CallingCo
             golem_api_grpc::proto::golem::worker::CallingConvention::Stdio => {
                 CallingConvention::Stdio
             }
-            golem_api_grpc::proto::golem::worker::CallingConvention::StdioEventloop => {
-                CallingConvention::StdioEventloop
-            }
         }
     }
 }
@@ -603,7 +598,6 @@ impl From<CallingConvention> for i32 {
         match value {
             CallingConvention::Component => 0,
             CallingConvention::Stdio => 1,
-            CallingConvention::StdioEventloop => 2,
         }
     }
 }
@@ -644,6 +638,7 @@ pub struct WorkerStatusRecord {
     pub pending_updates: VecDeque<TimestampedUpdateDescription>,
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
+    pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
     pub component_version: ComponentVersion,
     pub oplog_idx: OplogIndex,
 }
@@ -658,6 +653,7 @@ impl Default for WorkerStatusRecord {
             pending_updates: VecDeque::new(),
             failed_updates: Vec::new(),
             successful_updates: Vec::new(),
+            invocation_results: HashMap::new(),
             component_version: 0,
             oplog_idx: 0,
         }
@@ -790,6 +786,17 @@ pub enum WorkerInvocation {
     ManualUpdate {
         target_version: ComponentVersion,
     },
+}
+
+impl WorkerInvocation {
+    pub fn is_idempotency_key(&self, key: &IdempotencyKey) -> bool {
+        match self {
+            Self::ExportedFunction {
+                idempotency_key, ..
+            } => idempotency_key == key,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]

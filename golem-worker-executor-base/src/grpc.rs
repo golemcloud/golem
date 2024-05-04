@@ -177,7 +177,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn validate_worker_status(
         &self,
-        worker_id: &common_model::WorkerId,
+        worker_id: &WorkerId,
         metadata: &Option<WorkerMetadata>,
     ) -> Result<WorkerStatusRecord, GolemError> {
         let worker_status = Ctx::compute_latest_worker_status(self, worker_id, metadata).await?;
@@ -498,9 +498,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
 
-        let values = invoke_and_await(
+        let values = invoke_and_await::<Ctx>(
             worker_details,
-            self,
             idempotency_key,
             calling_convention.into(),
             full_function_name,
@@ -1685,7 +1684,6 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
         match self.calling_convention() {
             golem::worker::CallingConvention::Component => CallingConvention::Component,
             golem::worker::CallingConvention::Stdio => CallingConvention::Stdio,
-            golem::worker::CallingConvention::StdioEventloop => CallingConvention::StdioEventloop,
         }
     }
 

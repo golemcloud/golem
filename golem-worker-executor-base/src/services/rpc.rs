@@ -25,15 +25,15 @@ use tracing::debug;
 use golem_common::model::{AccountId, IdempotencyKey, WorkerId};
 
 use crate::error::GolemError;
+use crate::services::events::Events;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
-    active_workers, blob_store, component, golem_config, invocation_key, key_value, oplog, promise,
-    recovery, scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration,
-    HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasExtraDeps,
-    HasInvocationKeyService, HasKeyValueService, HasOplogService, HasPromiseService,
-    HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerProxy, HasWorkerService,
+    active_workers, blob_store, component, golem_config, key_value, oplog, promise, recovery,
+    scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration,
+    HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
+    HasKeyValueService, HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardService, HasWasmtimeEngine,
+    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::{invoke, invoke_and_await, Worker};
 use crate::workerctx::WorkerCtx;
@@ -228,7 +228,6 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
         Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
     promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
     golem_config: Arc<golem_config::GolemConfig>,
-    invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
     shard_service: Arc<dyn shard::ShardService + Send + Sync>,
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
@@ -236,6 +235,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     recovery_management: Arc<Mutex<Option<Arc<dyn recovery::RecoveryManagement + Send + Sync>>>>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
+    events: Arc<Events>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -254,7 +254,6 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
             promise_service: self.promise_service.clone(),
             golem_config: self.golem_config.clone(),
-            invocation_key_service: self.invocation_key_service.clone(),
             shard_service: self.shard_service.clone(),
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
@@ -262,8 +261,15 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             recovery_management: self.recovery_management.clone(),
             scheduler_service: self.scheduler_service.clone(),
             worker_activator: self.worker_activator.clone(),
+            events: self.events.clone(),
             extra_deps: self.extra_deps.clone(),
         }
+    }
+}
+
+impl<Ctx: WorkerCtx> HasEvents for DirectWorkerInvocationRpc<Ctx> {
+    fn events(&self) -> Arc<Events> {
+        self.events.clone()
     }
 }
 
@@ -304,14 +310,6 @@ impl<Ctx: WorkerCtx> HasRunningWorkerEnumerationService for DirectWorkerInvocati
         &self,
     ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync> {
         self.running_worker_enumeration_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasInvocationKeyService for DirectWorkerInvocationRpc<Ctx> {
-    fn invocation_key_service(
-        &self,
-    ) -> Arc<dyn invocation_key::InvocationKeyService + Send + Sync> {
-        self.invocation_key_service.clone()
     }
 }
 
@@ -417,7 +415,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         >,
         promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
-        invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
         shard_service: Arc<dyn shard::ShardService + Send + Sync>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
@@ -425,6 +422,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
         worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
+        events: Arc<Events>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -440,7 +438,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             running_worker_enumeration_service,
             promise_service,
             golem_config,
-            invocation_key_service,
             shard_service,
             key_value_service,
             blob_store_service,
@@ -448,6 +445,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             recovery_management: Arc::new(Mutex::new(None)),
             scheduler_service,
             worker_activator,
+            events,
             extra_deps,
         }
     }
@@ -491,7 +489,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
             let result_values = invoke_and_await(
                 worker,
-                self,
                 idempotency_key,
                 golem_common::model::CallingConvention::Component,
                 function_name,
@@ -536,7 +533,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
             invoke(
                 worker,
-                self,
                 idempotency_key,
                 golem_common::model::CallingConvention::Component,
                 function_name,
@@ -592,7 +588,7 @@ impl Rpc for RpcMock {
         _function_params: Vec<WitValue>,
         _account_id: &AccountId,
     ) -> Result<WitValue, RpcError> {
-        todo!()
+        unimplemented!()
     }
 
     async fn invoke(
@@ -603,6 +599,6 @@ impl Rpc for RpcMock {
         _function_params: Vec<WitValue>,
         _account_id: &AccountId,
     ) -> Result<(), RpcError> {
-        todo!()
+        unimplemented!()
     }
 }

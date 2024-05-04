@@ -114,12 +114,6 @@ pub trait TestDsl {
         function_name: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, Error>;
-    async fn invoke_and_await_stdio_eventloop(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, Error>;
     async fn invoke_and_await_custom(
         &self,
         worker_id: &WorkerId,
@@ -430,45 +424,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 } else {
                     Err(Error::BadRequest(
                         ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }))
-                }
-            })
-    }
-
-    async fn invoke_and_await_stdio_eventloop(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, Error> {
-        let json_string = params.to_string();
-        self.invoke_and_await_custom(
-            worker_id,
-            function_name,
-            vec![Value::String(json_string)],
-            CallingConvention::StdioEventloop,
-        )
-            .await
-            .and_then(|vals| {
-                if vals.len() == 1 {
-                    let value_opt = &vals[0];
-
-                    match value_opt {
-                        Value::String(s) => {
-                            if s.is_empty() {
-                                Ok(serde_json::Value::Null)
-                            } else {
-                                let result: serde_json::Value = serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.to_string()));
-                                Ok(result)
-                            }
-                        }
-                        _ => Err(Error::BadRequest(
-                            ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }
-                        )),
-                    }
-                } else {
-                    Err(Error::BadRequest(
-                        ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }
-                    ))
                 }
             })
     }
@@ -992,6 +947,7 @@ pub fn to_worker_metadata(
                     _ => None,
                 })
                 .collect(),
+            invocation_results: HashMap::new(),
             component_version: metadata.component_version,
         },
     }

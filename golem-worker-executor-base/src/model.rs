@@ -17,6 +17,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
 use bincode::{Decode, Encode};
+use golem_wasm_rpc::Value;
 use serde::{Deserialize, Serialize};
 use wasmtime::Trap;
 
@@ -243,8 +244,16 @@ impl From<PersistenceLevel> for crate::preview2::golem::api::host::PersistenceLe
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum LookupResult {
+    New,
+    Pending,
+    Interrupted,
+    Complete(Result<Vec<Value>, GolemError>),
+}
+
 #[cfg(test)]
-mod shard_id_tests {
+mod tests {
     use uuid::Uuid;
 
     use golem_common::model::ComponentId;

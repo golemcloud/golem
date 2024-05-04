@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::wasi_host::managed_stdio::{ManagedStandardIo, ManagedStreamStatus};
+use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -44,7 +45,7 @@ struct ManagedStdInState {
 }
 
 impl ManagedStdIn {
-    pub async fn from_standard_io(io: ManagedStandardIo) -> Self {
+    pub async fn from_standard_io<Ctx: WorkerCtx>(io: ManagedStandardIo<Ctx>) -> Self {
         let (demand_tx, demand_rx) = flume::unbounded();
         let (incoming_tx, incoming_rx) = flume::unbounded();
         let (remainder_tx, remainder_rx) = flume::unbounded();
@@ -192,7 +193,7 @@ struct ManagedStdOutState {
 }
 
 impl ManagedStdOut {
-    pub fn from_standard_io(io: ManagedStandardIo) -> Self {
+    pub fn from_standard_io<Ctx: WorkerCtx>(io: ManagedStandardIo<Ctx>) -> Self {
         let consumed = Arc::new(tokio::sync::Notify::new());
         let (outgoing_tx, outgoing_rx) = flume::unbounded();
         let dirty = Arc::new(AtomicBool::new(false));
@@ -319,125 +320,5 @@ impl StdoutStream for ManagedStdErr {
 
     fn isatty(&self) -> bool {
         false
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use crate::durable_host::io::{ManagedStdIn, ManagedStdOut};
-    use crate::services::invocation_key::InvocationKeyServiceDefault;
-    use crate::wasi_host::managed_stdio::ManagedStandardIo;
-    use bytes::{BufMut, Bytes};
-    use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
-    use uuid::Uuid;
-    use wasmtime_wasi::preview2::{HostInputStream, HostOutputStream, StreamError, Subscribe};
-
-    #[tokio::test]
-    async fn enqueue_first_and_read() {
-        let worker_id = WorkerId {
-            component_id: ComponentId(Uuid::new_v4()),
-            worker_name: "test".to_string(),
-        };
-        let invocation_key_service = Arc::new(InvocationKeyServiceDefault::default());
-        let stdio = ManagedStandardIo::new(worker_id, invocation_key_service);
-
-        let msg1 = Bytes::from("hello\n".to_string());
-        let key1 = IdempotencyKey::new("key1".to_string());
-
-        let msg2 = Bytes::from("world\n".to_string());
-        let key2 = IdempotencyKey::new("key2".to_string());
-
-        stdio.enqueue(msg1, key1).await;
-        stdio.enqueue(msg2, key2).await;
-
-        let mut input = ManagedStdIn::from_standard_io(stdio.clone()).await;
-        let mut output = ManagedStdOut::from_standard_io(stdio.clone());
-
-        let out1 = read_until_newline(&mut input).await;
-        output.ready().await;
-        output.write("ok\n".as_bytes().into()).unwrap();
-        output.flush().unwrap();
-        output.ready().await;
-
-        let out2 = read_until_newline(&mut input).await;
-        output.ready().await;
-        output.write("ok\n".as_bytes().into()).unwrap();
-        output.flush().unwrap();
-        output.ready().await;
-
-        assert_eq!(out1, "hello\n");
-        assert_eq!(out2, "world\n");
-    }
-
-    #[tokio::test]
-    async fn enqueue_after_first_read() {
-        let worker_id = WorkerId {
-            component_id: ComponentId(Uuid::new_v4()),
-            worker_name: "test".to_string(),
-        };
-        let invocation_key_service = Arc::new(InvocationKeyServiceDefault::default());
-        let stdio = ManagedStandardIo::new(worker_id, invocation_key_service);
-
-        let msg1 = Bytes::from("hello\n".to_string());
-        let key1 = IdempotencyKey::new("key1".to_string());
-
-        let msg2 = Bytes::from("world\n".to_string());
-        let key2 = IdempotencyKey::new("key2".to_string());
-
-        stdio.enqueue(msg1, key1).await;
-
-        let mut input = ManagedStdIn::from_standard_io(stdio.clone()).await;
-        let mut output = ManagedStdOut::from_standard_io(stdio.clone());
-
-        let out1 = read_until_newline(&mut input).await;
-        output.ready().await;
-        output.write("ok\n".as_bytes().into()).unwrap();
-        output.flush().unwrap();
-        output.ready().await;
-
-        let handle = tokio::spawn(async move {
-            println!("sleep..");
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            println!("awake..");
-            stdio.enqueue(msg2, key2).await;
-        });
-
-        let out2 = read_until_newline(&mut input).await;
-        output.ready().await;
-        output.write("ok\n".as_bytes().into()).unwrap();
-        output.flush().unwrap();
-        output.ready().await;
-
-        handle.await.unwrap();
-
-        assert_eq!(out1, "hello\n");
-        assert_eq!(out2, "world\n");
-    }
-
-    async fn read_until_newline(stream: &mut ManagedStdIn) -> String {
-        let mut result = vec![];
-
-        loop {
-            stream.ready().await;
-            match stream.read(1) {
-                Ok(buf) => {
-                    result.put_slice(&buf);
-                    if result.ends_with(&[10]) {
-                        break;
-                    }
-                }
-                Err(StreamError::Closed) => {
-                    break;
-                }
-                Err(err) => {
-                    panic!("unexpected error: {err}")
-                }
-            }
-        }
-
-        String::from_utf8(result).unwrap()
     }
 }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_wasm_rpc::Value;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::ops::DerefMut;
 use std::sync::Weak;
 use std::sync::{Arc, RwLock};
@@ -23,15 +23,17 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 use wasmtime::Store;
 
+use crate::error::GolemError;
 use crate::invocation::invoke_worker;
-use crate::services::invocation_key::LookupResult;
+use crate::model::{InterruptKind, LookupResult, TrapType};
+use crate::services::events::{Event, Events};
 use crate::services::oplog::Oplog;
 use crate::services::worker_activator::WorkerActivator;
-use crate::services::HasOplog;
+use crate::services::{HasInvocationQueue, HasOplog};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
-    OplogEntry, SnapshotSource, TimestampedUpdateDescription, UpdateDescription,
+    OplogEntry, OplogIndex, SnapshotSource, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
@@ -45,6 +47,9 @@ use golem_common::model::{
 /// persisting them and also making sure that all the enqueued invocations eventually get
 /// processed, in the same order as they came in.
 ///
+/// Invocations have an associated idempotency key that is used to ensure that the same invocation
+/// is not processed multiple times.
+///
 /// If the queue is empty, the service can trigger invocations directly as an optimization.
 ///
 /// Every worker invocation should be done through this service.
@@ -55,6 +60,8 @@ pub struct InvocationQueue<Ctx: WorkerCtx> {
     queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
     pending_updates: Arc<RwLock<VecDeque<TimestampedUpdateDescription>>>,
     running: Arc<Mutex<Option<RunningInvocationQueue<Ctx>>>>,
+    invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
+    events: Arc<Events>,
 }
 
 impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
@@ -62,8 +69,10 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         worker_id: WorkerId,
         oplog: Arc<dyn Oplog + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        events: Arc<Events>,
         initial_pending_invocations: &[TimestampedWorkerInvocation],
         initial_pending_updates: &[TimestampedUpdateDescription],
+        initial_invocation_results: &HashMap<IdempotencyKey, OplogIndex>,
     ) -> Self {
         let queue = Arc::new(RwLock::new(VecDeque::from_iter(
             initial_pending_invocations.iter().cloned(),
@@ -71,6 +80,17 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         let pending_updates = Arc::new(RwLock::new(VecDeque::from_iter(
             initial_pending_updates.iter().cloned(),
         )));
+        let invocation_results = Arc::new(RwLock::new(HashMap::from_iter(
+            initial_invocation_results.iter().map(|(key, oplog_idx)| {
+                (
+                    key.clone(),
+                    InvocationResult::Lazy {
+                        oplog_idx: *oplog_idx,
+                    },
+                )
+            }),
+        )));
+        let running = Arc::new(Mutex::new(None));
 
         InvocationQueue {
             worker_id,
@@ -78,7 +98,9 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
             worker_activator,
             queue,
             pending_updates,
-            running: Arc::new(Mutex::new(None)),
+            running,
+            invocation_results,
+            events,
         }
     }
 
@@ -219,6 +241,137 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
     pub fn pop_pending_update(&self) -> Option<TimestampedUpdateDescription> {
         self.pending_updates.write().unwrap().pop_front()
     }
+
+    pub fn invocation_results(&self) -> HashMap<IdempotencyKey, OplogIndex> {
+        HashMap::from_iter(
+            self.invocation_results
+                .read()
+                .unwrap()
+                .iter()
+                .map(|(key, result)| (key.clone(), result.oplog_idx())),
+        )
+    }
+
+    pub async fn store_invocation_success(
+        &self,
+        key: &IdempotencyKey,
+        result: Vec<Value>,
+        oplog_index: OplogIndex,
+    ) {
+        let mut map = self.invocation_results.write().unwrap();
+        map.insert(
+            key.clone(),
+            InvocationResult::Cached {
+                result: Ok(result.clone()),
+                oplog_idx: oplog_index,
+            },
+        );
+        debug!("stored invocation success for {key}");
+        self.events.publish(Event::InvocationCompleted {
+            worker_id: self.worker_id.clone(),
+            idempotency_key: key.clone(),
+            result: Ok(result),
+        });
+    }
+
+    pub async fn store_invocation_failure(
+        &self,
+        key: &IdempotencyKey,
+        trap_type: &TrapType,
+        oplog_index: OplogIndex,
+    ) {
+        let mut map = self.invocation_results.write().unwrap();
+        map.insert(
+            key.clone(),
+            InvocationResult::Cached {
+                result: Err(trap_type.clone()),
+                oplog_idx: oplog_index,
+            },
+        );
+        let golem_error = match trap_type {
+            TrapType::Interrupt(InterruptKind::Interrupt) => {
+                Some(GolemError::runtime("Interrupted via the Golem API"))
+            }
+            TrapType::Error(error) => Some(GolemError::runtime(error.to_string())),
+            TrapType::Exit => Some(GolemError::runtime("Process exited")),
+            _ => None,
+        };
+        if let Some(golem_error) = golem_error {
+            self.events.publish(Event::InvocationCompleted {
+                worker_id: self.worker_id.clone(),
+                idempotency_key: key.clone(),
+                result: Err(golem_error),
+            });
+        }
+    }
+
+    pub async fn store_invocation_resuming(&self, key: &IdempotencyKey) {
+        let mut map = self.invocation_results.write().unwrap();
+        map.remove(key);
+    }
+
+    pub async fn wait_for_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
+        match self.lookup_invocation_result(key).await {
+            LookupResult::New => LookupResult::New,
+            LookupResult::Interrupted => LookupResult::Interrupted,
+            LookupResult::Pending => {
+                self.events
+                    .wait_for(|event| match event {
+                        Event::InvocationCompleted {
+                            worker_id,
+                            idempotency_key,
+                            result,
+                        } if *worker_id == self.worker_id && idempotency_key == key => {
+                            Some(LookupResult::Complete(result.clone()))
+                        }
+                        _ => None,
+                    })
+                    .await
+            }
+            LookupResult::Complete(result) => LookupResult::Complete(result),
+        }
+    }
+
+    pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
+        let maybe_result = self.invocation_results.read().unwrap().get(key).cloned();
+        if let Some(mut result) = maybe_result {
+            result.cache(self.oplog.clone()).await;
+            match result {
+                InvocationResult::Cached {
+                    result: Ok(values), ..
+                } => LookupResult::Complete(Ok(values)),
+                InvocationResult::Cached {
+                    result: Err(TrapType::Interrupt(InterruptKind::Interrupt)),
+                    ..
+                } => LookupResult::Interrupted,
+                InvocationResult::Cached {
+                    result: Err(TrapType::Interrupt(_)),
+                    ..
+                } => LookupResult::Pending,
+                InvocationResult::Cached {
+                    result: Err(TrapType::Error(error)),
+                    ..
+                } => LookupResult::Complete(Err(GolemError::runtime(error.to_string()))),
+                InvocationResult::Cached {
+                    result: Err(TrapType::Exit),
+                    ..
+                } => LookupResult::Complete(Err(GolemError::runtime("Process exited"))),
+                InvocationResult::Lazy { .. } => {
+                    panic!("Unexpected lazy result after InvocationResult.cache")
+                }
+            }
+        } else {
+            let is_pending = self
+                .pending_invocations()
+                .iter()
+                .any(|entry| entry.invocation.is_idempotency_key(key));
+            if is_pending {
+                LookupResult::Pending
+            } else {
+                LookupResult::New
+            }
+        }
+    }
 }
 
 struct RunningInvocationQueue<Ctx: WorkerCtx> {
@@ -347,6 +500,17 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                             .set_current_idempotency_key(invocation_key)
                             .await;
 
+                        if let Some(idempotency_key) =
+                            &store.data().get_current_idempotency_key().await
+                        {
+                            store
+                                .data_mut()
+                                .get_public_state()
+                                .invocation_queue()
+                                .store_invocation_resuming(idempotency_key)
+                                .await;
+                        }
+
                         // Make sure to update the pending invocation queue in the status record before
                         // the invocation writes the invocation start oplog entry
                         store.data_mut().update_pending_invocations().await;
@@ -380,8 +544,12 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                         )
                         .await;
                         store.data_mut().end_call_snapshotting_function();
-                        let result = store.data_mut().lookup_invocation_result(&invocation_key);
+                        let result = store
+                            .data_mut()
+                            .lookup_invocation_result(&invocation_key)
+                            .await;
                         match result {
+                            LookupResult::New => {}
                             LookupResult::Pending => {}
                             LookupResult::Interrupted => {}
                             LookupResult::Complete(Ok(result)) => {
@@ -457,6 +625,52 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
             }
         } else {
             None
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum InvocationResult {
+    Cached {
+        result: Result<Vec<Value>, TrapType>,
+        oplog_idx: OplogIndex,
+    },
+    Lazy {
+        oplog_idx: OplogIndex,
+    },
+}
+
+impl InvocationResult {
+    pub fn oplog_idx(&self) -> OplogIndex {
+        match self {
+            Self::Cached { oplog_idx, .. } | Self::Lazy { oplog_idx } => *oplog_idx,
+        }
+    }
+
+    pub async fn cache(&mut self, oplog: Arc<dyn Oplog + Send + Sync>) {
+        if let Self::Lazy { oplog_idx } = self {
+            let oplog_idx = *oplog_idx;
+            let entry = oplog.read(oplog_idx).await;
+
+            let result = match entry {
+                OplogEntry::ExportedFunctionCompleted { .. } => {
+                    let values: Vec<golem_wasm_rpc::protobuf::Val> = entry.payload().expect("failed to deserialize function response payload").unwrap();
+                    let values = values
+                        .into_iter()
+                        .map(|val| {
+                            val.try_into()
+                                .expect("failed to decode serialized protobuf value")
+                        })
+                        .collect();
+                    Ok(values)
+                }
+                OplogEntry::Error { error, .. } => Err(TrapType::Error(error)),
+                OplogEntry::Interrupted { .. } => Err(TrapType::Interrupt(InterruptKind::Interrupt)),
+                OplogEntry::Exited { .. } => Err(TrapType::Exit),
+                _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {oplog:?}")
+            } ;
+
+            *self = Self::Cached { result, oplog_idx }
         }
     }
 }
