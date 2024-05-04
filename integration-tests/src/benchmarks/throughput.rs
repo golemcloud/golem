@@ -12,19 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::time::SystemTime;
 
 use async_trait::async_trait;
+use golem_common::model::WorkerId;
 use golem_wasm_rpc::Value;
 
-use golem_test_framework::config::{CliParams, TestDependencies};
+use golem_test_framework::config::{
+    CliParams, CliTestDependencies, CliTestService, TestDependencies, TestService,
+};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
-use integration_tests::benchmarks::{run_benchmark, setup, Context};
+use integration_tests::benchmarks::{run_benchmark, setup_with};
 
 struct Throughput {
     params: CliParams,
     config: RunConfig,
+}
+
+#[derive(Clone)]
+pub struct Context {
+    pub deps: CliTestDependencies,
+    pub rust_service: CliTestService,
+    pub worker_ids: Vec<WorkerId>,
 }
 
 #[async_trait]
@@ -40,13 +51,28 @@ impl Benchmark for Throughput {
     }
 
     async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(
+        let rust_service = CliTestService::new(
             self.params.clone(),
-            self.config.clone(),
+            "rust-http-service".to_string(),
+            HashMap::new(),
+            Some("test-components/rust-service".to_string()),
+        );
+
+        let deps = CliTestDependencies::new(self.params.clone(), self.config.clone()).await;
+        let worker_ids = setup_with(
+            self.config.size,
             "rust_component_service",
+            "worker",
             true,
+            deps.clone(),
         )
-        .await
+        .await;
+
+        Context {
+            deps,
+            rust_service,
+            worker_ids,
+        }
     }
 
     async fn warmup(&self, context: &Self::IterationContext) {
@@ -109,6 +135,7 @@ impl Benchmark for Throughput {
 
     async fn cleanup_iteration(&self, context: Self::IterationContext) {
         context.deps.kill_all();
+        context.rust_service.kill_all();
     }
 }
 

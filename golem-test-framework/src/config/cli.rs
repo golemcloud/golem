@@ -827,7 +827,7 @@ impl CliTestService {
         params: CliParams,
         name: String,
         env_vars: HashMap<String, String>,
-        service_build_target: Option<String>,
+        service_path: Option<String>,
     ) -> Self {
         match &params.mode {
             TestMode::Spawned {
@@ -835,9 +835,13 @@ impl CliTestService {
                 build_target,
                 ..
             } => {
-                let workspace_root = Path::new(workspace_root);
-                let build_root =
-                    workspace_root.join(service_build_target.unwrap_or(build_target.clone()));
+                let workspace_root = if let Some(service_path) = service_path {
+                    Path::new(workspace_root).join(service_path)
+                } else {
+                    Path::new(workspace_root).into()
+                };
+
+                let build_root = workspace_root.join(build_target);
 
                 let service: Arc<dyn Service + Send + Sync + 'static> =
                     Arc::new(SpawnedService::new(
