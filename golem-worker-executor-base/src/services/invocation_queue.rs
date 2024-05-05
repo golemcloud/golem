@@ -519,7 +519,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                         .await;
                     }
                     WorkerInvocation::ManualUpdate { target_version } => {
-                        let invocation_key = {
+                        let _idempotency_key = {
                             let ctx = store.data_mut();
                             let idempotency_key = IdempotencyKey::fresh();
                             ctx.set_current_idempotency_key(idempotency_key.clone())
@@ -527,7 +527,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                             idempotency_key
                         };
                         store.data_mut().begin_call_snapshotting_function();
-                        let _ = invoke_worker(
+                        let result = invoke_worker(
                             "golem:api/save-snapshot@0.2.0/save".to_string(),
                             vec![],
                             store,
@@ -537,15 +537,10 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                         )
                         .await;
                         store.data_mut().end_call_snapshotting_function();
-                        let result = store
-                            .data_mut()
-                            .lookup_invocation_result(&invocation_key)
-                            .await;
+
                         match result {
-                            LookupResult::New => {}
-                            LookupResult::Pending => {}
-                            LookupResult::Interrupted => {}
-                            LookupResult::Complete(Ok(result)) => {
+                            None => {}
+                            Some(Ok(result)) => {
                                 if let Some(parent) = parent.upgrade() {
                                     if let Some(bytes) = Self::decode_snapshot_result(result) {
                                         // Enqueue the update
@@ -572,7 +567,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                                     panic!("Parent invocation queue was unexpectedly dropped")
                                 }
                             }
-                            LookupResult::Complete(Err(error)) => {
+                            Some(Err(error)) => {
                                 Self::fail_update(
                                     target_version,
                                     format!("failed to get a snapshot for manual update: {error}"),
