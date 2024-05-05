@@ -191,6 +191,17 @@ impl TrapType {
             },
         }
     }
+
+    pub fn as_golem_error(&self) -> Option<GolemError> {
+        match self {
+            TrapType::Interrupt(InterruptKind::Interrupt) => {
+                Some(GolemError::runtime("Interrupted via the Golem API"))
+            }
+            TrapType::Error(error) => Some(GolemError::runtime(error.to_string())),
+            TrapType::Exit => Some(GolemError::runtime("Process exited")),
+            _ => None,
+        }
+    }
 }
 
 /// Encapsulates a worker error with the number of retries already attempted.

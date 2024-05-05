@@ -411,7 +411,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     .as_context_mut()
                                     .data_mut()
                                     .begin_call_snapshotting_function();
-                                let _ = invoke_worker(
+                                let load_result = invoke_worker(
                                     "golem:api/load-snapshot@0.2.0/load".to_string(),
                                     vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
                                     store,
@@ -424,18 +424,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     .as_context_mut()
                                     .data_mut()
                                     .end_call_snapshotting_function();
-                                let result = store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .lookup_invocation_result(&idempotency_key)
-                                    .await;
+
                                 let target_version = *pending_update.description.target_version();
 
-                                let failed = match result {
-                                    LookupResult::Complete(Err(error)) => Some(format!(
+                                let failed = match load_result {
+                                    Some(Err(error)) => Some(format!(
                                         "Manual update failed to load snapshot: {error}"
                                     )),
-                                    LookupResult::Complete(Ok(value)) => {
+                                    Some(Ok(value)) => {
                                         if value.len() == 1 {
                                             match &value[0] {
                                                 Value::Result(Err(Some(boxed_error_value))) => {
@@ -917,7 +913,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .set_current_idempotency_key(idempotency_key)
                             .await;
 
-                        let finished = invoke_worker(
+                        let invoke_result = invoke_worker(
                             function_name.to_string(),
                             function_input,
                             store,
@@ -927,20 +923,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         )
                         .await;
 
-                        if !finished {
+                        if let Some(invoke_result) = invoke_result {
+                            if let Err(error) = invoke_result {
+                                if let Some(error) =
+                                    TrapType::from_error::<Ctx>(&error).as_golem_error()
+                                {
+                                    break Err(error);
+                                }
+                            }
+                        } else {
                             break Err(GolemError::runtime(format!(
                                 "The worker could not finish replaying a function {function_name}"
                             )));
-                        } else {
-                            let result = store
-                                .as_context()
-                                .data()
-                                .durable_ctx()
-                                .get_current_invocation_result()
-                                .await;
-                            if let Some(LookupResult::Complete(Err(error))) = result {
-                                break Err(error);
-                            }
                         }
 
                         count += 1;
@@ -1430,18 +1424,6 @@ pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
     managed_stdio: ManagedStandardIo<Ctx>,
     invocation_queue: Arc<InvocationQueue<Ctx>>,
     oplog: Arc<dyn Oplog + Send + Sync>,
-}
-
-impl<Ctx: WorkerCtx> Drop for PublicDurableWorkerState<Ctx> {
-    fn drop(&mut self) {
-        debug!("Dropping PublicDurableWorkerState");
-    }
-}
-
-impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
-    fn drop(&mut self) {
-        debug!("Dropping DurableWorkerCtx");
-    }
 }
 
 impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {

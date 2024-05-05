@@ -288,14 +288,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
                 oplog_idx: oplog_index,
             },
         );
-        let golem_error = match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt) => {
-                Some(GolemError::runtime("Interrupted via the Golem API"))
-            }
-            TrapType::Error(error) => Some(GolemError::runtime(error.to_string())),
-            TrapType::Exit => Some(GolemError::runtime("Process exited")),
-            _ => None,
-        };
+        let golem_error = trap_type.as_golem_error();
         if let Some(golem_error) = golem_error {
             self.events.publish(Event::InvocationCompleted {
                 worker_id: self.worker_id.clone(),

@@ -44,7 +44,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     instance: &wasmtime::component::Instance,
     calling_convention: CallingConvention,
     was_live_before: bool,
-) -> bool {
+) -> Option<Result<Vec<Value>, anyhow::Error>> {
     let mut store = store.as_context_mut();
 
     let worker_id = store.data().worker_id().clone();
@@ -72,31 +72,31 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
             match trap_type {
                 TrapType::Interrupt(InterruptKind::Interrupt) => {
                     record_invocation(was_live_before, "interrupted");
-                    false
+                    None
                 }
                 TrapType::Interrupt(InterruptKind::Suspend) => {
                     // this invocation was suspended and expected to be resumed by an external call or schedule
                     record_invocation(was_live_before, "suspended");
-                    false
+                    None
                 }
                 TrapType::Exit => {
                     record_invocation(was_live_before, "exited");
-                    true
+                    Some(Err(err))
                 }
                 _ => {
                     record_invocation(was_live_before, "failed");
-                    true
+                    Some(Err(err))
                 }
             }
         }
         Ok(None) => {
             // this invocation did not produce any result, but we may get one in the future
-            false
+            None
         }
-        Ok(Some(_)) => {
+        Ok(Some(result)) => {
             // this invocation finished and produced a result
             record_invocation(was_live_before, "success");
-            true
+            Some(Ok(result))
         }
     }
 }

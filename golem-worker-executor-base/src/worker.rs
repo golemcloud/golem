@@ -913,7 +913,6 @@ where
                 &new_entries,
             );
 
-        debug!("deleted regions before: {deleted_regions:?}");
         if let Some(TimestampedUpdateDescription {
             oplog_index,
             description: UpdateDescription::SnapshotBased { .. },
@@ -924,8 +923,6 @@ where
                 OplogRegion::from_range(1..=*oplog_index),
             ]));
         }
-        debug!("deleted regions after: {deleted_regions:?}");
-
         let invocation_results = last_known.invocation_results; // TODO
 
         Ok(WorkerStatusRecord {
