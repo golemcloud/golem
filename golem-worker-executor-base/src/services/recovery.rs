@@ -758,6 +758,8 @@ mod tests {
 
     #[async_trait]
     impl InvocationHooks for EmptyContext {
+        type FailurePayload = ();
+
         async fn on_exported_function_invoked(
             &mut self,
             _full_function_name: &str,
@@ -767,14 +769,26 @@ mod tests {
             unimplemented!()
         }
 
-        async fn on_invocation_failure(&mut self, _trap_type: &TrapType) -> Result<(), Error> {
+        async fn on_invocation_failure(
+            &mut self,
+            _trap_type: &TrapType,
+        ) -> Result<Self::FailurePayload, Error> {
             unimplemented!()
         }
 
         async fn on_invocation_failure_deactivated(
             &mut self,
+            _payload: &Self::FailurePayload,
             _trap_type: &TrapType,
         ) -> Result<WorkerStatus, Error> {
+            unimplemented!()
+        }
+
+        async fn on_invocation_failure_final(
+            &mut self,
+            _payload: &Self::FailurePayload,
+            _trap_type: &TrapType,
+        ) -> Result<(), Error> {
             unimplemented!()
         }
 

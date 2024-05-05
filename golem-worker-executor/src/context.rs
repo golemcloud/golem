@@ -210,6 +210,8 @@ impl StatusManagement for Context {
 
 #[async_trait]
 impl InvocationHooks for Context {
+    type FailurePayload = <DurableWorkerCtx<Context> as InvocationHooks>::FailurePayload;
+
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
@@ -221,16 +223,30 @@ impl InvocationHooks for Context {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> Result<(), Error> {
+    async fn on_invocation_failure(
+        &mut self,
+        trap_type: &TrapType,
+    ) -> Result<Self::FailurePayload, Error> {
         self.durable_ctx.on_invocation_failure(trap_type).await
     }
 
     async fn on_invocation_failure_deactivated(
         &mut self,
+        payload: &Self::FailurePayload,
         trap_type: &TrapType,
     ) -> Result<WorkerStatus, Error> {
         self.durable_ctx
-            .on_invocation_failure_deactivated(trap_type)
+            .on_invocation_failure_deactivated(payload, trap_type)
+            .await
+    }
+
+    async fn on_invocation_failure_final(
+        &mut self,
+        payload: &Self::FailurePayload,
+        trap_type: &TrapType,
+    ) -> Result<(), Error> {
+        self.durable_ctx
+            .on_invocation_failure_final(payload, trap_type)
             .await
     }
 

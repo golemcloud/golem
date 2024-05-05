@@ -247,6 +247,8 @@ pub trait StatusManagement {
 /// successful or failed) of invocations.
 #[async_trait]
 pub trait InvocationHooks {
+    type FailurePayload: Send + Sync + 'static;
+
     /// Called when a worker is about to be invoked
     /// Arguments:
     /// - `full_function_name`: The full name of the function being invoked (including the exported interface name if any)
@@ -261,13 +263,24 @@ pub trait InvocationHooks {
     ) -> anyhow::Result<()>;
 
     /// Called when a worker invocation fails, before the worker gets deactivated
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> Result<(), anyhow::Error>;
+    async fn on_invocation_failure(
+        &mut self,
+        trap_type: &TrapType,
+    ) -> Result<Self::FailurePayload, anyhow::Error>;
 
     /// Called when a worker invocation fails, after the worker has been deactivated
     async fn on_invocation_failure_deactivated(
         &mut self,
+        payload: &Self::FailurePayload,
         trap_type: &TrapType,
     ) -> Result<WorkerStatus, anyhow::Error>;
+
+    /// Called when the worker invocation's failure is final, no more retry attempts will be made
+    async fn on_invocation_failure_final(
+        &mut self,
+        payload: &Self::FailurePayload,
+        trap_type: &TrapType,
+    ) -> Result<(), anyhow::Error>;
 
     /// Called when a worker invocation succeeds
     /// Arguments:

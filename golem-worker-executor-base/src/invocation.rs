@@ -197,11 +197,11 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
     match call_result {
         Err(err) => {
             let trap_type = TrapType::from_error::<Ctx>(&err);
-            store.data_mut().on_invocation_failure(&trap_type).await?;
+            let failure_payload = store.data_mut().on_invocation_failure(&trap_type).await?;
             store.data_mut().deactivate().await;
             let result_status = store
                 .data_mut()
-                .on_invocation_failure_deactivated(&trap_type)
+                .on_invocation_failure_deactivated(&failure_payload, &trap_type)
                 .await?;
             store
                 .data_mut()
@@ -211,6 +211,10 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
             if result_status == WorkerStatus::Retrying || result_status == WorkerStatus::Running {
                 Ok(None)
             } else {
+                store
+                    .data_mut()
+                    .on_invocation_failure_final(&failure_payload, &trap_type)
+                    .await?;
                 Err(err)
             }
         }

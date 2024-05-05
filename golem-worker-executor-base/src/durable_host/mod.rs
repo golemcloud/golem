@@ -46,7 +46,7 @@ use async_trait::async_trait;
 use cap_std::ambient_authority;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
-    OplogEntry, SnapshotSource, UpdateDescription, WrappedFunctionType,
+    OplogEntry, OplogIndex, SnapshotSource, UpdateDescription, WrappedFunctionType,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -580,6 +580,8 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
+    type FailurePayload = Option<OplogIndex>;
+
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
@@ -611,7 +613,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> Result<(), anyhow::Error> {
+    async fn on_invocation_failure(
+        &mut self,
+        trap_type: &TrapType,
+    ) -> Result<Option<OplogIndex>, anyhow::Error> {
         self.state.consume_hint_entries().await;
 
         if self.state.is_live() {
@@ -629,21 +634,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 let oplog_idx = self.state.oplog.add_and_commit(entry).await;
 
                 if store {
-                    if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
-                        self.public_state
-                            .invocation_queue
-                            .store_invocation_failure(&idempotency_key, trap_type, oplog_idx)
-                            .await;
-                    }
+                    Ok(Some(oplog_idx))
+                } else {
+                    Ok(None)
                 }
+            } else {
+                Ok(None)
             }
+        } else {
+            Ok(None)
         }
-
-        Ok(())
     }
 
     async fn on_invocation_failure_deactivated(
         &mut self,
+        _payload: &Option<OplogIndex>,
         error: &TrapType,
     ) -> Result<WorkerStatus, anyhow::Error> {
         let previous_tries = self.state.trailing_error_count().await;
@@ -670,6 +675,22 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             error,
             previous_tries,
         ))
+    }
+
+    async fn on_invocation_failure_final(
+        &mut self,
+        payload: &Option<OplogIndex>,
+        trap_type: &TrapType,
+    ) -> Result<(), anyhow::Error> {
+        if let Some(oplog_idx) = payload {
+            if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                self.public_state
+                    .invocation_queue
+                    .store_invocation_failure(&idempotency_key, trap_type, *oplog_idx)
+                    .await;
+            }
+        }
+        Ok(())
     }
 
     async fn on_invocation_success(
