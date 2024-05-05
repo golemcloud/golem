@@ -493,13 +493,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let calling_convention = request.calling_convention();
-        let worker_details = self.get_or_create(request).await?;
+        let worker = self.get_or_create(request).await?;
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
 
         let values = invoke_and_await::<Ctx>(
-            worker_details,
+            worker,
             idempotency_key,
             calling_convention.into(),
             full_function_name,

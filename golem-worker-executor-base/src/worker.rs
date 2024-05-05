@@ -831,9 +831,10 @@ pub async fn invoke_and_await<Ctx: WorkerCtx>(
         None => {
             debug!("Waiting for idempotency key {idempotency_key} to complete for {worker_id}",);
 
-            let result = worker
-                .public_state
-                .invocation_queue()
+            let invocation_queue = worker.public_state.invocation_queue().clone();
+            drop(worker); // we must not hold reference to the worker while waiting
+
+            let result = invocation_queue
                 .wait_for_invocation_result(&idempotency_key)
                 .await;
 

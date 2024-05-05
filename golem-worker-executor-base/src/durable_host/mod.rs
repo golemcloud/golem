@@ -383,9 +383,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> bool {
-        let public_state = store.as_context().data().durable_ctx().public_state.clone();
         let worker_id = store.as_context().data().worker_id().clone();
-        let pending_update = public_state.invocation_queue.pop_pending_update();
+        let pending_update = store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .public_state
+            .invocation_queue
+            .pop_pending_update();
         match pending_update {
             Some(pending_update) => match result {
                 Ok(_) => {
@@ -1404,6 +1409,18 @@ pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
     managed_stdio: ManagedStandardIo<Ctx>,
     invocation_queue: Arc<InvocationQueue<Ctx>>,
     oplog: Arc<dyn Oplog + Send + Sync>,
+}
+
+impl<Ctx: WorkerCtx> Drop for PublicDurableWorkerState<Ctx> {
+    fn drop(&mut self) {
+        debug!("Dropping PublicDurableWorkerState");
+    }
+}
+
+impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
+    fn drop(&mut self) {
+        debug!("Dropping DurableWorkerCtx");
+    }
 }
 
 impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
