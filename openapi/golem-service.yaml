@@ -1894,7 +1894,6 @@ components:
       enum:
       - Component
       - Stdio
-      - StdioEventloop
     CompleteParameters:
       type: object
       properties:
