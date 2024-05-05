@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/component/versioned_name.proto",
                 "proto/golem/component/versioned_component_id.proto",
                 "proto/golem/component/component_service.proto",
-                "proto/golem/componentcompilation/template_compilation_service.proto",
+                "proto/golem/componentcompilation/component_compilation_service.proto",
                 "proto/golem/worker/calling_convention.proto",
                 "proto/golem/worker/complete_parameters.proto",
                 "proto/golem/worker/idempotency_key.proto",
