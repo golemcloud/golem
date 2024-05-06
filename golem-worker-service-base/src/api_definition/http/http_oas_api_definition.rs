@@ -158,6 +158,7 @@ mod internal {
             function_name: get_function_name(worker_bridge_info)?,
             function_params: get_function_params_expr(worker_bridge_info)?,
             component: get_component_id(worker_bridge_info)?,
+            idempotency_key: get_idempotency_key(worker_bridge_info)?,
             response: get_response_mapping(worker_bridge_info)?,
         };
 
@@ -255,6 +256,17 @@ mod internal {
         expression::from_string(worker_id).map_err(|err| err.to_string())
     }
 
+    pub(crate) fn get_idempotency_key(worker_bridge_info: &Value) -> Result<Option<Expr>, String> {
+        if let Some(key) = worker_bridge_info.get("idempotency-key") {
+            let key_expr = key.as_str().ok_or("idempotency-key is not a string")?;
+            Ok(Some(
+                expression::from_string(key_expr).map_err(|err| err.to_string())?,
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub(crate) fn get_path_pattern(path: &str) -> Result<AllPathPatterns, String> {
         AllPathPatterns::parse(path).map_err(|err| err.to_string())
     }
@@ -279,6 +291,7 @@ mod tests {
                 "function-name": "test",
                 "function-params": ["${request}"],
                 "component-id": "00000000-0000-0000-0000-000000000000",
+                "idempotency-key": "test-key",
                 "response": "${{headers : {ContentType: 'json', user-id: 'foo'}, body: worker.response, status: 200}}"
             }))]
                 .into_iter()
@@ -308,6 +321,7 @@ mod tests {
                     function_name: "test".to_string(),
                     function_params: vec![Expr::Request()],
                     component: ComponentId(Uuid::nil()),
+                    idempotency_key: Some(Expr::Literal("test-key".to_string())),
                     response: Some(ResponseMapping(Expr::Record(
                         vec![
                             (
