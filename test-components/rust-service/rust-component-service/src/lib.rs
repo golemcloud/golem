@@ -10,7 +10,6 @@ impl Guest for Component {
     }
 
     fn calculate(input: u64) -> u64 {
-        common::loop_fibonacci(50, input);
-        input
+        common::calculate_sum(10000, input).0
     }
 }

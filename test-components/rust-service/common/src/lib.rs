@@ -21,20 +21,33 @@ pub fn fibonacci(n: u64) -> u64 {
     fib_helper(n, &mut memo)
 }
 
-pub fn loop_fibonacci(num: u64, loops: u64) {
+pub fn loop_fibonacci(num: u64, loops: u64) -> (u64, u64) {
+    let mut iterations: u64 = 0;
+    let mut value: u64 = 0;
     for _in in 0..loops {
-        let _ = fibonacci(num);
+        value = fibonacci(num);
+        iterations += 1;
     }
+    (iterations, value)
 }
 
-pub fn factorial(num: u128) -> u128 {
-    (1..=num).product()
-}
 
-pub fn loop_factorial(num: u128, loops: u64) {
-    for _in in 0..loops {
-        let _ = factorial(num);
+pub fn calculate_sum(num: u64, loops: u64) -> (u64, u128) {
+    fn process_vec(vec: Vec<u64>) -> u64 {
+        vec.iter().sum()
     }
+    let vec = (0..num).collect::<Vec<u64>>();
+    let mut iterations: u64 = 0;
+    let mut value: u128 = 0;
+    for i in 0..loops {
+        let mut vec = vec.clone();
+        if i % 2 == 0 {
+            vec.reverse();
+        }
+        value += process_vec(vec) as u128;
+        iterations += 1;
+    }
+    (iterations, value)
 }
 
 #[cfg(test)]

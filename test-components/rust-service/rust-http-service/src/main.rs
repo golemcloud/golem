@@ -12,8 +12,8 @@ fn echo(Path(input): Path<String>) -> String {
 
 #[handler]
 fn calculate(Path(input): Path<u64>) -> Json<u64> {
-    common::loop_fibonacci(50, input);
-    Json(input)
+    let result = common::calculate_sum(10000, input).0;
+    Json(result)
 }
 
 #[tokio::main]
