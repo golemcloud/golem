@@ -12,7 +12,7 @@ async fn auto_update_on_running() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let component_id = executor.store_component("update-test-v1").await;
+    let component_id = executor.store_unique_component("update-test-v1").await;
     let worker_id = executor
         .start_worker(&component_id, "auto_update_on_running")
         .await;
@@ -63,7 +63,7 @@ async fn auto_update_on_idle() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let component_id = executor.store_component("update-test-v1").await;
+    let component_id = executor.store_unique_component("update-test-v1").await;
     let worker_id = executor
         .start_worker(&component_id, "auto_update_on_idle")
         .await;
@@ -101,7 +101,7 @@ async fn failing_auto_update_on_idle() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let component_id = executor.store_component("update-test-v1").await;
+    let component_id = executor.store_unique_component("update-test-v1").await;
     let worker_id = executor
         .start_worker(&component_id, "failing_auto_update_on_idle")
         .await;
@@ -146,7 +146,7 @@ async fn auto_update_on_idle_with_non_diverging_history() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let component_id = executor.store_component("update-test-v1").await;
+    let component_id = executor.store_unique_component("update-test-v1").await;
     let worker_id = executor
         .start_worker(
             &component_id,
@@ -197,7 +197,7 @@ async fn failing_auto_update_on_running() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let component_id = executor.store_component("update-test-v1").await;
+    let component_id = executor.store_unique_component("update-test-v1").await;
     let worker_id = executor
         .start_worker(&component_id, "failing_auto_update_on_running")
         .await;
@@ -255,7 +255,7 @@ async fn manual_update_on_idle() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let component_id = executor.store_component("update-test-v2").await;
+    let component_id = executor.store_unique_component("update-test-v2").await;
     let worker_id = executor
         .start_worker(&component_id, "manual_update_on_idle")
         .await;
@@ -304,7 +304,7 @@ async fn manual_update_on_idle_without_save_snapshot() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let component_id = executor.store_component("update-test-v1").await;
+    let component_id = executor.store_unique_component("update-test-v1").await;
     let worker_id = executor
         .start_worker(&component_id, "manual_update_on_idle_without_save_snapshot")
         .await;
@@ -348,7 +348,7 @@ async fn auto_update_on_running_followed_by_manual() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let component_id = executor.store_component("update-test-v1").await;
+    let component_id = executor.store_unique_component("update-test-v1").await;
     let worker_id = executor
         .start_worker(&component_id, "auto_update_on_running_followed_by_manual")
         .await;
@@ -417,7 +417,7 @@ async fn manual_update_on_idle_with_failing_load() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let component_id = executor.store_component("update-test-v2").await;
+    let component_id = executor.store_unique_component("update-test-v2").await;
     let worker_id = executor
         .start_worker(&component_id, "manual_update_on_idle_with_failing_load")
         .await;

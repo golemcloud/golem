@@ -29,7 +29,6 @@ pub mod compiled_component;
 pub mod component;
 pub mod events;
 pub mod golem_config;
-pub mod invocation_key;
 pub mod invocation_queue;
 pub mod key_value;
 pub mod oplog;

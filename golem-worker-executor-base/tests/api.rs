@@ -995,7 +995,7 @@ async fn recovering_an_old_worker_after_updating_a_component() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let component_id = executor.store_component("shopping-cart").await;
+    let component_id = executor.store_unique_component("shopping-cart").await;
     let worker_id = executor
         .start_worker(
             &component_id,
@@ -1075,7 +1075,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let component_id = executor.store_component("shopping-cart").await;
+    let component_id = executor.store_unique_component("shopping-cart").await;
     let worker_id = executor
         .start_worker(
             &component_id,

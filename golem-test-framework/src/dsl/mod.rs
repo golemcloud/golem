@@ -44,10 +44,12 @@ use std::path::Path;
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, info};
+use uuid::Uuid;
 
 #[async_trait]
 pub trait TestDsl {
     async fn store_component(&self, name: &str) -> ComponentId;
+    async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
 
@@ -157,6 +159,17 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         self.component_service()
             .get_or_add_component(&source_path)
             .await
+    }
+
+    async fn store_unique_component(&self, name: &str) -> ComponentId {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        dump_component_info(&source_path);
+        let uuid = Uuid::new_v4();
+        let unique_name = format!("{name}-{uuid}");
+        self.component_service()
+            .add_component_with_name(&source_path, &unique_name)
+            .await
+            .expect("Failed to store unique component")
     }
 
     async fn store_component_unverified(&self, name: &str) -> ComponentId {
