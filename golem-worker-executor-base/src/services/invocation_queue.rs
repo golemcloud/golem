@@ -305,9 +305,8 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
 
     pub async fn wait_for_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         match self.lookup_invocation_result(key).await {
-            LookupResult::New => LookupResult::New,
             LookupResult::Interrupted => LookupResult::Interrupted,
-            LookupResult::Pending => {
+            LookupResult::New | LookupResult::Pending => {
                 self.events
                     .wait_for(|event| match event {
                         Event::InvocationCompleted {
