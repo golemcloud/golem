@@ -1,6 +1,6 @@
 use crate::cli::{Cli, CliLive};
 use golem_cli::model::component::ComponentView;
-use golem_cli::model::{Format, InvocationKey};
+use golem_cli::model::{Format, IdempotencyKey};
 use golem_client::model::{UpdateRecord, WorkerId, WorkersMetadataResponse};
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
@@ -22,11 +22,6 @@ fn make(
             format!("worker_new_instance{suffix}"),
             ctx.clone(),
             worker_new_instance,
-        ),
-        Trial::test_in_context(
-            format!("worker_get_invocation_key{suffix}"),
-            ctx.clone(),
-            worker_get_invocation_key,
         ),
         Trial::test_in_context(
             format!("worker_invoke_and_await{suffix}"),
@@ -143,36 +138,6 @@ fn worker_new_instance(
     Ok(())
 }
 
-fn worker_get_invocation_key(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
-    let component_id =
-        make_component(deps, &format!("{name} worker invocation key"), &cli)?.component_id;
-    let worker_name = format!("{name}_worker_invocation_key");
-    let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
-        "worker",
-        "add",
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
-    ])?;
-    let _: InvocationKey = cli.run(&[
-        "worker",
-        "invocation-key",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-    ])?;
-    Ok(())
-}
-
 fn worker_invoke_and_await(
     (deps, name, cli): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
@@ -195,14 +160,7 @@ fn worker_invoke_and_await(
         "TEST_ENV=test-value",
         "test-arg",
     ])?;
-    let args_key: InvocationKey = cli.run(&[
-        "worker",
-        "invocation-key",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-    ])?;
+    let args_key: IdempotencyKey = IdempotencyKey::fresh();
     let args = cli.run_json(&[
         "worker",
         "invoke-and-await",
@@ -214,7 +172,7 @@ fn worker_invoke_and_await(
         "golem:it/api/get-arguments",
         &cfg.arg('j', "parameters"),
         "[]",
-        &cfg.arg('k', "invocation-key"),
+        &cfg.arg('k', "idempotency-key"),
         &args_key.0,
     ])?;
 
@@ -222,14 +180,7 @@ fn worker_invoke_and_await(
 
     assert_eq!(args, expected_args);
 
-    let env_key: InvocationKey = cli.run(&[
-        "worker",
-        "invocation-key",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-    ])?;
+    let env_key: IdempotencyKey = IdempotencyKey::fresh();
 
     let env = cli.run_json(&[
         "worker",
@@ -240,7 +191,7 @@ fn worker_invoke_and_await(
         &worker_name,
         &cfg.arg('f', "function"),
         "golem:it/api/get-environment",
-        &cfg.arg('k', "invocation-key"),
+        &cfg.arg('k', "idempotency-key"),
         &env_key.0,
     ])?;
 
