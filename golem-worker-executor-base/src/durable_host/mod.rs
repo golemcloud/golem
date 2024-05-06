@@ -319,7 +319,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         deleted_regions.set_override(extra_deleted_regions);
 
         status.deleted_regions = deleted_regions;
-        status.overridden_retry_config = self.state.overridden_retry_policy.clone();
+        status
+            .overridden_retry_config
+            .clone_from(&self.state.overridden_retry_policy);
         status.pending_invocations = self.public_state.invocation_queue().pending_invocations();
         status.pending_updates = pending_updates;
         status.oplog_idx = self.state.oplog.current_oplog_index().await;
