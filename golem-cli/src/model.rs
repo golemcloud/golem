@@ -72,12 +72,19 @@ impl From<reqwest::Error> for GolemError {
     }
 }
 
+impl From<reqwest::header::InvalidHeaderValue> for GolemError {
+    fn from(value: reqwest::header::InvalidHeaderValue) -> Self {
+        GolemError(format!("Invalid request header: {value}"))
+    }
+}
+
 impl<T: crate::clients::errors::ResponseContentErrorMapper> From<golem_client::Error<T>>
     for GolemError
 {
     fn from(value: golem_client::Error<T>) -> Self {
         match value {
             golem_client::Error::Reqwest(error) => GolemError::from(error),
+            golem_client::Error::ReqwestHeader(invalid_header) => GolemError::from(invalid_header),
             golem_client::Error::Serde(error) => {
                 GolemError(format!("Unexpected serialization error: {error}"))
             }
