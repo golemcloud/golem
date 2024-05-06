@@ -639,6 +639,7 @@ pub struct WorkerStatusRecord {
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
     pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
+    pub current_idempotency_key: Option<IdempotencyKey>,
     pub component_version: ComponentVersion,
     pub oplog_idx: OplogIndex,
 }
@@ -654,6 +655,7 @@ impl Default for WorkerStatusRecord {
             failed_updates: Vec::new(),
             successful_updates: Vec::new(),
             invocation_results: HashMap::new(),
+            current_idempotency_key: None,
             component_version: 0,
             oplog_idx: 0,
         }

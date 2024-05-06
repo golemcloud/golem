@@ -948,6 +948,7 @@ pub fn to_worker_metadata(
                 })
                 .collect(),
             invocation_results: HashMap::new(),
+            current_idempotency_key: None,
             component_version: metadata.component_version,
         },
     }

@@ -923,7 +923,13 @@ where
                 OplogRegion::from_range(1..=*oplog_index),
             ]));
         }
-        let invocation_results = last_known.invocation_results; // TODO
+
+        let (invocation_results, current_idempotency_key) = calculate_invocation_results(
+            last_known.invocation_results,
+            last_known.current_idempotency_key,
+            last_known.oplog_idx,
+            &new_entries,
+        );
 
         Ok(WorkerStatusRecord {
             oplog_idx: last_oplog_index,
@@ -935,6 +941,7 @@ where
             failed_updates,
             successful_updates,
             invocation_results,
+            current_idempotency_key,
             component_version,
         })
     }
@@ -1184,4 +1191,41 @@ fn calculate_update_fields(
         }
     }
     (pending_updates, failed_updates, successful_updates, version)
+}
+
+fn calculate_invocation_results(
+    invocation_results: HashMap<IdempotencyKey, OplogIndex>,
+    current_idempotency_key: Option<IdempotencyKey>,
+    start_index: OplogIndex,
+    entries: &[OplogEntry],
+) -> (HashMap<IdempotencyKey, OplogIndex>, Option<IdempotencyKey>) {
+    let mut invocation_results = invocation_results;
+    let mut current_idempotency_key = current_idempotency_key;
+
+    for (n, entry) in entries.iter().enumerate() {
+        let oplog_idx = start_index + (n as OplogIndex);
+        match entry {
+            OplogEntry::ExportedFunctionInvoked {
+                idempotency_key, ..
+            } => {
+                current_idempotency_key = Some(idempotency_key.clone());
+            }
+            OplogEntry::ExportedFunctionCompleted { .. } => {
+                current_idempotency_key = None;
+            }
+            OplogEntry::Error { .. } => {
+                if let Some(idempotency_key) = &current_idempotency_key {
+                    invocation_results.insert(idempotency_key.clone(), oplog_idx);
+                }
+            }
+            OplogEntry::Exited { .. } => {
+                if let Some(idempotency_key) = &current_idempotency_key {
+                    invocation_results.insert(idempotency_key.clone(), oplog_idx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (invocation_results, current_idempotency_key)
 }

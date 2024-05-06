@@ -323,6 +323,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         status.pending_invocations = self.public_state.invocation_queue().pending_invocations();
         status.invocation_results = self.public_state.invocation_queue.invocation_results();
         status.pending_updates = pending_updates;
+        status
+            .current_idempotency_key
+            .clone_from(&self.state.current_idempotency_key);
         status.oplog_idx = self.state.oplog.current_oplog_index().await;
         f(&mut status);
         self.state
