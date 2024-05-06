@@ -310,13 +310,13 @@ paths:
           type: string
         explode: true
         style: simple
-      - in: query
-        name: idempotency-key
+      - in: header
+        name: Idempotency-Key
         deprecated: false
         schema:
           type: string
         explode: true
-        style: form
+        style: simple
       - in: query
         name: function
         required: true

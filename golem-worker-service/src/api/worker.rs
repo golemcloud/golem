@@ -1,7 +1,7 @@
 use golem_common::model::{CallingConvention, ComponentId, IdempotencyKey, WorkerFilter};
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::auth::EmptyAuthCtx;
-use poem_openapi::param::{Path, Query};
+use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tap::TapFallible;
@@ -95,7 +95,7 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
-        #[oai(name = "idempotency-key")] idempotency_key: Query<Option<IdempotencyKey>>, // TODO: use header
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
         #[oai(name = "calling-convention")] calling_convention: Query<Option<CallingConvention>>,
         params: Json<InvokeParameters>,
@@ -129,7 +129,7 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
-        #[oai(name = "idempotency-key")] idempotency_key: Query<Option<IdempotencyKey>>, // TODO: use header
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
         params: Json<InvokeParameters>,
     ) -> Result<Json<InvokeResponse>> {
