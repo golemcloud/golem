@@ -41,6 +41,16 @@ description = "Builds everything in debug mode"
 command = "cargo"
 args = ["build"]
 
+[tasks.build-worker-service]
+description = "Builds the worker-service"
+command = "cargo"
+args = ["build", "-p", "golem-worker-service"]
+
+[tasks.build-component-service]
+description = "Builds the component-service"
+command = "cargo"
+args = ["build", "-p", "golem-component-service"]
+
 [tasks.build-release]
 description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
 to build for other target than the current one, can be linux/amd64 or linux/arm64. This is used for cross-compiling
@@ -209,12 +219,12 @@ dependencies = [
 
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
-dependencies = ["build"]
+dependencies = ["build-worker-service"]
 script = "./target/debug/golem-worker-service --dump-openapi-yaml > ./target/golem-worker-service.yaml"
 
 [tasks.generate-component-service-openapi]
 description = "Generates openapi spec for component service"
-dependencies = ["build"]
+dependencies = ["build-component-service"]
 script = "./target/debug/golem-component-service --dump-openapi-yaml > ./target/golem-component-service.yaml"
 
 [tasks.merge-openapi]
