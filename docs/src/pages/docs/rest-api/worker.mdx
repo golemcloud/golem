@@ -178,23 +178,6 @@ Returns metadata about an existing worker:
 }
 ```
 
-## Get an invocation key
-
-| Path                                                      | Method | Protected |
-| --------------------------------------------------------- | ------ | --------- |
-| `/v2/components/{component_id}/workers/{worker_name}/key` | POST   | Yes       |
-
-Creates an invocation key for a given worker.
-An invocation key is passed to the below defined invoke APIs to guarantee that retrying those invocations only performs the operation on the worker once.
-
-**Example Response JSON**
-
-```json copy
-{
-  "value": "string"
-}
-```
-
 ## Invoke a function and await it's resolution
 
 | Path                                                                   | Method | Protected |
@@ -207,9 +190,14 @@ Supply the parameters in the request body as JSON.
 
 | Name               | Type                                   | Required | Description                                                               |
 | ------------------ | -------------------------------------- | -------- | ------------------------------------------------------------------------- |
-| invocation-key     | string                                 | Yes      | must be created with the create invokation key endpoint                   |
 | function           | string                                 | Yes      | name of the exported function to be invoked                               |
 | calling-convention | #/components/schemas/CallingConvention | No       | One of `component`, `stdio`, `stdio-event-loop`. Defaults to `component`. |
+
+**Headers**
+
+| Name            | Type   | Required | Description                                                                     |
+| --------------- | ------ | -------- | ------------------------------------------------------------------------------- |
+| Idempotency-Key | string | No       | A key to avoid performing the same invocation more than once in case of retries |
 
 **Example Request JSON**
 
@@ -233,7 +221,7 @@ Supply the parameters in the request body as JSON.
 | ------------------------------------------------------------ | ------ | --------- |
 | `/v2/components/{component_id}/workers/{worker_name}/invoke` | POST   | Yes       |
 
-A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns. Custom calling convention and invocation key is not supported.
+A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns. Custom calling convention is not supported.
 To understand how to get the function name and how to encode the function parameters check Component interface
 
 **Query Parameters**
@@ -241,6 +229,12 @@ To understand how to get the function name and how to encode the function parame
 | Name     | Type   | Required | Description                                 |
 | -------- | ------ | -------- | ------------------------------------------- |
 | function | string | Yes      | name of the exported function to be invoked |
+
+**Headers**
+
+| Name            | Type   | Required | Description                                                                     |
+| --------------- | ------ | -------- | ------------------------------------------------------------------------------- |
+| Idempotency-Key | string | No       | A key to avoid performing the same invocation more than once in case of retries |
 
 **Example Request JSON**
 
