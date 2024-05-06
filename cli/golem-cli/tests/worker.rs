@@ -105,7 +105,7 @@ pub fn make_component_from_file(
         "component",
         "add",
         &cfg.arg('c', "component-name"),
-        &component_name,
+        component_name,
         env_service.to_str().unwrap(),
     ])
 }
