@@ -116,6 +116,7 @@ fn golem_def_with_response(
                 worker_id: "worker-${request.path.user-id}".to_string(),
                 function_name: "golem:it/api/get-cart-contents".to_string(),
                 function_params: vec![],
+                idempotency_key: None,
                 response,
             },
         }],

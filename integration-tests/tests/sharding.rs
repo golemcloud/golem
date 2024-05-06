@@ -10,7 +10,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use golem_api_grpc::proto::golem::worker;
-use golem_common::model::WorkerId;
+use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 
@@ -279,10 +279,10 @@ async fn invoke_and_await_workers(workers: &[WorkerId]) -> Result<(), worker::wo
     for worker_id in workers {
         let worker_id_clone = worker_id.clone();
         tasks.push(tokio::spawn(async move {
-            let invocation_key = DEPS.get_invocation_key(&worker_id_clone).await;
+            let idempotency_key = IdempotencyKey::fresh();
             DEPS.invoke_and_await_with_key(
                 &worker_id_clone,
-                &invocation_key,
+                &idempotency_key,
                 "golem:it/api/echo",
                 vec![Value::Option(Some(Box::new(Value::String(
                     "Hello".to_string(),

@@ -419,7 +419,7 @@ async fn get_running_workers() {
 #[tokio::test]
 #[tracing::instrument]
 async fn auto_update_on_idle() {
-    let component_id = DEPS.store_component("update-test-v1").await;
+    let component_id = DEPS.store_unique_component("update-test-v1").await;
     let worker_id = DEPS
         .start_worker(&component_id, "auto_update_on_idle")
         .await;
@@ -450,9 +450,9 @@ async fn auto_update_on_idle() {
 #[tokio::test]
 #[tracing::instrument]
 async fn auto_update_on_idle_via_host_function() {
-    let component_id = DEPS.store_component("update-test-v1").await;
+    let component_id = DEPS.store_unique_component("update-test-v1").await;
     let worker_id = DEPS
-        .start_worker(&component_id, "auto_update_on_idle")
+        .start_worker(&component_id, "auto_update_on_idle_via_host_function")
         .await;
     let _ = DEPS.log_output(&worker_id).await;
 

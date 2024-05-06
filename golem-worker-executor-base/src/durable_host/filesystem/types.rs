@@ -12,21 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
-use fs_set_times::{set_symlink_times, SystemTimeSpec};
-use metrohash::MetroHash128;
 use std::hash::Hasher;
 use std::time::SystemTime;
 
+use async_trait::async_trait;
+use fs_set_times::{set_symlink_times, SystemTimeSpec};
+use metrohash::MetroHash128;
 use wasmtime::component::Resource;
-
-use crate::durable_host::serialized::{
-    SerializableDateTime, SerializableError, SerializableFileTimes,
-};
-use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::metrics::wasm::record_host_function_call;
-use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime;
 use wasmtime_wasi::preview2::bindings::filesystem::types::{
     Advice, Descriptor, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry,
@@ -35,6 +27,15 @@ use wasmtime_wasi::preview2::bindings::filesystem::types::{
     OutputStream, PathFlags,
 };
 use wasmtime_wasi::preview2::{spawn_blocking, FsError, ReaddirIterator};
+
+use golem_common::model::oplog::WrappedFunctionType;
+
+use crate::durable_host::serialized::{
+    SerializableDateTime, SerializableError, SerializableFileTimes,
+};
+use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::metrics::wasm::record_host_function_call;
+use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {

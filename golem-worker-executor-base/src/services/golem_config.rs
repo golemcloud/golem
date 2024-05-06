@@ -42,7 +42,7 @@ pub struct GolemConfig {
     pub suspend: SuspendConfig,
     pub active_workers: ActiveWorkersConfig,
     pub scheduler: SchedulerConfig,
-    pub invocation_keys: InvocationKeysConfig,
+    pub invocation_keys: InvocationKeysConfig, // TODO: review and remove?
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,

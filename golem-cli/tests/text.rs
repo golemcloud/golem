@@ -41,11 +41,6 @@ fn make(
             text_worker_add,
         ),
         Trial::test_in_context(
-            format!("text_worker_get_invocation_key{suffix}"),
-            ctx.clone(),
-            text_worker_get_invocation_key,
-        ),
-        Trial::test_in_context(
             format!("text_worker_invoke_and_await{suffix}"),
             ctx.clone(),
             text_worker_invoke_and_await,
@@ -298,49 +293,6 @@ fn text_worker_add(
         matched.as_ref().unwrap().get(2).unwrap().as_str(),
         worker_name
     );
-
-    Ok(())
-}
-
-fn text_worker_get_invocation_key(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
-    let component_id =
-        make_component(deps, &format!("{name} text worker invocation key"), &cli)?.component_id;
-    let worker_name = format!("{name}_worker_invocation_key");
-    let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
-        "worker",
-        "add",
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
-    ])?;
-    let res = cli.with_format(Format::Text).run_string(&[
-        "worker",
-        "invocation-key",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-    ])?;
-
-    let lines = res.lines().collect::<Vec<_>>();
-
-    assert!(lines.first().unwrap().starts_with("Invocation key: "));
-    assert_eq!(
-        *lines.get(1).unwrap(),
-        "You can use it in invoke-and-await command this way:"
-    );
-    assert!(lines
-        .get(2)
-        .unwrap()
-        .starts_with("invoke-and-await --invocation-key "));
 
     Ok(())
 }

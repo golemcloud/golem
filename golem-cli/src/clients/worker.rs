@@ -29,7 +29,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
 use tracing::{debug, info};
 
-use crate::model::{ComponentId, GolemError, InvocationKey, WorkerName, WorkerUpdateMode};
+use crate::model::{ComponentId, GolemError, IdempotencyKey, WorkerName, WorkerUpdateMode};
 
 #[async_trait]
 pub trait WorkerClient {
@@ -40,11 +40,6 @@ pub trait WorkerClient {
         args: Vec<String>,
         env: Vec<(String, String)>,
     ) -> Result<WorkerId, GolemError>;
-    async fn get_invocation_key(
-        &self,
-        name: &WorkerName,
-        component_id: &ComponentId,
-    ) -> Result<InvocationKey, GolemError>;
 
     async fn invoke_and_await(
         &self,
@@ -52,7 +47,7 @@ pub trait WorkerClient {
         component_id: ComponentId,
         function: String,
         parameters: InvokeParameters,
-        invocation_key: InvocationKey,
+        idempotency_key: Option<IdempotencyKey>,
         use_stdio: bool,
     ) -> Result<InvokeResult, GolemError>;
 
@@ -62,6 +57,7 @@ pub trait WorkerClient {
         component_id: ComponentId,
         function: String,
         parameters: InvokeParameters,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> Result<(), GolemError>;
 
     async fn interrupt(
@@ -139,28 +135,13 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .worker_id)
     }
 
-    async fn get_invocation_key(
-        &self,
-        name: &WorkerName,
-        component_id: &ComponentId,
-    ) -> Result<InvocationKey, GolemError> {
-        info!("Getting invocation key for {}/{}", component_id.0, name.0);
-
-        let key = self
-            .client
-            .get_invocation_key(&component_id.0, &name.0)
-            .await?;
-
-        Ok(key_api_to_cli(key))
-    }
-
     async fn invoke_and_await(
         &self,
         name: WorkerName,
         component_id: ComponentId,
         function: String,
         parameters: InvokeParameters,
-        invocation_key: InvocationKey,
+        idempotency_key: Option<IdempotencyKey>,
         use_stdio: bool,
     ) -> Result<InvokeResult, GolemError> {
         info!(
@@ -179,7 +160,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .invoke_and_await_function(
                 &component_id.0,
                 &name.0,
-                &invocation_key.0,
+                idempotency_key.as_ref().map(|k| k.0.as_str()),
                 &function,
                 Some(&calling_convention),
                 &parameters,
@@ -193,6 +174,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         component_id: ComponentId,
         function: String,
         parameters: InvokeParameters,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> Result<(), GolemError> {
         info!(
             "Invoke function {function} in {}/{}",
@@ -201,7 +183,13 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         let _ = self
             .client
-            .invoke_function(&component_id.0, &name.0, &function, &parameters)
+            .invoke_function(
+                &component_id.0,
+                &name.0,
+                idempotency_key.as_ref().map(|k| k.0.as_str()),
+                &function,
+                &parameters,
+            )
             .await?;
         Ok(())
     }
@@ -516,8 +504,4 @@ struct Log {
     pub level: i32,
     pub context: String,
     pub message: String,
-}
-
-fn key_api_to_cli(key: golem_client::model::InvocationKey) -> InvocationKey {
-    InvocationKey(key.value)
 }

@@ -31,7 +31,7 @@ use golem_common::cache::PendingOrFinal;
 use golem_common::model as common_model;
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
-    AccountId, CallingConvention, InvocationKey, ShardId, TimestampedWorkerInvocation,
+    AccountId, CallingConvention, IdempotencyKey, ShardId, TimestampedWorkerInvocation,
     WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::protobuf::Val;
@@ -50,8 +50,8 @@ use crate::model::{InterruptKind, LastError};
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{
-    worker_event, All, HasActiveWorkers, HasAll, HasInvocationKeyService, HasInvocationQueue,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    worker_event, All, HasActiveWorkers, HasAll, HasInvocationQueue, HasPromiseService,
+    HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::{invoke_and_await, PendingWorker, Worker};
@@ -177,7 +177,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn validate_worker_status(
         &self,
-        worker_id: &common_model::WorkerId,
+        worker_id: &WorkerId,
         metadata: &Option<WorkerMetadata>,
     ) -> Result<WorkerStatusRecord, GolemError> {
         let worker_status = Ctx::compute_latest_worker_status(self, worker_id, metadata).await?;
@@ -366,25 +366,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
-    async fn get_invocation_key_internal(
-        &self,
-        request: golem::workerexecutor::GetInvocationKeyRequest,
-    ) -> Result<golem::workerexecutor::GetInvocationKeySuccess, GolemError> {
-        let worker_id: WorkerId = request
-            .worker_id
-            .ok_or(GolemError::invalid_request("worker_id not found"))?
-            .try_into()
-            .map_err(GolemError::invalid_request)?;
-
-        self.validate_worker_id(&worker_id)?;
-
-        let invocation_key = self.invocation_key_service().generate_key(&worker_id);
-
-        Ok(golem::workerexecutor::GetInvocationKeySuccess {
-            invocation_key: Some(invocation_key.into()),
-        })
-    }
-
     async fn interrupt_worker_internal(
         &self,
         request: golem::workerexecutor::InterruptWorkerRequest,
@@ -512,16 +493,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let calling_convention = request.calling_convention();
-        let worker_details = self.get_or_create(request).await?;
-        let invocation_key = request.invocation_key()?.unwrap_or(
-            self.invocation_key_service()
-                .generate_key(&worker_details.metadata.worker_id),
-        );
+        let worker = self.get_or_create(request).await?;
+        let idempotency_key = request
+            .idempotency_key()?
+            .unwrap_or(IdempotencyKey::fresh());
 
-        let values = invoke_and_await(
-            worker_details,
-            self,
-            invocation_key,
+        let values = invoke_and_await::<Ctx>(
+            worker,
+            idempotency_key,
             calling_convention.into(),
             full_function_name,
             function_input,
@@ -630,7 +609,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let calling_convention = request.calling_convention();
 
-        let (invocation_queue, worker_id) = match self.get_or_create_pending(request).await? {
+        let (invocation_queue, _worker_id) = match self.get_or_create_pending(request).await? {
             PendingOrFinal::Pending(pending_worker) => (
                 pending_worker.invocation_queue.clone(),
                 pending_worker.worker_id.clone(),
@@ -641,13 +620,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ),
         };
 
-        let invocation_key = request
-            .invocation_key()?
-            .unwrap_or(self.invocation_key_service().generate_key(&worker_id));
+        let idempotency_key = request
+            .idempotency_key()?
+            .unwrap_or(IdempotencyKey::fresh());
 
         invocation_queue
             .enqueue(
-                invocation_key,
+                idempotency_key,
                 full_function_name,
                 function_input,
                 calling_convention,
@@ -1075,38 +1054,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    async fn get_invocation_key(
-        &self,
-        request: Request<golem::workerexecutor::GetInvocationKeyRequest>,
-    ) -> Result<Response<golem::workerexecutor::GetInvocationKeyResponse>, Status> {
-        let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
-            "get_invocation_key",
-            format!("worker_id={:?}", request.worker_id),
-        );
-        match self.get_invocation_key_internal(request).await {
-            Ok(result) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::GetInvocationKeyResponse {
-                    result: Some(
-                        golem::workerexecutor::get_invocation_key_response::Result::Success(result),
-                    ),
-                },
-            ))),
-            Err(err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::GetInvocationKeyResponse {
-                        result: Some(
-                            golem::workerexecutor::get_invocation_key_response::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &err,
-            ),
-        }
-    }
-
     async fn invoke_and_await_worker(
         &self,
         request: Request<golem::workerexecutor::InvokeAndAwaitWorkerRequest>,
@@ -1115,8 +1062,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = RecordedGrpcRequest::new(
             "invoke_and_await_worker",
             format!(
-                "worker_id={:?}, name={:?}, invocation_key={:?}, calling_convention={:?}, account_id={:?}",
-                request.worker_id, request.name, request.invocation_key, request.calling_convention, request.account_id
+                "worker_id={:?}, name={:?}, idempotency_key={:?}, calling_convention={:?}, account_id={:?}",
+                request.worker_id, request.name, request.idempotency_key, request.calling_convention, request.account_id
             ),
         );
         match self.invoke_and_await_worker_internal(&request).await {
@@ -1678,7 +1625,7 @@ trait GrpcInvokeRequest {
     fn calling_convention(&self) -> CallingConvention;
     fn input(&self) -> Vec<Val>;
     fn worker_id(&self) -> Result<common_model::WorkerId, GolemError>;
-    fn invocation_key(&self) -> Result<Option<InvocationKey>, GolemError>;
+    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError>;
     fn name(&self) -> String;
 }
 
@@ -1711,7 +1658,7 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
             .map_err(GolemError::invalid_request)
     }
 
-    fn invocation_key(&self) -> Result<Option<InvocationKey>, GolemError> {
+    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError> {
         Ok(None)
     }
 
@@ -1737,7 +1684,6 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
         match self.calling_convention() {
             golem::worker::CallingConvention::Component => CallingConvention::Component,
             golem::worker::CallingConvention::Stdio => CallingConvention::Stdio,
-            golem::worker::CallingConvention::StdioEventloop => CallingConvention::StdioEventloop,
         }
     }
 
@@ -1753,13 +1699,8 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
             .map_err(GolemError::invalid_request)
     }
 
-    fn invocation_key(&self) -> Result<Option<InvocationKey>, GolemError> {
-        self.invocation_key
-            .clone()
-            .ok_or(GolemError::invalid_request(
-                "invocation_key not found in InvokeAndAwaitWorkerRequest",
-            ))
-            .map(|key| Some(InvocationKey::from(key)))
+    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError> {
+        Ok(self.idempotency_key.clone().map(IdempotencyKey::from))
     }
 
     fn name(&self) -> String {

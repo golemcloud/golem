@@ -14,6 +14,7 @@
 
 use async_mutex::Mutex;
 use std::collections::{HashMap, VecDeque};
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ use bytes::Bytes;
 use fred::prelude::RedisValue;
 use fred::types::RedisKey;
 use golem_common::metrics::redis::record_redis_serialized_size;
-use golem_common::model::oplog::OplogEntry;
+use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::WorkerId;
 use golem_common::redis::RedisPool;
 use tracing::error;
@@ -47,7 +48,7 @@ pub trait OplogService {
 
 /// An open oplog providing write access
 #[async_trait]
-pub trait Oplog {
+pub trait Oplog: Debug {
     async fn add(&self, entry: OplogEntry);
     async fn commit(&self);
 
@@ -59,9 +60,13 @@ pub trait Oplog {
     /// otherwise false.
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool;
 
-    async fn add_and_commit(&self, entry: OplogEntry) {
+    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry;
+
+    async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
+        let idx = self.current_oplog_index().await;
         self.add(entry).await;
         self.commit().await;
+        idx
     }
 }
 
@@ -222,6 +227,7 @@ fn get_oplog_redis_key(worker_id: &WorkerId) -> String {
 
 struct RedisOplog {
     state: Arc<Mutex<RedisOplogState>>,
+    key: String,
 }
 
 impl RedisOplog {
@@ -237,11 +243,12 @@ impl RedisOplog {
                 redis,
                 replicas,
                 max_operations_before_commit,
-                key,
+                key: key.clone(),
                 buffer: VecDeque::new(),
                 last_committed_idx: oplog_size,
                 last_oplog_idx: oplog_size,
             })),
+            key,
         }
     }
 }
@@ -322,6 +329,50 @@ impl RedisOplogState {
             }
         }
     }
+
+    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+        let results: Vec<HashMap<String, HashMap<String, Bytes>>> = self
+            .redis
+            .with("oplog", "read")
+            .xrange(&self.key, oplog_index + 1, oplog_index + 1, None)
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to read oplog entry {oplog_index} from {} from Redis: {err}",
+                    self.key
+                )
+            });
+
+        let mut entries: Vec<OplogEntry> = Vec::new();
+
+        for result in results.iter() {
+            for (_, value) in result.iter() {
+                for (_, value) in value.iter() {
+                    let deserialized =
+                        self.redis
+                            .deserialize::<OplogEntry>(value)
+                            .unwrap_or_else(|err| {
+                                panic!("failed to deserialize oplog entry {:?}: {err}", value)
+                            });
+
+                    entries.push(deserialized);
+                }
+            }
+        }
+
+        entries.into_iter().next().unwrap_or_else(|| {
+            panic!(
+                "Missing oplog entry {oplog_index} for {} in Redis",
+                self.key
+            )
+        })
+    }
+}
+
+impl Debug for RedisOplog {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.key)
+    }
 }
 
 #[async_trait]
@@ -345,6 +396,11 @@ impl Oplog for RedisOplog {
         let mut state = self.state.lock().await;
         state.commit().await;
         state.wait_for_replicas(replicas, timeout).await
+    }
+
+    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+        let state = self.state.lock().await;
+        state.read(oplog_index).await
     }
 }
 

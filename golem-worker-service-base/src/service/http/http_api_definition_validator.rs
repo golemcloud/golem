@@ -161,6 +161,7 @@ fn test_unique_routes() {
                 worker_id: crate::expression::Expr::Request(),
                 function_name: "test".into(),
                 function_params: vec![],
+                idempotency_key: None,
                 response: None,
             },
         }

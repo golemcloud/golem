@@ -5,7 +5,7 @@ package golem.worker;
 import public "golem/common/empty.proto";
 import public "golem/worker/calling_convention.proto";
 import public "golem/worker/complete_parameters.proto";
-import public "golem/worker/invocation_key.proto";
+import public "golem/worker/idempotency_key.proto";
 import public "golem/worker/invoke_parameters.proto";
 import public "golem/worker/invoke_result.proto";
 import public "golem/worker/invoke_result_json.proto";
@@ -26,17 +26,11 @@ service WorkerService {
   rpc InterruptWorker (InterruptWorkerRequest) returns (InterruptWorkerResponse);
   rpc InvokeAndAwait (InvokeAndAwaitRequest) returns (InvokeAndAwaitResponse);
   rpc Invoke (InvokeRequest) returns (InvokeResponse);
-  rpc GetInvocationKey (GetInvocationKeyRequest) returns (GetInvocationKeyResponse);
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
   rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
 
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
-
-  // Temporary for proxying the REST API
-  rpc InvokeJson (InvokeRequestJson) returns (InvokeResponse);
-  // Temporary for proxying the REST API
-  rpc InvokeAndAwaitJson (InvokeAndAwaitRequestJson) returns (InvokeAndAwaitResponseJson);
 }
 
 message LaunchNewWorkerRequest {
@@ -106,7 +100,7 @@ message InterruptWorkerResponse {
 
 message InvokeAndAwaitRequest {
   golem.worker.WorkerId workerId = 1;
-  golem.worker.InvocationKey invocationKey = 2;
+  golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
   golem.worker.CallingConvention callingConvention = 5;
@@ -121,24 +115,14 @@ message InvokeAndAwaitResponse {
 
 message InvokeRequest {
   golem.worker.WorkerId workerId = 1;
-  string function = 2;
-  golem.worker.InvokeParameters invokeParameters = 3;
+  golem.worker.IdempotencyKey idempotencyKey = 2;
+  string function = 3;
+  golem.worker.InvokeParameters invokeParameters = 4;
 }
 
 message InvokeResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerError error = 2;
-  }
-}
-
-message GetInvocationKeyRequest {
-  golem.worker.WorkerId workerId = 1;
-}
-
-message GetInvocationKeyResponse {
-  oneof result {
-    golem.worker.InvocationKey success = 1;
     golem.worker.WorkerError error = 2;
   }
 }
@@ -156,32 +140,6 @@ message ResumeWorkerResponse {
 
 message ConnectWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
-}
-
-
-
-// Temporary
-message InvokeRequestJson {
-  WorkerId workerId = 1;
-  string function = 2;
-  string invokeParametersJson = 3;
-}
-
-// Temporary
-message InvokeAndAwaitRequestJson {
-  WorkerId workerId = 1;
-  InvocationKey invocationKey = 2;
-  string function = 3;
-  string invokeParametersJson = 4;
-  CallingConvention callingConvention = 5;
-}
-
-
-message InvokeAndAwaitResponseJson {
-  oneof result {
-    InvokeResultJson success = 1;
-    WorkerError error = 2;
-  }
 }
 
 message GetWorkersMetadataRequest {

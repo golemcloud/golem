@@ -19,7 +19,7 @@ use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentVersion, InvocationKey, WorkerId, WorkerMetadata,
+    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -29,12 +29,13 @@ use golem_worker_executor_base::durable_host::{
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, LookupResult, TrapType,
+    WorkerConfig,
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
+use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::invocation_key::{InvocationKeyService, LookupResult};
 use golem_worker_executor_base::services::invocation_queue::InvocationQueue;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
@@ -144,38 +145,18 @@ impl ExternalOperations<Context> for Context {
 
 #[async_trait]
 impl InvocationManagement for Context {
-    async fn set_current_invocation_key(&mut self, invocation_key: InvocationKey) {
+    async fn set_current_idempotency_key(&mut self, idempotency_key: IdempotencyKey) {
         self.durable_ctx
-            .set_current_invocation_key(invocation_key)
+            .set_current_idempotency_key(idempotency_key)
             .await
     }
 
-    async fn get_current_invocation_key(&self) -> Option<InvocationKey> {
-        self.durable_ctx.get_current_invocation_key().await
+    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+        self.durable_ctx.get_current_idempotency_key().await
     }
 
-    async fn interrupt_invocation_key(&mut self, key: &InvocationKey) {
-        self.durable_ctx.interrupt_invocation_key(key).await
-    }
-
-    async fn resume_invocation_key(&mut self, key: &InvocationKey) {
-        self.durable_ctx.resume_invocation_key(key).await
-    }
-
-    async fn confirm_invocation_key(
-        &mut self,
-        key: &InvocationKey,
-        vals: Result<Vec<Value>, GolemError>,
-    ) {
-        self.durable_ctx.confirm_invocation_key(key, vals).await
-    }
-
-    fn generate_new_invocation_key(&mut self) -> InvocationKey {
-        self.durable_ctx.generate_new_invocation_key()
-    }
-
-    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult {
-        self.durable_ctx.lookup_invocation_result(key)
+    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
+        self.durable_ctx.lookup_invocation_result(key).await
     }
 }
 
@@ -229,6 +210,8 @@ impl StatusManagement for Context {
 
 #[async_trait]
 impl InvocationHooks for Context {
+    type FailurePayload = <DurableWorkerCtx<Context> as InvocationHooks>::FailurePayload;
+
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
@@ -240,16 +223,30 @@ impl InvocationHooks for Context {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> Result<(), Error> {
+    async fn on_invocation_failure(
+        &mut self,
+        trap_type: &TrapType,
+    ) -> Result<Self::FailurePayload, Error> {
         self.durable_ctx.on_invocation_failure(trap_type).await
     }
 
     async fn on_invocation_failure_deactivated(
         &mut self,
+        payload: &Self::FailurePayload,
         trap_type: &TrapType,
     ) -> Result<WorkerStatus, Error> {
         self.durable_ctx
-            .on_invocation_failure_deactivated(trap_type)
+            .on_invocation_failure_deactivated(payload, trap_type)
+            .await
+    }
+
+    async fn on_invocation_failure_final(
+        &mut self,
+        payload: &Self::FailurePayload,
+        trap_type: &TrapType,
+    ) -> Result<(), Error> {
+        self.durable_ctx
+            .on_invocation_failure_final(payload, trap_type)
             .await
     }
 
@@ -301,7 +298,7 @@ impl WorkerCtx for Context {
         worker_id: WorkerId,
         account_id: AccountId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
+        events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -326,7 +323,7 @@ impl WorkerCtx for Context {
             worker_id,
             account_id,
             promise_service,
-            invocation_key_service,
+            events,
             worker_service,
             worker_enumeration_service,
             key_value_service,

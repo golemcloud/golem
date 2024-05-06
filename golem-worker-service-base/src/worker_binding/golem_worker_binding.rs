@@ -12,6 +12,7 @@ pub struct GolemWorkerBinding {
     pub worker_id: Expr,
     pub function_name: String,
     pub function_params: Vec<Expr>,
+    pub idempotency_key: Option<Expr>,
     pub response: Option<ResponseMapping>,
 }
 

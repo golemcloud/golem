@@ -108,9 +108,20 @@ pub trait ComponentService {
         }
     }
 
-    async fn add_component(&self, local_path: &Path) -> Result<ComponentId, AddComponentError> {
-        let mut client = self.client().await;
+    async fn add_component(
+        &self,
+        local_path: &Path,
+    ) -> Result<ComponentId, crate::components::component_service::AddComponentError> {
         let file_name = local_path.file_name().unwrap().to_string_lossy();
+        self.add_component_with_name(local_path, &file_name).await
+    }
+
+    async fn add_component_with_name(
+        &self,
+        local_path: &Path,
+        name: &str,
+    ) -> Result<ComponentId, AddComponentError> {
+        let mut client = self.client().await;
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
         })?;
@@ -118,7 +129,7 @@ pub trait ComponentService {
         let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
             data: Some(Data::Header(CreateComponentRequestHeader {
                 project_id: None,
-                component_name: file_name.to_string(),
+                component_name: name.to_string(),
             })),
         }];
 

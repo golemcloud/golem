@@ -3,6 +3,7 @@ use std::result::Result;
 use poem_openapi::*;
 use serde::{Deserialize, Serialize};
 
+use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_common::model::ComponentId;
 
 use crate::api_definition::http::MethodPattern;
@@ -49,6 +50,7 @@ pub struct GolemWorkerBinding {
     pub worker_id: String,
     pub function_name: String,
     pub function_params: Vec<String>,
+    pub idempotency_key: Option<String>,
     pub response: Option<String>,
 }
 
@@ -152,11 +154,18 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             function_params.push(v);
         }
 
+        let idempotency_key = if let Some(key) = &value.idempotency_key {
+            Some(expression::to_string(key).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+
         Ok(Self {
             component: value.component,
             worker_id,
             function_name: value.function_name,
             function_params,
+            idempotency_key,
             response,
         })
     }
@@ -182,17 +191,22 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             function_params.push(v);
         }
 
+        let idempotency_key = if let Some(key) = &self.idempotency_key {
+            Some(expression::from_string(key).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+
         Ok(crate::worker_binding::GolemWorkerBinding {
             component: self.component,
             worker_id,
             function_name: self.function_name,
             function_params,
+            idempotency_key,
             response,
         })
     }
 }
-
-use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 
 impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinition::ApiDefinition {
     type Error = String;
@@ -318,11 +332,18 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
             .map(|p| expression::to_string(&p).map_err(|e| e.to_string()))
             .collect::<Result<Vec<String>, String>>()?;
 
+        let idempotency_key = if let Some(key) = &value.idempotency_key {
+            Some(expression::to_string(key).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+
         let result = grpc_apidefinition::WorkerBinding {
             component: Some(value.component.into()),
             worker_id,
             function_name: value.function_name,
             function_params,
+            idempotency_key,
             response,
         };
 
@@ -355,11 +376,18 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
 
         let component_id = value.component.ok_or("component is missing")?.try_into()?;
 
+        let idempotency_key = if let Some(key) = &value.idempotency_key {
+            Some(key.parse().map_err(|e: ParseError| e.to_string())?)
+        } else {
+            None
+        };
+
         let result = crate::worker_binding::GolemWorkerBinding {
             component: component_id,
             worker_id,
             function_name: value.function_name,
             function_params,
+            idempotency_key,
             response,
         };
 
