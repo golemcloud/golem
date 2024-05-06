@@ -13,11 +13,9 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use cap_std::fs::Metadata;
 use fs_set_times::{set_symlink_times, SystemTimeSpec};
 use metrohash::MetroHash128;
 use std::hash::Hasher;
-use std::path::PathBuf;
 use std::time::SystemTime;
 
 use wasmtime::component::Resource;
@@ -424,31 +422,6 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, rep: Resource<Descriptor>) -> anyhow::Result<()> {
         record_host_function_call("filesystem::types::descriptor", "drop");
         HostDescriptor::drop(&mut self.as_wasi_view(), rep)
-    }
-}
-
-trait FileTimeSupport {
-    fn metadata(&self) -> std::io::Result<Metadata>;
-    fn set_times(
-        &self,
-        accessed: Option<SystemTimeSpec>,
-        modified: Option<SystemTimeSpec>,
-    ) -> std::io::Result<()>;
-}
-
-impl FileTimeSupport for PathBuf {
-    fn metadata(&self) -> std::io::Result<Metadata> {
-        Ok(Metadata::from_just_metadata(std::fs::symlink_metadata(
-            self,
-        )?))
-    }
-
-    fn set_times(
-        &self,
-        accessed: Option<SystemTimeSpec>,
-        modified: Option<SystemTimeSpec>,
-    ) -> std::io::Result<()> {
-        set_symlink_times(self, accessed, modified)
     }
 }
 
