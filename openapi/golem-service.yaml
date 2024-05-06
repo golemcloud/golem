@@ -2398,6 +2398,8 @@ components:
           type: array
           items:
             type: string
+        idempotencyKey:
+          type: string
         response:
           type: string
       required:
