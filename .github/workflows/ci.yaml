@@ -318,16 +318,16 @@ jobs:
           auto-start: false
       - name: Integration tests
         env:
-          CI: true
+          QUIET: 1
         run: cargo make integration-tests
       - name: Sharding tests
         env:
-          CI: true
+          QUIET: 1
         run: cargo make sharding-tests
         timeout-minutes: 10
       - name: CLI tests
         env:
-          CI: true
+          QUIET: 1
         run: cargo make cli-tests
   publish:
     needs: [ unit-tests, worker-tests, integration-tests ]

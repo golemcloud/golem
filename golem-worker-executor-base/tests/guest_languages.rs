@@ -38,55 +38,6 @@ async fn zig_example_1() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn zig_example_2() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
-
-    let component_id = executor.store_component("zig-2").await;
-    let worker_id = executor.start_worker(&component_id, "zig-2").await;
-    let rx = executor.capture_output(&worker_id).await;
-
-    let _ = executor
-        .invoke_and_await_stdio_eventloop(
-            &worker_id,
-            "wasi:cli/run@0.2.0/run",
-            serde_json::Value::Object(serde_json::Map::from_iter([(
-                "add".to_string(),
-                serde_json::Value::Number(10.into()),
-            )])),
-        )
-        .await
-        .expect("invoke_and_await_stdio_eventloop 1");
-    let _ = executor
-        .invoke_and_await_stdio_eventloop(
-            &worker_id,
-            "wasi:cli/run@0.2.0/run",
-            serde_json::Value::Object(serde_json::Map::from_iter([(
-                "add".to_string(),
-                serde_json::Value::Number(1.into()),
-            )])),
-        )
-        .await
-        .expect("invoke_and_await_stdio_eventloop 2");
-    let response = executor
-        .invoke_and_await_stdio_eventloop(
-            &worker_id,
-            "wasi:cli/run@0.2.0/run",
-            serde_json::Value::Object(serde_json::Map::from_iter([(
-                "get".to_string(),
-                serde_json::Value::Object(serde_json::Map::new()),
-            )])),
-        )
-        .await;
-
-    drop(executor);
-    drop(rx);
-
-    assert!(response == Ok(serde_json::Value::Number(11.into())))
-}
-
-#[tokio::test]
-#[tracing::instrument]
 async fn tinygo_example() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();

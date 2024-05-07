@@ -1,6 +1,6 @@
 use crate::model::component::ComponentView;
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::{ExampleDescription, InvocationKey};
+use crate::model::{ExampleDescription, IdempotencyKey};
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use golem_client::model::{
     ApiDeployment, HttpApiDefinition, Route, WorkerId, WorkerMetadata, WorkersMetadataResponse,
@@ -266,13 +266,13 @@ impl TextFormat for WorkerAddView {
     }
 }
 
-impl TextFormat for InvocationKey {
+impl TextFormat for IdempotencyKey {
     fn print(&self) {
         printdoc!(
             "
             Invocation key: {}
             You can use it in invoke-and-await command this way:
-            invoke-and-await --invocation-key {} ...
+            invoke-and-await --idempotency-key {} ...
             ",
             self.0,
             self.0

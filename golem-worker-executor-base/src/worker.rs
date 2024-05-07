@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use async_mutex::Mutex;
-use bytes::Bytes;
 use golem_common::cache::PendingOrFinal;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
@@ -26,7 +25,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, FailedUpdateRecord, InvocationKey, SuccessfulUpdateRecord,
+    AccountId, CallingConvention, FailedUpdateRecord, IdempotencyKey, SuccessfulUpdateRecord,
     Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
@@ -37,19 +36,18 @@ use wasmtime::{Store, UpdateDeadline};
 
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_create_worker, record_create_worker_failure};
-use crate::model::{ExecutionStatus, InterruptKind, TrapType, WorkerConfig};
+use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
+use crate::services::events::Events;
 use crate::services::golem_config::GolemConfig;
-use crate::services::invocation_key::LookupResult;
 use crate::services::invocation_queue::InvocationQueue;
 use crate::services::oplog::Oplog;
 use crate::services::recovery::is_worker_error_retriable;
 use crate::services::worker_activator::WorkerActivator;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    HasAll, HasComponentService, HasConfig, HasInvocationKeyService, HasInvocationQueue,
-    HasOplogService, HasWorkerService,
+    HasAll, HasComponentService, HasConfig, HasInvocationQueue, HasOplogService, HasWorkerService,
 };
-use crate::workerctx::{PublicWorkerIo, WorkerCtx};
+use crate::workerctx::WorkerCtx;
 
 /// Worker is one active wasmtime instance representing a Golem worker with its corresponding
 /// worker context. The worker struct itself is responsible for creating/reactivating/interrupting
@@ -133,7 +131,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     worker_metadata.worker_id.clone(),
                     worker_metadata.account_id.clone(),
                     this.promise_service(),
-                    this.invocation_key_service(),
+                    this.events(),
                     this.worker_service(),
                     this.worker_enumeration_service(),
                     this.key_value_service(),
@@ -357,6 +355,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .iter()
             .cloned()
             .collect::<Vec<_>>();
+        let initial_invocation_results =
+            worker_metadata.last_known_status.invocation_results.clone();
 
         let worker_details = this
             .active_workers()
@@ -368,8 +368,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         config_clone,
                         oplog,
                         this.worker_activator().clone(),
+                        this.events().clone(),
                         &initial_pending_invocations,
                         &initial_pending_updates,
+                        &initial_invocation_results,
                     )
                 },
                 |pending_worker| {
@@ -436,6 +438,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .iter()
             .cloned()
             .collect::<Vec<_>>();
+        let initial_invocation_results =
+            worker_metadata.last_known_status.invocation_results.clone();
 
         this.active_workers()
             .get_pending_with(
@@ -446,8 +450,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         config_clone,
                         oplog,
                         this.worker_activator().clone(),
+                        this.events().clone(),
                         &initial_pending_invocations,
                         &initial_pending_updates,
+                        &initial_invocation_results,
                     )
                 },
                 move |pending_worker| {
@@ -515,6 +521,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .iter()
             .cloned()
             .collect::<Vec<_>>();
+        let initial_invocation_results =
+            worker_metadata.last_known_status.invocation_results.clone();
 
         let (resume_sender, resume_receiver) = tokio::sync::oneshot::channel();
 
@@ -528,8 +536,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         config_clone,
                         oplog,
                         this.worker_activator().clone(),
+                        this.events().clone(),
                         &initial_pending_invocations,
                         &initial_pending_updates,
+                        &initial_invocation_results,
                     )
                 },
                 move |pending_worker| {
@@ -566,17 +576,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Worker was unexpectedly already active",
             )),
         }
-    }
-
-    /// Looks up a given invocation key's current status.
-    /// As the invocation key status is only stored in memory, we need to have an active
-    /// instance (instance_details) to call this function.
-    pub fn lookup_result<T>(&self, this: &T, invocation_key: &InvocationKey) -> LookupResult
-    where
-        T: HasInvocationKeyService,
-    {
-        this.invocation_key_service()
-            .lookup_key(&self.metadata.worker_id, invocation_key)
     }
 
     /// Marks the worker as interrupting - this should eventually make the worker interrupted.
@@ -719,15 +718,19 @@ impl<Ctx: WorkerCtx> PendingWorker<Ctx> {
         config: Arc<GolemConfig>,
         oplog: Arc<dyn Oplog + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        events: Arc<Events>,
         initial_pending_invocations: &[TimestampedWorkerInvocation],
         initial_pending_updates: &[TimestampedUpdateDescription],
+        initial_invocation_results: &HashMap<IdempotencyKey, OplogIndex>,
     ) -> Result<PendingWorker<Ctx>, GolemError> {
         let invocation_queue = Arc::new(InvocationQueue::new(
             worker_id.clone(),
             oplog.clone(),
-            worker_activator.clone(),
+            worker_activator,
+            events,
             initial_pending_invocations,
             initial_pending_updates,
+            initial_invocation_results,
         ));
 
         Ok(PendingWorker {
@@ -772,94 +775,51 @@ fn validate_worker(
     }
 }
 
-pub async fn invoke<Ctx: WorkerCtx, T>(
+pub async fn invoke<Ctx: WorkerCtx>(
     worker: Arc<Worker<Ctx>>,
-    this: &T,
-    invocation_key: InvocationKey,
+    idempotency_key: IdempotencyKey,
     calling_convention: CallingConvention,
     full_function_name: String,
     function_input: Vec<Value>,
-) -> Result<Option<Result<Vec<Value>, GolemError>>, GolemError>
-where
-    T: HasInvocationKeyService,
-{
-    let output = worker.lookup_result(this, &invocation_key);
+) -> Result<Option<Result<Vec<Value>, GolemError>>, GolemError> {
+    let output = worker
+        .public_state
+        .invocation_queue()
+        .lookup_invocation_result(&idempotency_key)
+        .await;
 
     match output {
         LookupResult::Complete(output) => Ok(Some(output)),
-        LookupResult::Invalid => Err(GolemError::invalid_request(format!(
-            "Invalid invocation key {} for {}",
-            invocation_key, worker.metadata.worker_id
-        ))),
         LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
-        LookupResult::Pending => {
-            if calling_convention == CallingConvention::StdioEventloop {
-                // We only have to invoke the function if it is not running yet
-                let requires_invoke = {
-                    let public_state = &worker.public_state;
-
-                    let bytes = match function_input.first() {
-                        Some(Value::String(value)) => {
-                            Ok(Bytes::from(format!("{}\n", value).to_string()))
-                        }
-                        _ => Err(GolemError::invalid_request(
-                            "unexpected function input for stdio-eventloop calling convention",
-                        )),
-                    }?;
-
-                    public_state.enqueue(bytes, invocation_key.clone()).await;
-                    let execution_status = worker.execution_status.read().unwrap().clone();
-                    !execution_status.is_running()
-                };
-
-                if requires_invoke {
-                    // Invoke the function in the background
-                    worker
-                        .public_state
-                        .invocation_queue()
-                        .enqueue(
-                            invocation_key,
-                            full_function_name,
-                            vec![],
-                            CallingConvention::Component,
-                        )
-                        .await;
-                }
-                Ok(None)
-            } else {
-                // Invoke the function in the background
-                worker
-                    .public_state
-                    .invocation_queue()
-                    .enqueue(
-                        invocation_key,
-                        full_function_name,
-                        function_input,
-                        calling_convention,
-                    )
-                    .await;
-                Ok(None)
-            }
+        LookupResult::Pending => Ok(None),
+        LookupResult::New => {
+            // Invoke the function in the background
+            worker
+                .public_state
+                .invocation_queue()
+                .enqueue(
+                    idempotency_key,
+                    full_function_name,
+                    function_input,
+                    calling_convention,
+                )
+                .await;
+            Ok(None)
         }
     }
 }
 
-pub async fn invoke_and_await<Ctx: WorkerCtx, T>(
+pub async fn invoke_and_await<Ctx: WorkerCtx>(
     worker: Arc<Worker<Ctx>>,
-    this: &T,
-    invocation_key: InvocationKey,
+    idempotency_key: IdempotencyKey,
     calling_convention: CallingConvention,
     full_function_name: String,
     function_input: Vec<Value>,
-) -> Result<Vec<Value>, GolemError>
-where
-    T: HasInvocationKeyService,
-{
+) -> Result<Vec<Value>, GolemError> {
     let worker_id = worker.metadata.worker_id.clone();
     match invoke(
-        worker,
-        this,
-        invocation_key.clone(),
+        worker.clone(),
+        idempotency_key.clone(),
         calling_convention,
         full_function_name,
         function_input,
@@ -869,29 +829,29 @@ where
         Some(Ok(output)) => Ok(output),
         Some(Err(err)) => Err(err),
         None => {
-            debug!(
-                "Waiting for invocation key {} to complete for {worker_id}",
-                invocation_key
-            );
-            let result = this
-                .invocation_key_service()
-                .wait_for_confirmation(&worker_id, &invocation_key)
+            debug!("Waiting for idempotency key {idempotency_key} to complete for {worker_id}",);
+
+            let invocation_queue = worker.public_state.invocation_queue().clone();
+            drop(worker); // we must not hold reference to the worker while waiting
+
+            let result = invocation_queue
+                .wait_for_invocation_result(&idempotency_key)
                 .await;
 
             debug!(
                 "Invocation key {} lookup result for {worker_id}: {:?}",
-                invocation_key, result
+                idempotency_key, result
             );
             match result {
-                LookupResult::Invalid => Err(GolemError::invalid_request(format!(
-                    "Invalid invocation key {invocation_key} for {worker_id}"
-                ))),
                 LookupResult::Complete(Ok(output)) => Ok(output),
                 LookupResult::Complete(Err(err)) => Err(err),
                 LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
-                LookupResult::Pending => {
-                    Err(GolemError::unknown("Unexpected pending invocation key"))
-                }
+                LookupResult::Pending => Err(GolemError::unknown(
+                    "Unexpected pending result after invoke",
+                )),
+                LookupResult::New => Err(GolemError::unknown(
+                    "Unexpected missing result after invoke",
+                )),
             }
         }
     }
@@ -953,7 +913,6 @@ where
                 &new_entries,
             );
 
-        debug!("deleted regions before: {deleted_regions:?}");
         if let Some(TimestampedUpdateDescription {
             oplog_index,
             description: UpdateDescription::SnapshotBased { .. },
@@ -964,7 +923,13 @@ where
                 OplogRegion::from_range(1..=*oplog_index),
             ]));
         }
-        debug!("deleted regions after: {deleted_regions:?}");
+
+        let (invocation_results, current_idempotency_key) = calculate_invocation_results(
+            last_known.invocation_results,
+            last_known.current_idempotency_key,
+            last_known.oplog_idx,
+            &new_entries,
+        );
 
         Ok(WorkerStatusRecord {
             oplog_idx: last_oplog_index,
@@ -975,6 +940,8 @@ where
             pending_updates,
             failed_updates,
             successful_updates,
+            invocation_results,
+            current_idempotency_key,
             component_version,
         })
     }
@@ -1127,16 +1094,18 @@ fn calculate_pending_invocations(
                     invocation: invocation.clone(),
                 });
             }
-            OplogEntry::ExportedFunctionInvoked { invocation_key, .. } => {
+            OplogEntry::ExportedFunctionInvoked {
+                idempotency_key, ..
+            } => {
                 result.retain(|invocation| match invocation {
                     TimestampedWorkerInvocation {
                         invocation:
                             WorkerInvocation::ExportedFunction {
-                                invocation_key: key,
+                                idempotency_key: key,
                                 ..
                             },
                         ..
-                    } => key != invocation_key,
+                    } => key != idempotency_key,
                     _ => true,
                 });
             }
@@ -1222,4 +1191,41 @@ fn calculate_update_fields(
         }
     }
     (pending_updates, failed_updates, successful_updates, version)
+}
+
+fn calculate_invocation_results(
+    invocation_results: HashMap<IdempotencyKey, OplogIndex>,
+    current_idempotency_key: Option<IdempotencyKey>,
+    start_index: OplogIndex,
+    entries: &[OplogEntry],
+) -> (HashMap<IdempotencyKey, OplogIndex>, Option<IdempotencyKey>) {
+    let mut invocation_results = invocation_results;
+    let mut current_idempotency_key = current_idempotency_key;
+
+    for (n, entry) in entries.iter().enumerate() {
+        let oplog_idx = start_index + (n as OplogIndex);
+        match entry {
+            OplogEntry::ExportedFunctionInvoked {
+                idempotency_key, ..
+            } => {
+                current_idempotency_key = Some(idempotency_key.clone());
+            }
+            OplogEntry::ExportedFunctionCompleted { .. } => {
+                current_idempotency_key = None;
+            }
+            OplogEntry::Error { .. } => {
+                if let Some(idempotency_key) = &current_idempotency_key {
+                    invocation_results.insert(idempotency_key.clone(), oplog_idx);
+                }
+            }
+            OplogEntry::Exited { .. } => {
+                if let Some(idempotency_key) = &current_idempotency_key {
+                    invocation_results.insert(idempotency_key.clone(), oplog_idx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (invocation_results, current_idempotency_key)
 }

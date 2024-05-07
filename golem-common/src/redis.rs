@@ -54,8 +54,8 @@ impl RedisPool {
         let mut redis_config = RedisConfig::from_url(config.url().as_str())?;
         redis_config.tracing = TracingConfig::new(config.tracing);
         redis_config.tracing.default_tracing_level = Level::DEBUG;
-        redis_config.username = config.username.clone();
-        redis_config.password = config.password.clone();
+        redis_config.username.clone_from(&config.username);
+        redis_config.password.clone_from(&config.password);
 
         let policy = ReconnectPolicy::new_exponential(
             config.retries.max_attempts,

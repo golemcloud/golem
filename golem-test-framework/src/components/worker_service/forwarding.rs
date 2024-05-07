@@ -20,12 +20,12 @@ use tonic::Streaming;
 use crate::components::component_service::ComponentService;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
 use golem_api_grpc::proto::golem::worker::{
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetInvocationKeyRequest,
-    GetInvocationKeyResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeRequest, InvokeResponse, InvokeResult, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, LogEvent, ResumeWorkerRequest, ResumeWorkerResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerId,
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse, InvokeResult,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, LogEvent,
+    ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError, WorkerId,
 };
 use golem_api_grpc::proto::golem::workerexecutor::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
@@ -148,44 +148,6 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
-    async fn get_invocation_key(
-        &self,
-        request: GetInvocationKeyRequest,
-    ) -> GetInvocationKeyResponse {
-        let result = self
-            .worker_executor
-            .client()
-            .await
-            .get_invocation_key(workerexecutor::GetInvocationKeyRequest {
-                worker_id: request.worker_id,
-            })
-            .await
-            .expect("Failed to call golem-worker-executor")
-            .into_inner();
-
-        match result.result {
-            None => panic!("No response from golem-worker-executor get-invocation-key call"),
-            Some(workerexecutor::get_invocation_key_response::Result::Success(result)) => {
-                GetInvocationKeyResponse {
-                    result: Some(worker::get_invocation_key_response::Result::Success(
-                        result
-                            .invocation_key
-                            .expect("Failed to get invocation key from the response"),
-                    )),
-                }
-            }
-            Some(workerexecutor::get_invocation_key_response::Result::Failure(error)) => {
-                GetInvocationKeyResponse {
-                    result: Some(worker::get_invocation_key_response::Result::Error(
-                        WorkerError {
-                            error: Some(worker::worker_error::Error::InternalError(error)),
-                        },
-                    )),
-                }
-            }
-        }
-    }
-
     async fn get_worker_metadata(
         &self,
         request: GetWorkerMetadataRequest,
@@ -227,6 +189,7 @@ impl WorkerService for ForwardingWorkerService {
             .await
             .invoke_worker(workerexecutor::InvokeWorkerRequest {
                 worker_id: request.worker_id,
+                idempotency_key: request.idempotency_key,
                 name: request.function,
                 input: request
                     .invoke_parameters
@@ -271,8 +234,8 @@ impl WorkerService for ForwardingWorkerService {
             .await
             .invoke_and_await_worker(workerexecutor::InvokeAndAwaitWorkerRequest {
                 worker_id: request.worker_id,
+                idempotency_key: request.idempotency_key,
                 name: request.function,
-                invocation_key: request.invocation_key,
                 calling_convention: request.calling_convention,
                 input: request
                     .invoke_parameters

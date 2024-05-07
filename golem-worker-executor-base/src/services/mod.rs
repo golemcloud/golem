@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use crate::services::worker_activator::WorkerActivator;
 
+use crate::services::events::Events;
 use tokio::runtime::Handle;
 
 use crate::workerctx::WorkerCtx;
@@ -26,8 +27,8 @@ pub mod active_workers;
 pub mod blob_store;
 pub mod compiled_component;
 pub mod component;
+pub mod events;
 pub mod golem_config;
-pub mod invocation_key;
 pub mod invocation_queue;
 pub mod key_value;
 pub mod oplog;
@@ -75,11 +76,6 @@ pub trait HasRunningWorkerEnumerationService {
     fn running_worker_enumeration_service(
         &self,
     ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>;
-}
-
-pub trait HasInvocationKeyService {
-    fn invocation_key_service(&self)
-        -> Arc<dyn invocation_key::InvocationKeyService + Send + Sync>;
 }
 
 pub trait HasShardService {
@@ -140,6 +136,10 @@ pub trait HasWorkerProxy {
     fn worker_proxy(&self) -> Arc<dyn worker_proxy::WorkerProxy + Send + Sync>;
 }
 
+pub trait HasEvents {
+    fn events(&self) -> Arc<Events>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -148,7 +148,6 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasWorkerService
     + HasWorkerEnumerationService
     + HasRunningWorkerEnumerationService
-    + HasInvocationKeyService
     + HasPromiseService
     + HasWasmtimeEngine<Ctx>
     + HasKeyValueService
@@ -159,6 +158,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasSchedulerService
     + HasWorkerActivator
     + HasWorkerProxy
+    + HasEvents
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -172,7 +172,6 @@ impl<
             + HasWorkerService
             + HasWorkerEnumerationService
             + HasRunningWorkerEnumerationService
-            + HasInvocationKeyService
             + HasPromiseService
             + HasWasmtimeEngine<Ctx>
             + HasKeyValueService
@@ -183,6 +182,7 @@ impl<
             + HasSchedulerService
             + HasWorkerActivator
             + HasWorkerProxy
+            + HasEvents
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -204,7 +204,6 @@ pub struct All<Ctx: WorkerCtx> {
         Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
     promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
     golem_config: Arc<golem_config::GolemConfig>,
-    invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
     shard_service: Arc<dyn shard::ShardService + Send + Sync>,
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
@@ -214,6 +213,7 @@ pub struct All<Ctx: WorkerCtx> {
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
+    events: Arc<Events>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -231,7 +231,6 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             running_worker_enumeration_service: self.running_worker_enumeration_service.clone(),
             promise_service: self.promise_service.clone(),
             golem_config: self.golem_config.clone(),
-            invocation_key_service: self.invocation_key_service.clone(),
             shard_service: self.shard_service.clone(),
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
@@ -241,6 +240,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             scheduler_service: self.scheduler_service.clone(),
             worker_activator: self.worker_activator.clone(),
             worker_proxy: self.worker_proxy.clone(),
+            events: self.events.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -264,7 +264,6 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         >,
         promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
         golem_config: Arc<golem_config::GolemConfig>,
-        invocation_key_service: Arc<dyn invocation_key::InvocationKeyService + Send + Sync>,
         shard_service: Arc<dyn shard::ShardService + Send + Sync>,
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
@@ -274,6 +273,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
+        events: Arc<Events>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -288,7 +288,6 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             running_worker_enumeration_service,
             promise_service,
             golem_config,
-            invocation_key_service,
             shard_service,
             key_value_service,
             blob_store_service,
@@ -298,6 +297,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             scheduler_service,
             worker_activator,
             worker_proxy,
+            events,
             extra_deps,
         }
     }
@@ -320,8 +320,6 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             Arc::new(worker_enumeration::RunningWorkerEnumerationServiceMock::new());
         let promise_service = Arc::new(promise::PromiseServiceMock::new());
         let golem_config = Arc::new(golem_config::GolemConfig::default());
-        let invocation_key_service =
-            Arc::new(invocation_key::InvocationKeyServiceDefault::default());
         let shard_service = Arc::new(shard::ShardServiceDefault::new());
         let shard_manager_service = Arc::new(shard_manager::ShardManagerServiceSingleShard::new());
         let key_value_service = Arc::new(key_value::KeyValueServiceInMemory::new());
@@ -332,6 +330,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let scheduler_service = Arc::new(scheduler::SchedulerServiceMock::new());
         let worker_activator = Arc::new(worker_activator::WorkerActivatorMock::new());
         let worker_proxy = Arc::new(worker_proxy::WorkerProxyMock::new());
+        let events = Arc::new(Events::new());
         Self {
             active_workers,
             engine,
@@ -344,7 +343,6 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             running_worker_enumeration_service,
             promise_service,
             golem_config,
-            invocation_key_service,
             shard_service,
             key_value_service,
             blob_store_service,
@@ -354,6 +352,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             scheduler_service,
             worker_activator,
             worker_proxy,
+            events,
             extra_deps: mocked_extra_deps,
         }
     }
@@ -416,14 +415,6 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasRunningWorkerEnumerationServi
         &self,
     ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync> {
         self.all().running_worker_enumeration_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasInvocationKeyService for T {
-    fn invocation_key_service(
-        &self,
-    ) -> Arc<dyn invocation_key::InvocationKeyService + Send + Sync> {
-        self.all().invocation_key_service.clone()
     }
 }
 
@@ -498,6 +489,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerActivator for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerProxy for T {
     fn worker_proxy(&self) -> Arc<dyn worker_proxy::WorkerProxy + Send + Sync> {
         self.all().worker_proxy.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasEvents for T {
+    fn events(&self) -> Arc<Events> {
+        self.all().events.clone()
     }
 }
 

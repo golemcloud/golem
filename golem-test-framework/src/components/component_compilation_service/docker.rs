@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{env_vars, ComponentService};
-use crate::components::rdb::Rdb;
+use crate::components::component_compilation_service::{env_vars, ComponentCompilationService};
 use crate::components::{DOCKER, NETWORK};
 use async_trait::async_trait;
 
@@ -22,35 +21,32 @@ use std::sync::Arc;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
 
+use crate::components::component_service::ComponentService;
 use tracing::{info, Level};
 
-pub struct DockerComponentService {
-    container: Container<'static, GolemComponentServiceImage>,
+pub struct DockerComponentCompilationService {
+    container: Container<'static, GolemComponentCompilationServiceImage>,
 }
 
-impl DockerComponentService {
-    const NAME: &'static str = "golem_component_service";
-    const HTTP_PORT: u16 = 8081;
-    const GRPC_PORT: u16 = 9091;
+impl DockerComponentCompilationService {
+    pub const NAME: &'static str = "golem_component_compilation_service";
+    pub const HTTP_PORT: u16 = 8083;
+    pub const GRPC_PORT: u16 = 9094;
 
     pub fn new(
-        component_compilation_service_host: &str,
-        component_compilation_service_port: u16,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         verbosity: Level,
     ) -> Self {
-        info!("Starting golem-component-service container");
+        info!("Starting golem-component-compilation-service container");
 
         let env_vars = env_vars(
             Self::HTTP_PORT,
             Self::GRPC_PORT,
-            component_compilation_service_host,
-            component_compilation_service_port,
-            rdb,
+            component_service,
             verbosity,
         );
 
-        let image = RunnableImage::from(GolemComponentServiceImage::new(
+        let image = RunnableImage::from(GolemComponentCompilationServiceImage::new(
             Self::GRPC_PORT,
             Self::HTTP_PORT,
             env_vars,
@@ -64,7 +60,7 @@ impl DockerComponentService {
 }
 
 #[async_trait]
-impl ComponentService for DockerComponentService {
+impl ComponentCompilationService for DockerComponentCompilationService {
     fn private_host(&self) -> String {
         Self::NAME.to_string()
     }
@@ -94,26 +90,26 @@ impl ComponentService for DockerComponentService {
     }
 }
 
-impl Drop for DockerComponentService {
+impl Drop for DockerComponentCompilationService {
     fn drop(&mut self) {
         self.kill();
     }
 }
 
 #[derive(Debug)]
-struct GolemComponentServiceImage {
+struct GolemComponentCompilationServiceImage {
     grpc_port: u16,
     http_port: u16,
     env_vars: HashMap<String, String>,
 }
 
-impl GolemComponentServiceImage {
+impl GolemComponentCompilationServiceImage {
     pub fn new(
         grpc_port: u16,
         http_port: u16,
         env_vars: HashMap<String, String>,
-    ) -> GolemComponentServiceImage {
-        GolemComponentServiceImage {
+    ) -> GolemComponentCompilationServiceImage {
+        GolemComponentCompilationServiceImage {
             grpc_port,
             http_port,
             env_vars,
@@ -121,11 +117,11 @@ impl GolemComponentServiceImage {
     }
 }
 
-impl Image for GolemComponentServiceImage {
+impl Image for GolemComponentCompilationServiceImage {
     type Args = ();
 
     fn name(&self) -> String {
-        "golemservices/golem-component-service".to_string()
+        "golemservices/golem-component-compilation-service".to_string()
     }
 
     fn tag(&self) -> String {

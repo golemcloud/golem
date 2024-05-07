@@ -1596,6 +1596,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 
 [[package]]
+name = "colored"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbf2150cce219b664a8a70df7a1f933836724b503f8a413af9365b4dcc4d90b8"
+dependencies = [
+ "lazy_static",
+ "windows-sys 0.48.0",
+]
+
+[[package]]
 name = "combine"
 version = "4.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3331,9 +3341,9 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.5"
+version = "0.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3d95ac39f293640b9ea7a4352c589f4e1c5c9882b7517c8884d003e5fd0b2f8"
+checksum = "93808434ae66e60e3316b99a3c2333a112bdb0662efb9a52d81ba7713e1d5808"
 dependencies = [
  "clap 4.5.4",
  "convert_case 0.6.0",
@@ -3420,10 +3430,13 @@ dependencies = [
  "async-scoped",
  "async-trait",
  "clap 4.5.4",
+ "cli-table",
+ "colored",
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "itertools 0.12.1",
  "k8s-openapi",
  "kill_tree",
  "kube",
@@ -3431,7 +3444,9 @@ dependencies = [
  "once_cell",
  "postgres",
  "redis 0.25.3",
+ "serde",
  "serde_json",
+ "serde_yaml",
  "testcontainers",
  "testcontainers-modules",
  "tokio",

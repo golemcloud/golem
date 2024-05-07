@@ -25,13 +25,12 @@ use std::time::{Duration, Instant};
 use crate::error::GolemError;
 use crate::invocation::invoke_worker;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, PersistenceLevel, TrapType,
-    WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, LookupResult,
+    PersistenceLevel, TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
-use crate::services::invocation_key::{InvocationKeyService, LookupResult};
 use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
@@ -44,16 +43,15 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::Bytes;
 use cap_std::ambient_authority;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
-    OplogEntry, SnapshotSource, UpdateDescription, WrappedFunctionType,
+    OplogEntry, OplogIndex, SnapshotSource, UpdateDescription, WrappedFunctionType,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord, InvocationKey,
-    SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
+    IdempotencyKey, SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -94,6 +92,7 @@ mod sockets;
 pub mod wasm_rpc;
 
 mod durability;
+use crate::services::events::Events;
 use crate::services::invocation_queue::InvocationQueue;
 use crate::services::worker_proxy::WorkerProxy;
 pub use durability::*;
@@ -116,7 +115,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         worker_id: WorkerId,
         account_id: AccountId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
+        _events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -151,7 +150,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_id, worker_config.deleted_regions
         );
 
-        let stdio = ManagedStandardIo::new(worker_id.clone(), invocation_key_service.clone());
+        let stdio = ManagedStandardIo::new(worker_id.clone(), invocation_queue.clone());
         let stdin = ManagedStdIn::from_standard_io(stdio.clone()).await;
         let stdout = ManagedStdOut::from_standard_io(stdio.clone());
         let stderr = ManagedStdErr::from_stderr(Stderr);
@@ -189,13 +188,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         scheduler_service,
                         worker_service,
                         worker_enumeration_service,
-                        invocation_key_service,
                         key_value_service,
                         blob_store_service,
                         config: config.clone(),
                         worker_id: worker_id.clone(),
                         account_id: account_id.clone(),
-                        current_invocation_key: None,
+                        current_idempotency_key: None,
                         active_workers: active_workers.clone(),
                         recovery_management,
                         rpc,
@@ -319,9 +317,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         deleted_regions.set_override(extra_deleted_regions);
 
         status.deleted_regions = deleted_regions;
-        status.overridden_retry_config = self.state.overridden_retry_policy.clone();
+        status
+            .overridden_retry_config
+            .clone_from(&self.state.overridden_retry_policy);
         status.pending_invocations = self.public_state.invocation_queue().pending_invocations();
+        status.invocation_results = self.public_state.invocation_queue.invocation_results();
         status.pending_updates = pending_updates;
+        status
+            .current_idempotency_key
+            .clone_from(&self.state.current_idempotency_key);
         status.oplog_idx = self.state.oplog.current_oplog_index().await;
         f(&mut status);
         self.state
@@ -345,24 +349,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.update_worker_status(|_| {}).await;
     }
 
-    pub fn get_stdio(&self) -> ManagedStandardIo {
+    pub fn get_stdio(&self) -> ManagedStandardIo<Ctx> {
         self.public_state.managed_stdio.clone()
     }
 
-    pub async fn get_current_invocation_key(&self) -> Option<InvocationKey> {
-        self.get_stdio()
-            .get_current_invocation_key()
-            .await
-            .or(self.state.get_current_invocation_key())
+    pub async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+        self.state.get_current_idempotency_key()
     }
 
-    pub fn get_current_invocation_result(&self) -> LookupResult {
-        match &self.state.current_invocation_key {
-            Some(key) => self
-                .state
-                .invocation_key_service
-                .lookup_key(&self.state.worker_id, key),
-            None => LookupResult::Invalid,
+    pub async fn get_current_invocation_result(&self) -> Option<LookupResult> {
+        match self.state.get_current_idempotency_key() {
+            Some(key) => Some(
+                self.public_state
+                    .invocation_queue
+                    .lookup_invocation_result(&key)
+                    .await,
+            ),
+            None => None,
         }
     }
 
@@ -383,9 +386,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> bool {
-        let public_state = store.as_context().data().durable_ctx().public_state.clone();
         let worker_id = store.as_context().data().worker_id().clone();
-        let pending_update = public_state.invocation_queue.pop_pending_update();
+        let pending_update = store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .public_state
+            .invocation_queue
+            .pop_pending_update();
         match pending_update {
             Some(pending_update) => match result {
                 Ok(_) => {
@@ -394,23 +402,19 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                     {
                         match source {
                             SnapshotSource::Inline(data) => {
-                                let invocation_key = store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .durable_ctx_mut()
-                                    .generate_new_invocation_key();
+                                let idempotency_key = IdempotencyKey::fresh();
                                 store
                                     .as_context_mut()
                                     .data_mut()
                                     .durable_ctx_mut()
-                                    .set_current_invocation_key(invocation_key.clone())
+                                    .set_current_idempotency_key(idempotency_key.clone())
                                     .await;
 
                                 store
                                     .as_context_mut()
                                     .data_mut()
                                     .begin_call_snapshotting_function();
-                                let _ = invoke_worker(
+                                let load_result = invoke_worker(
                                     "golem:api/load-snapshot@0.2.0/load".to_string(),
                                     vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
                                     store,
@@ -423,17 +427,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     .as_context_mut()
                                     .data_mut()
                                     .end_call_snapshotting_function();
-                                let result = store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .lookup_invocation_result(&invocation_key);
+
                                 let target_version = *pending_update.description.target_version();
 
-                                let failed = match result {
-                                    LookupResult::Complete(Err(error)) => Some(format!(
+                                let failed = match load_result {
+                                    Some(Err(error)) => Some(format!(
                                         "Manual update failed to load snapshot: {error}"
                                     )),
-                                    LookupResult::Complete(Ok(value)) => {
+                                    Some(Ok(value)) => {
                                         if value.len() == 1 {
                                             match &value[0] {
                                                 Value::Result(Err(Some(boxed_error_value))) => {
@@ -507,40 +508,19 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
-    async fn set_current_invocation_key(&mut self, invocation_key: InvocationKey) {
-        self.state.set_current_invocation_key(invocation_key)
+    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey) {
+        self.state.set_current_idempotency_key(key)
     }
 
-    async fn get_current_invocation_key(&self) -> Option<InvocationKey> {
-        self.get_current_invocation_key().await
+    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+        self.get_current_idempotency_key().await
     }
 
-    async fn interrupt_invocation_key(&mut self, key: &InvocationKey) {
-        self.state.interrupt_invocation_key(key).await
-    }
-
-    async fn resume_invocation_key(&mut self, key: &InvocationKey) {
-        self.state.resume_invocation_key(key).await
-    }
-
-    async fn confirm_invocation_key(
-        &mut self,
-        key: &InvocationKey,
-        vals: Result<Vec<Value>, GolemError>,
-    ) {
-        self.state.confirm_invocation_key(key, vals).await
-    }
-
-    fn generate_new_invocation_key(&mut self) -> InvocationKey {
-        self.state
-            .invocation_key_service
-            .generate_key(&self.worker_id)
-    }
-
-    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult {
-        self.state
-            .invocation_key_service
-            .lookup_key(&self.worker_id, key)
+    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
+        self.public_state
+            .invocation_queue
+            .lookup_invocation_result(key)
+            .await
     }
 }
 
@@ -599,6 +579,8 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
+    type FailurePayload = Option<OplogIndex>;
+
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
@@ -613,7 +595,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let oplog_entry = OplogEntry::exported_function_invoked(
                 full_function_name.to_string(),
                 &proto_function_input,
-                self.get_current_invocation_key().await.ok_or(anyhow!(
+                self.get_current_idempotency_key().await.ok_or(anyhow!(
                     "No active invocation key is associated with the worker"
                 ))?,
                 calling_convention,
@@ -630,28 +612,42 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> Result<(), anyhow::Error> {
+    async fn on_invocation_failure(
+        &mut self,
+        trap_type: &TrapType,
+    ) -> Result<Option<OplogIndex>, anyhow::Error> {
         self.state.consume_hint_entries().await;
 
         if self.state.is_live() {
             let needs_commit = match trap_type {
-                TrapType::Error(error) => Some(OplogEntry::error(error.clone())),
-                TrapType::Interrupt(InterruptKind::Interrupt) => Some(OplogEntry::interrupted()),
-                TrapType::Interrupt(InterruptKind::Suspend) => Some(OplogEntry::suspend()),
-                TrapType::Exit => Some(OplogEntry::exited()),
+                TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
+                TrapType::Interrupt(InterruptKind::Interrupt) => {
+                    Some((OplogEntry::interrupted(), true))
+                }
+                TrapType::Interrupt(InterruptKind::Suspend) => Some((OplogEntry::suspend(), false)),
+                TrapType::Exit => Some((OplogEntry::exited(), true)),
                 _ => None,
             };
 
-            if let Some(entry) = needs_commit {
-                self.state.oplog.add_and_commit(entry).await;
-            }
-        }
+            if let Some((entry, store)) = needs_commit {
+                let oplog_idx = self.state.oplog.add_and_commit(entry).await;
 
-        Ok(())
+                if store {
+                    Ok(Some(oplog_idx))
+                } else {
+                    Ok(None)
+                }
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
     }
 
     async fn on_invocation_failure_deactivated(
         &mut self,
+        _payload: &Option<OplogIndex>,
         error: &TrapType,
     ) -> Result<WorkerStatus, anyhow::Error> {
         let previous_tries = self.state.trailing_error_count().await;
@@ -680,6 +676,22 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         ))
     }
 
+    async fn on_invocation_failure_final(
+        &mut self,
+        payload: &Option<OplogIndex>,
+        trap_type: &TrapType,
+    ) -> Result<(), anyhow::Error> {
+        if let Some(oplog_idx) = payload {
+            if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                self.public_state
+                    .invocation_queue
+                    .store_invocation_failure(&idempotency_key, trap_type, *oplog_idx)
+                    .await;
+            }
+        }
+        Ok(())
+    }
+
     async fn on_invocation_success(
         &mut self,
         full_function_name: &str,
@@ -702,7 +714,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                             )
                         });
 
-                self.state.oplog.add_and_commit(oplog_entry).await;
+                let oplog_idx = self.state.oplog.add_and_commit(oplog_entry).await;
+
+                if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                    self.public_state
+                        .invocation_queue
+                        .store_invocation_success(&idempotency_key, output.clone(), oplog_idx)
+                        .await;
+                }
             }
         } else {
             let response = self
@@ -887,17 +906,17 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     Ok(Some((
                         function_name,
                         function_input,
-                        invocation_key,
+                        idempotency_key,
                         calling_convention,
                     ))) => {
                         debug!("prepare_instance invoking function {function_name} on {worker_id}");
                         store
                             .as_context_mut()
                             .data_mut()
-                            .set_current_invocation_key(invocation_key)
+                            .set_current_idempotency_key(idempotency_key)
                             .await;
 
-                        let finished = invoke_worker(
+                        let invoke_result = invoke_worker(
                             function_name.to_string(),
                             function_input,
                             store,
@@ -907,19 +926,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         )
                         .await;
 
-                        if !finished {
+                        if let Some(invoke_result) = invoke_result {
+                            if let Err(error) = invoke_result {
+                                if let Some(error) =
+                                    TrapType::from_error::<Ctx>(&error).as_golem_error()
+                                {
+                                    break Err(error);
+                                }
+                            }
+                        } else {
                             break Err(GolemError::runtime(format!(
                                 "The worker could not finish replaying a function {function_name}"
                             )));
-                        } else {
-                            let result = store
-                                .as_context()
-                                .data()
-                                .durable_ctx()
-                                .get_current_invocation_result();
-                            if let LookupResult::Complete(Err(error)) = result {
-                                break Err(error);
-                            }
                         }
 
                         count += 1;
@@ -1043,7 +1061,6 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     oplog: Arc<dyn Oplog + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-    invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
     worker_service: Arc<dyn WorkerService + Send + Sync>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
@@ -1051,7 +1068,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     config: Arc<GolemConfig>,
     worker_id: WorkerId,
     account_id: AccountId,
-    current_invocation_key: Option<InvocationKey>,
+    current_idempotency_key: Option<IdempotencyKey>,
     active_workers: Arc<ActiveWorkers<Ctx>>,
     recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
     rpc: Arc<dyn Rpc + Send + Sync>,
@@ -1217,15 +1234,22 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     async fn get_oplog_entry_exported_function_invoked(
         &mut self,
-    ) -> Result<Option<(String, Vec<Value>, InvocationKey, Option<CallingConvention>)>, GolemError>
-    {
+    ) -> Result<
+        Option<(
+            String,
+            Vec<Value>,
+            IdempotencyKey,
+            Option<CallingConvention>,
+        )>,
+        GolemError,
+    > {
         loop {
             if self.is_replay() {
                 let oplog_entry = self.get_oplog_entry().await;
                 match &oplog_entry {
                     OplogEntry::ExportedFunctionInvoked {
                         function_name,
-                        invocation_key,
+                        idempotency_key,
                         calling_convention,
                         ..
                     } => {
@@ -1243,7 +1267,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         break Ok(Some((
                             function_name.to_string(),
                             request,
-                            invocation_key.clone(),
+                            idempotency_key.clone(),
                             *calling_convention,
                         )));
                     }
@@ -1332,30 +1356,12 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         Ok(())
     }
 
-    pub async fn confirm_invocation_key(
-        &mut self,
-        key: &InvocationKey,
-        vals: Result<Vec<Value>, GolemError>,
-    ) {
-        self.invocation_key_service
-            .confirm_key(&self.worker_id, key, vals)
+    pub fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+        self.current_idempotency_key.clone()
     }
 
-    pub async fn interrupt_invocation_key(&mut self, key: &InvocationKey) {
-        self.invocation_key_service
-            .interrupt_key(&self.worker_id, key)
-    }
-
-    pub async fn resume_invocation_key(&mut self, key: &InvocationKey) {
-        self.invocation_key_service.resume_key(&self.worker_id, key)
-    }
-
-    pub fn get_current_invocation_key(&self) -> Option<InvocationKey> {
-        self.current_invocation_key.clone()
-    }
-
-    pub fn set_current_invocation_key(&mut self, invocation_key: InvocationKey) {
-        self.current_invocation_key = Some(invocation_key);
+    pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
+        self.current_idempotency_key = Some(invocation_key);
     }
 
     /// Counts the number of Error entries that are at the end of the oplog. This equals to the number of retries that have been attempted.
@@ -1418,7 +1424,7 @@ impl<Ctx: WorkerCtx> HasOplog for PrivateDurableWorkerState<Ctx> {
 pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
-    managed_stdio: ManagedStandardIo,
+    managed_stdio: ManagedStandardIo<Ctx>,
     invocation_queue: Arc<InvocationQueue<Ctx>>,
     oplog: Arc<dyn Oplog + Send + Sync>,
 }
@@ -1439,10 +1445,6 @@ impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
 impl<Ctx: WorkerCtx> PublicWorkerIo for PublicDurableWorkerState<Ctx> {
     fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync> {
         self.event_service.clone()
-    }
-
-    async fn enqueue(&self, message: Bytes, invocation_key: InvocationKey) {
-        self.managed_stdio.enqueue(message, invocation_key).await
     }
 }
 

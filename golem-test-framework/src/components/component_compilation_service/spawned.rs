@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{env_vars, wait_for_startup, ComponentService};
-use crate::components::rdb::Rdb;
+use crate::components::component_compilation_service::{
+    env_vars, wait_for_startup, ComponentCompilationService,
+};
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 
@@ -22,52 +23,45 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::components::component_service::ComponentService;
 use tracing::info;
 use tracing::Level;
 
-pub struct SpawnedComponentService {
+pub struct SpawnedComponentCompilationService {
     http_port: u16,
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
 }
 
-impl SpawnedComponentService {
+impl SpawnedComponentCompilationService {
     pub async fn new(
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
         grpc_port: u16,
-        component_compilation_service_port: u16,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         verbosity: Level,
         out_level: Level,
         err_level: Level,
     ) -> Self {
-        println!("Starting golem-component-service process");
+        println!("Starting golem-component-compilation-service process");
 
         if !executable.exists() {
-            panic!("Expected to have precompiled golem-component-service at {executable:?}");
+            panic!("Expected to have precompiled golem-component-compilation-service at {executable:?}");
         }
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(
-                http_port,
-                grpc_port,
-                "localhost",
-                component_compilation_service_port,
-                rdb,
-                verbosity,
-            ))
+            .envs(env_vars(http_port, grpc_port, component_service, verbosity))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("Failed to start golem-component-service");
+            .expect("Failed to start golem-component-compilation-service");
 
         let logger = ChildProcessLogger::log_child_process(
-            "[componentsvc]",
+            "[componentcompilationsvc]",
             out_level,
             err_level,
             &mut child,
@@ -85,7 +79,7 @@ impl SpawnedComponentService {
 }
 
 #[async_trait]
-impl ComponentService for SpawnedComponentService {
+impl ComponentCompilationService for SpawnedComponentCompilationService {
     fn private_host(&self) -> String {
         "localhost".to_string()
     }
@@ -99,14 +93,14 @@ impl ComponentService for SpawnedComponentService {
     }
 
     fn kill(&self) {
-        info!("Stopping golem-component-service");
+        info!("Stopping golem-component-compilation-service");
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
         }
     }
 }
 
-impl Drop for SpawnedComponentService {
+impl Drop for SpawnedComponentCompilationService {
     fn drop(&mut self) {
         self.kill();
     }

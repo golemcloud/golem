@@ -15,6 +15,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::components::component_compilation_service::ComponentCompilationService;
 pub use cli::{CliParams, CliTestDependencies};
 pub use env::EnvBasedTestDependencies;
 
@@ -36,6 +37,9 @@ pub trait TestDependencies {
     fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static>;
     fn component_directory(&self) -> PathBuf;
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static>;
+    fn component_compilation_service(
+        &self,
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static>;
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static>;
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
 

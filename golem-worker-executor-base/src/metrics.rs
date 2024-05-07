@@ -245,24 +245,24 @@ pub mod invocation_keys {
     use prometheus::*;
 
     lazy_static! {
-        static ref INVOCATION_KEYS_PENDING_COUNT: Gauge = register_gauge!(
-            "invocation_keys_pending_count",
-            "Number of pending invocation keys"
+        static ref IDEMPOTENCY_KEYS_PENDING_COUNT: Gauge = register_gauge!(
+            "idempotency_keys_pending_count",
+            "Number of pending idempotency keys"
         )
         .unwrap();
-        static ref INVOCATION_KEYS_CONFIRMED_COUNT: Gauge = register_gauge!(
-            "invocation_keys_confirmed_count",
-            "Number of confirmed invocation keys"
+        static ref IDEMPOTENCY_KEYS_CONFIRMED_COUNT: Gauge = register_gauge!(
+            "idempotency_keys_confirmed_count",
+            "Number of confirmed idempotency keys"
         )
         .unwrap();
     }
 
-    pub fn record_pending_invocation_keys_count(count: usize) {
-        INVOCATION_KEYS_PENDING_COUNT.set(count as f64);
+    pub fn record_pending_idempotency_keys_count(count: usize) {
+        IDEMPOTENCY_KEYS_PENDING_COUNT.set(count as f64);
     }
 
-    pub fn record_confirmed_invocation_keys_count(count: usize) {
-        INVOCATION_KEYS_CONFIRMED_COUNT.set(count as f64);
+    pub fn record_confirmed_idempotency_keys_count(count: usize) {
+        IDEMPOTENCY_KEYS_CONFIRMED_COUNT.set(count as f64);
     }
 }
 

@@ -16,23 +16,24 @@ use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use bytes::Bytes;
-use golem_common::model::{
-    AccountId, CallingConvention, ComponentVersion, InvocationKey, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
-};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
+use golem_common::model::{
+    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
+};
+
 use crate::error::GolemError;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, LookupResult, TrapType,
+    WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
+use crate::services::events::Events;
 use crate::services::golem_config::GolemConfig;
-use crate::services::invocation_key::{InvocationKeyService, LookupResult};
 use crate::services::invocation_queue::InvocationQueue;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
@@ -74,7 +75,6 @@ pub trait WorkerCtx:
     /// - `worker_id`: The worker ID (consists of the component id and worker name)
     /// - `account_id`: The account that initiated the creation of the worker
     /// - `promise_service`: The service for managing promises
-    /// - `invocation_key_service`: The service for managing invocation keys
     /// - `worker_service`: The service for managing workers
     /// - `key_value_service`: The service for storing key-value pairs
     /// - `blob_store_service`: The service for storing arbitrary blobs
@@ -94,7 +94,7 @@ pub trait WorkerCtx:
         worker_id: WorkerId,
         account_id: AccountId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
+        events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -186,30 +186,13 @@ pub trait FuelManagement {
 #[async_trait]
 pub trait InvocationManagement {
     /// Sets the invocation key associated with the current invocation of the worker.
-    async fn set_current_invocation_key(&mut self, invocation_key: InvocationKey);
+    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey);
 
     /// Gets the invocation key associated with the current invocation of the worker.
-    async fn get_current_invocation_key(&self) -> Option<InvocationKey>;
-
-    /// Marks an invocation as interrupted
-    async fn interrupt_invocation_key(&mut self, key: &InvocationKey);
-
-    /// Marks a previously interrupted invocation as resumed
-    async fn resume_invocation_key(&mut self, key: &InvocationKey);
-
-    /// Marks an invocation as finished. The `vals` parameter is either the result values or
-    /// an error if the invocation failed.
-    async fn confirm_invocation_key(
-        &mut self,
-        key: &InvocationKey,
-        vals: Result<Vec<Value>, GolemError>,
-    );
-
-    /// Sets the invocation key associated with the current invocation to a fresh key
-    fn generate_new_invocation_key(&mut self) -> InvocationKey;
+    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey>;
 
     /// Gets the result associated with an invocation key of the worker
-    fn lookup_invocation_result(&self, key: &InvocationKey) -> LookupResult;
+    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult;
 }
 
 /// The IoCapturing interface of a worker context is used by the Stdio calling convention to
@@ -264,6 +247,8 @@ pub trait StatusManagement {
 /// successful or failed) of invocations.
 #[async_trait]
 pub trait InvocationHooks {
+    type FailurePayload: Send + Sync + 'static;
+
     /// Called when a worker is about to be invoked
     /// Arguments:
     /// - `full_function_name`: The full name of the function being invoked (including the exported interface name if any)
@@ -278,13 +263,24 @@ pub trait InvocationHooks {
     ) -> anyhow::Result<()>;
 
     /// Called when a worker invocation fails, before the worker gets deactivated
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> Result<(), anyhow::Error>;
+    async fn on_invocation_failure(
+        &mut self,
+        trap_type: &TrapType,
+    ) -> Result<Self::FailurePayload, anyhow::Error>;
 
     /// Called when a worker invocation fails, after the worker has been deactivated
     async fn on_invocation_failure_deactivated(
         &mut self,
+        payload: &Self::FailurePayload,
         trap_type: &TrapType,
     ) -> Result<WorkerStatus, anyhow::Error>;
+
+    /// Called when the worker invocation's failure is final, no more retry attempts will be made
+    async fn on_invocation_failure_final(
+        &mut self,
+        payload: &Self::FailurePayload,
+        trap_type: &TrapType,
+    ) -> Result<(), anyhow::Error>;
 
     /// Called when a worker invocation succeeds
     /// Arguments:
@@ -336,7 +332,6 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         status: WorkerStatus,
     ) -> Result<(), GolemError>;
 
-    // TODO: move this to WorkerStatusRecord
     /// Gets how many times the worker has been retried to recover from an error, and what
     /// error was stored in the last entry.
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
@@ -382,15 +377,10 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
 
 /// A required interface to be implemented by the worker context's public state.
 ///
-/// It is used to "connect" to a worker's event stream and to implement the
-/// stdio-eventloop calling convention.
+/// It is used to "connect" to a worker's event stream
 #[async_trait]
 pub trait PublicWorkerIo {
     /// Gets the event service created for the worker, which can be used to
     /// subscribe to worker events.
     fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync>;
-
-    /// Enqueues a message to the worker's event loop when it is running
-    /// in the stdio-eventloop mode.
-    async fn enqueue(&self, message: Bytes, invocation_key: InvocationKey);
 }
