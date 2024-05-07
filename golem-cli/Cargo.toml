@@ -25,7 +25,7 @@ clap-verbosity-flag = "2.1.1"
 derive_more = "0.99.17"
 dirs = "5.0.1"
 futures-util = { workspace = true }
-golem-examples = "0.2.0"
+golem-examples = "0.2.1"
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true, features = ["text"] }
 golem-wasm-rpc-stubgen = { version = "0.0.22", optional = true }
