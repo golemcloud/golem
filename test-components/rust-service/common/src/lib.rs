@@ -31,7 +31,6 @@ pub fn loop_fibonacci(num: u64, loops: u64) -> (u64, u64) {
     (iterations, value)
 }
 
-
 pub fn calculate_sum(num: u64, loops: u64) -> (u64, u128) {
     fn process_vec(vec: Vec<u64>) -> u64 {
         vec.iter().sum()
@@ -48,6 +47,27 @@ pub fn calculate_sum(num: u64, loops: u64) -> (u64, u128) {
         iterations += 1;
     }
     (iterations, value)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommonData {
+    pub id: String,
+    pub name: String,
+    pub desc: String,
+    pub timestamp: u64,
+}
+
+pub fn process_data(data: Vec<CommonData>) -> Vec<CommonData> {
+    let mut vec = data.clone();
+    vec.reverse();
+    vec.into_iter()
+        .map(|d| CommonData {
+            id: d.id.chars().rev().collect(),
+            name: d.name.chars().rev().collect(),
+            desc: d.desc.chars().rev().collect(),
+            timestamp: d.timestamp,
+        })
+        .collect()
 }
 
 #[cfg(test)]

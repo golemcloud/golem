@@ -1,8 +1,9 @@
 use poem::{
-    get, handler, listener::TcpListener, middleware::Tracing, web::Json, web::Path, EndpointExt,
-    Route, Server,
+    get, handler, listener::TcpListener, middleware::Tracing, post, web::Json, web::Path,
+    EndpointExt, Route, Server,
 };
 
+use serde::{Deserialize, Serialize};
 use std::num::ParseIntError;
 
 #[handler]
@@ -14,6 +15,43 @@ fn echo(Path(input): Path<String>) -> String {
 fn calculate(Path(input): Path<u64>) -> Json<u64> {
     let result = common::calculate_sum(10000, input).0;
     Json(result)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Data {
+    pub id: String,
+    pub name: String,
+    pub desc: String,
+    pub timestamp: u64,
+}
+
+impl From<Data> for common::CommonData {
+    fn from(data: Data) -> Self {
+        common::CommonData {
+            id: data.id,
+            name: data.name,
+            desc: data.desc,
+            timestamp: data.timestamp,
+        }
+    }
+}
+
+impl From<common::CommonData> for Data {
+    fn from(data: common::CommonData) -> Self {
+        Data {
+            id: data.id,
+            name: data.name,
+            desc: data.desc,
+            timestamp: data.timestamp,
+        }
+    }
+}
+
+#[handler]
+fn process(req: Json<Vec<Data>>) -> Json<Vec<Data>> {
+    let input = req.0.into_iter().map(|i| i.into()).collect();
+    let result = common::process_data(input);
+    Json(result.into_iter().map(|i| i.into()).collect())
 }
 
 #[tokio::main]
@@ -34,6 +72,7 @@ async fn main() -> Result<(), std::io::Error> {
     let app = Route::new()
         .at("/echo/:input", get(echo))
         .at("/calculate/:input", get(calculate))
+        .at("/process", post(process))
         .with(Tracing);
 
     Server::new(TcpListener::bind(addr))

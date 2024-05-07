@@ -4301,6 +4301,8 @@ dependencies = [
  "golem-wasm-rpc",
  "rand 0.8.5",
  "reqwest",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

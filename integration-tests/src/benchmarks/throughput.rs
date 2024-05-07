@@ -27,6 +27,10 @@ use golem_test_framework::dsl::TestDsl;
 use integration_tests::benchmarks::{run_benchmark, setup_with};
 use reqwest::Client;
 use reqwest::Url;
+use serde::{Deserialize, Serialize};
+
+use rand::distributions::{Alphanumeric, DistString};
+use rand::thread_rng;
 
 struct Throughput {
     params: CliParams,
@@ -45,6 +49,49 @@ pub struct Context {
 pub struct RustServiceClient {
     client: Client,
     base_url: Url,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Data {
+    pub id: String,
+    pub name: String,
+    pub desc: String,
+    pub timestamp: u64,
+}
+
+impl Data {
+    fn generate() -> Self {
+        fn generate_random_string(len: usize) -> String {
+            let mut rng = thread_rng();
+            let string = Alphanumeric.sample_string(&mut rng, len);
+            string
+        }
+
+        Self {
+            id: generate_random_string(256),
+            name: generate_random_string(512),
+            desc: generate_random_string(1024),
+            timestamp: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        }
+    }
+
+    fn generate_list(count: usize) -> Vec<Self> {
+        (0..count).map(|_| Self::generate()).collect()
+    }
+}
+
+impl From<Data> for Value {
+    fn from(data: Data) -> Self {
+        Value::Record(vec![
+            Value::String(data.id),
+            Value::String(data.name),
+            Value::String(data.desc),
+            Value::U64(data.timestamp),
+        ])
+    }
 }
 
 impl RustServiceClient {
@@ -76,6 +123,26 @@ impl RustServiceClient {
                 .await
                 .expect("calculate - unexpected response"),
             _ => panic!("calculate - unexpected response: {status}"),
+        }
+    }
+
+    async fn process(&self, input: Vec<Data>) -> Vec<Data> {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut().unwrap().push("process");
+
+        let mut request = self.client.post(url.clone());
+
+        request = request.json(&input);
+
+        let response = request.send().await.expect("process - unexpected response");
+
+        let status = response.status().as_u16();
+        match status {
+            200 => response
+                .json::<Vec<Data>>()
+                .await
+                .expect("process - unexpected response"),
+            _ => panic!("process - unexpected response: {status}"),
         }
     }
 
@@ -254,6 +321,65 @@ impl Benchmark for Throughput {
                     context_clone.rust_client.calculate(calculate_iter).await;
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
                     recorder_clone.duration(&"rust-http-calculate-invocation".to_string(), elapsed);
+                }
+            });
+            fibers.push(fiber);
+        }
+
+        for fiber in fibers {
+            fiber.await.expect("fiber failed");
+        }
+
+        let data = Data::generate_list(1000);
+
+        let values = data
+            .clone()
+            .into_iter()
+            .map(|d| d.into())
+            .collect::<Vec<Value>>();
+
+        let mut fibers = Vec::new();
+        for worker_id in context.worker_ids.iter() {
+            let context_clone = context.clone();
+            let worker_id_clone = worker_id.clone();
+            let recorder_clone = recorder.clone();
+            let values_clone = values.clone();
+            let length = self.config.length;
+            let fiber = tokio::task::spawn(async move {
+                for _ in 0..length {
+                    let start = SystemTime::now();
+                    context_clone
+                        .deps
+                        .invoke_and_await(
+                            &worker_id_clone,
+                            "golem:it/api/calculate",
+                            vec![Value::List(values_clone.clone())],
+                        )
+                        .await
+                        .expect("invoke_and_await failed");
+                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
+                    recorder_clone.duration(&"worker-calculate-invocation".to_string(), elapsed);
+                }
+            });
+            fibers.push(fiber);
+        }
+
+        for fiber in fibers {
+            fiber.await.expect("fiber failed");
+        }
+
+        let mut fibers = Vec::new();
+        for _ in context.worker_ids.iter() {
+            let context_clone = context.clone();
+            let recorder_clone = recorder.clone();
+            let length = self.config.length;
+            let data_clone = data.clone();
+            let fiber = tokio::task::spawn(async move {
+                for _ in 0..length {
+                    let start = SystemTime::now();
+                    context_clone.rust_client.process(data_clone.clone()).await;
+                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
+                    recorder_clone.duration(&"rust-http-process-invocation".to_string(), elapsed);
                 }
             });
             fibers.push(fiber);
