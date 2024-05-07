@@ -63,8 +63,7 @@ impl Data {
     fn generate() -> Self {
         fn generate_random_string(len: usize) -> String {
             let mut rng = thread_rng();
-            let string = Alphanumeric.sample_string(&mut rng, len);
-            string
+            Alphanumeric.sample_string(&mut rng, len)
         }
 
         Self {
@@ -232,6 +231,14 @@ impl Benchmark for Throughput {
     async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
         let calculate_iter: u64 = 200000;
 
+        let data = Data::generate_list(2000);
+
+        let values = data
+            .clone()
+            .into_iter()
+            .map(|d| d.into())
+            .collect::<Vec<Value>>();
+
         let mut fibers = Vec::new();
         for worker_id in context.worker_ids.iter() {
             let context_clone = context.clone();
@@ -291,6 +298,36 @@ impl Benchmark for Throughput {
         }
 
         let mut fibers = Vec::new();
+        for worker_id in context.worker_ids.iter() {
+            let context_clone = context.clone();
+            let worker_id_clone = worker_id.clone();
+            let recorder_clone = recorder.clone();
+            let values_clone = values.clone();
+            let length = self.config.length;
+            let fiber = tokio::task::spawn(async move {
+                for _ in 0..length {
+                    let start = SystemTime::now();
+                    context_clone
+                        .deps
+                        .invoke_and_await(
+                            &worker_id_clone,
+                            "golem:it/api/process",
+                            vec![Value::List(values_clone.clone())],
+                        )
+                        .await
+                        .expect("invoke_and_await failed");
+                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
+                    recorder_clone.duration(&"worker-process-invocation".to_string(), elapsed);
+                }
+            });
+            fibers.push(fiber);
+        }
+
+        for fiber in fibers {
+            fiber.await.expect("fiber failed");
+        }
+
+        let mut fibers = Vec::new();
         for _ in context.worker_ids.iter() {
             let context_clone = context.clone();
             let recorder_clone = recorder.clone();
@@ -321,44 +358,6 @@ impl Benchmark for Throughput {
                     context_clone.rust_client.calculate(calculate_iter).await;
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
                     recorder_clone.duration(&"rust-http-calculate-invocation".to_string(), elapsed);
-                }
-            });
-            fibers.push(fiber);
-        }
-
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
-        }
-
-        let data = Data::generate_list(1000);
-
-        let values = data
-            .clone()
-            .into_iter()
-            .map(|d| d.into())
-            .collect::<Vec<Value>>();
-
-        let mut fibers = Vec::new();
-        for worker_id in context.worker_ids.iter() {
-            let context_clone = context.clone();
-            let worker_id_clone = worker_id.clone();
-            let recorder_clone = recorder.clone();
-            let values_clone = values.clone();
-            let length = self.config.length;
-            let fiber = tokio::task::spawn(async move {
-                for _ in 0..length {
-                    let start = SystemTime::now();
-                    context_clone
-                        .deps
-                        .invoke_and_await(
-                            &worker_id_clone,
-                            "golem:it/api/calculate",
-                            vec![Value::List(values_clone.clone())],
-                        )
-                        .await
-                        .expect("invoke_and_await failed");
-                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"worker-calculate-invocation".to_string(), elapsed);
                 }
             });
             fibers.push(fiber);

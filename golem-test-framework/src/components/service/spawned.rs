@@ -53,7 +53,7 @@ impl SpawnedService {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect(&format!("Failed to start {name}"));
+            .unwrap_or_else(|_| panic!("Failed to start {name}"));
 
         let logger = ChildProcessLogger::log_child_process(
             &format!("[{name}]"),
