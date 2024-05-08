@@ -44,12 +44,10 @@ The currently supported Tier 1 languages are:
   <Card title="Typescript" href="/docs/building-components/tier-1/typescript" />
   <Card title="Python" href="/docs/building-components/tier-1/python" />
   <Card title="Scala.JS" href="/docs/building-components/tier-1/scala" />
+  <Card title="Zig" href="/docs/building-components/tier-1/zig" />
 </Cards>
 
 <Callout>
-
-**Zig** may be lifted to be a Tier 1 guest language in the near future, as it is supposed to work with bindings generated for C.
-
 **JVM** languages like **Java, Scala, Kotlin and Clojure** could in theory be Tier 1 guest languages by using the experimental https://github.com/fermyon/teavm-wasi but it is not working currently. However,
 Scala 2 is supported by first compiling to Javascript using Scala.JS and then using the Javascript tooling.
 
@@ -68,13 +66,11 @@ It is possible to pass input to these functions using the **standard input** and
 Golem provides two special **calling conventions** for workers implemented with a **tier 2** language:
 
 - The `stdio` calling convention passes the invocation's parameters through the worker's standard input, and parses it's standard output as JSON, returning as the invocation's result. A worker after an `stdio` invocation is no longer usable.
-- The `stdio-eventloop` calling convention makes it possible to implement stateful workers with a **tier 2** language but it requires the worker to be implemented as a **loop** that in each iteration reads a single line containing the invocation parameters as JSON, and before reading the next line is responsible to write the response to the standard output as a single-line JSON.
 
 The currently supported Tier 2 languages are:
 
 <Cards>
   <Card title="Swift" href="/docs/building-components/tier-2/swift" />
-  <Card title="Zig" href="/docs/building-components/tier-2/zig" />
   <Card title="Grain" href="/docs/building-components/tier-2/grain" />
 </Cards>
 
