@@ -23,8 +23,12 @@ use golem_test_framework::dsl::benchmark::{BenchmarkApi, BenchmarkRecorder, RunC
 use golem_test_framework::dsl::TestDsl;
 
 #[derive(Clone)]
-pub struct Context {
+pub struct BenchmarkContext {
     pub deps: CliTestDependencies,
+}
+
+#[derive(Clone)]
+pub struct IterationContext {
     pub worker_ids: Vec<WorkerId>,
 }
 
@@ -50,7 +54,7 @@ pub async fn setup_with(
     // Initialize infrastructure
 
     // Upload test component
-    let component_id = deps.store_component(component_name).await;
+    let component_id = deps.store_unique_component(component_name).await;
     // Create 'size' workers
     let worker_ids = get_worker_ids(size, &component_id, worker_name_prefix);
 
@@ -69,31 +73,44 @@ pub async fn start(worker_ids: Vec<WorkerId>, deps: CliTestDependencies) {
     }
 }
 
-pub async fn setup(
-    params: CliParams,
+pub async fn setup_benchmark(params: CliParams, cluster_size: usize) -> BenchmarkContext {
+    // Initialize infrastructure
+    let deps = CliTestDependencies::new(params.clone(), cluster_size).await;
+
+    BenchmarkContext { deps }
+}
+
+pub async fn setup_iteration(
+    benchmark_context: &BenchmarkContext,
     config: RunConfig,
     component_name: &str,
     start_workers: bool,
-) -> Context {
-    // Initialize infrastructure
-    let deps = CliTestDependencies::new(params.clone(), config.clone()).await;
-
+) -> IterationContext {
     let worker_ids = setup_with(
         config.size,
         component_name,
         "worker",
         start_workers,
-        deps.clone(),
+        benchmark_context.deps.clone(),
     )
     .await;
 
-    Context { deps, worker_ids }
+    IterationContext { worker_ids }
 }
 
-pub async fn warmup_echo(context: &Context) {
-    let mut fibers = Vec::new();
+pub async fn cleanup_iteration(benchmark_context: &BenchmarkContext, context: IterationContext) {
     for worker_id in &context.worker_ids {
-        let context_clone = context.clone();
+        benchmark_context.deps.delete_worker(worker_id).await
+    }
+}
+
+pub async fn warmup_echo(
+    benchmark_context: &BenchmarkContext,
+    iteration_context: &IterationContext,
+) {
+    let mut fibers = Vec::new();
+    for worker_id in &iteration_context.worker_ids {
+        let context_clone = benchmark_context.clone();
         let worker_id_clone = worker_id.clone();
         let fiber = tokio::task::spawn(async move {
             context_clone
@@ -114,11 +131,16 @@ pub async fn warmup_echo(context: &Context) {
     }
 }
 
-pub async fn run_echo(length: usize, context: &Context, recorder: BenchmarkRecorder) {
+pub async fn run_echo(
+    length: usize,
+    benchmark_context: &BenchmarkContext,
+    iteration_context: &IterationContext,
+    recorder: BenchmarkRecorder,
+) {
     // Invoke each worker a 'length' times in parallel and record the duration
     let mut fibers = Vec::new();
-    for (n, worker_id) in context.worker_ids.iter().enumerate() {
-        let context_clone = context.clone();
+    for (n, worker_id) in iteration_context.worker_ids.iter().enumerate() {
+        let context_clone = benchmark_context.clone();
         let worker_id_clone = worker_id.clone();
         let recorder_clone = recorder.clone();
         let fiber = tokio::task::spawn(async move {

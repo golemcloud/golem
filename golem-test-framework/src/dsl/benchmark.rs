@@ -522,15 +522,38 @@ impl BenchmarkRecorderState {
 
 #[async_trait]
 pub trait Benchmark: Send + Sync + 'static {
+    type BenchmarkContext: Send + Sync + 'static;
     type IterationContext: Send + Sync + 'static;
 
     fn name() -> &'static str;
+
+    async fn create_benchmark_context(
+        params: CliParams,
+        cluster_size: usize,
+    ) -> Self::BenchmarkContext;
+    async fn cleanup(benchmark_context: Self::BenchmarkContext);
     async fn create(params: CliParams, config: RunConfig) -> Self;
 
-    async fn setup_iteration(&self) -> Self::IterationContext;
-    async fn warmup(&self, context: &Self::IterationContext);
-    async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder);
-    async fn cleanup_iteration(&self, context: Self::IterationContext);
+    async fn setup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+    ) -> Self::IterationContext;
+    async fn warmup(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+    );
+    async fn run(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+        recorder: BenchmarkRecorder,
+    );
+    async fn cleanup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: Self::IterationContext,
+    );
 }
 
 #[async_trait]
@@ -539,13 +562,20 @@ pub trait BenchmarkApi {
 }
 
 async fn run_benchmark<B: Benchmark>(
+    benchmark_context: &B::BenchmarkContext,
     params: CliParams,
     config: RunConfig,
+    cluster_size: usize,
     run_name: &str,
 ) -> BenchmarkRunResult {
-    let span = tracing::info_span!("benchmark", name = B::name());
+    let span = tracing::info_span!(
+        "benchmark",
+        name = B::name(),
+        cluster_size = cluster_size,
+        run = run_name
+    );
     let _enter = span.enter();
-    info!("Initializing benchmark {}", B::name());
+    info!("Starting benchmark iterations {}", B::name());
 
     let benchmark = B::create(params.clone(), config.clone())
         .instrument(span.clone())
@@ -562,22 +592,28 @@ async fn run_benchmark<B: Benchmark>(
         let _enter = span.enter();
         info!("Starting iteration");
 
-        let context = benchmark.setup_iteration().instrument(span.clone()).await;
+        let context = benchmark
+            .setup_iteration(benchmark_context)
+            .instrument(span.clone())
+            .await;
 
         info!("Starting warmup");
-        benchmark.warmup(&context).instrument(span.clone()).await;
+        benchmark
+            .warmup(benchmark_context, &context)
+            .instrument(span.clone())
+            .await;
         info!("Finished warmup");
 
         info!("Starting benchmark");
         let recorder = BenchmarkRecorder::new();
         benchmark
-            .run(&context, recorder.clone())
+            .run(benchmark_context, &context, recorder.clone())
             .instrument(span.clone())
             .await;
         info!("Finished benchmark");
 
         benchmark
-            .cleanup_iteration(context)
+            .cleanup_iteration(benchmark_context, context)
             .instrument(span.clone())
             .await;
         aggregated_results.add(recorder);
@@ -591,16 +627,53 @@ async fn run_benchmark<B: Benchmark>(
 #[async_trait]
 impl<B: Benchmark> BenchmarkApi for B {
     async fn run_benchmark(params: CliParams) -> BenchmarkResult {
+        let span = tracing::info_span!("benchmark", name = B::name());
+        let _enter = span.enter();
+        info!("Initializing benchmark {}", B::name());
+
         let runs = params.runs();
+
+        let runs_cnt = runs.len();
+        let mut current_run = 0;
 
         let mut results = Vec::new();
 
-        for (iter, config) in runs.iter().enumerate() {
-            let run_name = format!("{}/{}", iter + 1, runs.len());
-            results.push((
-                config.clone(),
-                run_benchmark::<B>(params.clone(), config.clone(), &run_name).await,
-            ));
+        let groups = runs
+            .iter()
+            .group_by(|r| r.cluster_size)
+            .into_iter()
+            .map(|(cluster_size, group)| (cluster_size, group.collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+
+        for (cluster_size, runs) in groups {
+            let span =
+                tracing::info_span!("benchmark", name = B::name(), cluster_size = cluster_size);
+            let _enter = span.enter();
+
+            info!("Creating benchmark context");
+            let context = B::create_benchmark_context(params.clone(), cluster_size)
+                .instrument(span.clone())
+                .await;
+
+            for config in runs {
+                current_run += 1;
+                let run_name = format!("{current_run}/{runs_cnt}");
+                results.push((
+                    config.clone(),
+                    run_benchmark::<B>(
+                        &context,
+                        params.clone(),
+                        config.clone(),
+                        cluster_size,
+                        &run_name,
+                    )
+                    .instrument(span.clone())
+                    .await,
+                ));
+            }
+
+            info!("Stopping benchmark context");
+            B::cleanup(context).instrument(span.clone()).await;
         }
 
         BenchmarkResult { runs, results }

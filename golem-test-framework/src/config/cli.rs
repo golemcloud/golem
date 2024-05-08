@@ -223,7 +223,7 @@ pub enum TestMode {
     },
     #[command()]
     Spawned {
-        #[arg(long)]
+        #[arg(long, default_value = ".")]
         workspace_root: String,
         #[arg(long, default_value = "target/debug")]
         build_target: String,
@@ -253,6 +253,8 @@ pub enum TestMode {
         worker_executor_base_http_port: u16,
         #[arg(long, default_value = "9100")]
         worker_executor_base_grpc_port: u16,
+        #[arg(long, default_value = "false")]
+        mute_child: bool,
     },
     #[command()]
     Minikube {
@@ -281,7 +283,7 @@ impl CliTestDependencies {
         tracing_subscriber::registry().with(ansi_layer).init();
     }
 
-    pub async fn new(params: CliParams, config: RunConfig) -> Self {
+    pub async fn new(params: CliParams, cluster_size: usize) -> Self {
         match &params.mode {
             TestMode::Provided {
                 postgres,
@@ -400,7 +402,7 @@ impl CliTestDependencies {
                 let worker_executor_cluster: Arc<
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(DockerWorkerExecutorCluster::new(
-                    config.cluster_size,
+                    cluster_size,
                     *worker_executor_base_http_port,
                     *worker_executor_base_grpc_port,
                     redis.clone(),
@@ -438,16 +440,23 @@ impl CliTestDependencies {
                 worker_service_custom_request_port,
                 worker_executor_base_http_port,
                 worker_executor_base_grpc_port,
+                mute_child,
             } => {
-                let workspace_root = Path::new(workspace_root);
+                let workspace_root = Path::new(workspace_root).canonicalize().unwrap();
                 let build_root = workspace_root.join(build_target);
+
+                let out_level = if *mute_child {
+                    Level::TRACE
+                } else {
+                    Level::INFO
+                };
 
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(DockerPostgresRdb::new(true).await);
                 let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
                     *redis_port,
                     redis_prefix.clone(),
-                    Level::INFO,
+                    out_level,
                     Level::ERROR,
                 ));
                 let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
@@ -461,7 +470,7 @@ impl CliTestDependencies {
                         *shard_manager_grpc_port,
                         redis.clone(),
                         params.service_verbosity(),
-                        Level::INFO,
+                        out_level,
                         Level::ERROR,
                     )
                     .await,
@@ -475,7 +484,7 @@ impl CliTestDependencies {
                         *component_compilation_service_grpc_port,
                         rdb.clone(),
                         params.service_verbosity(),
-                        Level::INFO,
+                        out_level,
                         Level::ERROR,
                     )
                     .await,
@@ -490,7 +499,7 @@ impl CliTestDependencies {
                         *component_compilation_service_grpc_port,
                         component_service.clone(),
                         params.service_verbosity(),
-                        Level::INFO,
+                        out_level,
                         Level::ERROR,
                     )
                     .await,
@@ -507,7 +516,7 @@ impl CliTestDependencies {
                         rdb.clone(),
                         redis.clone(),
                         params.service_verbosity(),
-                        Level::INFO,
+                        out_level,
                         Level::ERROR,
                     )
                     .await,
@@ -516,7 +525,7 @@ impl CliTestDependencies {
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(
                     SpawnedWorkerExecutorCluster::new(
-                        config.cluster_size,
+                        cluster_size,
                         *worker_executor_base_http_port,
                         *worker_executor_base_grpc_port,
                         &build_root.join("worker-executor"),
@@ -526,7 +535,7 @@ impl CliTestDependencies {
                         shard_manager.clone(),
                         worker_service.clone(),
                         params.service_verbosity(),
-                        Level::INFO,
+                        out_level,
                         Level::ERROR,
                     )
                     .await,
@@ -622,7 +631,7 @@ impl CliTestDependencies {
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(
                     K8sWorkerExecutorCluster::new(
-                        config.cluster_size,
+                        cluster_size,
                         &namespace,
                         &routing_type,
                         redis.clone(),
@@ -734,7 +743,7 @@ impl CliTestDependencies {
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(
                     K8sWorkerExecutorCluster::new(
-                        config.cluster_size,
+                        cluster_size,
                         &namespace,
                         &routing_type,
                         redis.clone(),
