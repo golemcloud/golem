@@ -364,6 +364,7 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -399,6 +400,7 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
                 expected_map,
             )]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -437,6 +439,7 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
                 expected_map,
             )]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -481,6 +484,7 @@ mod tests {
                 serde_json::Value::Number(serde_json::Number::from(1)),
                 serde_json::Value::Number(serde_json::Number::from(2)),
             ]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -527,6 +531,7 @@ mod tests {
                 serde_json::Value::Number(serde_json::Number::from(2)),
                 serde_json::Value::String("age-10".to_string()),
             ]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -598,6 +603,7 @@ mod tests {
                 serde_json::Value::String("age-10".to_string()),
                 serde_json::Value::Object(user_name_map),
             ]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -629,6 +635,7 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -666,6 +673,7 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::String(
                 "address".to_string(),
             )]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -698,6 +706,7 @@ mod tests {
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::Bool(true)]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -730,6 +739,7 @@ mod tests {
             worker_id: "shopping-cart".to_string(),
             function: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::Bool(true)]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -764,6 +774,7 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::Number(
                 serde_json::Number::from(1),
             )]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -801,6 +812,7 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::Number(
                 serde_json::Number::from(0),
             )]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -836,6 +848,7 @@ mod tests {
                 serde_json::Value::Number(serde_json::Number::from(2)),
                 serde_json::Value::Number(serde_json::Number::from(1)),
             ]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -889,6 +902,7 @@ mod tests {
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),
             ]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -942,6 +956,7 @@ mod tests {
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),
             ]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -993,6 +1008,7 @@ mod tests {
             function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
                 request_body.clone(),
             )]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
@@ -1053,6 +1069,7 @@ mod tests {
                 serde_json::Value::String("bar_value".to_string()),
                 serde_json::Value::String("token_value".to_string()),
             ]),
+            idempotency_key: None,
         };
 
         assert_eq!(result, Ok(expected));
