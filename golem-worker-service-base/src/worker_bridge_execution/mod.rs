@@ -41,7 +41,7 @@ impl WorkerRequest {
                 return Err(format!(
                     "Worker id is not a string. {}",
                     get_json_from_typed_value(&worker_id_value)
-                ))
+                ));
             }
         };
 
@@ -59,7 +59,7 @@ impl WorkerRequest {
                 return Err(format!(
                     "Function name is not a string. {}",
                     get_json_from_typed_value(&function_name_value)
-                ))
+                ));
             }
         };
 
@@ -93,7 +93,11 @@ impl WorkerRequest {
 
             Some(IdempotencyKey::new(idempotency_key))
         } else {
-            None
+            resolved_route
+                .headers
+                .get("idempotency-key")
+                .and_then(|h| h.to_str().ok())
+                .map(|value| IdempotencyKey::new(value.to_string()))
         };
 
         Ok(WorkerRequest {

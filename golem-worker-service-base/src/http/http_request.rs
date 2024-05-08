@@ -90,6 +90,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
         let resolved_binding = ResolvedWorkerBinding {
             resolved_worker_binding_template: binding.clone(),
             typed_value_from_input: { request_details },
+            headers: self.headers.clone(),
         };
 
         Some(resolved_binding)
