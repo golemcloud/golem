@@ -20,15 +20,15 @@ pub fn build(b: *Builder) !void {
     var it = try binding_root_dir.walk(b.allocator);
     while (try it.next()) |entry| {
         switch (entry.kind) {
-        .file => {
-            const path = b.pathJoin(&.{ binding_root, entry.path });
-            if (std.mem.endsWith(u8, entry.basename, ".c")) {
-                wasm.addCSourceFile(.{ .file = .{ .path = path }, .flags = &.{} });
-            } else if (std.mem.endsWith(u8, entry.basename, ".o")) {
-                wasm.addObjectFile(.{ .path = path });
-            }
-        },
-        else => continue,
+            .file => {
+                const path = b.pathJoin(&.{ binding_root, entry.path });
+                if (std.mem.endsWith(u8, entry.basename, ".c")) {
+                    wasm.addCSourceFile(.{ .file = .{ .path = path }, .flags = &.{} });
+                } else if (std.mem.endsWith(u8, entry.basename, ".o")) {
+                    wasm.addObjectFile(.{ .path = path });
+                }
+            },
+            else => continue,
         }
     }
 

@@ -16,39 +16,69 @@ use async_trait::async_trait;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use integration_tests::benchmarks::{run_benchmark, run_echo, setup, warmup_echo, Context};
+use integration_tests::benchmarks::{
+    cleanup_iteration, run_benchmark, run_echo, setup_benchmark, setup_iteration, warmup_echo,
+    BenchmarkContext, IterationContext,
+};
 
 struct WorkerLatencySmall {
-    params: CliParams,
     config: RunConfig,
 }
 
 #[async_trait]
 impl Benchmark for WorkerLatencySmall {
-    type IterationContext = Context;
+    type BenchmarkContext = BenchmarkContext;
+    type IterationContext = IterationContext;
 
     fn name() -> &'static str {
         "latency-small"
     }
 
-    async fn create(params: CliParams, config: RunConfig) -> Self {
-        Self { params, config }
+    async fn create_benchmark_context(
+        params: CliParams,
+        cluster_size: usize,
+    ) -> Self::BenchmarkContext {
+        setup_benchmark(params, cluster_size).await
     }
 
-    async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.params.clone(), self.config.clone(), "rust-echo", true).await
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
+        benchmark_context.deps.kill_all()
     }
 
-    async fn warmup(&self, context: &Self::IterationContext) {
-        warmup_echo(context).await
+    async fn create(_params: CliParams, config: RunConfig) -> Self {
+        Self { config }
     }
 
-    async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
-        run_echo(self.config.length, context, recorder).await
+    async fn setup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+    ) -> Self::IterationContext {
+        setup_iteration(benchmark_context, self.config.clone(), "rust-echo", true).await
     }
 
-    async fn cleanup_iteration(&self, context: Self::IterationContext) {
-        context.deps.kill_all();
+    async fn warmup(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+    ) {
+        warmup_echo(benchmark_context, context).await
+    }
+
+    async fn run(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+        recorder: BenchmarkRecorder,
+    ) {
+        run_echo(self.config.length, benchmark_context, context, recorder).await
+    }
+
+    async fn cleanup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: Self::IterationContext,
+    ) {
+        cleanup_iteration(benchmark_context, context).await
     }
 }
 
