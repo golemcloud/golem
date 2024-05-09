@@ -73,11 +73,22 @@ pub fn process_data(data: Vec<CommonData>) -> Vec<CommonData> {
 #[cfg(test)]
 mod tests {
     use crate::fibonacci;
+    use crate::calculate_sum;
+    use std::time::SystemTime;
 
     #[test]
     pub fn fibonacci_test() {
         let v = fibonacci(50);
 
         println!("{v}");
+    }
+
+    #[test]
+    pub fn calculate_sum_test() {
+        let start = SystemTime::now();
+        let v = calculate_sum(10000, 200000);
+        let elapsed = start.elapsed().expect("SystemTime elapsed failed");
+
+        println!("{:?} {:?}", v, elapsed);
     }
 }
