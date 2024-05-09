@@ -18,48 +18,76 @@ use golem_common::model::WorkerId;
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use integration_tests::benchmarks::{
-    get_worker_ids, run_benchmark, run_echo, setup, start, Context,
+    cleanup_iteration, get_worker_ids, run_benchmark, run_echo, setup_benchmark, setup_iteration,
+    start, BenchmarkContext, IterationContext,
 };
 
 struct ColdStartEchoSmall {
-    params: CliParams,
     config: RunConfig,
 }
 
 #[async_trait]
 impl Benchmark for ColdStartEchoSmall {
-    type IterationContext = Context;
+    type BenchmarkContext = BenchmarkContext;
+    type IterationContext = IterationContext;
 
     fn name() -> &'static str {
         "cold-start-small"
     }
 
-    async fn create(params: CliParams, config: RunConfig) -> Self {
-        Self { params, config }
+    async fn create_benchmark_context(
+        params: CliParams,
+        cluster_size: usize,
+    ) -> Self::BenchmarkContext {
+        setup_benchmark(params, cluster_size).await
     }
 
-    async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.params.clone(), self.config.clone(), "rust-echo", false).await
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
+        benchmark_context.deps.kill_all()
     }
 
-    async fn warmup(&self, context: &Self::IterationContext) {
+    async fn create(_params: CliParams, config: RunConfig) -> Self {
+        Self { config }
+    }
+
+    async fn setup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+    ) -> Self::IterationContext {
+        setup_iteration(benchmark_context, self.config.clone(), "rust-echo", false).await
+    }
+
+    async fn warmup(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+    ) {
         // warmup with other workers
         if let Some(WorkerId { component_id, .. }) = context.worker_ids.clone().first() {
             start(
                 get_worker_ids(context.worker_ids.len(), component_id, "warmup-worker"),
-                context.deps.clone(),
+                benchmark_context.deps.clone(),
             )
             .await
         }
     }
 
-    async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
+    async fn run(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+        recorder: BenchmarkRecorder,
+    ) {
         // config.benchmark_config.length is not used, we want to have only one invocation per worker in this benchmark
-        run_echo(1, context, recorder).await
+        run_echo(1, benchmark_context, context, recorder).await
     }
 
-    async fn cleanup_iteration(&self, context: Self::IterationContext) {
-        context.deps.kill_all();
+    async fn cleanup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: Self::IterationContext,
+    ) {
+        cleanup_iteration(benchmark_context, context).await
     }
 }
 

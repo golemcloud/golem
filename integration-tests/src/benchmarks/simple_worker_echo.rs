@@ -20,28 +20,45 @@ use golem_wasm_rpc::Value;
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
-use integration_tests::benchmarks::{run_benchmark, setup, Context};
+use integration_tests::benchmarks::{
+    cleanup_iteration, run_benchmark, setup_benchmark, setup_iteration, BenchmarkContext,
+    IterationContext,
+};
 
 struct SimpleWorkerEcho {
-    params: CliParams,
     config: RunConfig,
 }
 
 #[async_trait]
 impl Benchmark for SimpleWorkerEcho {
-    type IterationContext = Context;
+    type BenchmarkContext = BenchmarkContext;
+    type IterationContext = IterationContext;
 
     fn name() -> &'static str {
         "simple-worker-echo"
     }
 
-    async fn create(params: CliParams, config: RunConfig) -> Self {
-        Self { params, config }
+    async fn create_benchmark_context(
+        params: CliParams,
+        cluster_size: usize,
+    ) -> Self::BenchmarkContext {
+        setup_benchmark(params, cluster_size).await
     }
 
-    async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(
-            self.params.clone(),
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
+        benchmark_context.deps.kill_all()
+    }
+
+    async fn create(_params: CliParams, config: RunConfig) -> Self {
+        Self { config }
+    }
+
+    async fn setup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+    ) -> Self::IterationContext {
+        setup_iteration(
+            benchmark_context,
             self.config.clone(),
             "option-service",
             true,
@@ -49,11 +66,15 @@ impl Benchmark for SimpleWorkerEcho {
         .await
     }
 
-    async fn warmup(&self, context: &Self::IterationContext) {
+    async fn warmup(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+    ) {
         // Invoke each worker a few times in parallel
         let mut fibers = Vec::new();
         for worker_id in &context.worker_ids {
-            let context_clone = context.clone();
+            let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let fiber = tokio::task::spawn(async move {
                 for _ in 0..5 {
@@ -78,11 +99,16 @@ impl Benchmark for SimpleWorkerEcho {
         }
     }
 
-    async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
+    async fn run(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+        recorder: BenchmarkRecorder,
+    ) {
         // Invoke each worker a 'length' times in parallel and record the duration
         let mut fibers = Vec::new();
         for (n, worker_id) in context.worker_ids.iter().enumerate() {
-            let context_clone = context.clone();
+            let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
@@ -113,8 +139,12 @@ impl Benchmark for SimpleWorkerEcho {
         }
     }
 
-    async fn cleanup_iteration(&self, context: Self::IterationContext) {
-        context.deps.kill_all();
+    async fn cleanup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: Self::IterationContext,
+    ) {
+        cleanup_iteration(benchmark_context, context).await
     }
 }
 
