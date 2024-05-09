@@ -33,15 +33,18 @@ use rand::distributions::{Alphanumeric, DistString};
 use rand::thread_rng;
 
 struct Throughput {
-    params: CliParams,
     config: RunConfig,
 }
 
 #[derive(Clone)]
-pub struct Context {
+pub struct BenchmarkContext {
     pub deps: CliTestDependencies,
     pub rust_service: CliTestService,
     pub rust_client: RustServiceClient,
+}
+
+#[derive(Clone)]
+pub struct IterationContext {
     pub worker_ids: Vec<WorkerId>,
 }
 
@@ -164,48 +167,68 @@ impl RustServiceClient {
 
 #[async_trait]
 impl Benchmark for Throughput {
-    type IterationContext = Context;
+    type BenchmarkContext = BenchmarkContext;
+    type IterationContext = IterationContext;
 
     fn name() -> &'static str {
         "throughput"
     }
 
-    async fn create(params: CliParams, config: RunConfig) -> Self {
-        Self { params, config }
-    }
-
-    async fn setup_iteration(&self) -> Self::IterationContext {
+    async fn create_benchmark_context(
+        params: CliParams,
+        cluster_size: usize,
+    ) -> Self::BenchmarkContext {
         let rust_client = RustServiceClient::new("http://localhost:3000");
         let rust_service = CliTestService::new(
-            self.params.clone(),
+            params.clone(),
             "rust-http-service".to_string(),
             HashMap::new(),
             Some("test-components/rust-service".to_string()),
         );
 
-        let deps = CliTestDependencies::new(self.params.clone(), self.config.clone()).await;
+        let deps = CliTestDependencies::new(params.clone(), cluster_size).await;
+
+        BenchmarkContext {
+            deps,
+            rust_service,
+            rust_client,
+        }
+    }
+
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
+        benchmark_context.deps.kill_all();
+        benchmark_context.rust_service.kill_all();
+    }
+
+    async fn create(_params: CliParams, config: RunConfig) -> Self {
+        Self { config }
+    }
+
+    async fn setup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+    ) -> Self::IterationContext {
         let worker_ids = setup_with(
             1, //self.config.size,
             "rust_component_service",
             "worker",
             true,
-            deps.clone(),
+            benchmark_context.deps.clone(),
         )
         .await;
 
-        Context {
-            deps,
-            rust_service,
-            rust_client,
-            worker_ids,
-        }
+        IterationContext { worker_ids }
     }
 
-    async fn warmup(&self, context: &Self::IterationContext) {
+    async fn warmup(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+    ) {
         // Invoke each worker a few times in parallel
         let mut fibers = Vec::new();
         for worker_id in &context.worker_ids {
-            let context_clone = context.clone();
+            let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let fiber = tokio::task::spawn(async move {
                 context_clone
@@ -225,10 +248,15 @@ impl Benchmark for Throughput {
             fiber.await.expect("fiber failed");
         }
 
-        context.rust_client.echo("hello").await;
+        benchmark_context.rust_client.echo("hello").await;
     }
 
-    async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
+    async fn run(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+        recorder: BenchmarkRecorder,
+    ) {
         let calculate_iter: u64 = 200000;
 
         let data = Data::generate_list(2000);
@@ -241,7 +269,7 @@ impl Benchmark for Throughput {
 
         let mut fibers = Vec::new();
         for worker_id in context.worker_ids.iter() {
-            let context_clone = context.clone();
+            let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
@@ -270,7 +298,7 @@ impl Benchmark for Throughput {
 
         let mut fibers = Vec::new();
         for worker_id in context.worker_ids.iter() {
-            let context_clone = context.clone();
+            let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
@@ -299,7 +327,7 @@ impl Benchmark for Throughput {
 
         let mut fibers = Vec::new();
         for worker_id in context.worker_ids.iter() {
-            let context_clone = context.clone();
+            let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
             let values_clone = values.clone();
@@ -329,7 +357,7 @@ impl Benchmark for Throughput {
 
         let mut fibers = Vec::new();
         for _ in context.worker_ids.iter() {
-            let context_clone = context.clone();
+            let context_clone = benchmark_context.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
             let fiber = tokio::task::spawn(async move {
@@ -349,7 +377,7 @@ impl Benchmark for Throughput {
 
         let mut fibers = Vec::new();
         for _ in context.worker_ids.iter() {
-            let context_clone = context.clone();
+            let context_clone = benchmark_context.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
             let fiber = tokio::task::spawn(async move {
@@ -369,7 +397,7 @@ impl Benchmark for Throughput {
 
         let mut fibers = Vec::new();
         for _ in context.worker_ids.iter() {
-            let context_clone = context.clone();
+            let context_clone = benchmark_context.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
             let data_clone = data.clone();
@@ -389,9 +417,14 @@ impl Benchmark for Throughput {
         }
     }
 
-    async fn cleanup_iteration(&self, context: Self::IterationContext) {
-        context.deps.kill_all();
-        context.rust_service.kill_all();
+    async fn cleanup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: Self::IterationContext,
+    ) {
+        for worker_id in &context.worker_ids {
+            benchmark_context.deps.delete_worker(worker_id).await
+        }
     }
 }
 
