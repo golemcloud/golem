@@ -3,7 +3,8 @@ name = "golem-component-compilation-service"
 version = "0.0.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+path = "src/lib.rs"
 
 [[bin]]
 name = "golem-component-compilation-service"
