@@ -4,20 +4,17 @@ use crate::grpcapi::get_authorisation_token;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::{
-    complete_promise_response, delete_worker_response, get_invocation_key_response,
-    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_response, invoke_and_await_response_json, invoke_response,
-    launch_new_worker_response, resume_worker_response, worker_error, worker_execution_error,
-    CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest,
-    DeleteWorkerResponse, GetInvocationKeyRequest, GetInvocationKeyResponse,
-    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
-    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvocationKey, InvokeAndAwaitRequest, InvokeAndAwaitRequestJson,
-    InvokeAndAwaitResponse, InvokeAndAwaitResponseJson, InvokeRequest, InvokeRequestJson,
-    InvokeResponse, InvokeResult, InvokeResultJson, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, UnknownError, WorkerError as GrpcWorkerError, WorkerExecutionError,
-    WorkerMetadata,
+    complete_promise_response, delete_worker_response, get_worker_metadata_response,
+    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_response,
+    invoke_response, launch_new_worker_response, resume_worker_response, update_worker_response,
+    worker_error, worker_execution_error, CompletePromiseRequest, CompletePromiseResponse,
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse, InvokeResult,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, UnknownError, UpdateWorkerRequest,
+    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
 };
 use golem_common::model::{ComponentVersion, WorkerFilter, WorkerId};
 use golem_worker_service_base::service::worker::WorkerServiceError;
@@ -83,6 +80,24 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(CompletePromiseResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn update_worker(
+        &self,
+        request: Request<UpdateWorkerRequest>,
+    ) -> Result<Response<UpdateWorkerResponse>, Status> {
+        let (m, _, r) = request.into_parts();
+
+        let response = match self.update_worker(r, m).await {
+            Ok(()) => update_worker_response::Result::Success(
+                golem_api_grpc::proto::golem::common::Empty {},
+            ),
+            Err(error) => update_worker_response::Result::Error(error),
+        };
+
+        Ok(Response::new(UpdateWorkerResponse {
             result: Some(response),
         }))
     }
@@ -165,21 +180,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
-    async fn get_invocation_key(
-        &self,
-        request: Request<GetInvocationKeyRequest>,
-    ) -> Result<Response<GetInvocationKeyResponse>, Status> {
-        let (m, _, r) = request.into_parts();
-        let response = match self.get_invocation_key(r, m).await {
-            Ok(invocation_key) => get_invocation_key_response::Result::Success(invocation_key),
-            Err(error) => get_invocation_key_response::Result::Error(error),
-        };
-
-        Ok(Response::new(GetInvocationKeyResponse {
-            result: Some(response),
-        }))
-    }
-
     async fn resume_worker(
         &self,
         request: Request<ResumeWorkerRequest>,
@@ -191,45 +191,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(ResumeWorkerResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn invoke_json(
-        &self,
-        request: Request<InvokeRequestJson>,
-    ) -> Result<Response<InvokeResponse>, Status> {
-        let (m, _, r) = request.into_parts();
-        let response = match self.invoke_json(r, m).await {
-            Ok(()) => invoke_response::Result::Success(Empty {}),
-            Err(error) => invoke_response::Result::Error(error),
-        };
-
-        Ok(Response::new(InvokeResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn invoke_and_await_json(
-        &self,
-        request: Request<InvokeAndAwaitRequestJson>,
-    ) -> Result<Response<InvokeAndAwaitResponseJson>, Status> {
-        let (m, _, r) = request.into_parts();
-        let serialized = self.invoke_and_await_json(r, m).await.and_then(|value| {
-            serde_json::to_string(&value).map_err(|e| {
-                tracing::error!("Error serializing invoke and await json response: {:?}", e);
-                server_error("Error serializing invoke and await json response: {e}")
-            })
-        });
-
-        let response = match serialized {
-            Ok(result_json) => {
-                invoke_and_await_response_json::Result::Success(InvokeResultJson { result_json })
-            }
-            Err(error) => invoke_and_await_response_json::Result::Error(error),
-        };
-
-        Ok(Response::new(InvokeAndAwaitResponseJson {
             result: Some(response),
         }))
     }
@@ -429,22 +390,6 @@ impl WorkerGrpcApi {
         Ok(())
     }
 
-    async fn get_invocation_key(
-        &self,
-        request: GetInvocationKeyRequest,
-        metadata: MetadataMap,
-    ) -> Result<InvocationKey, GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
-        let worker_id = make_crate_worker_id(request.worker_id)?;
-
-        let invocation_key = self
-            .worker_service
-            .get_invocation_key(&worker_id, &auth)
-            .await?;
-
-        Ok(invocation_key.into())
-    }
-
     async fn invoke(
         &self,
         request: InvokeRequest,
@@ -458,7 +403,13 @@ impl WorkerGrpcApi {
             .ok_or_else(|| bad_request_error("Missing invoke parameters"))?;
 
         self.worker_service
-            .invoke_fn_proto(&worker_id, request.function, params.params, &auth)
+            .invoke_function_proto(
+                &worker_id,
+                request.idempotency_key,
+                request.function,
+                params.params,
+                &auth,
+            )
             .await?;
 
         Ok(())
@@ -476,10 +427,6 @@ impl WorkerGrpcApi {
             .invoke_parameters
             .ok_or(bad_request_error("Missing invoke parameters"))?;
 
-        let invocation_key = request
-            .invocation_key
-            .ok_or(bad_request_error("Missing invocation key"))?;
-
         let calling_convention: golem_common::model::CallingConvention = request
             .calling_convention
             .try_into()
@@ -489,8 +436,8 @@ impl WorkerGrpcApi {
             .worker_service
             .invoke_and_await_function_proto(
                 &worker_id,
+                request.idempotency_key,
                 request.function,
-                &invocation_key.into(),
                 params.params,
                 &calling_convention,
                 &auth,
@@ -513,61 +460,6 @@ impl WorkerGrpcApi {
         Ok(())
     }
 
-    async fn invoke_json(
-        &self,
-        request: InvokeRequestJson,
-        metadata: MetadataMap,
-    ) -> Result<(), GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
-        let worker_id = make_crate_worker_id(request.worker_id)?;
-
-        let params: serde_json::Value =
-            serde_json::from_str(request.invoke_parameters_json.as_str())
-                .map_err(|e| bad_request_error(format!("Error parsing invoke parameters: {e}")))?;
-
-        self.worker_service
-            .invoke_function(&worker_id, request.function, params, &auth)
-            .await?;
-
-        Ok(())
-    }
-
-    async fn invoke_and_await_json(
-        &self,
-        request: InvokeAndAwaitRequestJson,
-        metadata: MetadataMap,
-    ) -> Result<serde_json::Value, GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
-        let worker_id = make_crate_worker_id(request.worker_id)?;
-
-        let params: serde_json::Value =
-            serde_json::from_str(request.invoke_parameters_json.as_str())
-                .map_err(|e| bad_request_error(format!("Error parsing invoke parameters: {e}")))?;
-
-        let invocation_key = request
-            .invocation_key
-            .ok_or(bad_request_error("Missing invocation key"))?;
-
-        let calling_convention: golem_common::model::CallingConvention = request
-            .calling_convention
-            .try_into()
-            .map_err(bad_request_error)?;
-
-        let result = self
-            .worker_service
-            .invoke_and_await_function(
-                &worker_id,
-                request.function,
-                &invocation_key.into(),
-                params,
-                &calling_convention,
-                &auth,
-            )
-            .await?;
-
-        Ok(result)
-    }
-
     async fn connect_worker(
         &self,
         request: ConnectWorkerRequest,
@@ -578,6 +470,22 @@ impl WorkerGrpcApi {
         let stream = self.worker_service.connect(&worker_id, &auth).await?;
 
         Ok(stream)
+    }
+
+    async fn update_worker(
+        &self,
+        request: UpdateWorkerRequest,
+        metadata: MetadataMap,
+    ) -> Result<(), GrpcWorkerError> {
+        let worker_id = make_crate_worker_id(request.worker_id.clone())?;
+
+        let auth = self.auth(metadata).await?;
+
+        self.worker_service
+            .update(&worker_id, request.mode(), request.target_version, &auth)
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -698,19 +606,6 @@ where
     GrpcWorkerError {
         error: Some(worker_error::Error::BadRequest(ErrorsBody {
             errors: vec![error.into()],
-        })),
-    }
-}
-
-fn server_error<T>(error: T) -> GrpcWorkerError
-where
-    T: Into<String>,
-{
-    GrpcWorkerError {
-        error: Some(worker_error::Error::InternalError(WorkerExecutionError {
-            error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                details: error.into(),
-            })),
         })),
     }
 }

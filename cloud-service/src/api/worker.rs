@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use cloud_common::auth::GolemSecurityScheme;
-use golem_common::model::{CallingConvention, ComponentId, InvocationKey, WorkerFilter};
+use golem_common::model::{CallingConvention, ComponentId, IdempotencyKey, WorkerFilter};
 use golem_worker_service_base::service::component::ComponentServiceError;
-use poem_openapi::param::{Path, Query};
+use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tap::TapFallible;
@@ -262,32 +262,6 @@ impl WorkerApi {
         Ok(Json(DeleteWorkerResponse {}))
     }
 
-    /// Get an invocation key
-    ///
-    /// Creates an invocation key for a given worker.
-    /// An invocation key is passed to the below defined invoke APIs to guarantee that retrying those invocations only performs the operation on the worker once.
-    #[oai(
-        path = "/:component_id/workers/:worker_name/key",
-        method = "post",
-        operation_id = "get_invocation_key"
-    )]
-    async fn get_invocation_key(
-        &self,
-        component_id: Path<ComponentId>,
-        worker_name: Path<String>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<InvocationKey>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
-
-        let invocation_key = self
-            .worker_service
-            .get_invocation_key(&worker_id, &auth)
-            .await?;
-
-        Ok(Json(invocation_key))
-    }
-
     /// Invoke a function and await it's resolution
     ///
     /// Supply the parameters in the request body as JSON.
@@ -300,10 +274,7 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
-        /// must be created with the create invokation key endpoint
-        #[oai(name = "invocation-key")]
-        invocation_key: Query<String>,
-        /// name of the exported function to be invoked
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
         /// One of `component`, `stdio`, `stdio-event-loop`. Defaults to `component`.
         #[oai(name = "calling-convention")]
@@ -320,10 +291,8 @@ impl WorkerApi {
             .worker_service
             .invoke_and_await_function(
                 &worker_id,
+                idempotency_key.0,
                 function.0,
-                &InvocationKey {
-                    value: invocation_key.0,
-                },
                 params.0.params,
                 &calling_convention,
                 &auth,
@@ -335,7 +304,7 @@ impl WorkerApi {
 
     /// Invoke a function
     ///
-    /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns. Custom calling convention and invocation key is not supported.
+    /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
     /// To understand how to get the function name and how to encode the function parameters check Component interface
     #[oai(
         path = "/:component_id/workers/:worker_name/invoke",
@@ -346,6 +315,7 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         /// name of the exported function to be invoked
         function: Query<String>,
         params: Json<InvokeParameters>,
@@ -355,7 +325,13 @@ impl WorkerApi {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service
-            .invoke_function(&worker_id, function.0, params.0.params, &auth)
+            .invoke_function(
+                &worker_id,
+                idempotency_key.0,
+                function.0,
+                params.0.params,
+                &auth,
+            )
             .await?;
 
         Ok(Json(InvokeResponse {}))
@@ -592,6 +568,33 @@ impl WorkerApi {
         self.worker_service.resume(&worker_id, &auth).await?;
 
         Ok(Json(ResumeResponse {}))
+    }
+
+    #[oai(
+        path = "/:component_id/workers/:worker_name/update",
+        method = "post",
+        operation_id = "update_worker"
+    )]
+    async fn update_worker(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        params: Json<UpdateWorkerRequest>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<UpdateWorkerResponse>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        self.worker_service
+            .update(
+                &worker_id,
+                params.mode.clone().into(),
+                params.target_version,
+                &auth,
+            )
+            .await?;
+
+        Ok(Json(UpdateWorkerResponse {}))
     }
 }
 

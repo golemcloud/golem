@@ -2,10 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::worker::InvokeResult as ProtoInvokeResult;
+use golem_api_grpc::proto::golem::worker::{
+    IdempotencyKey as ProtoIdempotencyKey, InvokeResult as ProtoInvokeResult, UpdateMode,
+};
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, InvocationKey, ProjectId, Timestamp, WorkerFilter,
-    WorkerStatus,
+    AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, ProjectId,
+    Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_worker_service_base::service::worker::{
@@ -66,17 +68,11 @@ pub trait WorkerService {
         auth: &AccountAuthorisation,
     ) -> Result<(), WorkerError>;
 
-    async fn get_invocation_key(
-        &self,
-        worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
-    ) -> Result<InvocationKey, WorkerError>;
-
     async fn invoke_and_await_function(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        invocation_key: &InvocationKey,
         params: Value,
         calling_convention: &CallingConvention,
         auth: &AccountAuthorisation,
@@ -85,8 +81,8 @@ pub trait WorkerService {
     async fn invoke_and_await_function_proto(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
-        invocation_key: &InvocationKey,
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
         auth: &AccountAuthorisation,
@@ -95,14 +91,16 @@ pub trait WorkerService {
     async fn invoke_function(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Value,
         auth: &AccountAuthorisation,
     ) -> Result<(), WorkerError>;
 
-    async fn invoke_fn_proto(
+    async fn invoke_function_proto(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
         auth: &AccountAuthorisation,
@@ -142,6 +140,14 @@ pub trait WorkerService {
     async fn resume(
         &self,
         worker_id: &WorkerId,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), WorkerError>;
+
+    async fn update(
+        &self,
+        worker_id: &WorkerId,
+        update_mode: UpdateMode,
+        target_version: ComponentVersion,
         auth: &AccountAuthorisation,
     ) -> Result<(), WorkerError>;
 }
@@ -297,28 +303,11 @@ impl WorkerService for WorkerServiceDefault {
         Ok(())
     }
 
-    async fn get_invocation_key(
-        &self,
-        worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
-    ) -> Result<InvocationKey, WorkerError> {
-        let _ = self
-            .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
-            .await?;
-
-        let value = self
-            .base_worker_service
-            .get_invocation_key(worker_id, auth)
-            .await?;
-
-        Ok(value)
-    }
-
     async fn invoke_and_await_function(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        invocation_key: &InvocationKey,
         params: Value,
         calling_convention: &CallingConvention,
         auth: &AccountAuthorisation,
@@ -331,8 +320,8 @@ impl WorkerService for WorkerServiceDefault {
             .base_worker_service
             .invoke_and_await_function(
                 worker_id,
+                idempotency_key,
                 function_name,
-                invocation_key,
                 params,
                 calling_convention,
                 namespace.as_worker_request_metadata(),
@@ -346,8 +335,8 @@ impl WorkerService for WorkerServiceDefault {
     async fn invoke_and_await_function_proto(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
-        invocation_key: &InvocationKey,
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
         auth: &AccountAuthorisation,
@@ -360,8 +349,8 @@ impl WorkerService for WorkerServiceDefault {
             .base_worker_service
             .invoke_and_await_function_proto(
                 worker_id,
+                idempotency_key,
                 function_name,
-                invocation_key,
                 params,
                 calling_convention,
                 namespace.as_worker_request_metadata(),
@@ -375,6 +364,7 @@ impl WorkerService for WorkerServiceDefault {
     async fn invoke_function(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Value,
         auth: &AccountAuthorisation,
@@ -386,6 +376,7 @@ impl WorkerService for WorkerServiceDefault {
             .base_worker_service
             .invoke_function(
                 worker_id,
+                idempotency_key,
                 function_name,
                 params,
                 namespace.as_worker_request_metadata(),
@@ -396,9 +387,10 @@ impl WorkerService for WorkerServiceDefault {
         Ok(())
     }
 
-    async fn invoke_fn_proto(
+    async fn invoke_function_proto(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
         auth: &AccountAuthorisation,
@@ -408,8 +400,9 @@ impl WorkerService for WorkerServiceDefault {
             .await?;
         let _ = self
             .base_worker_service
-            .invoke_fn_proto(
+            .invoke_function_proto(
                 worker_id,
+                idempotency_key,
                 function_name,
                 params,
                 namespace.as_worker_request_metadata(),
@@ -506,8 +499,28 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         auth: &AccountAuthorisation,
     ) -> Result<(), WorkerError> {
+        let _ = self
+            .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
+            .await?;
         let _ = self.base_worker_service.resume(worker_id, auth).await?;
 
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        worker_id: &WorkerId,
+        update_mode: UpdateMode,
+        target_version: ComponentVersion,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), WorkerError> {
+        let _ = self
+            .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
+            .await?;
+        let _ = self
+            .base_worker_service
+            .update(worker_id, update_mode, target_version, auth)
+            .await?;
         Ok(())
     }
 }
@@ -733,21 +746,11 @@ impl WorkerService for WorkerServiceNoOp {
         Ok(())
     }
 
-    async fn get_invocation_key(
-        &self,
-        _worker_id: &WorkerId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<InvocationKey, WorkerError> {
-        Ok(InvocationKey {
-            value: "".to_string(),
-        })
-    }
-
     async fn invoke_and_await_function(
         &self,
         _worker_id: &WorkerId,
+        _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _invocation_key: &InvocationKey,
         _params: Value,
         _calling_convention: &CallingConvention,
         _auth: &AccountAuthorisation,
@@ -758,8 +761,8 @@ impl WorkerService for WorkerServiceNoOp {
     async fn invoke_and_await_function_proto(
         &self,
         _worker_id: &WorkerId,
+        _idempotency_key: Option<ProtoIdempotencyKey>,
         _function_name: String,
-        _invocation_key: &InvocationKey,
         _params: Vec<ProtoVal>,
         _calling_convention: &CallingConvention,
         _auth: &AccountAuthorisation,
@@ -770,6 +773,7 @@ impl WorkerService for WorkerServiceNoOp {
     async fn invoke_function(
         &self,
         _worker_id: &WorkerId,
+        _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _params: Value,
         _auth: &AccountAuthorisation,
@@ -777,9 +781,10 @@ impl WorkerService for WorkerServiceNoOp {
         Ok(())
     }
 
-    async fn invoke_fn_proto(
+    async fn invoke_function_proto(
         &self,
         _worker_id: &WorkerId,
+        _idempotency_key: Option<ProtoIdempotencyKey>,
         _function_name: String,
         _params: Vec<ProtoVal>,
         _auth: &AccountAuthorisation,
@@ -841,6 +846,16 @@ impl WorkerService for WorkerServiceNoOp {
     async fn resume(
         &self,
         _worker_id: &WorkerId,
+        _auth: &AccountAuthorisation,
+    ) -> Result<(), WorkerError> {
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        _worker_id: &WorkerId,
+        _update_mode: UpdateMode,
+        _target_version: ComponentVersion,
         _auth: &AccountAuthorisation,
     ) -> Result<(), WorkerError> {
         Ok(())
