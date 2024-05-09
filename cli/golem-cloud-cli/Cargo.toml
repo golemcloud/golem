@@ -20,8 +20,8 @@ clap = { version = "4.4.12", features = ["derive"] }
 clap-verbosity-flag = "2.1.1"
 derive_more = "0.99.17"
 futures-util = "0.3.30"
-golem-examples = "0.1.12"
-golem-wasm-rpc-stubgen = { version = "0.0.13", optional = true }
+golem-examples = "0.2.1"
+golem-wasm-rpc-stubgen = { version = "0.0.22", optional = true }
 http = "1.0.0"
 indoc = "2.0.4"
 itertools = "0.11.0"

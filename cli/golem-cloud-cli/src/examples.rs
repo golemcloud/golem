@@ -15,7 +15,7 @@
 use std::env;
 
 use golem_examples::model::{
-    ExampleName, ExampleParameters, GuestLanguage, GuestLanguageTier, PackageName, TemplateName,
+    ComponentName, ExampleName, ExampleParameters, GuestLanguage, GuestLanguageTier, PackageName,
 };
 use golem_examples::*;
 
@@ -24,7 +24,7 @@ use crate::GolemResult;
 
 pub fn process_new(
     example_name: ExampleName,
-    component_name: TemplateName,
+    component_name: ComponentName,
     package_name: Option<PackageName>,
 ) -> Result<GolemResult, GolemError> {
     let examples = GolemExamples::list_all_examples();
@@ -35,7 +35,7 @@ pub fn process_new(
             match GolemExamples::instantiate(
                 example,
                 ExampleParameters {
-                    template_name: component_name,
+                    component_name,
                     package_name: package_name
                         .unwrap_or(PackageName::from_string("golem:component").unwrap()),
                     target_path: cwd,

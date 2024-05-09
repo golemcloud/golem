@@ -16,11 +16,13 @@ use async_trait::async_trait;
 use clap::builder::ValueParser;
 use clap::Subcommand;
 use golem_cloud_client::model::{InvokeParameters, WorkerMetadata, WorkersMetadataResponse};
+use uuid::Uuid;
 
 use crate::clients::worker::WorkerClient;
 use crate::component::ComponentHandler;
 use crate::model::{
-    ComponentIdOrName, GolemError, GolemResult, InvocationKey, JsonValueParser, WorkerName,
+    ComponentIdOrName, GolemError, GolemResult, IdempotencyKey, JsonValueParser, WorkerName,
+    WorkerUpdateMode,
 };
 use crate::parse_key_val;
 
@@ -47,17 +49,9 @@ pub enum WorkerSubcommand {
         args: Vec<String>,
     },
 
-    /// Generates an invocation ID for achieving at-most-one invocation when doing retries
+    /// Generates an idempotency ID for achieving at-most-one invocation when doing retries
     #[command()]
-    InvocationKey {
-        /// The Golem componen the worker to be invoked belongs to
-        #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
-
-        /// Name of the worker
-        #[arg(short, long)]
-        worker_name: WorkerName,
-    },
+    IdempotencyKey {},
 
     /// Invokes a worker and waits for its completion
     #[command()]
@@ -70,9 +64,9 @@ pub enum WorkerSubcommand {
         #[arg(short, long)]
         worker_name: WorkerName,
 
-        /// A pre-generated invocation key, if not provided, a new one will be generated
+        /// A pre-generated idempotency key, if not provided, a new one will be generated
         #[arg(short = 'k', long)]
-        invocation_key: Option<InvocationKey>,
+        idempotency_key: Option<IdempotencyKey>,
 
         /// Name of the function to be invoked
         #[arg(short, long)]
@@ -97,6 +91,10 @@ pub enum WorkerSubcommand {
         /// Name of the worker
         #[arg(short, long)]
         worker_name: WorkerName,
+
+        /// A pre-generated idempotency key
+        #[arg(short = 'k', long)]
+        idempotency_key: Option<IdempotencyKey>,
 
         /// Name of the function to be invoked
         #[arg(short, long)]
@@ -168,7 +166,7 @@ pub enum WorkerSubcommand {
         #[arg(short, long)]
         worker_name: WorkerName,
     },
-    /// Retrieves metadata about an existing workers in a componen
+    /// Retrieves metadata about an existing workers in a component
     #[command()]
     List {
         /// The Golem componen the workers to be retrieved belongs to
@@ -195,6 +193,25 @@ pub enum WorkerSubcommand {
         /// Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
         #[arg(short, long)]
         precise: Option<bool>,
+    },
+    /// Updates a worker
+    #[command()]
+    Update {
+        /// The Golem component of the worker, identified by either its name or its component ID
+        #[command(flatten)]
+        component_id_or_name: ComponentIdOrName,
+
+        /// Name of the worker to update
+        #[arg(short, long)]
+        worker_name: WorkerName,
+
+        /// Update mode - auto or manual
+        #[arg(short, long)]
+        mode: WorkerUpdateMode,
+
+        /// The new version of the updated worker
+        #[arg(short = 't', long)]
+        target_version: u64,
     },
 }
 
@@ -229,37 +246,20 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
 
                 Ok(GolemResult::Ok(Box::new(inst)))
             }
-            WorkerSubcommand::InvocationKey {
-                component_id_or_name,
-                worker_name,
-            } => {
-                let component_id = self.components.resolve_id(component_id_or_name).await?;
-
-                let key = self
-                    .client
-                    .get_invocation_key(&worker_name, &component_id)
-                    .await?;
+            WorkerSubcommand::IdempotencyKey {} => {
+                let key = IdempotencyKey(Uuid::new_v4().to_string());
 
                 Ok(GolemResult::Ok(Box::new(key)))
             }
             WorkerSubcommand::InvokeAndAwait {
                 component_id_or_name,
                 worker_name,
-                invocation_key,
+                idempotency_key,
                 function,
                 parameters,
                 use_stdio,
             } => {
                 let component_id = self.components.resolve_id(component_id_or_name).await?;
-
-                let invocation_key = match invocation_key {
-                    None => {
-                        self.client
-                            .get_invocation_key(&worker_name, &component_id)
-                            .await?
-                    }
-                    Some(key) => key,
-                };
 
                 let res = self
                     .client
@@ -268,7 +268,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
                         component_id,
                         function,
                         InvokeParameters { params: parameters },
-                        invocation_key,
+                        idempotency_key,
                         use_stdio,
                     )
                     .await?;
@@ -278,6 +278,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
             WorkerSubcommand::Invoke {
                 component_id_or_name,
                 worker_name,
+                idempotency_key,
                 function,
                 parameters,
             } => {
@@ -289,6 +290,7 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
                         component_id,
                         function,
                         InvokeParameters { params: parameters },
+                        idempotency_key,
                     )
                     .await?;
 
@@ -395,6 +397,20 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
                         cursor: None,
                     })))
                 }
+            }
+            WorkerSubcommand::Update {
+                component_id_or_name,
+                worker_name,
+                target_version,
+                mode,
+            } => {
+                let component_id = self.components.resolve_id(component_id_or_name).await?;
+                let _ = self
+                    .client
+                    .update(worker_name, component_id, mode, target_version)
+                    .await?;
+
+                Ok(GolemResult::Str("Updated".to_string()))
             }
         }
     }

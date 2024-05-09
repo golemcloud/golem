@@ -64,6 +64,12 @@ impl From<reqwest::Error> for GolemError {
     }
 }
 
+impl From<reqwest::header::InvalidHeaderValue> for GolemError {
+    fn from(value: reqwest::header::InvalidHeaderValue) -> Self {
+        GolemError(format!("Invalid request header: {value}"))
+    }
+}
+
 impl<T: crate::clients::gateway::errors::ResponseContentErrorMapper>
     From<golem_gateway_client::Error<T>> for GolemError
 {
@@ -78,6 +84,7 @@ impl<T: crate::clients::gateway::errors::ResponseContentErrorMapper>
                     crate::clients::gateway::errors::ResponseContentErrorMapper::map(data);
                 GolemError(format!("Response error: {error_str}"))
             }
+
             golem_gateway_client::Error::Unexpected { code, data } => {
                 match String::from_utf8(Vec::from(data)) {
                     Ok(data_string) => GolemError(format!(
@@ -87,6 +94,9 @@ impl<T: crate::clients::gateway::errors::ResponseContentErrorMapper>
                         "Unexpected http error. Code: {code}, can't parse content as string."
                     )),
                 }
+            }
+            golem_gateway_client::Error::ReqwestHeader(invalid_header_value) => {
+                GolemError::from(invalid_header_value)
             }
         }
     }
@@ -114,6 +124,9 @@ impl<T: crate::clients::errors::ResponseContentErrorMapper> From<golem_cloud_cli
                         "Unexpected http error. Code: {code}, can't parse content as string."
                     )),
                 }
+            }
+            golem_cloud_client::Error::ReqwestHeader(invalid_header_value) => {
+                GolemError::from(invalid_header_value)
             }
         }
     }
@@ -488,7 +501,33 @@ pub struct ProjectPolicyId(pub Uuid);
 pub struct WorkerName(pub String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize)]
-pub struct InvocationKey(pub String); // TODO: Validate
+pub struct IdempotencyKey(pub String); // TODO: Validate
+
+impl IdempotencyKey {
+    pub fn fresh() -> Self {
+        IdempotencyKey(Uuid::new_v4().to_string())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Display)]
+pub enum WorkerUpdateMode {
+    Automatic,
+    Manual,
+}
+
+impl FromStr for WorkerUpdateMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auto" => Ok(WorkerUpdateMode::Automatic),
+            "manual" => Ok(WorkerUpdateMode::Manual),
+            _ => Err(format!(
+                "Unknown mode: {s}. Expected one of \"auto\", \"manual\""
+            )),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct JsonValueParser;
