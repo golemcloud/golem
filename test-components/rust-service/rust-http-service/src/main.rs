@@ -13,7 +13,8 @@ fn echo(Path(input): Path<String>) -> String {
 
 #[handler]
 fn calculate(Path(input): Path<u64>) -> Json<u64> {
-    let result = common::calculate_sum(10000, input).0;
+    let (i, s) = common::calculate_sum(10000, input);
+    let result = (s / i as u128) as u64;
     Json(result)
 }
 

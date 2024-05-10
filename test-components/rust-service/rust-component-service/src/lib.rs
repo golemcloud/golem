@@ -10,7 +10,9 @@ impl Guest for Component {
     }
 
     fn calculate(input: u64) -> u64 {
-        common::calculate_sum(10000, input).0
+        let (i, s) = common::calculate_sum(10000, input);
+        let result = (s / i as u128) as u64;
+        result
     }
 
     fn process(input: Vec<Data>) -> Vec<Data> {

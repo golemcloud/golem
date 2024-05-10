@@ -72,8 +72,8 @@ pub fn process_data(data: Vec<CommonData>) -> Vec<CommonData> {
 
 #[cfg(test)]
 mod tests {
-    use crate::fibonacci;
     use crate::calculate_sum;
+    use crate::fibonacci;
     use std::time::SystemTime;
 
     #[test]
