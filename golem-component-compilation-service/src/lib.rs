@@ -68,7 +68,7 @@ async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn s
 
     // Start metrics and healthcheck server.
     let address = config.http_addr().expect("Invalid HTTP address");
-    let _ = HttpServerImpl::new(
+    let http_server = HttpServerImpl::new(
         address,
         prometheus,
         "Component Compilation Service is running",
@@ -90,6 +90,8 @@ async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn s
     start_grpc_server(address, compilation_service).await?;
 
     info!("Server started on port {}", config.grpc_port);
+
+    drop(http_server); // explicitly keeping it alive until the end
 
     Ok(())
 }
