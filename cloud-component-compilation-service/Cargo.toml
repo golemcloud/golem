@@ -1,0 +1,7 @@
+[package]
+name = "cloud-component-compilation-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+golem-component-compilation-service = { workspace = true }

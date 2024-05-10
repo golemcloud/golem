@@ -1,5 +1,7 @@
+use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::service::component_compilation::{
-    ComponentCompilationService, ComponentCompilationServiceDisabled,
+    ComponentCompilationService, ComponentCompilationServiceDefault,
+    ComponentCompilationServiceDisabled,
 };
 use golem_service_base::config::ComponentStoreConfig;
 use golem_service_base::service::component_object_store;
@@ -179,9 +181,15 @@ impl Services {
                 repositories.component_repo.clone(),
             ));
 
-        // TODO: Load from config.
         let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
-            Arc::new(ComponentCompilationServiceDisabled);
+            match config.components.compilation.clone() {
+                ComponentCompilationConfig::Enabled(config) => {
+                    Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
+                }
+                ComponentCompilationConfig::Disabled => {
+                    Arc::new(ComponentCompilationServiceDisabled)
+                }
+            };
 
         let component_service: Arc<dyn component::ComponentService + Sync + Send> =
             Arc::new(component::ComponentServiceDefault::new(
