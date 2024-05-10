@@ -2,6 +2,7 @@
 name = "golem-rust-examples"
 version = "0.1.0"
 edition = "2021"
+repository = "https://github.com/golemcloud/golem-rust"
 
 [dependencies]
 golem-rust = { path = "../" }
