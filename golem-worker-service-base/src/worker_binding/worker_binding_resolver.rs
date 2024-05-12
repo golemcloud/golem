@@ -1,4 +1,5 @@
 use golem_wasm_rpc::TypeAnnotatedValue;
+use crate::request_details::RequestDetails;
 
 use crate::worker_binding::GolemWorkerBinding;
 
@@ -11,5 +12,5 @@ pub trait WorkerBindingResolver<ApiDefinition> {
 #[derive(Debug, Clone)]
 pub struct ResolvedWorkerBinding {
     pub resolved_worker_binding_template: GolemWorkerBinding,
-    pub typed_value_from_input: TypeAnnotatedValue,
+    pub request_details: RequestDetails,
 }

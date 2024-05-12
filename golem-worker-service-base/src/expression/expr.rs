@@ -13,7 +13,7 @@ use crate::parser::{GolemParser, ParseError};
 pub enum Expr {
     Request(),
     Let(String, Box<Expr>),
-    WorkerResponse(),
+    Worker(),
     SelectField(Box<Expr>, String),
     SelectIndex(Box<Expr>, usize),
     Sequence(Vec<Expr>),

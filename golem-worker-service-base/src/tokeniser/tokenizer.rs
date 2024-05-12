@@ -56,7 +56,7 @@ impl Token {
         Token::MultiChar(MultiCharTokens::InterpolationStart)
     }
 
-    pub fn worker_response() -> Token {
+    pub fn worker() -> Token {
         Token::MultiChar(MultiCharTokens::Worker)
     }
 
@@ -516,7 +516,7 @@ impl<'t> Tokenizer<'t> {
                 let str =
                     self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')?;
                 match str {
-                    "worker_response" => Some(Token::MultiChar(MultiCharTokens::Worker)),
+                    "worker" => Some(Token::MultiChar(MultiCharTokens::Worker)),
                     "request" => Some(Token::MultiChar(MultiCharTokens::Request)),
                     "ok" => Some(Token::MultiChar(MultiCharTokens::Ok)),
                     "err" => Some(Token::MultiChar(MultiCharTokens::Err)),
@@ -649,8 +649,8 @@ mod tests {
 
     #[test]
     fn test_worker_response() {
-        let tokens: Vec<Token> = Tokenizer::new("worker_response.").collect();
-        assert_eq!(tokens, vec![Token::worker_response(), Token::Dot]);
+        let tokens: Vec<Token> = Tokenizer::new("worker.").collect();
+        assert_eq!(tokens, vec![Token::worker(), Token::Dot]);
     }
 
     #[test]
@@ -1032,7 +1032,9 @@ else${z}
                 Token::interpolation_start(),
                 Token::match_token(),
                 Token::Space,
-                Token::worker_response(),
+                Token::worker(),
+                Token::Dot,
+                Token::raw_string("response"),
                 Token::Space,
                 Token::LCurly,
                 Token::Space,
@@ -1043,7 +1045,9 @@ else${z}
                 Token::Space,
                 Token::arrow(),
                 Token::Space,
-                Token::worker_response(),
+                Token::worker(),
+                Token::Dot,
+                Token::raw_string("response"),
                 Token::Comma,
                 Token::Space,
                 Token::none(),

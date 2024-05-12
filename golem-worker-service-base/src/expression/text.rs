@@ -174,11 +174,11 @@ mod record_tests {
         let input_expr = Expr::Record(vec![
             (
                 "a".to_string(),
-                Box::new(Expr::Tuple(vec![Expr::Request(), Expr::WorkerResponse()])),
+                Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Worker()])),
             ),
             (
                 "b".to_string(),
-                Box::new(Expr::Tuple(vec![Expr::Request(), Expr::WorkerResponse()])),
+                Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Worker()])),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -908,7 +908,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_worker() {
-        let input_expr = Expr::WorkerResponse();
+        let input_expr = Expr::Worker();
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${worker_response}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -1745,7 +1745,7 @@ mod if_cond_tests {
     fn test_round_trip_if_condition_of_flags() {
         let input_expr = Expr::Cond(
             Box::new(Expr::EqualTo(
-                Box::new(Expr::WorkerResponse()),
+                Box::new(Expr::Worker()),
                 Box::new(Expr::Flags(vec!["flag1".to_string(), "flag2".to_string()])),
             )),
             Box::new(Expr::Flags(vec!["flag1".to_string(), "flag2".to_string()])),

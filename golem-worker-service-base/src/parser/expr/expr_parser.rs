@@ -77,7 +77,7 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::MultiChar(MultiCharTokens::Worker) => {
-                previous_expression.build(Expr::WorkerResponse())
+                previous_expression.build(Expr::Worker())
             }
 
             Token::MultiChar(MultiCharTokens::InterpolationStart) => {
@@ -351,7 +351,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser.parse("${worker_response.input[0]}");
-        let worker = Expr::WorkerResponse();
+        let worker = Expr::Worker();
         let select_input = Expr::SelectField(Box::new(worker), "input".to_string());
         let first_index = Expr::SelectIndex(Box::new(select_input), 0);
 
@@ -870,7 +870,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::Worker()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -901,7 +901,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::Worker()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -938,7 +938,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::Worker()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -948,7 +948,7 @@ mod tests {
                         )))],
                     )
                     .unwrap(),
-                    Box::new(Expr::WorkerResponse()),
+                    Box::new(Expr::Worker()),
                 )),
                 MatchArm((
                     ArmPattern::from("none", vec![]).unwrap(),
@@ -969,7 +969,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::Worker()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -983,7 +983,7 @@ mod tests {
                         .unwrap()],
                     )
                     .unwrap(),
-                    Box::new(Expr::WorkerResponse()),
+                    Box::new(Expr::Worker()),
                 )),
                 MatchArm((
                     ArmPattern::from("none", vec![]).unwrap(),
@@ -1003,7 +1003,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::Worker()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1040,7 +1040,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::Worker()),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1078,7 +1078,7 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::WorkerResponse()),
+            Box::new(Expr::Worker()),
             vec![
                 MatchArm((
                     ArmPattern::from(

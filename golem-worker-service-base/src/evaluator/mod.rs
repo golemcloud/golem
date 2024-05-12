@@ -8,6 +8,7 @@ use crate::worker_bridge_execution::WorkerBridgeResponse;
 use getter::GetError;
 use getter::Getter;
 use path::Path;
+use crate::evaluator::input_namespace::EvaluatorInputNamespace;
 
 use crate::expression::{Expr, InnerNumber};
 use crate::merge::Merge;
@@ -19,11 +20,12 @@ mod math_op_evaluator;
 mod path;
 mod pattern_match_evaluator;
 
+mod input_namespace;
+
 pub trait Evaluator {
     fn evaluate(
         &self,
-        input_request: &TypeAnnotatedValue,
-        worker_bridge_response: Option<&WorkerBridgeResponse>,
+        evaluator_namespace: &EvaluatorInputNamespace,
     ) -> Result<EvaluationResult, EvaluationError>;
 }
 
@@ -90,8 +92,7 @@ impl<'t> RawString<'t> {
 impl<'t> Evaluator for RawString<'t> {
     fn evaluate(
         &self,
-        input: &TypeAnnotatedValue,
-        _worker_bridge_response: Option<&WorkerBridgeResponse>,
+        input: &EvaluatorInputNamespace,
     ) -> Result<EvaluationResult, EvaluationError> {
         let mut combined_string = String::new();
         let mut tokenizer: Tokenizer = Tokenizer::new(self.input);
@@ -130,8 +131,7 @@ impl<'t> Evaluator for RawString<'t> {
 impl Evaluator for Expr {
     fn evaluate(
         &self,
-        input: &TypeAnnotatedValue,
-        worker_response: Option<&WorkerBridgeResponse>,
+        input: &EvaluatorInputNamespace,
     ) -> Result<EvaluationResult, EvaluationError> {
         let expr: &Expr = self;
 
@@ -139,7 +139,7 @@ impl Evaluator for Expr {
         // and therefore returns ValueTyped
         fn go(
             expr: &Expr,
-            input: &mut TypeAnnotatedValue,
+            input: &mut EvaluatorInputNamespace,
             worker_response: Option<&WorkerBridgeResponse>,
         ) -> Result<EvaluationResult, EvaluationError> {
             match expr {
@@ -148,7 +148,7 @@ impl Evaluator for Expr {
                     .map(|x| x.into())
                     .map_err(|err| err.into()),
 
-                Expr::WorkerResponse() => {
+                Expr::Worker() => {
                     let result = match worker_response {
                         Some(WorkerBridgeResponse::MultipleResults(results)) => {
                             results.clone().into()

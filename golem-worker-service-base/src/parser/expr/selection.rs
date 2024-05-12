@@ -12,7 +12,7 @@ pub fn get_select_index(
         | Expr::Variable(_)
         | Expr::SelectField(_, _)
         | Expr::Request()
-        | Expr::WorkerResponse() => {
+        | Expr::Worker() => {
             //
             let optional_possible_index = tokenizer.capture_string_until(&Token::RSquare);
 

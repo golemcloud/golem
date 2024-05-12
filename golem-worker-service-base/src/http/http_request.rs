@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::api_definition::http::{HttpApiDefinition, QueryInfo, VarInfo};
 use crate::tokeniser::tokenizer::Token;
 use crate::worker_binding::{ResolvedWorkerBinding, WorkerBindingResolver};
-
+use crate::request_details::RequestDetails;
 use self::internal::RecordField;
 
 use super::router::RouterPattern;
@@ -42,7 +42,7 @@ impl InputHttpRequest {
 
         let request_query_variables = self.input_path.query_components().unwrap_or_default();
 
-        let header_value = internal::get_headers(&self.headers)?;
+        let header_value= internal::get_headers(&self.headers)?;
         let body_value = internal::get_request_body(request_body)?;
         let path_value = internal::get_request_path_query_values(
             request_query_variables,
@@ -68,6 +68,9 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 
         let router = router::build(api_definition.routes.clone());
 
+        let http_requests = RequestDetails::from(api_request, api_definition)
+            .ok()?;
+
         let path: Vec<&str> = RouterPattern::split(&api_request.input_path.base_path).collect();
 
         let router::RouteEntry {
@@ -83,6 +86,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
                 .collect()
         };
 
+        let request_details_ = RequestDetails::from(zipped_path_params, )
         let request_details = api_request
             .get_type_annotated_value(zipped_path_params, query_params)
             .ok()?;
@@ -123,7 +127,7 @@ impl ApiInputPath {
     }
 }
 
-pub(crate) mod router {
+pub mod router {
     use crate::{
         api_definition::http::{PathPattern, QueryInfo, Route, VarInfo},
         http::router::{Router, RouterPattern},
