@@ -16,7 +16,7 @@ use crate::merge::Merge;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
 mod getter;
-mod math_op_evaluator;
+mod evaluator_context;
 mod path;
 mod pattern_match_evaluator;
 
@@ -192,7 +192,7 @@ impl Evaluator for Expr {
                     let left = go(left, input, worker_response)?;
                     let right = go(right, input, worker_response)?;
 
-                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
+                    evaluator_context::compare_eval_result(&left, &right, |left, right| {
                         left == right
                     })
                 }
@@ -200,7 +200,7 @@ impl Evaluator for Expr {
                     let left = go(left, input, worker_response)?;
                     let right = go(right, input, worker_response)?;
 
-                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
+                    evaluator_context::compare_eval_result(&left, &right, |left, right| {
                         left > right
                     })
                 }
@@ -208,7 +208,7 @@ impl Evaluator for Expr {
                     let left = go(left, input, worker_response)?;
                     let right = go(right, input, worker_response)?;
 
-                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
+                    evaluator_context::compare_eval_result(&left, &right, |left, right| {
                         left >= right
                     })
                 }
@@ -216,7 +216,7 @@ impl Evaluator for Expr {
                     let left = go(left, input, worker_response)?;
                     let right = go(right, input, worker_response)?;
 
-                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
+                    evaluator_context::compare_eval_result(&left, &right, |left, right| {
                         left < right
                     })
                 }
@@ -224,7 +224,7 @@ impl Evaluator for Expr {
                     let left = go(left, input, worker_response)?;
                     let right = go(right, input, worker_response)?;
 
-                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
+                    evaluator_context::compare_eval_result(&left, &right, |left, right| {
                         left <= right
                     })
                 }

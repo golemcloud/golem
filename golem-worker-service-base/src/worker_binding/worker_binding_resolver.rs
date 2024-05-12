@@ -5,10 +5,12 @@ use crate::http::http_request::router;
 use crate::http::InputHttpRequest;
 use crate::http::router::RouterPattern;
 
-use crate::worker_binding::GolemWorkerBinding;
+use crate::worker_binding::{GolemWorkerBinding, RequestDetails};
 
 // For any input request type, there should be a way to resolve the
 // worker binding component, which is then used to form the worker request
+// resolved binding is always kept along with the request as binding may refer
+// to request details
 pub trait WorkerBindingResolver<ApiDefinition> {
     fn resolve(&self, api_specification: &ApiDefinition) -> Option<ResolvedWorkerBinding>;
 }
