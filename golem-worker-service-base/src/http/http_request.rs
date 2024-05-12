@@ -1,20 +1,12 @@
 use std::collections::HashMap;
 
 use crate::api_definition::ApiSiteString;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::TypeAnnotatedValue;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
 
 use crate::api_definition::http::{HttpApiDefinition, QueryInfo, VarInfo};
-use crate::tokeniser::tokenizer::Token;
-use crate::worker_binding::{ResolvedWorkerBinding, WorkerBindingResolver};
-use crate::request_details::RequestDetails;
-use self::internal::RecordField;
+use crate::worker_binding::{WorkerBindingResolver};
 
-use super::router::RouterPattern;
-
-// An input request from external API gateways, that is then resolved to a worker request, using API definitions
 #[derive(Clone)]
 pub struct InputHttpRequest {
     pub input_path: ApiInputPath,
@@ -29,74 +21,6 @@ impl InputHttpRequest {
             .get("host")
             .and_then(|host| host.to_str().ok())
             .map(|host_str| ApiSiteString(host_str.to_string()))
-    }
-
-    // Converts all request details to type-annotated-value
-    // and place them under the key `request`
-    pub fn get_type_annotated_value(
-        &self,
-        path_params: HashMap<VarInfo, &str>,
-        spec_query_variables: &[QueryInfo],
-    ) -> Result<TypeAnnotatedValue, Vec<String>> {
-        let request_body = &self.req_body;
-
-        let request_query_variables = self.input_path.query_components().unwrap_or_default();
-
-        let header_value= internal::get_headers(&self.headers)?;
-        let body_value = internal::get_request_body(request_body)?;
-        let path_value = internal::get_request_path_query_values(
-            request_query_variables,
-            spec_query_variables,
-            path_params,
-        )?;
-
-        let merged = RecordField::merge_all(vec![header_value, body_value, path_value]);
-        let token = Token::request().to_string();
-
-        let request_type_annotated_value = TypeAnnotatedValue::Record {
-            typ: vec![(token.clone(), AnalysedType::from(&merged))],
-            value: vec![(token, merged)],
-        };
-
-        Ok(request_type_annotated_value)
-    }
-}
-
-impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
-    fn resolve(&self, api_definition: &HttpApiDefinition) -> Option<ResolvedWorkerBinding> {
-        let api_request = self;
-
-        let router = router::build(api_definition.routes.clone());
-
-        let http_requests = RequestDetails::from(api_request, api_definition)
-            .ok()?;
-
-        let path: Vec<&str> = RouterPattern::split(&api_request.input_path.base_path).collect();
-
-        let router::RouteEntry {
-            path_params,
-            query_params,
-            binding,
-        } = router.check_path(&api_request.req_method, &path)?;
-
-        let zipped_path_params: HashMap<VarInfo, &str> = {
-            path_params
-                .iter()
-                .map(|(var, index)| (var.clone(), path[*index]))
-                .collect()
-        };
-
-        let request_details_ = RequestDetails::from(zipped_path_params, )
-        let request_details = api_request
-            .get_type_annotated_value(zipped_path_params, query_params)
-            .ok()?;
-
-        let resolved_binding = ResolvedWorkerBinding {
-            resolved_worker_binding_template: binding.clone(),
-            typed_value_from_input: { request_details },
-        };
-
-        Some(resolved_binding)
     }
 }
 

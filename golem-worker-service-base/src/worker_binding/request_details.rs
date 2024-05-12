@@ -6,7 +6,7 @@ use http::HeaderMap;
 use serde_json::Value;
 use golem_service_base::type_inference::infer_analysed_type;
 use crate::api_definition::http::{HttpApiDefinition, QueryInfo, VarInfo};
-use crate::request_details::internal::{TypedKeyValue, TypedKeyValueCollection};
+use internal::{TypedKeyValue, TypedKeyValueCollection};
 use crate::merge::Merge;
 
 pub enum RequestDetails {
