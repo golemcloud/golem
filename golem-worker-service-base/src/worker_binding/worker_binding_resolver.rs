@@ -8,11 +8,11 @@ use crate::api_definition::http::{HttpApiDefinition, VarInfo};
 use crate::http::http_request::router;
 use crate::http::InputHttpRequest;
 use crate::http::router::RouterPattern;
-use crate::evaluator::{EvaluationResult, EvaluatorInputContext, RawString};
+use crate::evaluator::{EvaluatorInputContext};
 use crate::evaluator::Evaluator;
 use crate::primitive::GetPrimitive;
 
-use crate::worker_binding::{GolemWorkerBinding, RequestDetails, ResponseMapping, WorkerDetails};
+use crate::worker_binding::{GolemWorkerBinding, RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::WorkerRequest;
 
 // For any input request type, there should be a way to resolve the

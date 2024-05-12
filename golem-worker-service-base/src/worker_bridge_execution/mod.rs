@@ -1,12 +1,10 @@
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
 
 use golem_common::model::ComponentId;
 
-use crate::evaluator::{EvaluationResult, Evaluator, RawString};
-use crate::worker_binding::{ResolvedWorkerBinding, WorkerDetails};
+use crate::evaluator::{Evaluator};
 
 mod worker_bridge_response;
 mod worker_request_executor;

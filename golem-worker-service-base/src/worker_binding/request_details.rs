@@ -5,8 +5,7 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use http::HeaderMap;
 use serde_json::Value;
 use golem_service_base::type_inference::infer_analysed_type;
-use crate::api_definition::http::{HttpApiDefinition, QueryInfo, VarInfo};
-use internal::{TypedKeyValue, TypedKeyValueCollection};
+use crate::api_definition::http::{QueryInfo, VarInfo};
 use crate::merge::Merge;
 
 #[derive(Clone)]
@@ -155,17 +154,65 @@ impl TypedRequestBody {
     }
 }
 
+#[derive(Clone)]
+pub struct TypedKeyValueCollection {
+    pub fields: Vec<TypedKeyValue>,
+}
+
+impl TypedKeyValueCollection {
+    pub fn push(&mut self, key: String, value: TypeAnnotatedValue) {
+        self.fields.push(TypedKeyValue { name: key, value });
+    }
+}
+
+impl Default for TypedKeyValueCollection {
+    fn default() -> Self {
+        TypedKeyValueCollection { fields: vec![] }
+    }
+}
+
+impl From<TypedKeyValueCollection> for AnalysedType {
+    fn from(typed_key_value_collection: &TypedKeyValueCollection) -> Self {
+        let mut typ: Vec<(String, AnalysedType)> = vec![];
+
+        for record in &typed_key_value_collection.fields {
+            typ.push((record.name.clone(), AnalysedType::from(&record.value)));
+        }
+
+        AnalysedType::Record(typ)
+    }
+}
+
+impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
+    fn from(typed_key_value_collection: TypedKeyValueCollection) -> Self {
+        let mut typ: Vec<(String, AnalysedType)> = vec![];
+        let mut value: Vec<(String, TypeAnnotatedValue)> = vec![];
+
+        for record in typed_key_value_collection.fields {
+            typ.push((record.name.clone(), AnalysedType::from(&record.value)));
+            value.push((record.name, record.value));
+        }
+
+        TypeAnnotatedValue::Record { typ, value }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TypedKeyValue {
+    pub name: String,
+    pub value: TypeAnnotatedValue,
+}
+
 
 mod internal {
     use crate::merge::Merge;
     use crate::primitive::{Number, Primitive};
-    use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::TypeAnnotatedValue;
 
 
     pub(crate) fn get_typed_value_from_primitive(value: impl AsRef<str>) -> TypeAnnotatedValue {
-        let query_value = Primitive::from(value.as_ref().to_string());
-        match query_value {
+        let primitive = Primitive::from(value.as_ref().to_string());
+        match primitive {
             Primitive::Num(number) => match number {
                 Number::PosInt(value) => TypeAnnotatedValue::U64(value),
                 Number::NegInt(value) => TypeAnnotatedValue::S64(value),
@@ -174,54 +221,5 @@ mod internal {
             Primitive::String(value) => TypeAnnotatedValue::Str(value),
             Primitive::Bool(value) => TypeAnnotatedValue::Bool(value),
         }
-    }
-
-    #[derive(Clone)]
-    pub struct TypedKeyValueCollection {
-        pub fields: Vec<TypedKeyValue>,
-    }
-
-    impl TypedKeyValueCollection {
-        pub fn push(&mut self, key: String, value: TypeAnnotatedValue) {
-            self.fields.push(TypedKeyValue { name: key, value });
-        }
-    }
-
-    impl Default for TypedKeyValueCollection {
-        fn default() -> Self {
-            TypedKeyValueCollection { fields: vec![] }
-        }
-    }
-
-    impl From<TypedKeyValueCollection> for AnalysedType {
-        fn from(typed_key_value_collection: &TypedKeyValueCollection) -> Self {
-            let mut typ: Vec<(String, AnalysedType)> = vec![];
-
-            for record in &typed_key_value_collection.fields {
-                typ.push((record.name.clone(), AnalysedType::from(&record.value)));
-            }
-
-            AnalysedType::Record(typ)
-        }
-    }
-
-    impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
-        fn from(typed_key_value_collection: TypedKeyValueCollection) -> Self {
-            let mut typ: Vec<(String, AnalysedType)> = vec![];
-            let mut value: Vec<(String, TypeAnnotatedValue)> = vec![];
-
-            for record in typed_key_value_collection.fields {
-                typ.push((record.name.clone(), AnalysedType::from(&record.value)));
-                value.push((record.name, record.value));
-            }
-
-            TypeAnnotatedValue::Record { typ, value }
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    pub struct TypedKeyValue {
-        pub name: String,
-        pub value: TypeAnnotatedValue,
     }
 }

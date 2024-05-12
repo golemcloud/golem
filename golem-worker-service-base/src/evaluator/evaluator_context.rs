@@ -29,11 +29,11 @@ impl EvaluatorInputContext{
         EvaluatorInputContext::RequestData(request.clone())
     }
 
-    pub fn from_all(worker_metadata: WorkerRequest, worker_response: WorkerBridgeResponse, request: RequestDetails) -> Self {
+    pub fn from_all(worker_request: WorkerRequest, worker_response: WorkerBridgeResponse, request: RequestDetails) -> Self {
         EvaluatorInputContext::All {
-            worker_request,
-            worker_response,
-            request
+            worker_request: worker_request,
+            worker_response: worker_response,
+            request: request
         }
     }
 
