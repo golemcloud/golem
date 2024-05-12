@@ -59,6 +59,17 @@ pub enum ComponentSubCommand {
         #[arg(short, long)]
         component_name: Option<ComponentName>,
     },
+    /// Get component
+    #[command()]
+    Get {
+        /// The Golem component id or name
+        #[command(flatten)]
+        component_id_or_name: ComponentIdOrName,
+
+        /// The version of the component
+        #[arg(short = 't', long)]
+        version: Option<u64>,
+    },
 }
 
 #[async_trait]
@@ -111,6 +122,18 @@ impl<C: ComponentClient + Send + Sync> ComponentHandler for ComponentHandlerLive
                 let views: Vec<ComponentView> = components.into_iter().map(|t| t.into()).collect();
 
                 Ok(GolemResult::Ok(Box::new(views)))
+            }
+            ComponentSubCommand::Get {
+                component_id_or_name,
+                version,
+            } => {
+                let component_id = self.resolve_id(component_id_or_name).await?;
+                let component = match version {
+                    Some(v) => self.get_metadata(&component_id, v).await?,
+                    None => self.get_latest_metadata(&component_id).await?,
+                };
+                let view: ComponentView = component.into();
+                Ok(GolemResult::Ok(Box::new(vec![view])))
             }
         }
     }
