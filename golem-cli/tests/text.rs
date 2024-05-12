@@ -243,9 +243,8 @@ fn text_component_get(
     let get_res = cli.with_format(Format::Text).run_string(&[
         "component",
         "get",
-        &cfg.arg('C', "component-id"),
-        &component.component_id,
-        env_service.to_str().unwrap(),
+        &cfg.arg('c', "component-name"),
+        &component_name,
     ])?;
 
     let lines = get_res.lines().collect::<Vec<_>>();
@@ -253,7 +252,7 @@ fn text_component_get(
     assert_eq!(
         *lines.first().unwrap(),
         format!(
-            "Component with ID {}. Version: 1. Component size is 72309 bytes.",
+            "Component with ID {}. Version: 0. Component size is 72309 bytes.",
             component.component_id
         )
     );
