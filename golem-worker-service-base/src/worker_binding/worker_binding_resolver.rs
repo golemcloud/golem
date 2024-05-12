@@ -1,4 +1,5 @@
 use golem_wasm_rpc::TypeAnnotatedValue;
+use http::HeaderMap;
 
 use crate::worker_binding::GolemWorkerBinding;
 
@@ -12,4 +13,5 @@ pub trait WorkerBindingResolver<ApiDefinition> {
 pub struct ResolvedWorkerBinding {
     pub resolved_worker_binding_template: GolemWorkerBinding,
     pub typed_value_from_input: TypeAnnotatedValue,
+    pub headers: HeaderMap,
 }
