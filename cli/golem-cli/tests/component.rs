@@ -23,6 +23,11 @@ fn make(
             component_add_and_find_by_name,
         ),
         Trial::test_in_context(
+            format!("component_add_and_get{suffix}"),
+            ctx.clone(),
+            component_add_and_get,
+        ),
+        Trial::test_in_context(
             format!("component_update{suffix}"),
             ctx.clone(),
             component_update,
@@ -132,5 +137,32 @@ fn component_update(
         &component.component_id,
         env_service.to_str().unwrap(),
     ])?;
+    Ok(())
+}
+
+fn component_add_and_get(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let component_name = format!("{name} component add and get");
+    let env_service = deps.component_directory().join("environment-service.wasm");
+    let cfg = &cli.config;
+    let component: ComponentView = cli.run(&[
+        "component",
+        "add",
+        &cfg.arg('c', "component-name"),
+        &component_name,
+        env_service.to_str().unwrap(),
+    ])?;
+    let res: ComponentView = cli.run(&[
+        "component",
+        "get",
+        &cfg.arg('c', "component-name"),
+        &component_name,
+    ])?;
+    assert!(res == component, "{res:?} = ({component:?})");
     Ok(())
 }
