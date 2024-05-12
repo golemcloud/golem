@@ -331,7 +331,7 @@ mod tests {
 
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
 
-    use golem_common::model::ComponentId;
+    use golem_common::model::{ComponentId, IdempotencyKey};
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
@@ -1110,6 +1110,40 @@ mod tests {
         test_paths("/getcartcontent/{cart-id}", "getcartcontent/1", true);
         test_paths("getcartcontent/{cart-id}", "getcartcontent/1", true);
         test_paths("/getcartcontent/{cart-id}", "/getcartcontent/1", true);
+    }
+
+    #[test]
+    fn test_worker_idempotency_key_header() {
+        fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
+            let api_request = get_api_request(
+                "/getcartcontent/1",
+                None,
+                header_map,
+                serde_json::Value::Null,
+            );
+
+            let function_params = "[]";
+
+            let api_specification: HttpApiDefinition = get_api_spec(
+                "getcartcontent/{cart-id}",
+                "shopping-cart-${request.path.cart-id}",
+                function_params,
+            );
+
+            let resolved_route = api_request.resolve(&api_specification).unwrap();
+
+            let result = WorkerRequest::from_resolved_route(resolved_route).unwrap();
+
+            assert_eq!(result.idempotency_key, idempotency_key);
+        }
+
+        test_key(&HeaderMap::new(), None);
+        let mut headers = HeaderMap::new();
+        headers.insert("Idempotency-Key", HeaderValue::from_str("foo").unwrap());
+        test_key(&headers, Some(IdempotencyKey::new("foo".to_string())));
+        let mut headers = HeaderMap::new();
+        headers.insert("idempotency-key", HeaderValue::from_str("bar").unwrap());
+        test_key(&headers, Some(IdempotencyKey::new("bar".to_string())));
     }
 
     fn get_api_request(
