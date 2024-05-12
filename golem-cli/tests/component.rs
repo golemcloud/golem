@@ -1,6 +1,5 @@
 use crate::cli::{Cli, CliLive};
 use golem_cli::model::component::ComponentView;
-use golem_cli::model::text::ComponentGetView;
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};
 use std::sync::Arc;
@@ -148,7 +147,7 @@ fn component_add_and_get(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let component_name = format!("{name} component add and find by name");
+    let component_name = format!("{name} component add and get");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
     let component: ComponentView = cli.run(&[
@@ -158,12 +157,12 @@ fn component_add_and_get(
         &component_name,
         env_service.to_str().unwrap(),
     ])?;
-    let res: ComponentGetView = cli.run(&[
+    let res: ComponentView = cli.run(&[
         "component",
         "get",
         &cfg.arg('c', "component-name"),
         &component_name,
     ])?;
-    assert!(res.0 == component, "{res:?} = ({component:?})");
+    assert!(res == component, "{res:?} = ({component:?})");
     Ok(())
 }
