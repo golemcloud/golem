@@ -283,11 +283,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
@@ -319,11 +319,11 @@ mod tests {
         expected_map.insert("x".to_string(), serde_json::Value::String("y".to_string()));
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
                 expected_map,
             )]),
@@ -357,11 +357,11 @@ mod tests {
         );
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
                 expected_map,
             )]),
@@ -400,11 +400,11 @@ mod tests {
         );
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Number(serde_json::Number::from(1)),
                 serde_json::Value::Number(serde_json::Number::from(2)),
@@ -445,11 +445,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Number(serde_json::Number::from(1)),
                 serde_json::Value::Number(serde_json::Number::from(2)),
@@ -515,11 +515,11 @@ mod tests {
         );
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Object(user_id_map),
                 serde_json::Value::Number(serde_json::Number::from(2)),
@@ -548,11 +548,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
@@ -586,11 +586,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::String(
                 "address".to_string(),
             )]),
@@ -620,11 +620,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::Bool(true)]),
         };
 
@@ -652,11 +652,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::Bool(true)]),
         };
 
@@ -684,11 +684,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::Number(
                 serde_json::Number::from(1),
             )]),
@@ -721,11 +721,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::Number(
                 serde_json::Number::from(0),
             )]),
@@ -755,11 +755,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![
                 serde_json::Value::Number(serde_json::Number::from(2)),
                 serde_json::Value::Number(serde_json::Number::from(1)),
@@ -808,11 +808,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),
@@ -861,11 +861,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),
@@ -913,11 +913,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![serde_json::Value::Object(
                 request_body.clone(),
             )]),
@@ -971,11 +971,11 @@ mod tests {
         let result = WorkerRequest::from_resolved_route(resolved_route.clone());
 
         let expected = WorkerRequest {
-            component: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
+            component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_id: "shopping-cart-1".to_string(),
-            function: "golem:it/api/get-cart-contents".to_string(),
+            function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: serde_json::Value::Array(vec![
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),

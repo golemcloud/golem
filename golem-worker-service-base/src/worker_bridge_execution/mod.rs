@@ -1,3 +1,4 @@
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
@@ -5,7 +6,7 @@ use serde_json::Value;
 use golem_common::model::ComponentId;
 
 use crate::evaluator::{EvaluationResult, Evaluator, RawString};
-use crate::worker_binding::ResolvedWorkerBinding;
+use crate::worker_binding::{ResolvedWorkerBinding, WorkerDetails};
 
 mod worker_bridge_response;
 mod worker_request_executor;
@@ -17,81 +18,25 @@ pub use worker_request_executor::*;
 // along with the value of any variables that's associated with it.
 #[derive(PartialEq, Debug, Clone)]
 pub struct WorkerRequest {
-    pub component: ComponentId,
-    pub worker_id: String,
-    pub function: String,
-    pub function_params: Value,
+    pub component_id: ComponentId,
+    pub worker_name: String,
+    pub function_name: String,
+    pub function_params: Vec<Value>,
 }
 
 impl WorkerRequest {
-    // A worker-request can be formed from a route definition along with variables that were resolved using incoming http request
-    pub fn from_resolved_route(
-        resolved_route: ResolvedWorkerBinding,
-    ) -> Result<WorkerRequest, String> {
-        let worker_id_value: TypeAnnotatedValue = resolved_route
-            .resolved_worker_binding_template
-            .worker_id
-            .evaluate(&resolved_route.typed_value_from_input, None)
-            .map_err(|err| err.to_string())?
-            .get_value()
-            .ok_or("Worker id is not a text value".to_string())?;
-
-        let worker_id = match worker_id_value {
-            TypeAnnotatedValue::Str(value) => value,
-            _ => {
-                return Err(format!(
-                    "Worker id is not a string. {}",
-                    get_json_from_typed_value(&worker_id_value)
-                ))
-            }
-        };
-
-        let function_name_value = RawString::new(
-            &resolved_route
-                .resolved_worker_binding_template
-                .function_name,
-        )
-        .evaluate(&resolved_route.typed_value_from_input, None)
-        .map_err(|err| err.to_string())?;
-
-        let function_name = match function_name_value {
-            EvaluationResult::Value(TypeAnnotatedValue::Str(value)) => value,
-            _ => {
-                return Err(format!(
-                    "Function name is evaluated to {}, which is not a string",
-                    function_name_value
-                        .get_value()
-                        .map_or("()".to_string(), |v| get_json_from_typed_value(&v)
-                            .to_string())
-                ))
-            }
-        };
-
-        let mut function_params: Vec<Value> = vec![];
-
-        for expr in &resolved_route
-            .resolved_worker_binding_template
-            .function_params
-        {
-            let type_annotated_value = expr
-                .evaluate(&resolved_route.typed_value_from_input, None)
-                .map_err(|err| err.to_string())?
-                .get_value()
-                .ok_or("Failed to evaluate Route expression".to_string())?;
-
-            let json = get_json_from_typed_value(&type_annotated_value);
-
-            function_params.push(json);
+    pub fn to_type_annotated_value(self) -> TypeAnnotatedValue {
+        TypeAnnotatedValue::Record {
+            typ: vec![
+                ("component_id".to_string(), AnalysedType::Str),
+                ("name".to_string(), AnalysedType::Str),
+                ("function_name".to_string(), AnalysedType::Str),
+            ],
+            value: vec![
+                ("component_id".to_string(), TypeAnnotatedValue::Str(self.component_id.0.to_string())),
+                ("name".to_string(), TypeAnnotatedValue::Str(self.worker_name)),
+                ("function_name".to_string(), TypeAnnotatedValue::Str(self.function_name)),
+            ],
         }
-
-        Ok(WorkerRequest {
-            worker_id,
-            component: resolved_route
-                .resolved_worker_binding_template
-                .component
-                .clone(),
-            function: function_name,
-            function_params: Value::Array(function_params),
-        })
     }
 }

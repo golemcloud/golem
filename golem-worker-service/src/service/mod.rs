@@ -3,7 +3,7 @@ pub mod component;
 pub mod worker;
 
 use crate::service::api_definition_lookup_impl::CustomRequestDefinitionLookupDefault;
-use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
+use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
 
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
 
@@ -94,7 +94,7 @@ impl Services {
         ));
 
         let worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
-            Arc::new(WorkerRequestToHttpResponse::new(worker_service.clone()));
+            Arc::new(UnauthorisedWorkerRequestExecutor::new(worker_service.clone()));
 
         let definition_repo: Arc<
             dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
@@ -190,7 +190,7 @@ impl Services {
         ));
 
         let worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
-            Arc::new(WorkerRequestToHttpResponse::new(worker_service.clone()));
+            Arc::new(UnauthorisedWorkerRequestExecutor::new(worker_service.clone()));
 
         Services {
             worker_service,

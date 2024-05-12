@@ -1,45 +1,40 @@
-use crate::evaluator::{EvaluationError, EvaluationResult};
-use crate::primitive::{GetPrimitive, Primitive};
-use golem_wasm_rpc::TypeAnnotatedValue;
+use crate::worker_binding::{RequestDetails, WorkerDetails};
+use crate::worker_bridge_execution::{WorkerBridgeResponse, WorkerRequest, WorkerResponse};
 
-pub(crate) fn compare_typed_value<F>(
-    left: &TypeAnnotatedValue,
-    right: &TypeAnnotatedValue,
-    compare: F,
-) -> Result<TypeAnnotatedValue, EvaluationError>
-where
-    F: Fn(Primitive, Primitive) -> bool,
-{
-    match (left.get_primitive(), right.get_primitive()) {
-        (Some(left), Some(right)) => {
-            let result = compare(left, right);
-            Ok(TypeAnnotatedValue::Bool(result))
-        }
-        _ => Err(EvaluationError::Message(
-            "Unsupported type to compare".to_string(),
-        )),
-    }
+
+// Evaluator of an expression doesn't necessarily need a context all the time, and can be empty.
+// or contain worker details, request details, worker_response or all of them.
+pub enum EvaluatorInputContext {
+    WorkerRequest(WorkerRequest),
+    WorkerResponse(WorkerBridgeResponse),
+    RequestData(RequestDetails),
+    All {
+        worker_request: WorkerRequest,
+        worker_response: WorkerBridgeResponse,
+        request: RequestDetails
+    },
+    Empty,
 }
 
-pub(crate) fn compare_eval_result<F>(
-    left: &EvaluationResult,
-    right: &EvaluationResult,
-    compare: F,
-) -> Result<EvaluationResult, EvaluationError>
-where
-    F: Fn(Primitive, Primitive) -> bool,
-{
-    if left.is_unit() && right.is_unit() {
-        Ok(TypeAnnotatedValue::Bool(true).into())
-    } else {
-        match (left.get_value(), right.get_value()) {
-            (Some(left), Some(right)) => {
-                let result = compare_typed_value(&left, &right, compare)?;
-                Ok(EvaluationResult::Value(result))
-            }
-            _ => Err(EvaluationError::Message(
-                "Unsupported type to compare".to_string(),
-            )),
+impl EvaluatorInputContext{
+    pub fn from_worker_data(worker_metadata: WorkerRequest) -> Self {
+        EvaluatorInputContext::WorkerRequest(worker_metadata)
+    }
+
+    pub fn from_worker_response(worker_response: WorkerBridgeResponse) -> Self {
+        EvaluatorInputContext::WorkerResponse(worker_response)
+    }
+
+    pub fn from_request_data(request: &RequestDetails) -> Self {
+        EvaluatorInputContext::RequestData(request.clone())
+    }
+
+    pub fn from_all(worker_metadata: WorkerRequest, worker_response: WorkerBridgeResponse, request: RequestDetails) -> Self {
+        EvaluatorInputContext::All {
+            worker_request,
+            worker_response,
+            request
         }
     }
+
 }

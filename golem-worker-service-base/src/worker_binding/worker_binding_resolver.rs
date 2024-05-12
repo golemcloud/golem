@@ -1,11 +1,19 @@
 use std::collections::HashMap;
+use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
+use serde_json::Value;
+use uuid::Uuid;
+use golem_common::model::ComponentId;
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
 use crate::http::http_request::router;
 use crate::http::InputHttpRequest;
 use crate::http::router::RouterPattern;
+use crate::evaluator::{EvaluationResult, EvaluatorInputContext, RawString};
+use crate::evaluator::Evaluator;
+use crate::primitive::GetPrimitive;
 
-use crate::worker_binding::{GolemWorkerBinding, RequestDetails};
+use crate::worker_binding::{GolemWorkerBinding, RequestDetails, ResponseMapping, WorkerDetails};
+use crate::worker_bridge_execution::WorkerRequest;
 
 // For any input request type, there should be a way to resolve the
 // worker binding component, which is then used to form the worker request
@@ -17,8 +25,9 @@ pub trait WorkerBindingResolver<ApiDefinition> {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedWorkerBinding {
-    pub resolved_worker_binding_template: GolemWorkerBinding,
+    pub worker_request: WorkerRequest,
     pub request_details: RequestDetails,
+    pub response_mapping: Option<ResponseMapping>
 }
 
 impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
@@ -46,9 +55,60 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
         let request_details =
             RequestDetails::from(&zipped_path_params, &request_query_variables, query_params, request_body, headers)?;
 
+        let request_evaluation_context = EvaluatorInputContext::from_request_data(&request_details);
+
+        let worker_name: String =
+            binding
+            .worker_id
+            .evaluate(&request_evaluation_context)
+            .map_err(|err| err.to_string())?
+            .get_value()
+            .ok_or("Worker id is not a text value".to_string())?.get_primitive().ok_or("Worker id is not a primitive".to_string())?.as_string();
+
+        let function_name =
+            &binding.function_name
+            .evaluate(&request_evaluation_context)
+            .map_err(|err| err.to_string())?
+                .get_value()
+                .ok_or("Worker id is not a text value".to_string())?.get_primitive().ok_or("Worker id is not a primitive".to_string())?.as_string();
+
+        let mut function_params: Vec<Value> = vec![];
+
+        for expr in &binding
+            .function_params
+        {
+            let type_annotated_value = expr
+                .evaluate(&request_evaluation_context)
+                .map_err(|err| err.to_string())?
+                .get_value()
+                .ok_or("Failed to evaluate Route expression".to_string())?;
+
+            let json = get_json_from_typed_value(&type_annotated_value);
+
+            function_params.push(json);
+        }
+
+        let component_id_text: String = binding
+            .worker_id
+            .evaluate(&request_evaluation_context)
+            .map_err(|err| err.to_string())?
+            .get_value()
+            .ok_or("Worker id is not a text value".to_string())?.get_primitive().ok_or("Worker id is not a primitive".to_string())?.as_string();
+
+        let component_id = ComponentId(Uuid::parse_str(&component_id_text).map_err(|err| err.to_string())?);
+
+
+        let worker_request = WorkerRequest {
+            component_id,
+            worker_name,
+            function_name: function_name.to_string(),
+            function_params
+        };
+
         let resolved_binding = ResolvedWorkerBinding {
-            resolved_worker_binding_template: binding.clone(),
-            request_details
+            worker_request,
+            request_details,
+            response_mapping: binding.response.clone()
         };
 
         Some(resolved_binding)

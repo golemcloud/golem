@@ -8,24 +8,26 @@ use crate::worker_bridge_execution::WorkerBridgeResponse;
 use getter::GetError;
 use getter::Getter;
 use path::Path;
-use crate::evaluator::input_namespace::EvaluatorInputNamespace;
+use crate::evaluator::EvaluatorInputContext;
 
 use crate::expression::{Expr, InnerNumber};
 use crate::merge::Merge;
 
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
+pub(crate) use evaluator_context::*;
 mod getter;
-mod evaluator_context;
+mod math_op_evaluator;
 mod path;
 mod pattern_match_evaluator;
 
-mod input_namespace;
+mod evaluator_context;
+mod type_annotated_value_conversion;
 
 pub trait Evaluator {
     fn evaluate(
         &self,
-        evaluator_namespace: &EvaluatorInputNamespace,
+        evaluator_namespace: &EvaluatorInputContext,
     ) -> Result<EvaluationResult, EvaluationError>;
 }
 
@@ -92,7 +94,7 @@ impl<'t> RawString<'t> {
 impl<'t> Evaluator for RawString<'t> {
     fn evaluate(
         &self,
-        input: &EvaluatorInputNamespace,
+        input: &EvaluatorInputContext,
     ) -> Result<EvaluationResult, EvaluationError> {
         let mut combined_string = String::new();
         let mut tokenizer: Tokenizer = Tokenizer::new(self.input);
@@ -131,7 +133,7 @@ impl<'t> Evaluator for RawString<'t> {
 impl Evaluator for Expr {
     fn evaluate(
         &self,
-        input: &EvaluatorInputNamespace,
+        input: &EvaluatorInputContext,
     ) -> Result<EvaluationResult, EvaluationError> {
         let expr: &Expr = self;
 
@@ -139,7 +141,7 @@ impl Evaluator for Expr {
         // and therefore returns ValueTyped
         fn go(
             expr: &Expr,
-            input: &mut EvaluatorInputNamespace,
+            input: &mut EvaluatorInputContext,
             worker_response: Option<&WorkerBridgeResponse>,
         ) -> Result<EvaluationResult, EvaluationError> {
             match expr {
@@ -192,7 +194,7 @@ impl Evaluator for Expr {
                     let left = go(left, input, worker_response)?;
                     let right = go(right, input, worker_response)?;
 
-                    evaluator_context::compare_eval_result(&left, &right, |left, right| {
+                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left == right
                     })
                 }
@@ -200,7 +202,7 @@ impl Evaluator for Expr {
                     let left = go(left, input, worker_response)?;
                     let right = go(right, input, worker_response)?;
 
-                    evaluator_context::compare_eval_result(&left, &right, |left, right| {
+                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left > right
                     })
                 }
@@ -208,7 +210,7 @@ impl Evaluator for Expr {
                     let left = go(left, input, worker_response)?;
                     let right = go(right, input, worker_response)?;
 
-                    evaluator_context::compare_eval_result(&left, &right, |left, right| {
+                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left >= right
                     })
                 }
@@ -216,7 +218,7 @@ impl Evaluator for Expr {
                     let left = go(left, input, worker_response)?;
                     let right = go(right, input, worker_response)?;
 
-                    evaluator_context::compare_eval_result(&left, &right, |left, right| {
+                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left < right
                     })
                 }
@@ -224,7 +226,7 @@ impl Evaluator for Expr {
                     let left = go(left, input, worker_response)?;
                     let right = go(right, input, worker_response)?;
 
-                    evaluator_context::compare_eval_result(&left, &right, |left, right| {
+                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left <= right
                     })
                 }

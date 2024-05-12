@@ -101,11 +101,11 @@ impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
         worker_request_params: WorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
         let worker_name = worker_request_params.worker_id;
-        let component_id = worker_request_params.component;
+        let component_id = worker_request_params.component_id;
 
         info!(
             "Executing request for component: {}, worker: {}, function: {}",
-            component_id, worker_name, worker_request_params.function
+            component_id, worker_name, worker_request_params.function_name
         );
 
         let sample_json_data = json!(

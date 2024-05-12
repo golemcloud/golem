@@ -9,8 +9,9 @@ use crate::api_definition::http::{HttpApiDefinition, QueryInfo, VarInfo};
 use internal::{TypedKeyValue, TypedKeyValueCollection};
 use crate::merge::Merge;
 
+#[derive(Clone)]
 pub enum RequestDetails {
-    Http(HttRequestDetails)
+    Http(TypedHttRequestDetails)
 }
 impl RequestDetails {
     pub fn from(
@@ -20,18 +21,25 @@ impl RequestDetails {
         request_body: &Value,
         headers: &HeaderMap,
     ) -> Result<Self, Vec<String>> {
-        Ok(Self::Http(HttRequestDetails::from_input_http_request(path_params, query_variable_values, query_variable_names, request_body, headers)?))
+        Ok(Self::Http(TypedHttRequestDetails::from_input_http_request(path_params, query_variable_values, query_variable_names, request_body, headers)?))
+    }
+
+    pub fn to_type_annotated_value(self) -> TypeAnnotatedValue {
+        match self {
+            RequestDetails::Http(http) => http.to_type_annotated_value()
+        }
     }
 }
 
-pub struct HttRequestDetails {
+#[derive(Clone)]
+pub struct TypedHttRequestDetails {
     pub typed_path_key_values: TypedPathKeyValues,
     pub typed_request_body: TypedRequestBody,
     pub typed_query_values: TypedQueryKeyValues,
     pub typed_header_values: TypedHeaderValues,
 }
 
-impl HttRequestDetails {
+impl TypedHttRequestDetails {
 
     fn to_type_annotated_value(self) -> TypeAnnotatedValue {
         let mut typed_path_values: TypeAnnotatedValue = self.typed_path_key_values.0.into();
@@ -73,17 +81,10 @@ impl HttRequestDetails {
             typed_header_values: header_params
         })
     }
-
-    fn get_path_value(&self, key: &str) -> Option<&TypeAnnotatedValue> {
-        self.typed_path_key_values.get(key)
-    }
-
-    fn get_query_param_value(&self, key: &str) -> Option<&TypeAnnotatedValue> {
-        self.typed_query_values.get(key)
-    }
 }
 
-pub struct TypedPathKeyValues(TypedKeyValueCollection);
+#[derive(Clone)]
+pub struct TypedPathKeyValues(pub TypedKeyValueCollection);
 
 impl TypedPathKeyValues {
     fn from(path_variables: &HashMap<VarInfo, &str>) -> TypedPathKeyValues {
@@ -98,7 +99,7 @@ impl TypedPathKeyValues {
     }
 }
 
-pub struct TypedQueryKeyValues(TypedKeyValueCollection);
+pub struct TypedQueryKeyValues(pub TypedKeyValueCollection);
 
 impl TypedQueryKeyValues {
     fn from(
@@ -175,6 +176,7 @@ mod internal {
         }
     }
 
+    #[derive(Clone)]
     pub struct TypedKeyValueCollection {
         pub fields: Vec<TypedKeyValue>,
     }

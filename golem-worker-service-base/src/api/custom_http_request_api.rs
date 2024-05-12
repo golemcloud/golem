@@ -119,7 +119,7 @@ impl CustomHttpRequestApi {
 
                         match worker_bridge_response {
                             Ok(response) => response.to_http_response(
-                                &resolved_route.resolved_worker_binding_template.response,
+                                &resolved_route.binding_template.response,
                                 &resolved_route.typed_value_from_input,
                             ),
                             Err(e) => {
