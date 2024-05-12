@@ -240,7 +240,7 @@ fn text_component_get(
         env_service.to_str().unwrap(),
     ])?;
 
-    let update_res = cli.with_format(Format::Text).run_string(&[
+    let get_res = cli.with_format(Format::Text).run_string(&[
         "component",
         "get",
         &cfg.arg('C', "component-id"),
@@ -248,7 +248,7 @@ fn text_component_get(
         env_service.to_str().unwrap(),
     ])?;
 
-    let lines = update_res.lines().collect::<Vec<_>>();
+    let lines = get_res.lines().collect::<Vec<_>>();
 
     assert_eq!(
         *lines.first().unwrap(),
