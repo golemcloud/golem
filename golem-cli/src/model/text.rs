@@ -213,6 +213,29 @@ impl TextFormat for ComponentUpdateView {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComponentGetView(pub ComponentView);
+
+impl TextFormat for ComponentGetView {
+    fn print(&self) {
+        printdoc!(
+            "
+            Component with ID {}. Version: {}. Component size is {} bytes.
+            Component name: {}.
+            Exports:
+            ",
+            self.0.component_id,
+            self.0.component_version,
+            self.0.component_size,
+            self.0.component_name
+        );
+
+        for export in &self.0.exports {
+            println!("\t{export}")
+        }
+    }
+}
+
 #[derive(Table)]
 struct ComponentListView {
     #[table(title = "ID")]

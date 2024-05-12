@@ -20,7 +20,7 @@ use itertools::Itertools;
 
 use crate::clients::component::ComponentClient;
 use crate::model::component::ComponentView;
-use crate::model::text::{ComponentAddView, ComponentUpdateView};
+use crate::model::text::{ComponentAddView, ComponentGetView, ComponentUpdateView};
 use crate::model::{
     ComponentId, ComponentIdOrName, ComponentName, GolemError, GolemResult, PathBufOrStdin,
 };
@@ -133,7 +133,7 @@ impl<C: ComponentClient + Send + Sync> ComponentHandler for ComponentHandlerLive
                     None => self.get_latest_metadata(&component_id).await?,
                 };
                 let view: ComponentView = component.into();
-                Ok(GolemResult::Ok(Box::new(vec![view])))
+                Ok(GolemResult::Ok(Box::new(ComponentGetView(view))))
             }
         }
     }
