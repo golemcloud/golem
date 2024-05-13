@@ -12,26 +12,26 @@ use crate::service::api_definition_lookup::ApiDefinitionLookup;
 
 use crate::worker_binding::WorkerBindingResolver;
 use crate::worker_bridge_execution::WorkerRequestExecutor;
-use crate::worker_bridge_execution::{WorkerBridgeResponse, WorkerRequest};
+use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
-    pub worker_to_http_response_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+    pub worker_request_executor_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     pub api_definition_lookup_service:
         Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
     pub fn new(
-        worker_to_http_response_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+        worker_request_executor_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
         api_definition_lookup_service: Arc<
             dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         >,
     ) -> Self {
         Self {
-            worker_to_http_response_service,
+            worker_request_executor_service,
             api_definition_lookup_service,
         }
     }
@@ -91,64 +91,8 @@ impl CustomHttpRequestApi {
         };
 
         match api_request.resolve(&api_definition) {
-            Some(resolved_route) => {
-                let resolved_worker_request =
-                    match WorkerRequest::from_resolved_route(resolved_route.clone()) {
-                        Ok(golem_worker_request) => golem_worker_request,
-                        Err(e) => {
-                            error!(
-                                "API request id: {} - request error: {}",
-                                &api_definition.id, e
-                            );
-                            return Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(Body::from_string(
-                                    format!("API request error {}", e).to_string(),
-                                ));
-                        }
-                    };
-
-                match self
-                    .worker_to_http_response_service
-                    .execute(resolved_worker_request.clone())
-                    .await
-                {
-                    Ok(worker_response) => {
-                        let worker_bridge_response =
-                            WorkerBridgeResponse::from_worker_response(&worker_response);
-
-                        match worker_bridge_response {
-                            Ok(response) => response.to_http_response(
-                                &resolved_route.binding_template.response,
-                                &resolved_route.typed_value_from_input,
-                            ),
-                            Err(e) => {
-                                error!(
-                                    "API request id: {} - response error: {}",
-                                    &api_definition.id, e
-                                );
-                                Response::builder()
-                                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                    .body(Body::from_string(
-                                        format!("API request error {}", e).to_string(),
-                                    ))
-                            }
-                        }
-                    }
-
-                    Err(e) => {
-                        error!(
-                            "API request id: {} - request error: {}",
-                            &api_definition.id, e
-                        );
-                        Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(Body::from_string(
-                                format!("API request error {}", e).to_string(),
-                            ))
-                    }
-                }
-            }
+            Some(resolved_route) =>
+                resolved_route.execute_with(&self.worker_request_executor_service),
 
             None => {
                 error!(

@@ -4,7 +4,7 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 
 use crate::expression;
 use crate::primitive::{GetPrimitive, Primitive};
-use crate::worker_bridge_execution::WorkerBridgeResponse;
+use crate::worker_bridge_execution::RefinedWorkerResponse;
 use getter::GetError;
 use getter::Getter;
 use path::Path;
@@ -142,7 +142,7 @@ impl Evaluator for Expr {
         fn go(
             expr: &Expr,
             input: &mut EvaluatorInputContext,
-            worker_response: Option<&WorkerBridgeResponse>,
+            worker_response: Option<&RefinedWorkerResponse>,
         ) -> Result<EvaluationResult, EvaluationError> {
             match expr {
                 Expr::Request() => input
@@ -152,11 +152,11 @@ impl Evaluator for Expr {
 
                 Expr::Worker() => {
                     let result = match worker_response {
-                        Some(WorkerBridgeResponse::MultipleResults(results)) => {
+                        Some(RefinedWorkerResponse::MultipleResults(results)) => {
                             results.clone().into()
                         }
-                        Some(WorkerBridgeResponse::SingleResult(result)) => result.clone().into(),
-                        Some(WorkerBridgeResponse::Unit) => EvaluationResult::Unit,
+                        Some(RefinedWorkerResponse::SingleResult(result)) => result.clone().into(),
+                        Some(RefinedWorkerResponse::Unit) => EvaluationResult::Unit,
                         None => Err("Worker response is not available".to_string())?,
                     };
 
@@ -510,7 +510,7 @@ mod tests {
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, EvaluationResult, Evaluator};
     use crate::expression;
-    use crate::worker_bridge_execution::{WorkerBridgeResponse, WorkerResponse};
+    use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerResponse};
     use test_utils::*;
 
     trait EvaluatorTestExt {
@@ -520,7 +520,7 @@ mod tests {
         ) -> Result<TypeAnnotatedValue, EvaluationError>;
         fn evaluate_worker_bridge_response(
             &self,
-            worker_bridge_response: &WorkerBridgeResponse,
+            worker_bridge_response: &RefinedWorkerResponse,
         ) -> Result<TypeAnnotatedValue, EvaluationError>;
     }
 
@@ -537,7 +537,7 @@ mod tests {
 
         fn evaluate_worker_bridge_response(
             &self,
-            worker_bridge_response: &WorkerBridgeResponse,
+            worker_bridge_response: &RefinedWorkerResponse,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             let empty_input = TypeAnnotatedValue::Record {
                 value: vec![],
@@ -551,12 +551,12 @@ mod tests {
     }
 
     trait WorkerBridgeExt {
-        fn to_test_worker_bridge_response(&self) -> WorkerBridgeResponse;
+        fn to_test_worker_bridge_response(&self) -> RefinedWorkerResponse;
     }
 
     impl WorkerBridgeExt for WorkerResponse {
-        fn to_test_worker_bridge_response(&self) -> WorkerBridgeResponse {
-            WorkerBridgeResponse::SingleResult(self.result.result.clone())
+        fn to_test_worker_bridge_response(&self) -> RefinedWorkerResponse {
+            RefinedWorkerResponse::SingleResult(self.result.result.clone())
         }
     }
 
@@ -843,7 +843,7 @@ mod tests {
         let result_as_typed_value =
             get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type)))
                 .unwrap();
-        let worker_response = WorkerBridgeResponse::from_worker_response(&WorkerResponse::new(
+        let worker_response = RefinedWorkerResponse::from_worker_response(&WorkerResponse::new(
             TypeAnnotatedValue::Tuple {
                 typ: vec![AnalysedType::from(&result_as_typed_value)],
                 value: vec![result_as_typed_value],

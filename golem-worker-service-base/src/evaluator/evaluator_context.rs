@@ -1,16 +1,16 @@
 use crate::worker_binding::{RequestDetails, WorkerDetails};
-use crate::worker_bridge_execution::{WorkerBridgeResponse, WorkerRequest, WorkerResponse};
+use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerResponse};
 
 
 // Evaluator of an expression doesn't necessarily need a context all the time, and can be empty.
 // or contain worker details, request details, worker_response or all of them.
 pub enum EvaluatorInputContext {
     WorkerRequest(WorkerRequest),
-    WorkerResponse(WorkerBridgeResponse),
+    WorkerResponse(RefinedWorkerResponse),
     RequestData(RequestDetails),
     All {
         worker_request: WorkerRequest,
-        worker_response: WorkerBridgeResponse,
+        worker_response: RefinedWorkerResponse,
         request: RequestDetails
     },
     Empty,
@@ -21,7 +21,7 @@ impl EvaluatorInputContext{
         EvaluatorInputContext::WorkerRequest(worker_metadata)
     }
 
-    pub fn from_worker_response(worker_response: WorkerBridgeResponse) -> Self {
+    pub fn from_worker_response(worker_response: RefinedWorkerResponse) -> Self {
         EvaluatorInputContext::WorkerResponse(worker_response)
     }
 
@@ -29,7 +29,7 @@ impl EvaluatorInputContext{
         EvaluatorInputContext::RequestData(request.clone())
     }
 
-    pub fn from_all(worker_request: WorkerRequest, worker_response: WorkerBridgeResponse, request: RequestDetails) -> Self {
+    pub fn from_all(worker_request: WorkerRequest, worker_response: RefinedWorkerResponse, request: RequestDetails) -> Self {
         EvaluatorInputContext::All {
             worker_request: worker_request,
             worker_response: worker_response,

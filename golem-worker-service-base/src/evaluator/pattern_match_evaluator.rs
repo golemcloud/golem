@@ -2,7 +2,7 @@ use crate::evaluator::Evaluator;
 use crate::evaluator::{EvaluationError, EvaluationResult};
 use crate::expression::{ArmPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, MatchArm};
 use crate::merge::Merge;
-use crate::worker_bridge_execution::WorkerBridgeResponse;
+use crate::worker_bridge_execution::RefinedWorkerResponse;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::ops::Deref;
@@ -29,7 +29,7 @@ pub(crate) fn evaluate_pattern_match(
     match_expr: &Expr,
     arms: &Vec<MatchArm>,
     input: &mut TypeAnnotatedValue,
-    worker_bridge_response: Option<&WorkerBridgeResponse>,
+    worker_bridge_response: Option<&RefinedWorkerResponse>,
 ) -> Result<EvaluationResult, EvaluationError> {
     let match_evaluated = match_expr.evaluate(input, worker_bridge_response)?;
 

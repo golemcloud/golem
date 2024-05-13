@@ -1,7 +1,7 @@
-use crate::worker_bridge_execution::WorkerBridgeResponse;
+use crate::worker_bridge_execution::RefinedWorkerResponse;
 
 struct WorkerDetails {
     id: String,
-    response: WorkerBridgeResponse
+    response: RefinedWorkerResponse
 }
 

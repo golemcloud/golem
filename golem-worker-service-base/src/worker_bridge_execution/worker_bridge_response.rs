@@ -8,26 +8,26 @@ use serde_json::json;
 use tracing::info;
 
 use crate::service::worker::TypedResult;
-use crate::worker_binding::ResponseMapping;
+use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::worker_request_executor::{
     WorkerRequestExecutor, WorkerRequestExecutorError,
 };
 use crate::worker_bridge_execution::{WorkerRequest, WorkerResponse};
 use golem_service_base::type_inference::*;
 
-// Worker Bridge response is different from WorkerResponse, because,
-// it ensures that we are not returing a vector of result if they are not named results
+// Refined Worker response is different from WorkerResponse, because,
+// it ensures that we are not returning a vector of result if they are not named results
 // or unit
-pub enum WorkerBridgeResponse {
+pub enum RefinedWorkerResponse {
     Unit,
     SingleResult(TypeAnnotatedValue),
     MultipleResults(TypeAnnotatedValue),
 }
 
-impl WorkerBridgeResponse {
+impl RefinedWorkerResponse {
     pub(crate) fn from_worker_response(
         worker_response: &WorkerResponse,
-    ) -> Result<WorkerBridgeResponse, String> {
+    ) -> Result<RefinedWorkerResponse, String> {
         let result = &worker_response.result.result;
         let function_result_types = &worker_response.result.function_result_types;
 
@@ -37,9 +37,9 @@ impl WorkerBridgeResponse {
             match result {
                 TypeAnnotatedValue::Tuple { value, .. } => {
                     if value.len() == 1 {
-                        Ok(WorkerBridgeResponse::SingleResult(value[0].clone()))
+                        Ok(RefinedWorkerResponse::SingleResult(value[0].clone()))
                     } else if value.is_empty() {
-                        Ok(WorkerBridgeResponse::Unit)
+                        Ok(RefinedWorkerResponse::Unit)
                     } else {
                         Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple with 1 element if results are unnamed. Obtained {:?}", AnalysedType::from(result)))
                     }
@@ -49,7 +49,7 @@ impl WorkerBridgeResponse {
         } else {
             match &worker_response.result.result  {
                 TypeAnnotatedValue::Record { .. } => {
-                    Ok(WorkerBridgeResponse::MultipleResults(worker_response.result.result.clone()))
+                    Ok(RefinedWorkerResponse::MultipleResults(worker_response.result.result.clone()))
                 }
 
                 // See wasm-rpc implementations for more details
@@ -61,7 +61,7 @@ impl WorkerBridgeResponse {
     pub(crate) fn to_http_response(
         &self,
         response_mapping: &Option<ResponseMapping>,
-        input_request: &TypeAnnotatedValue,
+        input_request: &RequestDetails,
     ) -> poem::Response {
         if let Some(mapping) = response_mapping {
             match internal::IntermediateHttpResponse::from(self, mapping, input_request) {
@@ -75,9 +75,9 @@ impl WorkerBridgeResponse {
             }
         } else {
             let type_annotated_value = match self {
-                WorkerBridgeResponse::Unit => None,
-                WorkerBridgeResponse::SingleResult(value) => Some(value.clone()),
-                WorkerBridgeResponse::MultipleResults(results) => Some(results.clone()),
+                RefinedWorkerResponse::Unit => None,
+                RefinedWorkerResponse::SingleResult(value) => Some(value.clone()),
+                RefinedWorkerResponse::MultipleResults(results) => Some(results.clone()),
             };
 
             match type_annotated_value {
@@ -95,7 +95,7 @@ impl WorkerBridgeResponse {
 pub struct NoOpWorkerRequestExecutor {}
 
 #[async_trait]
-impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
+impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
     async fn execute(
         &self,
         worker_request_params: WorkerRequest,
@@ -151,7 +151,7 @@ mod internal {
     use crate::expression::Expr;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::ResponseMapping;
-    use crate::worker_bridge_execution::worker_bridge_response::WorkerBridgeResponse;
+    use crate::worker_bridge_execution::worker_bridge_response::RefinedWorkerResponse;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, StatusCode};
@@ -166,7 +166,7 @@ mod internal {
 
     impl IntermediateHttpResponse {
         pub(crate) fn from(
-            worker_response: &WorkerBridgeResponse,
+            worker_response: &RefinedWorkerResponse,
             response_mapping: &ResponseMapping,
             input_request: &TypeAnnotatedValue,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {

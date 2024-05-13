@@ -19,7 +19,7 @@ impl UnauthorisedWorkerRequestExecutor {
 }
 
 #[async_trait]
-impl WorkerRequestExecutor<poem::Response> for UnauthorisedWorkerRequestExecutor {
+impl WorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
     async fn execute(
         &self,
         worker_request_params: WorkerRequest,

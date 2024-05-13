@@ -1,7 +1,11 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
+use http::StatusCode;
+use poem::{Body, EndpointExt, Response};
 use serde_json::Value;
+use tracing::error;
 use uuid::Uuid;
 use golem_common::model::ComponentId;
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
@@ -12,8 +16,9 @@ use crate::evaluator::{EvaluatorInputContext};
 use crate::evaluator::Evaluator;
 use crate::primitive::GetPrimitive;
 
-use crate::worker_binding::{GolemWorkerBinding, RequestDetails, ResponseMapping};
-use crate::worker_bridge_execution::WorkerRequest;
+use crate::worker_binding::{RequestDetails, ResponseMapping};
+use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor, WorkerResponse};
+use crate::worker_bridge_execution::to_response::ToResponse;
 
 // For any input request type, there should be a way to resolve the
 // worker binding component, which is then used to form the worker request
@@ -28,6 +33,26 @@ pub struct ResolvedWorkerBinding {
     pub worker_request: WorkerRequest,
     pub request_details: RequestDetails,
     pub response_mapping: Option<ResponseMapping>
+}
+
+impl ResolvedWorkerBinding {
+    pub async fn execute_with<A>(&self, executor: &Arc<dyn WorkerRequestExecutor>) -> A where WorkerResponse: ToResponse<A> {
+        let worker_request = &self.worker_request;
+        let worker_response = executor.execute(worker_request.clone()).await.map_err(|err| err.to_string());
+
+        match worker_response {
+            Ok(worker_response) => {
+                worker_response.to_response(&self.response_mapping.clone(), &self.request_details);
+            }
+            Err(e) => {
+                Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from_string(
+                        format!("API request error {}", e).to_string(),
+                    ))
+            }
+        }
+    }
 }
 
 impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
