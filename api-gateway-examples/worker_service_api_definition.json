@@ -7,8 +7,8 @@
       "path": "/{user-id}/get-cart-contents",
       "binding": {
         "type": "wit-worker",
-        "template": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-        "workerId": "worker-${request.path.user-id}",
+        "componentId": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+        "workerName": "worker-${request.path.user-id}",
         "functionName": "golem:it/api/get-cart-contents",
         "functionParams": [],
         "response" : {

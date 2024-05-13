@@ -183,7 +183,9 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             None => None,
         };
 
-        let worker_id: Expr = expression::from_string(self.worker_name).map_err(|e| e.to_string())?;
+        let worker_name: Expr =
+            expression::from_string(self.worker_name).map_err(|e| e.to_string())?;
+
         let mut function_params = Vec::new();
 
         for param in self.function_params {
@@ -199,7 +201,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
 
         Ok(crate::worker_binding::GolemWorkerBinding {
             component_id: self.component_id,
-            worker_name: worker_id,
+            worker_name,
             function_name: self.function_name,
             function_params,
             idempotency_key,
