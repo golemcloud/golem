@@ -38,7 +38,7 @@ impl SpawnedComponentService {
         working_directory: &Path,
         http_port: u16,
         grpc_port: u16,
-        component_compilation_service_port: u16,
+        component_compilation_service_port: Option<u16>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
         out_level: Level,
@@ -55,8 +55,7 @@ impl SpawnedComponentService {
             .envs(env_vars(
                 http_port,
                 grpc_port,
-                "localhost",
-                component_compilation_service_port,
+                component_compilation_service_port.map(|p| ("localhost", p)),
                 rdb,
                 verbosity,
             ))

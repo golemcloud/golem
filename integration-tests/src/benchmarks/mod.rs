@@ -75,7 +75,7 @@ pub async fn start(worker_ids: Vec<WorkerId>, deps: CliTestDependencies) {
 
 pub async fn setup_benchmark(params: CliParams, cluster_size: usize) -> BenchmarkContext {
     // Initialize infrastructure
-    let deps = CliTestDependencies::new(params.clone(), cluster_size).await;
+    let deps = CliTestDependencies::new(params.clone(), cluster_size, true).await;
 
     BenchmarkContext { deps }
 }

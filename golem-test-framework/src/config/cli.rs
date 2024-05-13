@@ -283,7 +283,11 @@ impl CliTestDependencies {
         tracing_subscriber::registry().with(ansi_layer).init();
     }
 
-    pub async fn new(params: CliParams, cluster_size: usize) -> Self {
+    pub async fn new(
+        params: CliParams,
+        cluster_size: usize,
+        component_compilation_service: bool,
+    ) -> Self {
         match &params.mode {
             TestMode::Provided {
                 postgres,
@@ -378,10 +382,17 @@ impl CliTestDependencies {
                 let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
                     DockerShardManager::new(redis.clone(), params.service_verbosity()),
                 );
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
-                    Arc::new(DockerComponentService::new(
+                let component_compilation_service = if component_compilation_service {
+                    Some((
                         DockerComponentCompilationService::NAME,
                         DockerComponentCompilationService::GRPC_PORT,
+                    ))
+                } else {
+                    None
+                };
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+                    Arc::new(DockerComponentService::new(
+                        component_compilation_service,
                         rdb.clone(),
                         params.service_verbosity(),
                     ));
@@ -475,13 +486,18 @@ impl CliTestDependencies {
                     )
                     .await,
                 );
+                let component_compilation_service_port = if component_compilation_service {
+                    Some(*component_compilation_service_grpc_port)
+                } else {
+                    None
+                };
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
                     SpawnedComponentService::new(
                         &build_root.join("golem-component-service"),
                         &workspace_root.join("golem-component-service"),
                         *component_service_http_port,
                         *component_service_grpc_port,
-                        *component_compilation_service_grpc_port,
+                        component_compilation_service_port,
                         rdb.clone(),
                         params.service_verbosity(),
                         out_level,
@@ -587,13 +603,20 @@ impl CliTestDependencies {
                     )
                     .await,
                 );
+                let component_compilation_service = if component_compilation_service {
+                    Some((
+                        K8sComponentCompilationService::NAME,
+                        K8sComponentCompilationService::GRPC_PORT,
+                    ))
+                } else {
+                    None
+                };
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
                     K8sComponentService::new(
                         &namespace,
                         &routing_type,
                         Level::INFO,
-                        K8sComponentCompilationService::NAME,
-                        K8sComponentCompilationService::GRPC_PORT,
+                        component_compilation_service,
                         rdb.clone(),
                         timeout,
                         None,
@@ -699,13 +722,20 @@ impl CliTestDependencies {
                     )
                     .await,
                 );
+                let component_compilation_service = if component_compilation_service {
+                    Some((
+                        K8sComponentCompilationService::NAME,
+                        K8sComponentCompilationService::GRPC_PORT,
+                    ))
+                } else {
+                    None
+                };
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
                     K8sComponentService::new(
                         &namespace,
                         &routing_type,
                         Level::INFO,
-                        K8sComponentCompilationService::NAME,
-                        K8sComponentCompilationService::GRPC_PORT,
+                        component_compilation_service,
                         rdb.clone(),
                         timeout,
                         service_annotations.clone(),
