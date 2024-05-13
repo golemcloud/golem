@@ -64,7 +64,7 @@ impl TypedHttRequestDetails {
             ],
             value: vec![
                 ("path".to_string(), merged_type_annotated_value),
-                ("body".to_string(), self.typed_request_body.0.into()),
+                ("body".to_string(), self.typed_request_body.0),
                 ("headers".to_string(), self.typed_header_values.0.into()),
             ],
         }
@@ -80,7 +80,7 @@ impl TypedHttRequestDetails {
         let request_body = TypedRequestBody::from(request_body)?;
         let path_params = TypedPathKeyValues::from(path_params);
         let query_params =
-            TypedQueryKeyValues::from(&query_variable_values, &query_variable_names)?;
+            TypedQueryKeyValues::from(query_variable_values, query_variable_names)?;
         let header_params = TypedHeaderValues::from(headers)?;
 
         Ok(Self {
@@ -98,7 +98,7 @@ pub struct TypedPathKeyValues(pub TypedKeyValueCollection);
 impl TypedPathKeyValues {
     fn from(path_variables: &HashMap<VarInfo, &str>) -> TypedPathKeyValues {
         let record_fields: Vec<TypedKeyValue> = path_variables
-            .into_iter()
+            .iter()
             .map(|(key, value)| TypedKeyValue {
                 name: key.key_name.clone(),
                 value: internal::get_typed_value_from_primitive(value),
@@ -171,6 +171,7 @@ impl TypedRequestBody {
 }
 
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub struct TypedKeyValueCollection {
     pub fields: Vec<TypedKeyValue>,
 }
@@ -181,11 +182,6 @@ impl TypedKeyValueCollection {
     }
 }
 
-impl Default for TypedKeyValueCollection {
-    fn default() -> Self {
-        TypedKeyValueCollection { fields: vec![] }
-    }
-}
 
 impl From<TypedKeyValueCollection> for AnalysedType {
     fn from(typed_key_value_collection: TypedKeyValueCollection) -> Self {

@@ -46,7 +46,7 @@ impl ToResponse<poem::Response> for WorkerRequestExecutorError {
         poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::from_string(
-                format!("API request error {}", self.to_string()).to_string(),
+                format!("API request error {}", self).to_string(),
             ))
     }
 }
