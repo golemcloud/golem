@@ -9,7 +9,7 @@ use crate::expression::Expr;
 #[serde(rename_all = "camelCase")]
 pub struct GolemWorkerBinding {
     pub component: ComponentId,
-    pub worker_id: Expr,
+    pub worker_name: Expr,
     pub function_name: String,
     pub function_params: Vec<Expr>,
     pub idempotency_key: Option<Expr>,

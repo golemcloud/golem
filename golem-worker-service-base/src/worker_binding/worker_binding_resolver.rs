@@ -117,7 +117,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
         let request_evaluation_context = EvaluationContext::from_request_data(&request_details);
 
         let worker_name: String = binding
-            .worker_id
+            .worker_name
             .evaluate(&request_evaluation_context)
             .map_err(|err| err.to_string())?
             .get_value()

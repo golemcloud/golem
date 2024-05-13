@@ -154,7 +154,7 @@ mod internal {
             ))?;
 
         let binding = GolemWorkerBinding {
-            worker_id: get_worker_id_expr(worker_bridge_info)?,
+            worker_name: get_worker_id_expr(worker_bridge_info)?,
             function_name: get_function_name(worker_bridge_info)?,
             function_params: get_function_params_expr(worker_bridge_info)?,
             component: get_component_id(worker_bridge_info)?,
@@ -308,7 +308,7 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
-                    worker_id: Expr::Concat(vec![
+                    worker_name: Expr::Concat(vec![
                         Expr::Literal("worker-".to_string()),
                         Expr::SelectField(
                             Box::new(Expr::SelectField(
