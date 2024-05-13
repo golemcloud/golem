@@ -8,7 +8,7 @@ use golem_service_base::type_inference::infer_analysed_type;
 use crate::api_definition::http::{QueryInfo, VarInfo};
 use crate::merge::Merge;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum RequestDetails {
     Http(TypedHttRequestDetails)
 }
@@ -30,7 +30,7 @@ impl RequestDetails {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TypedHttRequestDetails {
     pub typed_path_key_values: TypedPathKeyValues,
     pub typed_request_body: TypedRequestBody,
@@ -82,7 +82,7 @@ impl TypedHttRequestDetails {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TypedPathKeyValues(pub TypedKeyValueCollection);
 
 impl TypedPathKeyValues {
@@ -158,7 +158,7 @@ impl TypedRequestBody {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TypedKeyValueCollection {
     pub fields: Vec<TypedKeyValue>,
 }

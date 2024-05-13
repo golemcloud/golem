@@ -91,13 +91,13 @@ impl CustomHttpRequestApi {
         };
 
         match api_request.resolve(&api_definition) {
-            Some(resolved_worker_request) =>
+            Ok(resolved_worker_request) =>
                 resolved_worker_request.execute_with::<poem::Response>(&self.worker_request_executor_service).await,
 
-            None => {
+            Err(msg) => {
                 error!(
                     "API request id: {} - request error: {}",
-                    &api_definition.id, "Unable to find a route"
+                    &api_definition.id, msg
                 );
 
                 Response::builder()

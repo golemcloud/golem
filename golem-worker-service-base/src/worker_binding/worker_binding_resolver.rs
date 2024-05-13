@@ -1,20 +1,21 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::Arc;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use poem::{EndpointExt};
 use serde_json::Value;
-use uuid::Uuid;
-use golem_common::model::ComponentId;
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
 use crate::http::http_request::router;
 use crate::http::InputHttpRequest;
 use crate::http::router::RouterPattern;
 use crate::evaluator::{EvaluationContext};
 use crate::evaluator::Evaluator;
+use crate::expression;
+use crate::expression::Expr;
 use crate::primitive::GetPrimitive;
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
-use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse};
+use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse};
 use crate::worker_bridge_execution::to_response::ToResponse;
 
 // For any input request type, there should be a way to resolve the
@@ -22,7 +23,23 @@ use crate::worker_bridge_execution::to_response::ToResponse;
 // resolved binding is always kept along with the request as binding may refer
 // to request details
 pub trait WorkerBindingResolver<ApiDefinition> {
-    fn resolve(&self, api_specification: &ApiDefinition) -> Option<ResolvedWorkerBinding>;
+    fn resolve(&self, api_specification: &ApiDefinition) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError>;
+}
+
+
+#[derive(Debug)]
+struct WorkerBindingResolutionError(pub String);
+
+impl<A: AsRef<str>> From<A> for WorkerBindingResolutionError {
+    fn from(message: A) -> Self {
+        WorkerBindingResolutionError(message.as_ref().to_string())
+    }
+}
+
+impl Display for WorkerBindingResolutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Worker binding resolution error: {}", self.0)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +68,7 @@ impl ResolvedWorkerBinding {
 }
 
 impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
-    fn resolve(&self, api_definition: &HttpApiDefinition) -> Option<ResolvedWorkerBinding> {
+    fn resolve(&self, api_definition: &HttpApiDefinition) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError> {
         let api_request = self;
         let router = router::build(api_definition.routes.clone());
         let path: Vec<&str> = RouterPattern::split(&api_request.input_path.base_path).collect();
@@ -63,7 +80,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             path_params,
             query_params,
             binding,
-        } = router.check_path(&api_request.req_method, &path)?;
+        } = router.check_path(&api_request.req_method, &path).ok_or("Failed to resolve route")?;
 
         let zipped_path_params: HashMap<VarInfo, &str> = {
             path_params
@@ -73,7 +90,8 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
         };
 
         let request_details =
-            RequestDetails::from(&zipped_path_params, &request_query_variables, query_params, request_body, headers)?;
+            RequestDetails::from(&zipped_path_params, &request_query_variables, query_params, request_body, headers)
+                .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
         let request_evaluation_context = EvaluationContext::from_request_data(&request_details);
 
@@ -119,6 +137,6 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             response_mapping: binding.response.clone()
         };
 
-        Some(resolved_binding)
+        Ok(resolved_binding)
     }
 }
