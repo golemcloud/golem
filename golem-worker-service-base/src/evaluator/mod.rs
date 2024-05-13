@@ -491,7 +491,7 @@ mod tests {
             &self,
             input: &RequestDetails,
             worker_response: &RefinedWorkerResponse,
-        ) -> Result<TypeAnnotatedValue, EvaluationError>;
+        ) -> Result<EvaluationResult, EvaluationError>;
     }
 
     impl<T: Evaluator> EvaluatorTestExt for T {
@@ -513,9 +513,14 @@ mod tests {
                 value: vec![],
                 typ: vec![],
             };
-            let eval_result = self.evaluate(&EvaluationContext::from_worker_response(
-                worker_bridge_response,
-            ))?;
+
+            let eval_result = self.evaluate(&EvaluationContext {
+                worker_request: None,
+                worker_response: Some(worker_bridge_response.clone()),
+                variables: None,
+                request_data: None,
+            })?;
+
             Ok(eval_result
                 .get_value()
                 .ok_or("The expression is evaluated to unit and doesn't have a value")?)
@@ -525,7 +530,7 @@ mod tests {
             &self,
             input: &RequestDetails,
             worker_response: &RefinedWorkerResponse,
-        ) -> Result<TypeAnnotatedValue, EvaluationError> {
+        ) -> Result<EvaluationResult, EvaluationError> {
             let evaluation_context = EvaluationContext {
                 worker_request: None,
                 worker_response: Some(worker_response.clone()),
@@ -534,9 +539,7 @@ mod tests {
             };
 
             let eval_result = self.evaluate(&evaluation_context)?;
-            Ok(eval_result
-                .get_value()
-                .ok_or("The expression is evaluated to unit and doesn't have a value")?)
+            Ok(eval_result)
         }
     }
 

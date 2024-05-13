@@ -128,7 +128,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -160,7 +160,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let mut expected_map = serde_json::Map::new();
 
@@ -193,7 +193,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let mut expected_map = serde_json::Map::new();
 
@@ -234,7 +234,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let mut expected_map = serde_json::Map::new();
 
@@ -286,7 +286,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -342,7 +342,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let mut user_id_map = serde_json::Map::new();
 
@@ -389,7 +389,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -427,7 +427,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -459,7 +459,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -491,7 +491,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -523,7 +523,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -558,7 +558,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -590,7 +590,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -643,7 +643,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -696,7 +696,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -748,7 +748,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
@@ -804,7 +804,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-        let result = WorkerRequest::from_resolved_route(resolved_route.clone());
+        let result = resolved_route.worker_request;
 
         let expected = WorkerRequest {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
