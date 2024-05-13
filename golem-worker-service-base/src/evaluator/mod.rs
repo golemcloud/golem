@@ -1390,7 +1390,7 @@ mod tests {
 
         let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::Record {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Record {
             typ: vec![(
                 "a".to_string(),
                 AnalysedType::Result {
@@ -1406,7 +1406,7 @@ mod tests {
                     value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
                 },
             )],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
@@ -1417,7 +1417,7 @@ mod tests {
 
         let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::Record {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Record {
             typ: vec![(
                 "a".to_string(),
                 AnalysedType::Result {
@@ -1433,7 +1433,7 @@ mod tests {
                     value: Err(Some(Box::new(TypeAnnotatedValue::U64(1)))),
                 },
             )],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
@@ -1444,14 +1444,14 @@ mod tests {
 
         let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::List {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::List {
             typ: AnalysedType::U64,
             values: vec![
                 TypeAnnotatedValue::U64(1),
                 TypeAnnotatedValue::U64(2),
                 TypeAnnotatedValue::U64(3),
             ],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
@@ -1462,7 +1462,7 @@ mod tests {
 
         let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::Tuple {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Tuple {
             typ: vec![
                 AnalysedType::Option(Box::new(AnalysedType::U64)),
                 AnalysedType::U64,
@@ -1476,7 +1476,7 @@ mod tests {
                 TypeAnnotatedValue::U64(2),
                 TypeAnnotatedValue::U64(3),
             ],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
@@ -1501,7 +1501,7 @@ mod tests {
 
         let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::List {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::List {
             typ: AnalysedType::Result {
                 ok: Some(Box::new(AnalysedType::U64)),
                 error: None,
@@ -1518,7 +1518,7 @@ mod tests {
                     value: Ok(Some(Box::new(TypeAnnotatedValue::U64(2)))),
                 },
             ],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
