@@ -93,7 +93,7 @@ impl Evaluator for Expr {
 
                 // worker.response
                 Expr::Worker() => {
-                    let worker_data = input.merge_worker_data();
+                    let worker_data = internal::merge_worker_request_response(input);
                     worker_data.ok_or(EvaluationError::Message("Worker data is not available".to_string()))
                 }
 
@@ -210,7 +210,7 @@ impl Evaluator for Expr {
                                 typ: vec![(str.to_string(), typ)],
                             };
 
-                            input.merge(&result);
+                            input.merge_variables(&result);
 
                             Ok(EvaluationResult::Unit) // Result of a let binding is Unit
                         })
@@ -223,7 +223,7 @@ impl Evaluator for Expr {
                         match go(expr, input) {
                             Ok(expr_result) => {
                                 if let Some(value) = expr_result.get_value() {
-                                    input.merge(&value);
+                                    input.merge_variables(&value);
                                 }
                                 result.push(expr_result);
                             }
@@ -323,8 +323,7 @@ impl Evaluator for Expr {
                     InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(*f64).into()),
                 },
 
-                Expr::Variable(variable) => input
-                    .get(&Path::from_key(variable.as_str()))
+                Expr::Variable(variable) => input.get_variable_value(variable.as_str())
                     .map(|v| v.into())
                     .map_err(|err| err.into()),
 
@@ -425,6 +424,35 @@ impl Evaluator for Expr {
         let mut input = input.clone();
         go(expr, &mut input)
     }
+}
+
+mod internal {
+    use crate::evaluator::{EvaluationContext, EvaluationResult};
+    use crate::worker_bridge_execution::RefinedWorkerResponse;
+    use crate::merge::Merge;
+
+    pub(crate) fn merge_worker_request_response(evaluation_context: &EvaluationContext) -> Option<EvaluationResult> {
+        match (&evaluation_context.worker_response, &evaluation_context.worker_request) {
+            (Some(res), Some(req)) => {
+                let mut typed_worker_data = req.clone().to_type_annotated_value();
+
+                if let Some(typed_res) = res.to_type_annotated_value() {
+                    typed_worker_data.merge(&typed_res);
+                }
+
+                Some(EvaluationResult::Value(typed_worker_data))
+            },
+
+            (None, Some(req)) => Some(req.clone().to_type_annotated_value().into()),
+            (Some(res), None) => match res {
+                RefinedWorkerResponse::Unit => Some(EvaluationResult::Unit),
+                RefinedWorkerResponse::SingleResult(value) => Some(value.clone().into()),
+                RefinedWorkerResponse::MultipleResults(value) => Some(value.clone().into())
+            }
+            (None, None) => None
+        }
+    }
+
 }
 
 #[cfg(test)]

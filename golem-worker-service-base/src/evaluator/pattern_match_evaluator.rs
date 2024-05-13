@@ -51,7 +51,7 @@ pub(crate) fn evaluate_pattern_match(
                 if let Some(binding_variable) = &match_result.binding_variable {
                     let typ = AnalysedType::from(&match_result.result);
 
-                    input.merge(&TypeAnnotatedValue::Record {
+                    input.merge_variables(&TypeAnnotatedValue::Record {
                         value: vec![(binding_variable.0.clone(), match_result.result)],
                         typ: vec![(binding_variable.0.clone(), typ)],
                     });
@@ -165,7 +165,7 @@ fn handle_ok(
             ))?;
 
             if let Some(bv) = binding_variable {
-                input.merge(&TypeAnnotatedValue::Record {
+                input.merge_variables(&TypeAnnotatedValue::Record {
                     value: vec![(bv.0.clone(), result.clone())],
                     typ: vec![(bv.0.clone(), AnalysedType::from(result))],
                 });
@@ -199,7 +199,7 @@ fn handle_err(
             ))?;
 
             if let Some(bv) = binding_variable {
-                input.merge(&TypeAnnotatedValue::Record {
+                input.merge_variables(&TypeAnnotatedValue::Record {
                     value: vec![(bv.0.clone(), result.clone())],
                     typ: vec![(bv.0.clone(), AnalysedType::from(result))],
                 });
@@ -231,7 +231,7 @@ fn handle_some(
             let type_annotated_value_in_some = *some_value.clone();
 
             if let Some(bv) = binding_variable {
-                input.merge(&TypeAnnotatedValue::Record {
+                input.merge_variables(&TypeAnnotatedValue::Record {
                     value: vec![(bv.0.clone(), result.clone())],
                     typ: vec![(bv.0.clone(), AnalysedType::from(result))],
                 });
@@ -291,7 +291,7 @@ fn handle_variant(
                 )?;
 
                 if let Some(bv) = binding_variable {
-                    input.merge(&TypeAnnotatedValue::Record {
+                    input.merge_variables(&TypeAnnotatedValue::Record {
                         value: vec![(bv.0.clone(), result.clone())],
                         typ: vec![(bv.0.clone(), AnalysedType::from(result))],
                     });

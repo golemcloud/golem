@@ -3,6 +3,9 @@ use crate::evaluator::EvaluationResult;
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails};
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerResponse};
+use crate::evaluator::Getter;
+use crate::evaluator::getter::GetError;
+use crate::evaluator::path::Path;
 
 
 // Evaluator of an expression doesn't necessarily need a context all the time, and can be empty.
@@ -26,18 +29,8 @@ impl EvaluationContext {
         }
     }
 
-    pub fn with_worker_request(&mut self, worker_request: &WorkerRequest) -> Self {
-        EvaluationContext {
-            worker_request: Some(worker_request.clone()),
-            worker_response: self.worker_response.clone(),
-            variables: self.variables.clone(),
-            request_data: self.request_data.clone()
-        }
-    }
 
-
-
-    pub fn merge(&mut self, variables: &TypeAnnotatedValue) {
+    pub fn merge_variables(&mut self, variables: &TypeAnnotatedValue) {
         match self.variables {
             Some(ref mut existing) => {
                 existing.merge(variables);
@@ -48,28 +41,14 @@ impl EvaluationContext {
         }
     }
 
-    pub fn merge_worker_data(&self) -> Option<EvaluationResult> {
-        match (&self.worker_response, &self.worker_request) {
-            (Some(res), Some(req)) => {
-                let mut typed_worker_data = req.clone().to_type_annotated_value();
-
-                if let Some(typed_res) = res.to_type_annotated_value() {
-                    typed_worker_data.merge(&typed_res);
-                }
-
-               Some(EvaluationResult::Value(typed_worker_data))
+    pub fn get_variable_value(&self, variable_name: &str) -> Result<TypeAnnotatedValue, GetError> {
+        match &self.variables {
+            Some(variables) => {
+                variables.get(&Path::from_key(variable_name))
             },
-
-            (None, Some(req)) => Some(req.clone().to_type_annotated_value().into()),
-            (Some(res), None) => match res {
-                RefinedWorkerResponse::Unit => Some(EvaluationResult::Unit),
-                RefinedWorkerResponse::SingleResult(value) => Some(value.clone().into()),
-                RefinedWorkerResponse::MultipleResults(value) => Some(value.clone().into())
-            }
-            (None, None) => None
+            None => Err(GetError::KeyNotFound(variable_name.to_string()))
         }
     }
-
 
     pub fn from_worker_data(worker_metadata: &WorkerRequest) -> Self {
        EvaluationContext {
