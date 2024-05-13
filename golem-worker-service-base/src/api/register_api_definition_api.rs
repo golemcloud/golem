@@ -363,7 +363,7 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             None => None,
         };
 
-        let worker_id = value
+        let worker_name = value
             .worker_id
             .parse()
             .map_err(|e: ParseError| e.to_string())?;
@@ -383,8 +383,8 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
         };
 
         let result = crate::worker_binding::GolemWorkerBinding {
-            component_id: component_id,
-            worker_name: worker_id,
+            component_id,
+            worker_name,
             function_name: value.function_name,
             function_params,
             idempotency_key,
