@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use figment::value::Value;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::{get_json_from_typed_value, get_typed_value_from_json};
 use golem_wasm_rpc::TypeAnnotatedValue;
@@ -15,7 +14,6 @@ use crate::worker_bridge_execution::worker_request_executor::{
 };
 use crate::worker_bridge_execution::{WorkerRequest, WorkerResponse};
 use golem_service_base::type_inference::*;
-use crate::evaluator::{EvaluationContext, Evaluator};
 
 // Refined Worker response is different from WorkerResponse, because,
 // it ensures that we are not returning a vector of result if they are not named results

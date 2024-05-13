@@ -1,12 +1,9 @@
 use crate::service::worker::TypedResult;
-use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
+use crate::worker_bridge_execution::{WorkerRequest};
 use async_trait::async_trait;
 use golem_service_base::model::FunctionResult;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
-use std::sync::Arc;
-use crate::worker_binding::{RequestDetails, ResponseMapping};
-use crate::worker_bridge_execution::to_response::ToResponse;
 
 #[async_trait]
 pub trait WorkerRequestExecutor {

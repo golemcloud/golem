@@ -1,8 +1,6 @@
 use crate::evaluator::Evaluator;
 use crate::evaluator::{EvaluationError, EvaluationResult};
 use crate::expression::{ArmPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, MatchArm};
-use crate::merge::Merge;
-use crate::worker_bridge_execution::RefinedWorkerResponse;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::ops::Deref;

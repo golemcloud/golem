@@ -1,8 +1,7 @@
 use golem_wasm_rpc::TypeAnnotatedValue;
-use crate::evaluator::EvaluationResult;
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails};
-use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerResponse};
+use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
 use crate::evaluator::Getter;
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;

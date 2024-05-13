@@ -10,8 +10,6 @@ use crate::http::InputHttpRequest;
 use crate::http::router::RouterPattern;
 use crate::evaluator::{EvaluationContext};
 use crate::evaluator::Evaluator;
-use crate::expression;
-use crate::expression::Expr;
 use crate::primitive::GetPrimitive;
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};

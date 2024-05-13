@@ -209,7 +209,7 @@ pub struct TypedKeyValue {
 
 
 mod internal {
-    use crate::merge::Merge;
+    
     use crate::primitive::{Number, Primitive};
     use golem_wasm_rpc::TypeAnnotatedValue;
 

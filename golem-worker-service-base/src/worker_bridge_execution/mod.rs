@@ -4,7 +4,6 @@ use serde_json::Value;
 
 use golem_common::model::ComponentId;
 
-use crate::evaluator::{Evaluator};
 
 mod worker_bridge_response;
 mod worker_request_executor;

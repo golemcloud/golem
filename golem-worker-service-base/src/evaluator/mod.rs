@@ -16,7 +16,6 @@ use getter::Getter;
 use path::Path;
 
 use crate::expression::{Expr, InnerNumber};
-use crate::merge::Merge;
 
 pub trait Evaluator {
     fn evaluate(

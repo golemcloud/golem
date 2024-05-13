@@ -4,8 +4,6 @@ use crate::api_definition::ApiSiteString;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
 
-use crate::api_definition::http::{HttpApiDefinition, QueryInfo, VarInfo};
-use crate::worker_binding::{WorkerBindingResolver};
 
 #[derive(Clone)]
 pub struct InputHttpRequest {

@@ -12,7 +12,6 @@ use crate::service::api_definition_lookup::ApiDefinitionLookup;
 
 use crate::worker_binding::WorkerBindingResolver;
 use crate::worker_bridge_execution::WorkerRequestExecutor;
-use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
