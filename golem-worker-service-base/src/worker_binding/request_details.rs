@@ -16,7 +16,7 @@ impl RequestDetails {
     pub fn from(
         path_params: &HashMap<VarInfo, &str>,
         query_variable_values: &HashMap<String, String>,
-        query_variable_names: &Vec<QueryInfo>,
+        query_variable_names: &[QueryInfo],
         request_body: &Value,
         headers: &HeaderMap,
     ) -> Result<Self, Vec<String>> {
@@ -29,9 +29,9 @@ impl RequestDetails {
         )?))
     }
 
-    pub fn to_type_annotated_value(self) -> TypeAnnotatedValue {
+    pub fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
         match self {
-            RequestDetails::Http(http) => http.to_type_annotated_value(),
+            RequestDetails::Http(http) => http.clone().to_type_annotated_value(),
         }
     }
 }
@@ -45,9 +45,9 @@ pub struct TypedHttRequestDetails {
 }
 
 impl TypedHttRequestDetails {
-    fn to_type_annotated_value(self) -> TypeAnnotatedValue {
-        let mut typed_path_values: TypeAnnotatedValue = self.typed_path_key_values.0.into();
-        let typed_query_values: TypeAnnotatedValue = self.typed_query_values.0.into();
+    fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
+        let mut typed_path_values: TypeAnnotatedValue = self.typed_path_key_values.clone().0.into();
+        let typed_query_values: TypeAnnotatedValue = self.typed_query_values.clone().0.into();
         let merged_type_annotated_value = typed_path_values.merge(&typed_query_values).clone();
 
         TypeAnnotatedValue::Record {
@@ -64,8 +64,11 @@ impl TypedHttRequestDetails {
             ],
             value: vec![
                 ("path".to_string(), merged_type_annotated_value),
-                ("body".to_string(), self.typed_request_body.0),
-                ("headers".to_string(), self.typed_header_values.0.into()),
+                ("body".to_string(), self.typed_request_body.clone().0),
+                (
+                    "headers".to_string(),
+                    self.typed_header_values.clone().0.into(),
+                ),
             ],
         }
     }
@@ -73,14 +76,13 @@ impl TypedHttRequestDetails {
     fn from_input_http_request(
         path_params: &HashMap<VarInfo, &str>,
         query_variable_values: &HashMap<String, String>,
-        query_variable_names: &Vec<QueryInfo>,
+        query_variable_names: &[QueryInfo],
         request_body: &Value,
         headers: &HeaderMap,
     ) -> Result<Self, Vec<String>> {
         let request_body = TypedRequestBody::from(request_body)?;
         let path_params = TypedPathKeyValues::from(path_params);
-        let query_params =
-            TypedQueryKeyValues::from(query_variable_values, query_variable_names)?;
+        let query_params = TypedQueryKeyValues::from(query_variable_values, query_variable_names)?;
         let header_params = TypedHeaderValues::from(headers)?;
 
         Ok(Self {
@@ -170,8 +172,7 @@ impl TypedRequestBody {
     }
 }
 
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct TypedKeyValueCollection {
     pub fields: Vec<TypedKeyValue>,
 }
@@ -181,7 +182,6 @@ impl TypedKeyValueCollection {
         self.fields.push(TypedKeyValue { name: key, value });
     }
 }
-
 
 impl From<TypedKeyValueCollection> for AnalysedType {
     fn from(typed_key_value_collection: TypedKeyValueCollection) -> Self {
