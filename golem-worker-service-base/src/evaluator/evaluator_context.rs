@@ -17,6 +17,25 @@ pub struct EvaluationContext {
 }
 
 impl EvaluationContext {
+    pub fn empty() -> Self {
+        EvaluationContext {
+            worker_request: None,
+            worker_response: None,
+            variables: None,
+            request_data: None
+        }
+    }
+
+    pub fn with_worker_request(&mut self, worker_request: &WorkerRequest) -> Self {
+        EvaluationContext {
+            worker_request: Some(worker_request.clone()),
+            worker_response: self.worker_response.clone(),
+            variables: self.variables.clone(),
+            request_data: self.request_data.clone()
+        }
+    }
+
+
 
     pub fn merge(&mut self, variables: &TypeAnnotatedValue) {
         match self.variables {
