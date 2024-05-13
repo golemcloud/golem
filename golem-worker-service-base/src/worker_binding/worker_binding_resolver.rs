@@ -17,7 +17,7 @@ use crate::evaluator::Evaluator;
 use crate::primitive::GetPrimitive;
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
-use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor, WorkerResponse};
+use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse};
 use crate::worker_bridge_execution::to_response::ToResponse;
 
 // For any input request type, there should be a way to resolve the
@@ -36,20 +36,17 @@ pub struct ResolvedWorkerBinding {
 }
 
 impl ResolvedWorkerBinding {
-    pub async fn execute_with<A>(&self, executor: &Arc<dyn WorkerRequestExecutor>) -> A where WorkerResponse: ToResponse<A> {
+    pub async fn execute_with<A>(&self, executor: &Arc<dyn WorkerRequestExecutor>) -> A where
+        WorkerResponse: ToResponse<A>, WorkerRequestExecutorError: ToResponse<A> {
         let worker_request = &self.worker_request;
-        let worker_response = executor.execute(worker_request.clone()).await.map_err(|err| err.to_string());
+        let worker_response = executor.execute(worker_request.clone()).await;
 
         match worker_response {
             Ok(worker_response) => {
                 worker_response.to_response(&self.response_mapping.clone(), &self.request_details);
             }
-            Err(e) => {
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from_string(
-                        format!("API request error {}", e).to_string(),
-                    ))
+            Err(error) => {
+                error.to_response(&self.response_mapping.clone(), &self.request_details);
             }
         }
     }

@@ -22,7 +22,6 @@ mod path;
 mod pattern_match_evaluator;
 
 mod evaluator_context;
-mod type_annotated_value_conversion;
 
 pub trait Evaluator {
     fn evaluate(

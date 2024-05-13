@@ -14,6 +14,7 @@ use crate::worker_bridge_execution::worker_request_executor::{
 };
 use crate::worker_bridge_execution::{WorkerRequest, WorkerResponse};
 use golem_service_base::type_inference::*;
+use crate::evaluator::{EvaluatorInputContext, Evaluator};
 
 // Refined Worker response is different from WorkerResponse, because,
 // it ensures that we are not returning a vector of result if they are not named results
@@ -100,7 +101,7 @@ impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
         &self,
         worker_request_params: WorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        let worker_name = worker_request_params.worker_id;
+        let worker_name = worker_request_params.worker_name;
         let component_id = worker_request_params.component_id;
 
         info!(
@@ -147,16 +148,17 @@ impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
 mod internal {
     use crate::api_definition::http::HttpResponseMapping;
     use crate::evaluator::Evaluator;
-    use crate::evaluator::{EvaluationError, EvaluationResult};
+    use crate::evaluator::{EvaluationError, EvaluationResult, EvaluatorInputContext}
     use crate::expression::Expr;
     use crate::primitive::{GetPrimitive, Primitive};
-    use crate::worker_binding::ResponseMapping;
+    use crate::worker_binding::{RequestDetails, ResponseMapping};
     use crate::worker_bridge_execution::worker_bridge_response::RefinedWorkerResponse;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, StatusCode};
     use poem::{Body, ResponseParts};
     use std::collections::HashMap;
+    use crate::worker_bridge_execution::WorkerRequest;
 
     pub(crate) struct IntermediateHttpResponse {
         body: EvaluationResult,
@@ -168,9 +170,11 @@ mod internal {
         pub(crate) fn from(
             worker_response: &RefinedWorkerResponse,
             response_mapping: &ResponseMapping,
-            input_request: &TypeAnnotatedValue,
+            request_details: &RequestDetails,
+            worker_request: &WorkerRequest
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
-            let type_annotated_value = input_request.clone();
+            let evaluation_context =
+                EvaluatorInputContext::from_all(worker_request, worker_response, request_details);
 
             let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
                 .map_err(EvaluationError::Message)?;
@@ -231,9 +235,9 @@ mod internal {
 
     fn get_status_code(
         status_expr: &Expr,
-        resolved_variables: &TypeAnnotatedValue,
+        evaluator_context: &EvaluatorInputContext,
     ) -> Result<StatusCode, EvaluationError> {
-        let status_value = status_expr.evaluate(resolved_variables, None)?;
+        let status_value = status_expr.evaluate(evaluator_context)?;
         let status_res: Result<u16, EvaluationError> =
             match status_value.get_primitive() {
                 Some(Primitive::String(status_str)) => status_str.parse().map_err(|e| {
