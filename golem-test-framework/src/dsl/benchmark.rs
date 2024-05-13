@@ -15,6 +15,12 @@
 use crate::config::CliParams;
 use async_trait::async_trait;
 use clap::Args;
+use cli_table::format::{Border, Separator};
+use cli_table::{format::Justify, Cell, CellStruct, Style, Table};
+use colored::Colorize;
+use itertools::Itertools;
+use serde::Serialize;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Mutex};
@@ -23,11 +29,34 @@ use tracing::{info, Instrument};
 
 #[derive(Debug, Clone, Args)]
 pub struct BenchmarkConfig {
+    /// Number of repetitions of benchmark with the same configuration.
     #[arg(long, default_value = "3")]
     pub iterations: usize,
-    #[arg(long, default_value = "10")]
+
+    /// Cluster size. Can be repeated for multiple benchmarks runs.
+    ///
+    /// Not applicable to provided cluster.
+    /// Total number of runs is multiplication for number of different cluster sizes, sizes and lengths.
+    #[arg(long, default_values_t = [3])]
+    pub cluster_size: Vec<usize>,
+
+    /// Benchmark-specific size of worker cluster. Can be repeated for multiple benchmarks runs.
+    ///
+    /// Total number of runs is multiplication for number of different cluster sizes, sizes and lengths.
+    #[arg(long, default_values_t = [10])]
+    pub size: Vec<usize>,
+
+    /// Benchmark-specific number of work units.
+    ///
+    /// Total number of runs is multiplication for number of different cluster sizes, sizes and lengths.
+    #[arg(long, default_values_t = [100])]
+    pub length: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RunConfig {
+    pub cluster_size: usize,
     pub size: usize,
-    #[arg(long, default_value = "100")]
     pub length: usize,
 }
 
@@ -119,19 +148,286 @@ impl Default for CountResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RunConfigView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    cluster_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    length: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    size: Option<usize>,
+}
+
+impl PartialOrd<Self> for RunConfigView {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RunConfigView {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.cluster_size, self.length, self.size).cmp(&(
+            other.cluster_size,
+            other.length,
+            other.size,
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DurationResultView {
+    pub avg: Duration,
+    pub min: Duration,
+    pub max: Duration,
+}
+
+impl From<&DurationResult> for DurationResultView {
+    fn from(value: &DurationResult) -> Self {
+        Self {
+            avg: value.avg,
+            min: value.min,
+            max: value.max,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CountResultView {
+    pub avg: u64,
+    pub min: u64,
+    pub max: u64,
+}
+
+impl From<&CountResult> for CountResultView {
+    fn from(value: &CountResult) -> Self {
+        Self {
+            avg: value.avg,
+            min: value.min,
+            max: value.max,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BenchmarkResultItemView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    config: Option<RunConfigView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    duration: Option<DurationResultView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    count: Option<CountResultView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BenchmarkResultView {
+    results: HashMap<ResultKey, Vec<BenchmarkResultItemView>>,
+}
+
+impl Display for BenchmarkResultView {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for (key, items) in self.results.iter().sorted_by_key(|(k, _)| (*k).clone()) {
+            writeln!(f, "{} '{}':", "Results for".bold(), key)?;
+
+            if items.len() == 1 {
+                let item = items.first().unwrap();
+
+                if let Some(duration_result) = &item.duration {
+                    writeln!(f, "Duration:")?;
+                    writeln!(f, "  Avg: {:?}", duration_result.avg)?;
+                    writeln!(f, "  Min: {:?}", duration_result.min)?;
+                    writeln!(f, "  Max: {:?}", duration_result.max)?;
+                }
+
+                if let Some(count_result) = &item.count {
+                    writeln!(f, "Count:")?;
+                    writeln!(f, "  Avg: {:?}", count_result.avg)?;
+                    writeln!(f, "  Min: {:?}", count_result.min)?;
+                    writeln!(f, "  Max: {:?}", count_result.max)?;
+                }
+            } else {
+                let first_config = items
+                    .first()
+                    .expect("At lease one result expected")
+                    .config
+                    .as_ref()
+                    .expect("Config expected for multiple results");
+                let show_cluster_size = first_config.cluster_size.is_some();
+                let show_size = first_config.size.is_some();
+                let show_length = first_config.length.is_some();
+                let show_duration = items.iter().any(|i| i.duration.is_some());
+                let show_count = items.iter().any(|i| i.count.is_some());
+
+                let mut title = Vec::new();
+                if show_cluster_size {
+                    title.push("Cluster size".cell().bold(true));
+                }
+                if show_length {
+                    title.push("Length".cell().bold(true));
+                }
+                if show_size {
+                    title.push("Size".cell().bold(true));
+                }
+                if show_duration {
+                    title.push("Duration Avg".cell().bold(true));
+                    title.push("Duration Min".cell().bold(true));
+                    title.push("Duration Max".cell().bold(true));
+                }
+                if show_count {
+                    title.push("Count Avg".cell().bold(true));
+                    title.push("Count Min".cell().bold(true));
+                    title.push("Count Max".cell().bold(true));
+                }
+
+                let tbl = items.iter().sorted_by_key(|i| &i.config).map(|item| {
+                    let mut record = Vec::new();
+                    if show_cluster_size {
+                        record.push(
+                            item.config
+                                .as_ref()
+                                .unwrap()
+                                .cluster_size
+                                .unwrap()
+                                .cell()
+                                .justify(Justify::Right),
+                        );
+                    }
+                    if show_length {
+                        record.push(
+                            item.config
+                                .as_ref()
+                                .unwrap()
+                                .length
+                                .unwrap()
+                                .cell()
+                                .justify(Justify::Right),
+                        );
+                    }
+                    if show_size {
+                        record.push(
+                            item.config
+                                .as_ref()
+                                .unwrap()
+                                .size
+                                .unwrap()
+                                .cell()
+                                .justify(Justify::Right),
+                        );
+                    }
+                    if show_duration {
+                        fn duration_cell(d: Option<&Duration>) -> CellStruct {
+                            d.map(|d| format!("{:?}", d))
+                                .unwrap_or("".to_string())
+                                .cell()
+                                .justify(Justify::Right)
+                        }
+
+                        record.push(duration_cell(item.duration.as_ref().map(|d| &d.avg)));
+                        record.push(duration_cell(item.duration.as_ref().map(|d| &d.min)));
+                        record.push(duration_cell(item.duration.as_ref().map(|d| &d.max)));
+                    }
+                    if show_count {
+                        fn count_cell(c: Option<u64>) -> CellStruct {
+                            c.map(|c| format!("{}", c))
+                                .unwrap_or("".to_string())
+                                .cell()
+                                .justify(Justify::Right)
+                        }
+
+                        record.push(count_cell(item.count.as_ref().map(|c| c.avg)));
+                        record.push(count_cell(item.count.as_ref().map(|c| c.min)));
+                        record.push(count_cell(item.count.as_ref().map(|c| c.max)));
+                    }
+
+                    record
+                });
+
+                let res = tbl
+                    .table()
+                    .title(title)
+                    .separator(Separator::builder().build())
+                    .border(Border::builder().build())
+                    .display()
+                    .unwrap();
+
+                writeln!(f, "{}", res)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BenchmarkResult {
+    runs: Vec<RunConfig>,
+    results: Vec<(RunConfig, BenchmarkRunResult)>,
+}
+
+impl BenchmarkResult {
+    pub fn view(&self) -> BenchmarkResultView {
+        let show_cluster_size = self.runs.iter().map(|c| c.cluster_size).unique().count() > 1;
+        let show_size = self.runs.iter().map(|c| c.size).unique().count() > 1;
+        let show_length = self.runs.iter().map(|c| c.length).unique().count() > 1;
+        let show_config = show_cluster_size || show_size || show_length;
+
+        let mut all_keys = Vec::new();
+        for (_, res) in &self.results {
+            all_keys.extend(res.count_results.keys().cloned());
+            all_keys.extend(res.duration_results.keys().cloned());
+        }
+        all_keys.sort();
+        all_keys.dedup();
+
+        let mut results: HashMap<ResultKey, Vec<BenchmarkResultItemView>> = HashMap::new();
+
+        for key in all_keys {
+            for (conf, res) in &self.results {
+                let config = RunConfigView {
+                    cluster_size: if show_cluster_size {
+                        Some(conf.cluster_size)
+                    } else {
+                        None
+                    },
+                    size: if show_size { Some(conf.size) } else { None },
+                    length: if show_length { Some(conf.length) } else { None },
+                };
+
+                let item = BenchmarkResultItemView {
+                    config: if show_config { Some(config) } else { None },
+                    duration: res.duration_results.get(&key).map(|d| d.into()),
+                    count: res.count_results.get(&key).map(|c| c.into()),
+                };
+
+                if item.duration.is_some() || item.count.is_some() {
+                    let items = results.entry(key.clone()).or_default();
+                    items.push(item);
+                }
+            }
+        }
+
+        BenchmarkResultView { results }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BenchmarkRunResult {
     duration_results: HashMap<ResultKey, DurationResult>,
     count_results: HashMap<ResultKey, CountResult>,
 }
 
-impl Default for BenchmarkResult {
+impl Default for BenchmarkRunResult {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl BenchmarkResult {
+impl BenchmarkRunResult {
     pub fn new() -> Self {
         Self {
             duration_results: HashMap::new(),
@@ -157,35 +453,6 @@ impl BenchmarkResult {
             let results = self.count_results.entry(key.clone()).or_default();
             results.add_iteration(&counts);
         }
-    }
-}
-
-impl Display for BenchmarkResult {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut all_keys = Vec::new();
-        all_keys.extend(self.count_results.keys().cloned());
-        all_keys.extend(self.duration_results.keys().cloned());
-        all_keys.dedup();
-
-        for key in all_keys {
-            writeln!(f, "Results for '{}':", key)?;
-
-            if let Some(duration_result) = self.duration_results.get(&key) {
-                writeln!(f, "Duration:")?;
-                writeln!(f, "  Avg: {:?}", duration_result.avg)?;
-                writeln!(f, "  Min: {:?}", duration_result.min)?;
-                writeln!(f, "  Max: {:?}", duration_result.max)?;
-            }
-
-            if let Some(count_result) = self.count_results.get(&key) {
-                writeln!(f, "Count:")?;
-                writeln!(f, "  Avg: {:?}", count_result.avg)?;
-                writeln!(f, "  Min: {:?}", count_result.min)?;
-                writeln!(f, "  Max: {:?}", count_result.max)?;
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -255,20 +522,106 @@ impl BenchmarkRecorderState {
 
 #[async_trait]
 pub trait Benchmark: Send + Sync + 'static {
+    type BenchmarkContext: Send + Sync + 'static;
     type IterationContext: Send + Sync + 'static;
 
     fn name() -> &'static str;
-    async fn create(params: CliParams) -> Self;
 
-    async fn setup_iteration(&self) -> Self::IterationContext;
-    async fn warmup(&self, context: &Self::IterationContext);
-    async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder);
-    async fn cleanup_iteration(&self, context: Self::IterationContext);
+    async fn create_benchmark_context(
+        params: CliParams,
+        cluster_size: usize,
+    ) -> Self::BenchmarkContext;
+    async fn cleanup(benchmark_context: Self::BenchmarkContext);
+    async fn create(params: CliParams, config: RunConfig) -> Self;
+
+    async fn setup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+    ) -> Self::IterationContext;
+    async fn warmup(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+    );
+    async fn run(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+        recorder: BenchmarkRecorder,
+    );
+    async fn cleanup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: Self::IterationContext,
+    );
 }
 
 #[async_trait]
 pub trait BenchmarkApi {
     async fn run_benchmark(params: CliParams) -> BenchmarkResult;
+}
+
+async fn run_benchmark<B: Benchmark>(
+    benchmark_context: &B::BenchmarkContext,
+    params: CliParams,
+    config: RunConfig,
+    cluster_size: usize,
+    run_name: &str,
+) -> BenchmarkRunResult {
+    let span = tracing::info_span!(
+        "benchmark",
+        name = B::name(),
+        cluster_size = cluster_size,
+        run = run_name
+    );
+    let _enter = span.enter();
+    info!("Starting benchmark iterations {}", B::name());
+
+    let benchmark = B::create(params.clone(), config.clone())
+        .instrument(span.clone())
+        .await;
+    let mut aggregated_results = BenchmarkRunResult::new();
+
+    for iteration in 0..params.benchmark_config.iterations {
+        let span = tracing::info_span!(
+            "benchmark",
+            name = B::name(),
+            run = run_name,
+            iteration = iteration
+        );
+        let _enter = span.enter();
+        info!("Starting iteration");
+
+        let context = benchmark
+            .setup_iteration(benchmark_context)
+            .instrument(span.clone())
+            .await;
+
+        info!("Starting warmup");
+        benchmark
+            .warmup(benchmark_context, &context)
+            .instrument(span.clone())
+            .await;
+        info!("Finished warmup");
+
+        info!("Starting benchmark");
+        let recorder = BenchmarkRecorder::new();
+        benchmark
+            .run(benchmark_context, &context, recorder.clone())
+            .instrument(span.clone())
+            .await;
+        info!("Finished benchmark");
+
+        benchmark
+            .cleanup_iteration(benchmark_context, context)
+            .instrument(span.clone())
+            .await;
+        aggregated_results.add(recorder);
+
+        info!("Finished iteration");
+    }
+
+    aggregated_results
 }
 
 #[async_trait]
@@ -278,37 +631,51 @@ impl<B: Benchmark> BenchmarkApi for B {
         let _enter = span.enter();
         info!("Initializing benchmark {}", B::name());
 
-        let benchmark = B::create(params.clone()).instrument(span.clone()).await;
-        let mut aggregated_results = BenchmarkResult::new();
+        let runs = params.runs();
 
-        for iteration in 0..params.benchmark_config.iterations {
-            let span = tracing::info_span!("benchmark", name = B::name(), iteration = iteration);
+        let runs_cnt = runs.len();
+        let mut current_run = 0;
+
+        let mut results = Vec::new();
+
+        let groups = runs
+            .iter()
+            .group_by(|r| r.cluster_size)
+            .into_iter()
+            .map(|(cluster_size, group)| (cluster_size, group.collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+
+        for (cluster_size, runs) in groups {
+            let span =
+                tracing::info_span!("benchmark", name = B::name(), cluster_size = cluster_size);
             let _enter = span.enter();
-            info!("Starting iteration");
 
-            let context = benchmark.setup_iteration().instrument(span.clone()).await;
-
-            info!("Starting warmup");
-            benchmark.warmup(&context).instrument(span.clone()).await;
-            info!("Finished warmup");
-
-            info!("Starting benchmark");
-            let recorder = BenchmarkRecorder::new();
-            benchmark
-                .run(&context, recorder.clone())
+            info!("Creating benchmark context");
+            let context = B::create_benchmark_context(params.clone(), cluster_size)
                 .instrument(span.clone())
                 .await;
-            info!("Finished benchmark");
 
-            benchmark
-                .cleanup_iteration(context)
-                .instrument(span.clone())
-                .await;
-            aggregated_results.add(recorder);
+            for config in runs {
+                current_run += 1;
+                let run_name = format!("{current_run}/{runs_cnt}");
+                results.push((
+                    config.clone(),
+                    run_benchmark::<B>(
+                        &context,
+                        params.clone(),
+                        config.clone(),
+                        cluster_size,
+                        &run_name,
+                    )
+                    .instrument(span.clone())
+                    .await,
+                ));
+            }
 
-            info!("Finished iteration");
+            info!("Stopping benchmark context");
+            B::cleanup(context).instrument(span.clone()).await;
         }
 
-        aggregated_results
+        BenchmarkResult { runs, results }
     }
 }

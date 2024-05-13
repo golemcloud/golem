@@ -42,8 +42,8 @@ use crate::http_server::HttpServerImpl;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
+use crate::services::events::Events;
 use crate::services::golem_config::{GolemConfig, WorkersServiceConfig};
-use crate::services::invocation_key::{InvocationKeyService, InvocationKeyServiceDefault};
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{OplogService, RedisOplogService};
 use crate::services::promise::PromiseService;
@@ -84,7 +84,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         golem_config: Arc<GolemConfig>,
-        invocation_key_service: Arc<dyn InvocationKeyService + Send + Sync>,
         shard_service: Arc<dyn ShardService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
@@ -92,6 +91,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        events: Arc<Events>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -215,11 +215,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let linker = Arc::new(linker);
 
-        let invocation_key_service = Arc::new(InvocationKeyServiceDefault::new(
-            golem_config.invocation_keys.pending_key_retention,
-            golem_config.invocation_keys.confirm_queue_capacity,
-        ));
-
         let key_value_service =
             key_value::configured(&golem_config.key_value_service, pool.clone());
 
@@ -242,6 +237,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 .expect("Access token must be an UUID"),
         ));
 
+        let events = Arc::new(Events::new());
+
         let services = self
             .create_services(
                 active_workers,
@@ -255,7 +252,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 running_worker_enumeration_service,
                 promise_service,
                 golem_config.clone(),
-                invocation_key_service,
                 shard_service,
                 key_value_service,
                 blob_store_service,
@@ -263,6 +259,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 oplog_service,
                 scheduler_service,
                 worker_proxy,
+                events,
             )
             .await?;
 

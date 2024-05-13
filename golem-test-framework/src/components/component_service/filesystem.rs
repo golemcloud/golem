@@ -70,6 +70,14 @@ impl ComponentService for FileSystemComponentService {
         Ok(ComponentId(uuid))
     }
 
+    async fn add_component_with_name(
+        &self,
+        local_path: &Path,
+        _name: &str,
+    ) -> Result<ComponentId, AddComponentError> {
+        self.add_component(local_path).await
+    }
+
     async fn update_component(&self, component_id: &ComponentId, local_path: &Path) -> u64 {
         let target_dir = &self.root;
 

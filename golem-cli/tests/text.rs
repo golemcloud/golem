@@ -31,6 +31,11 @@ fn make(
             text_component_update,
         ),
         Trial::test_in_context(
+            format!("text_component_get{suffix}"),
+            ctx.clone(),
+            text_component_get,
+        ),
+        Trial::test_in_context(
             format!("text_component_list{suffix}"),
             ctx.clone(),
             text_component_list,
@@ -39,11 +44,6 @@ fn make(
             format!("text_worker_add{suffix}"),
             ctx.clone(),
             text_worker_add,
-        ),
-        Trial::test_in_context(
-            format!("text_worker_get_invocation_key{suffix}"),
-            ctx.clone(),
-            text_worker_get_invocation_key,
         ),
         Trial::test_in_context(
             format!("text_worker_invoke_and_await{suffix}"),
@@ -222,6 +222,57 @@ fn text_component_update(
     Ok(())
 }
 
+fn text_component_get(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let component_name = format!("{name} text component get");
+    let env_service = deps.component_directory().join("environment-service.wasm");
+    let cfg = &cli.config;
+    let component: ComponentView = cli.run(&[
+        "component",
+        "add",
+        &cfg.arg('c', "component-name"),
+        &component_name,
+        env_service.to_str().unwrap(),
+    ])?;
+
+    let get_res = cli.with_format(Format::Text).run_string(&[
+        "component",
+        "get",
+        &cfg.arg('c', "component-name"),
+        &component_name,
+    ])?;
+
+    let lines = get_res.lines().collect::<Vec<_>>();
+
+    assert_eq!(
+        *lines.first().unwrap(),
+        format!(
+            "Component with ID {}. Version: 0. Component size is 72309 bytes.",
+            component.component_id
+        )
+    );
+    assert_eq!(
+        *lines.get(1).unwrap(),
+        format!("Component name: {component_name}.")
+    );
+    assert_eq!(*lines.get(2).unwrap(), "Exports:");
+    assert_eq!(
+        *lines.get(3).unwrap(),
+        "\tgolem:it/api/get-environment() -> result<list<tuple<string, string>>, string>"
+    );
+    assert_eq!(
+        *lines.get(4).unwrap(),
+        "\tgolem:it/api/get-arguments() -> result<list<string>, string>"
+    );
+
+    Ok(())
+}
+
 fn text_component_list(
     (deps, name, cli): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
@@ -298,49 +349,6 @@ fn text_worker_add(
         matched.as_ref().unwrap().get(2).unwrap().as_str(),
         worker_name
     );
-
-    Ok(())
-}
-
-fn text_worker_get_invocation_key(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
-    let component_id =
-        make_component(deps, &format!("{name} text worker invocation key"), &cli)?.component_id;
-    let worker_name = format!("{name}_worker_invocation_key");
-    let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
-        "worker",
-        "add",
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
-    ])?;
-    let res = cli.with_format(Format::Text).run_string(&[
-        "worker",
-        "invocation-key",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-    ])?;
-
-    let lines = res.lines().collect::<Vec<_>>();
-
-    assert!(lines.first().unwrap().starts_with("Invocation key: "));
-    assert_eq!(
-        *lines.get(1).unwrap(),
-        "You can use it in invoke-and-await command this way:"
-    );
-    assert!(lines
-        .get(2)
-        .unwrap()
-        .starts_with("invoke-and-await --invocation-key "));
 
     Ok(())
 }

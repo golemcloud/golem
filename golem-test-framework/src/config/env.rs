@@ -18,6 +18,9 @@ use std::sync::Arc;
 use tracing::Level;
 
 use crate::components;
+use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
+use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
+use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::component_service::docker::DockerComponentService;
 use crate::components::component_service::spawned::SpawnedComponentService;
 use crate::components::component_service::ComponentService;
@@ -47,6 +50,7 @@ pub struct EnvBasedTestDependencies {
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+    component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
 }
@@ -132,6 +136,8 @@ impl EnvBasedTestDependencies {
             let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
                 if Self::use_docker() {
                     Arc::new(DockerComponentService::new(
+                        DockerComponentCompilationService::NAME,
+                        DockerComponentCompilationService::GRPC_PORT,
                         rdb.clone(),
                         Self::default_verbosity(),
                     ))
@@ -142,6 +148,7 @@ impl EnvBasedTestDependencies {
                             Path::new("../golem-component-service"),
                             8081,
                             9091,
+                            9094,
                             rdb.clone(),
                             Self::default_verbosity(),
                             Self::default_stdout_level(),
@@ -151,6 +158,31 @@ impl EnvBasedTestDependencies {
                     )
                 };
             component_service
+        };
+        let component_compilation_service = {
+            let component_compilation_service: Arc<
+                dyn ComponentCompilationService + Send + Sync + 'static,
+            > = if Self::use_docker() {
+                Arc::new(DockerComponentCompilationService::new(
+                    component_service.clone(),
+                    Self::default_verbosity(),
+                ))
+            } else {
+                Arc::new(
+                    SpawnedComponentCompilationService::new(
+                        Path::new("../target/debug/golem-component-compilation-service"),
+                        Path::new("../golem-component-compilation-service"),
+                        8083,
+                        9094,
+                        component_service.clone(),
+                        Self::default_verbosity(),
+                        Self::default_stdout_level(),
+                        Self::default_stderr_level(),
+                    )
+                    .await,
+                )
+            };
+            component_compilation_service
         };
         let worker_service = {
             let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
@@ -224,6 +256,7 @@ impl EnvBasedTestDependencies {
             redis_monitor,
             shard_manager,
             component_service,
+            component_compilation_service,
             worker_service,
             worker_executor_cluster,
         }
@@ -316,6 +349,12 @@ impl TestDependencies for EnvBasedTestDependencies {
 
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
         self.component_service.clone()
+    }
+
+    fn component_compilation_service(
+        &self,
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+        self.component_compilation_service.clone()
     }
 
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {

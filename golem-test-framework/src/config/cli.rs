@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
+use crate::components::component_compilation_service::k8s::K8sComponentCompilationService;
+use crate::components::component_compilation_service::provided::ProvidedComponentCompilationService;
+use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
+use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::component_service::docker::DockerComponentService;
 use crate::components::component_service::k8s::K8sComponentService;
 use crate::components::component_service::provided::ProvidedComponentService;
@@ -45,8 +50,9 @@ use crate::components::worker_service::provided::ProvidedWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
 use crate::config::TestDependencies;
-use crate::dsl::benchmark::BenchmarkConfig;
+use crate::dsl::benchmark::{BenchmarkConfig, RunConfig};
 use clap::{Parser, Subcommand};
+use itertools::Itertools;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -67,6 +73,7 @@ pub struct CliTestDependencies {
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+    component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
     component_directory: PathBuf,
@@ -108,6 +115,55 @@ impl CliParams {
             Level::INFO
         }
     }
+
+    pub fn runs(&self) -> Vec<RunConfig> {
+        let cluster_size: Vec<usize> = match self.mode {
+            TestMode::Provided { .. } => {
+                vec![0]
+            }
+            _ => self
+                .benchmark_config
+                .cluster_size
+                .iter()
+                .copied()
+                .unique()
+                .sorted()
+                .collect(),
+        };
+
+        let size = self
+            .benchmark_config
+            .size
+            .iter()
+            .copied()
+            .unique()
+            .sorted()
+            .collect::<Vec<_>>();
+        let length = self
+            .benchmark_config
+            .length
+            .iter()
+            .copied()
+            .unique()
+            .sorted()
+            .collect::<Vec<_>>();
+
+        let mut res = Vec::new();
+
+        for cluster_size in cluster_size {
+            for &size in &size {
+                for &length in &length {
+                    res.push(RunConfig {
+                        cluster_size,
+                        size,
+                        length,
+                    })
+                }
+            }
+        }
+
+        res
+    }
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -136,6 +192,12 @@ pub enum TestMode {
         #[arg(long, default_value = "9091")]
         component_service_grpc_port: u16,
         #[arg(long, default_value = "localhost")]
+        component_compilation_service_host: String,
+        #[arg(long, default_value = "8083")]
+        component_compilation_service_http_port: u16,
+        #[arg(long, default_value = "9094")]
+        component_compilation_service_grpc_port: u16,
+        #[arg(long, default_value = "localhost")]
         worker_service_host: String,
         #[arg(long, default_value = "8082")]
         worker_service_http_port: u16,
@@ -152,8 +214,6 @@ pub enum TestMode {
     },
     #[command()]
     Docker {
-        #[arg(long, default_value = "3")]
-        cluster_size: usize,
         #[arg(long, default_value = "")]
         redis_prefix: String,
         #[arg(long, default_value = "9000")]
@@ -163,12 +223,10 @@ pub enum TestMode {
     },
     #[command()]
     Spawned {
-        #[arg(long)]
+        #[arg(long, default_value = ".")]
         workspace_root: String,
         #[arg(long, default_value = "target/debug")]
         build_target: String,
-        #[arg(long, default_value = "3")]
-        cluster_size: usize,
         #[arg(long, default_value = "6379")]
         redis_port: u16,
         #[arg(long, default_value = "")]
@@ -181,6 +239,10 @@ pub enum TestMode {
         component_service_http_port: u16,
         #[arg(long, default_value = "9091")]
         component_service_grpc_port: u16,
+        #[arg(long, default_value = "8083")]
+        component_compilation_service_http_port: u16,
+        #[arg(long, default_value = "9094")]
+        component_compilation_service_grpc_port: u16,
         #[arg(long, default_value = "8082")]
         worker_service_http_port: u16,
         #[arg(long, default_value = "9092")]
@@ -191,13 +253,13 @@ pub enum TestMode {
         worker_executor_base_http_port: u16,
         #[arg(long, default_value = "9100")]
         worker_executor_base_grpc_port: u16,
+        #[arg(long, default_value = "false")]
+        mute_child: bool,
     },
     #[command()]
     Minikube {
         #[arg(long, default_value = "default")]
         namespace: String,
-        #[arg(long, default_value = "3")]
-        cluster_size: usize,
         #[arg(long, default_value = "")]
         redis_prefix: String,
     },
@@ -205,8 +267,6 @@ pub enum TestMode {
     Aws {
         #[arg(long, default_value = "default")]
         namespace: String,
-        #[arg(long, default_value = "3")]
-        cluster_size: usize,
         #[arg(long, default_value = "")]
         redis_prefix: String,
     },
@@ -223,7 +283,7 @@ impl CliTestDependencies {
         tracing_subscriber::registry().with(ansi_layer).init();
     }
 
-    pub async fn new(params: CliParams) -> Self {
+    pub async fn new(params: CliParams, cluster_size: usize) -> Self {
         match &params.mode {
             TestMode::Provided {
                 postgres,
@@ -236,6 +296,9 @@ impl CliTestDependencies {
                 component_service_host,
                 component_service_http_port,
                 component_service_grpc_port,
+                component_compilation_service_host,
+                component_compilation_service_http_port,
+                component_compilation_service_grpc_port,
                 worker_service_host,
                 worker_service_http_port,
                 worker_service_grpc_port,
@@ -266,6 +329,13 @@ impl CliTestDependencies {
                         *component_service_http_port,
                         *component_service_grpc_port,
                     ));
+                let component_compilation_service: Arc<
+                    dyn ComponentCompilationService + Send + Sync + 'static,
+                > = Arc::new(ProvidedComponentCompilationService::new(
+                    component_compilation_service_host.clone(),
+                    *component_compilation_service_http_port,
+                    *component_compilation_service_grpc_port,
+                ));
                 let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
                     Arc::new(ProvidedWorkerService::new(
                         worker_service_host.clone(),
@@ -287,13 +357,13 @@ impl CliTestDependencies {
                     redis_monitor,
                     shard_manager,
                     component_service,
+                    component_compilation_service,
                     worker_service,
                     worker_executor_cluster,
                     component_directory: Path::new(&params.component_directory).to_path_buf(),
                 }
             }
             TestMode::Docker {
-                cluster_size,
                 redis_prefix,
                 worker_executor_base_http_port,
                 worker_executor_base_grpc_port,
@@ -308,9 +378,19 @@ impl CliTestDependencies {
                 let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
                     DockerShardManager::new(redis.clone(), params.service_verbosity()),
                 );
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    DockerComponentService::new(rdb.clone(), params.service_verbosity()),
-                );
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+                    Arc::new(DockerComponentService::new(
+                        DockerComponentCompilationService::NAME,
+                        DockerComponentCompilationService::GRPC_PORT,
+                        rdb.clone(),
+                        params.service_verbosity(),
+                    ));
+                let component_compilation_service: Arc<
+                    dyn ComponentCompilationService + Send + Sync + 'static,
+                > = Arc::new(DockerComponentCompilationService::new(
+                    component_service.clone(),
+                    params.service_verbosity(),
+                ));
                 let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
                     Arc::new(DockerWorkerService::new(
                         component_service.clone(),
@@ -322,7 +402,7 @@ impl CliTestDependencies {
                 let worker_executor_cluster: Arc<
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(DockerWorkerExecutorCluster::new(
-                    *cluster_size,
+                    cluster_size,
                     *worker_executor_base_http_port,
                     *worker_executor_base_grpc_port,
                     redis.clone(),
@@ -338,6 +418,7 @@ impl CliTestDependencies {
                     redis_monitor,
                     shard_manager,
                     component_service,
+                    component_compilation_service,
                     worker_service,
                     worker_executor_cluster,
                     component_directory: Path::new(&params.component_directory).to_path_buf(),
@@ -346,28 +427,36 @@ impl CliTestDependencies {
             TestMode::Spawned {
                 workspace_root,
                 build_target,
-                cluster_size,
                 redis_port,
                 redis_prefix,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
                 component_service_http_port,
                 component_service_grpc_port,
+                component_compilation_service_http_port,
+                component_compilation_service_grpc_port,
                 worker_service_http_port,
                 worker_service_grpc_port,
                 worker_service_custom_request_port,
                 worker_executor_base_http_port,
                 worker_executor_base_grpc_port,
+                mute_child,
             } => {
-                let workspace_root = Path::new(workspace_root);
+                let workspace_root = Path::new(workspace_root).canonicalize().unwrap();
                 let build_root = workspace_root.join(build_target);
+
+                let out_level = if *mute_child {
+                    Level::TRACE
+                } else {
+                    Level::INFO
+                };
 
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(DockerPostgresRdb::new(true).await);
                 let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
                     *redis_port,
                     redis_prefix.clone(),
-                    Level::INFO,
+                    out_level,
                     Level::ERROR,
                 ));
                 let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
@@ -381,7 +470,7 @@ impl CliTestDependencies {
                         *shard_manager_grpc_port,
                         redis.clone(),
                         params.service_verbosity(),
-                        Level::INFO,
+                        out_level,
                         Level::ERROR,
                     )
                     .await,
@@ -392,9 +481,25 @@ impl CliTestDependencies {
                         &workspace_root.join("golem-component-service"),
                         *component_service_http_port,
                         *component_service_grpc_port,
+                        *component_compilation_service_grpc_port,
                         rdb.clone(),
                         params.service_verbosity(),
-                        Level::INFO,
+                        out_level,
+                        Level::ERROR,
+                    )
+                    .await,
+                );
+                let component_compilation_service: Arc<
+                    dyn ComponentCompilationService + Send + Sync + 'static,
+                > = Arc::new(
+                    SpawnedComponentCompilationService::new(
+                        &build_root.join("golem-component-compilation-service"),
+                        &workspace_root.join("golem-component-compilation-service"),
+                        *component_compilation_service_http_port,
+                        *component_compilation_service_grpc_port,
+                        component_service.clone(),
+                        params.service_verbosity(),
+                        out_level,
                         Level::ERROR,
                     )
                     .await,
@@ -411,7 +516,7 @@ impl CliTestDependencies {
                         rdb.clone(),
                         redis.clone(),
                         params.service_verbosity(),
-                        Level::INFO,
+                        out_level,
                         Level::ERROR,
                     )
                     .await,
@@ -420,7 +525,7 @@ impl CliTestDependencies {
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(
                     SpawnedWorkerExecutorCluster::new(
-                        *cluster_size,
+                        cluster_size,
                         *worker_executor_base_http_port,
                         *worker_executor_base_grpc_port,
                         &build_root.join("worker-executor"),
@@ -430,7 +535,7 @@ impl CliTestDependencies {
                         shard_manager.clone(),
                         worker_service.clone(),
                         params.service_verbosity(),
-                        Level::INFO,
+                        out_level,
                         Level::ERROR,
                     )
                     .await,
@@ -442,6 +547,7 @@ impl CliTestDependencies {
                     redis_monitor,
                     shard_manager,
                     component_service,
+                    component_compilation_service,
                     worker_service,
                     worker_executor_cluster,
                     component_directory: Path::new(&params.component_directory).to_path_buf(),
@@ -449,7 +555,6 @@ impl CliTestDependencies {
             }
             TestMode::Minikube {
                 namespace,
-                cluster_size,
                 redis_prefix,
             } => {
                 let routing_type = K8sRoutingType::Minikube;
@@ -487,7 +592,22 @@ impl CliTestDependencies {
                         &namespace,
                         &routing_type,
                         Level::INFO,
+                        K8sComponentCompilationService::NAME,
+                        K8sComponentCompilationService::GRPC_PORT,
                         rdb.clone(),
+                        timeout,
+                        None,
+                    )
+                    .await,
+                );
+                let component_compilation_service: Arc<
+                    dyn ComponentCompilationService + Send + Sync + 'static,
+                > = Arc::new(
+                    K8sComponentCompilationService::new(
+                        &namespace,
+                        &routing_type,
+                        Level::INFO,
+                        component_service.clone(),
                         timeout,
                         None,
                     )
@@ -511,7 +631,7 @@ impl CliTestDependencies {
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(
                     K8sWorkerExecutorCluster::new(
-                        *cluster_size,
+                        cluster_size,
                         &namespace,
                         &routing_type,
                         redis.clone(),
@@ -531,6 +651,7 @@ impl CliTestDependencies {
                     redis_monitor,
                     shard_manager,
                     component_service,
+                    component_compilation_service,
                     worker_service,
                     worker_executor_cluster,
                     component_directory: Path::new(&params.component_directory).to_path_buf(),
@@ -538,7 +659,6 @@ impl CliTestDependencies {
             }
             TestMode::Aws {
                 namespace,
-                cluster_size,
                 redis_prefix,
             } => {
                 let routing_type = K8sRoutingType::Service;
@@ -584,7 +704,22 @@ impl CliTestDependencies {
                         &namespace,
                         &routing_type,
                         Level::INFO,
+                        K8sComponentCompilationService::NAME,
+                        K8sComponentCompilationService::GRPC_PORT,
                         rdb.clone(),
+                        timeout,
+                        service_annotations.clone(),
+                    )
+                    .await,
+                );
+                let component_compilation_service: Arc<
+                    dyn ComponentCompilationService + Send + Sync + 'static,
+                > = Arc::new(
+                    K8sComponentCompilationService::new(
+                        &namespace,
+                        &routing_type,
+                        Level::INFO,
+                        component_service.clone(),
                         timeout,
                         service_annotations.clone(),
                     )
@@ -608,7 +743,7 @@ impl CliTestDependencies {
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(
                     K8sWorkerExecutorCluster::new(
-                        *cluster_size,
+                        cluster_size,
                         &namespace,
                         &routing_type,
                         redis.clone(),
@@ -628,6 +763,7 @@ impl CliTestDependencies {
                     redis_monitor,
                     shard_manager,
                     component_service,
+                    component_compilation_service,
                     worker_service,
                     worker_executor_cluster,
                     component_directory: Path::new(&params.component_directory).to_path_buf(),
@@ -660,6 +796,12 @@ impl TestDependencies for CliTestDependencies {
 
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
         self.component_service.clone()
+    }
+
+    fn component_compilation_service(
+        &self,
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+        self.component_compilation_service.clone()
     }
 
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {

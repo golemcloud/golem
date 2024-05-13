@@ -1,6 +1,6 @@
 use crate::model::component::ComponentView;
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::{ExampleDescription, InvocationKey};
+use crate::model::{ExampleDescription, IdempotencyKey};
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use golem_client::model::{
     ApiDeployment, HttpApiDefinition, Route, WorkerId, WorkerMetadata, WorkersMetadataResponse,
@@ -213,6 +213,29 @@ impl TextFormat for ComponentUpdateView {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComponentGetView(pub ComponentView);
+
+impl TextFormat for ComponentGetView {
+    fn print(&self) {
+        printdoc!(
+            "
+            Component with ID {}. Version: {}. Component size is {} bytes.
+            Component name: {}.
+            Exports:
+            ",
+            self.0.component_id,
+            self.0.component_version,
+            self.0.component_size,
+            self.0.component_name
+        );
+
+        for export in &self.0.exports {
+            println!("\t{export}")
+        }
+    }
+}
+
 #[derive(Table)]
 struct ComponentListView {
     #[table(title = "ID")]
@@ -266,13 +289,13 @@ impl TextFormat for WorkerAddView {
     }
 }
 
-impl TextFormat for InvocationKey {
+impl TextFormat for IdempotencyKey {
     fn print(&self) {
         printdoc!(
             "
             Invocation key: {}
             You can use it in invoke-and-await command this way:
-            invoke-and-await --invocation-key {} ...
+            invoke-and-await --idempotency-key {} ...
             ",
             self.0,
             self.0

@@ -216,15 +216,7 @@ fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String 
         WorkerServiceErrorsBody::Validation(validation) => validation
             .errors
             .iter()
-            .map(|e| {
-                format!(
-                    "{}/{}/{}/{}",
-                    e.method.to_string(),
-                    e.path,
-                    e.component,
-                    e.detail
-                )
-            })
+            .map(|e| format!("{}/{}/{}/{}", e.method, e.path, e.component, e.detail))
             .join("\n"),
     }
 }

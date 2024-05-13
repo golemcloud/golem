@@ -3,7 +3,7 @@
 rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service" 
 "option-service" "flags-service" "http-client-2" "stdio-cc" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
 "update-test-v1" "update-test-v2" "update-test-v3" "update-test-v4" "rust-echo" "golem-rust-tests")
-zig_test_components=("zig-1" "zig-2")
+zig_test_components=("zig-1" "zig-3")
 tinygo_test_components=("tinygo-wasi" "tinygo-wasi-http")
 grain_test_components=("grain-1")
 js_test_components=("js-1" "js-2" "js-3" "js-4" "js-echo")
@@ -103,12 +103,12 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "zig" ]; then
       rm -rf zig-out
       rm -rf zig-cache
     fi
-    zig build
+    zig build -Dadapter=../../../golem-wit/adapters/tier1/wasi_snapshot_preview1.wasm
 
     echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    wasm-tools component new zig-out/bin/main.wasm -o "$target" --adapt ../../../golem-wit/adapters/tier2/wasi_snapshot_preview1.wasm
+    cp zig-out/bin/component.wasm "$target"
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit

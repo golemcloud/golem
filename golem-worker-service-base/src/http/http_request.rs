@@ -105,7 +105,7 @@ mod tests {
 
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
 
-    use golem_common::model::ComponentId;
+    use golem_common::model::{ComponentId, IdempotencyKey};
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
@@ -138,6 +138,7 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -171,6 +172,7 @@ mod tests {
             worker_name: "shopping-cart-1".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: vec![serde_json::Value::Object(expected_map)],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -207,6 +209,7 @@ mod tests {
             worker_name: "shopping-cart-1".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: vec![serde_json::Value::Object(expected_map)],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -251,6 +254,7 @@ mod tests {
                 serde_json::Value::Number(serde_json::Number::from(1)),
                 serde_json::Value::Number(serde_json::Number::from(2)),
             ],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -297,6 +301,7 @@ mod tests {
                 serde_json::Value::Number(serde_json::Number::from(2)),
                 serde_json::Value::String("age-10".to_string()),
             ],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -368,6 +373,7 @@ mod tests {
                 serde_json::Value::String("age-10".to_string()),
                 serde_json::Value::Object(user_name_map),
             ],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -399,6 +405,7 @@ mod tests {
                 serde_json::Value::String("a".to_string()),
                 serde_json::Value::String("b".to_string()),
             ],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -434,6 +441,7 @@ mod tests {
             worker_name: "shopping-cart-1".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: vec![serde_json::Value::String("address".to_string())],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -466,6 +474,7 @@ mod tests {
             worker_name: "shopping-cart".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: vec![serde_json::Value::Bool(true)],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -498,6 +507,7 @@ mod tests {
             worker_name: "shopping-cart".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: vec![serde_json::Value::Bool(true)],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -530,6 +540,7 @@ mod tests {
             worker_name: "shopping-cart".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: vec![serde_json::Value::Number(serde_json::Number::from(1))],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -565,6 +576,7 @@ mod tests {
             worker_name: "shopping-cart".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: vec![serde_json::Value::Number(serde_json::Number::from(0))],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -600,6 +612,7 @@ mod tests {
                 serde_json::Value::Number(serde_json::Number::from(2)),
                 serde_json::Value::Number(serde_json::Number::from(1)),
             ],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -653,6 +666,7 @@ mod tests {
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),
             ],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -706,6 +720,7 @@ mod tests {
                 serde_json::Value::String("foo_value".to_string()),
                 serde_json::Value::String("bar_value".to_string()),
             ],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -755,6 +770,7 @@ mod tests {
             worker_name: "shopping-cart-1".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
             function_params: vec![serde_json::Value::Object(request_body.clone())],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -815,6 +831,7 @@ mod tests {
                 serde_json::Value::String("bar_value".to_string()),
                 serde_json::Value::String("token_value".to_string()),
             ],
+            idempotency_key: None,
         };
 
         assert_eq!(result, expected);
@@ -850,6 +867,40 @@ mod tests {
         test_paths("/getcartcontent/{cart-id}", "getcartcontent/1", true);
         test_paths("getcartcontent/{cart-id}", "getcartcontent/1", true);
         test_paths("/getcartcontent/{cart-id}", "/getcartcontent/1", true);
+    }
+
+    #[test]
+    fn test_worker_idempotency_key_header() {
+        fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
+            let api_request = get_api_request(
+                "/getcartcontent/1",
+                None,
+                header_map,
+                serde_json::Value::Null,
+            );
+
+            let function_params = "[]";
+
+            let api_specification: HttpApiDefinition = get_api_spec(
+                "getcartcontent/{cart-id}",
+                "shopping-cart-${request.path.cart-id}",
+                function_params,
+            );
+
+            let resolved_route = api_request.resolve(&api_specification).unwrap();
+
+            let result = WorkerRequest::from_resolved_route(resolved_route).unwrap();
+
+            assert_eq!(result.idempotency_key, idempotency_key);
+        }
+
+        test_key(&HeaderMap::new(), None);
+        let mut headers = HeaderMap::new();
+        headers.insert("Idempotency-Key", HeaderValue::from_str("foo").unwrap());
+        test_key(&headers, Some(IdempotencyKey::new("foo".to_string())));
+        let mut headers = HeaderMap::new();
+        headers.insert("idempotency-key", HeaderValue::from_str("bar").unwrap());
+        test_key(&headers, Some(IdempotencyKey::new("bar".to_string())));
     }
 
     fn get_api_request(

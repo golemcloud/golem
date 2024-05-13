@@ -108,9 +108,20 @@ pub trait ComponentService {
         }
     }
 
-    async fn add_component(&self, local_path: &Path) -> Result<ComponentId, AddComponentError> {
-        let mut client = self.client().await;
+    async fn add_component(
+        &self,
+        local_path: &Path,
+    ) -> Result<ComponentId, crate::components::component_service::AddComponentError> {
         let file_name = local_path.file_name().unwrap().to_string_lossy();
+        self.add_component_with_name(local_path, &file_name).await
+    }
+
+    async fn add_component_with_name(
+        &self,
+        local_path: &Path,
+        name: &str,
+    ) -> Result<ComponentId, AddComponentError> {
+        let mut client = self.client().await;
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
         })?;
@@ -118,7 +129,7 @@ pub trait ComponentService {
         let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
             data: Some(Data::Header(CreateComponentRequestHeader {
                 project_id: None,
-                component_name: file_name.to_string(),
+                component_name: name.to_string(),
             })),
         }];
 
@@ -301,14 +312,18 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
 fn env_vars(
     http_port: u16,
     grpc_port: u16,
+    component_compilation_service_host: &str,
+    component_compilation_service_port: u16,
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     verbosity: Level,
 ) -> HashMap<String, String> {
     let log_level = verbosity.as_str().to_lowercase();
-
     let vars: &[(&str, &str)] = &[
         ("RUST_LOG"                     , &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
         ("RUST_BACKTRACE"               , "1"),
+        ("GOLEM__COMPILATION__TYPE", "Enabled"),
+        ("GOLEM__COMPILATION__CONFIG__HOST", component_compilation_service_host),
+        ("GOLEM__COMPILATION__CONFIG__PORT", &component_compilation_service_port.to_string()),
         ("GOLEM__COMPONENT_STORE__TYPE", "Local"),
         ("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", ""),
         ("GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH", "/tmp/ittest-local-object-store/golem"),

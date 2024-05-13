@@ -143,6 +143,28 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             function_params.push(json);
         }
 
+        let idempotency_key = if let Some(expr) = &resolved_route
+            .resolved_worker_binding_template
+            .idempotency_key
+        {
+            let idempotency_key_value = expr
+                .evaluate(&resolved_route.typed_value_from_input)
+                .map_err(|err| err.to_string())?;
+
+            let idempotency_key = match idempotency_key_value {
+                TypeAnnotatedValue::Str(value) => value,
+                _ => return Err("Idempotency Key is not a string".to_string()),
+            };
+
+            Some(IdempotencyKey::new(idempotency_key))
+        } else {
+            resolved_route
+                .headers
+                .get("idempotency-key")
+                .and_then(|h| h.to_str().ok())
+                .map(|value| IdempotencyKey::new(value.to_string()))
+        };
+
         let worker_request = WorkerRequest {
             component_id: component_id.clone(),
             worker_name,

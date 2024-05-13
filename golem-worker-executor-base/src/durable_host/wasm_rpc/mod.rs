@@ -14,17 +14,19 @@
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::oplog::WrappedFunctionType;
-use golem_common::model::{ComponentId, WorkerId};
+use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
 use golem_wasm_rpc::golem::rpc::types::Uri;
 use golem_wasm_rpc::{HostWasmRpc, WasmRpcEntry, WitValue};
 use std::str::FromStr;
 use tracing::{debug, error};
+use uuid::Uuid;
 use wasmtime::component::Resource;
 
 #[async_trait]
@@ -62,6 +64,24 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id.clone();
 
+        let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
+            self,
+            WrappedFunctionType::ReadLocal,
+            "golem::rpc::wasm-rpc::invoke-and-await idempotency key",
+            |_ctx| {
+                Box::pin(async move {
+                    let uuid = Uuid::new_v4();
+                    Ok::<Uuid, GolemError>(uuid)
+                })
+            },
+            |_ctx, uuid: &Uuid| Ok(uuid.as_u64_pair()),
+            |_ctx, (high_bits, low_bits)| {
+                Box::pin(async move { Ok(Uuid::from_u64_pair(high_bits, low_bits)) })
+            },
+        )
+        .await?;
+        let idempotency_key = IdempotencyKey::from_uuid(uuid);
+
         let result = Durability::<Ctx, WitValue, SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
@@ -71,6 +91,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     ctx.rpc()
                         .invoke_and_await(
                             &remote_worker_id,
+                            Some(idempotency_key),
                             function_name,
                             function_params,
                             &ctx.state.account_id,
@@ -105,6 +126,24 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id.clone();
 
+        let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
+            self,
+            WrappedFunctionType::ReadLocal,
+            "golem::rpc::wasm-rpc::invoke-and-await idempotency key",
+            |_ctx| {
+                Box::pin(async move {
+                    let uuid = Uuid::new_v4();
+                    Ok::<Uuid, GolemError>(uuid)
+                })
+            },
+            |_ctx, uuid: &Uuid| Ok(uuid.as_u64_pair()),
+            |_ctx, (high_bits, low_bits)| {
+                Box::pin(async move { Ok(Uuid::from_u64_pair(high_bits, low_bits)) })
+            },
+        )
+        .await?;
+        let idempotency_key = IdempotencyKey::from_uuid(uuid);
+
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
@@ -114,6 +153,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     ctx.rpc()
                         .invoke(
                             &remote_worker_id,
+                            Some(idempotency_key),
                             function_name,
                             function_params,
                             &ctx.state.account_id,

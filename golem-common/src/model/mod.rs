@@ -14,7 +14,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::str::FromStr;
@@ -474,30 +474,89 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode, Eq, Hash, PartialEq, Object)]
-pub struct InvocationKey {
+#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode, Eq, Hash, PartialEq)]
+pub struct IdempotencyKey {
     pub value: String,
 }
 
-impl InvocationKey {
+impl IdempotencyKey {
     pub fn new(value: String) -> Self {
         Self { value }
     }
+
+    pub fn from_uuid(value: Uuid) -> Self {
+        Self {
+            value: value.to_string(),
+        }
+    }
+
+    pub fn fresh() -> Self {
+        Self::from_uuid(Uuid::new_v4())
+    }
 }
 
-impl From<golem_api_grpc::proto::golem::worker::InvocationKey> for InvocationKey {
-    fn from(proto: golem_api_grpc::proto::golem::worker::InvocationKey) -> Self {
+impl From<golem_api_grpc::proto::golem::worker::IdempotencyKey> for IdempotencyKey {
+    fn from(proto: golem_api_grpc::proto::golem::worker::IdempotencyKey) -> Self {
         Self { value: proto.value }
     }
 }
 
-impl From<InvocationKey> for golem_api_grpc::proto::golem::worker::InvocationKey {
-    fn from(value: InvocationKey) -> Self {
+impl From<IdempotencyKey> for golem_api_grpc::proto::golem::worker::IdempotencyKey {
+    fn from(value: IdempotencyKey) -> Self {
         Self { value: value.value }
     }
 }
 
-impl Display for InvocationKey {
+impl poem_openapi::types::Type for IdempotencyKey {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> Cow<'static, str> {
+        Cow::from(format!("string({})", stringify!(InvocationKey)))
+    }
+
+    fn schema_ref() -> MetaSchemaRef {
+        MetaSchemaRef::Inline(Box::new(MetaSchema::new("string")))
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+impl ParseFromParameter for IdempotencyKey {
+    fn parse_from_parameter(value: &str) -> ParseResult<Self> {
+        Ok(Self {
+            value: value.to_string(),
+        })
+    }
+}
+
+impl ParseFromJSON for IdempotencyKey {
+    fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
+        match value {
+            Some(Value::String(s)) => Ok(Self { value: s }),
+            _ => Err(poem_openapi::types::ParseError::<IdempotencyKey>::custom(
+                format!("Unexpected representation of {}", stringify!(InvocationKey)),
+            )),
+        }
+    }
+}
+
+impl ToJSON for IdempotencyKey {
+    fn to_json(&self) -> Option<Value> {
+        Some(Value::String(self.value.clone()))
+    }
+}
+
+impl Display for IdempotencyKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.value)
     }
@@ -507,7 +566,6 @@ impl Display for InvocationKey {
 pub enum CallingConvention {
     Component,
     Stdio,
-    StdioEventloop,
 }
 
 impl TryFrom<i32> for CallingConvention {
@@ -517,7 +575,6 @@ impl TryFrom<i32> for CallingConvention {
         match value {
             0 => Ok(CallingConvention::Component),
             1 => Ok(CallingConvention::Stdio),
-            2 => Ok(CallingConvention::StdioEventloop),
             _ => Err(format!("Unknown calling convention: {}", value)),
         }
     }
@@ -532,9 +589,6 @@ impl From<golem_api_grpc::proto::golem::worker::CallingConvention> for CallingCo
             golem_api_grpc::proto::golem::worker::CallingConvention::Stdio => {
                 CallingConvention::Stdio
             }
-            golem_api_grpc::proto::golem::worker::CallingConvention::StdioEventloop => {
-                CallingConvention::StdioEventloop
-            }
         }
     }
 }
@@ -544,7 +598,6 @@ impl From<CallingConvention> for i32 {
         match value {
             CallingConvention::Component => 0,
             CallingConvention::Stdio => 1,
-            CallingConvention::StdioEventloop => 2,
         }
     }
 }
@@ -585,6 +638,8 @@ pub struct WorkerStatusRecord {
     pub pending_updates: VecDeque<TimestampedUpdateDescription>,
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
+    pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
+    pub current_idempotency_key: Option<IdempotencyKey>,
     pub component_version: ComponentVersion,
     pub oplog_idx: OplogIndex,
 }
@@ -599,6 +654,8 @@ impl Default for WorkerStatusRecord {
             pending_updates: VecDeque::new(),
             failed_updates: Vec::new(),
             successful_updates: Vec::new(),
+            invocation_results: HashMap::new(),
+            current_idempotency_key: None,
             component_version: 0,
             oplog_idx: 0,
         }
@@ -723,7 +780,7 @@ impl From<WorkerStatus> for i32 {
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum WorkerInvocation {
     ExportedFunction {
-        invocation_key: InvocationKey,
+        idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<golem_wasm_rpc::Value>,
         calling_convention: CallingConvention,
@@ -731,6 +788,17 @@ pub enum WorkerInvocation {
     ManualUpdate {
         target_version: ComponentVersion,
     },
+}
+
+impl WorkerInvocation {
+    pub fn is_idempotency_key(&self, key: &IdempotencyKey) -> bool {
+        match self {
+            Self::ExportedFunction {
+                idempotency_key, ..
+            } => idempotency_key == key,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]

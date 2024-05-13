@@ -23,12 +23,11 @@ use tracing::Level;
 
 use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetInvocationKeyRequest,
-    GetInvocationKeyResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest,
-    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LogEvent, ResumeWorkerRequest,
-    ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LogEvent,
+    ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 
 use crate::components::component_service::ComponentService;
@@ -65,18 +64,6 @@ pub trait WorkerService {
         self.client()
             .await
             .delete_worker(request)
-            .await
-            .expect("Failed to call golem-worker-service")
-            .into_inner()
-    }
-
-    async fn get_invocation_key(
-        &self,
-        request: GetInvocationKeyRequest,
-    ) -> GetInvocationKeyResponse {
-        self.client()
-            .await
-            .get_invocation_key(request)
             .await
             .expect("Failed to call golem-worker-service")
             .into_inner()

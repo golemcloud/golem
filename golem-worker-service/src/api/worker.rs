@@ -1,7 +1,7 @@
-use golem_common::model::{CallingConvention, ComponentId, InvocationKey, WorkerFilter};
+use golem_common::model::{CallingConvention, ComponentId, IdempotencyKey, WorkerFilter};
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::auth::EmptyAuthCtx;
-use poem_openapi::param::{Path, Query};
+use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tap::TapFallible;
@@ -87,26 +87,6 @@ impl WorkerApi {
     }
 
     #[oai(
-        path = "/:component_id/workers/:worker_name/key",
-        method = "post",
-        operation_id = "get_invocation_key"
-    )]
-    async fn get_invocation_key(
-        &self,
-        component_id: Path<ComponentId>,
-        worker_name: Path<String>,
-    ) -> Result<Json<InvocationKey>> {
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
-
-        let invocation_key = self
-            .worker_service
-            .get_invocation_key(&worker_id, &EmptyAuthCtx {})
-            .await?;
-
-        Ok(Json(invocation_key))
-    }
-
-    #[oai(
         path = "/:component_id/workers/:worker_name/invoke-and-await",
         method = "post",
         operation_id = "invoke_and_await_function"
@@ -115,7 +95,7 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
-        #[oai(name = "invocation-key")] invocation_key: Query<String>,
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
         #[oai(name = "calling-convention")] calling_convention: Query<Option<CallingConvention>>,
         params: Json<InvokeParameters>,
@@ -128,10 +108,8 @@ impl WorkerApi {
             .worker_service
             .invoke_and_await_function(
                 &worker_id,
+                idempotency_key.0,
                 function.0,
-                &InvocationKey {
-                    value: invocation_key.0,
-                },
                 params.0.params,
                 &calling_convention,
                 empty_worker_metadata(),
@@ -151,6 +129,7 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
         params: Json<InvokeParameters>,
     ) -> Result<Json<InvokeResponse>> {
@@ -159,6 +138,7 @@ impl WorkerApi {
         self.worker_service
             .invoke_function(
                 &worker_id,
+                idempotency_key.0,
                 function.0,
                 params.0.params,
                 empty_worker_metadata(),

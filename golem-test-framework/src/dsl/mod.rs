@@ -20,11 +20,10 @@ use golem_api_grpc::proto::golem::common::ErrorsBody;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::{
-    get_invocation_key_response, get_worker_metadata_response, get_workers_metadata_response,
-    interrupt_worker_response, invoke_and_await_response, invoke_response,
-    launch_new_worker_response, log_event, resume_worker_response, update_worker_response,
-    worker_execution_error, CallingConvention, ConnectWorkerRequest, DeleteWorkerRequest,
-    GetInvocationKeyRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
+    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
+    invoke_and_await_response, invoke_response, launch_new_worker_response, log_event,
+    resume_worker_response, update_worker_response, worker_execution_error, CallingConvention,
+    ConnectWorkerRequest, DeleteWorkerRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
     GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
     InvokeAndAwaitRequest, InvokeParameters, InvokeRequest, LaunchNewWorkerRequest, LogEvent,
     ResumeWorkerRequest, StdErrLog, StdOutLog, UpdateMode, UpdateWorkerRequest,
@@ -33,7 +32,7 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    ComponentId, ComponentVersion, FailedUpdateRecord, InvocationKey, SuccessfulUpdateRecord,
+    ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey, SuccessfulUpdateRecord,
     WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_wasm_ast::analysis::AnalysisContext;
@@ -45,10 +44,12 @@ use std::path::Path;
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, info};
+use uuid::Uuid;
 
 #[async_trait]
 pub trait TestDsl {
     async fn store_component(&self, name: &str) -> ComponentId;
+    async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
 
@@ -82,10 +83,17 @@ pub trait TestDsl {
         precise: bool,
     ) -> (Option<u64>, Vec<WorkerMetadata>);
     async fn delete_worker(&self, worker_id: &WorkerId);
-    async fn get_invocation_key(&self, worker_id: &WorkerId) -> InvocationKey;
+
     async fn invoke(
         &self,
         worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<(), Error>;
+    async fn invoke_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<(), Error>;
@@ -98,17 +106,11 @@ pub trait TestDsl {
     async fn invoke_and_await_with_key(
         &self,
         worker_id: &WorkerId,
-        invocation_key: &InvocationKey,
+        idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<Vec<Value>, Error>;
     async fn invoke_and_await_stdio(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, Error>;
-    async fn invoke_and_await_stdio_eventloop(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
@@ -124,7 +126,7 @@ pub trait TestDsl {
     async fn invoke_and_await_custom_with_key(
         &self,
         worker_id: &WorkerId,
-        invocation_key: &InvocationKey,
+        idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
         cc: CallingConvention,
@@ -157,6 +159,17 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         self.component_service()
             .get_or_add_component(&source_path)
             .await
+    }
+
+    async fn store_unique_component(&self, name: &str) -> ComponentId {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        dump_component_info(&source_path);
+        let uuid = Uuid::new_v4();
+        let unique_name = format!("{name}-{uuid}");
+        self.component_service()
+            .add_component_with_name(&source_path, &unique_name)
+            .await
+            .expect("Failed to store unique component")
     }
 
     async fn store_component_unverified(&self, name: &str) -> ComponentId {
@@ -301,23 +314,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .await;
     }
 
-    async fn get_invocation_key(&self, worker_id: &WorkerId) -> InvocationKey {
-        match self
-            .worker_service()
-            .get_invocation_key(GetInvocationKeyRequest {
-                worker_id: Some(worker_id.clone().into()),
-            })
-            .await
-            .result
-            .expect("Invocation key response is empty")
-        {
-            get_invocation_key_response::Result::Success(response) => response.into(),
-            get_invocation_key_response::Result::Error(error) => {
-                panic!("Failed to get invocation key: {error:?}")
-            }
-        }
-    }
-
     async fn invoke(
         &self,
         worker_id: &WorkerId,
@@ -328,6 +324,36 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .worker_service()
             .invoke(InvokeRequest {
                 worker_id: Some(worker_id.clone().into()),
+                idempotency_key: None,
+                function: function_name.to_string(),
+                invoke_parameters: Some(InvokeParameters {
+                    params: params.into_iter().map(|v| v.into()).collect(),
+                }),
+            })
+            .await;
+
+        match invoke_response.result {
+            None => panic!("No response from invoke_worker"),
+            Some(invoke_response::Result::Success(_)) => Ok(()),
+            Some(invoke_response::Result::Error(WorkerError { error: Some(error) })) => Err(error),
+            Some(invoke_response::Result::Error(_)) => {
+                panic!("Empty error response from invoke_worker")
+            }
+        }
+    }
+
+    async fn invoke_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<(), Error> {
+        let invoke_response = self
+            .worker_service()
+            .invoke(InvokeRequest {
+                worker_id: Some(worker_id.clone().into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
                 function: function_name.to_string(),
                 invoke_parameters: Some(InvokeParameters {
                     params: params.into_iter().map(|v| v.into()).collect(),
@@ -363,13 +389,13 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn invoke_and_await_with_key(
         &self,
         worker_id: &WorkerId,
-        invocation_key: &InvocationKey,
+        idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<Vec<Value>, Error> {
         self.invoke_and_await_custom_with_key(
             worker_id,
-            invocation_key,
+            idempotency_key,
             function_name,
             params,
             CallingConvention::Component,
@@ -415,45 +441,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             })
     }
 
-    async fn invoke_and_await_stdio_eventloop(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, Error> {
-        let json_string = params.to_string();
-        self.invoke_and_await_custom(
-            worker_id,
-            function_name,
-            vec![Value::String(json_string)],
-            CallingConvention::StdioEventloop,
-        )
-            .await
-            .and_then(|vals| {
-                if vals.len() == 1 {
-                    let value_opt = &vals[0];
-
-                    match value_opt {
-                        Value::String(s) => {
-                            if s.is_empty() {
-                                Ok(serde_json::Value::Null)
-                            } else {
-                                let result: serde_json::Value = serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.to_string()));
-                                Ok(result)
-                            }
-                        }
-                        _ => Err(Error::BadRequest(
-                            ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }
-                        )),
-                    }
-                } else {
-                    Err(Error::BadRequest(
-                        ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }
-                    ))
-                }
-            })
-    }
-
     async fn invoke_and_await_custom(
         &self,
         worker_id: &WorkerId,
@@ -461,15 +448,21 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         params: Vec<Value>,
         cc: CallingConvention,
     ) -> Result<Vec<Value>, Error> {
-        let invocation_key = self.get_invocation_key(worker_id).await;
-        self.invoke_and_await_custom_with_key(worker_id, &invocation_key, function_name, params, cc)
-            .await
+        let idempotency_key = IdempotencyKey::fresh();
+        self.invoke_and_await_custom_with_key(
+            worker_id,
+            &idempotency_key,
+            function_name,
+            params,
+            cc,
+        )
+        .await
     }
 
     async fn invoke_and_await_custom_with_key(
         &self,
         worker_id: &WorkerId,
-        invocation_key: &InvocationKey,
+        idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
         cc: CallingConvention,
@@ -478,11 +471,11 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .worker_service()
             .invoke_and_await(InvokeAndAwaitRequest {
                 worker_id: Some(worker_id.clone().into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
                 function: function_name.to_string(),
                 invoke_parameters: Some(InvokeParameters {
                     params: params.into_iter().map(|v| v.into()).collect(),
                 }),
-                invocation_key: Some(invocation_key.clone().into()),
                 calling_convention: cc.into(),
             })
             .await;
@@ -967,6 +960,8 @@ pub fn to_worker_metadata(
                     _ => None,
                 })
                 .collect(),
+            invocation_results: HashMap::new(),
+            current_idempotency_key: None,
             component_version: metadata.component_version,
         },
     }

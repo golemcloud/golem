@@ -58,25 +58,25 @@ mod internal {
             worker_request_params.function_name
         );
 
-        let invocation_key = default_executor
-            .worker_service
-            .get_invocation_key(&worker_id, &EmptyAuthCtx {})
-            .await
-            .map_err(|e| e.to_string())?;
-
         let invoke_parameters = worker_request_params.function_params;
 
+        let idempotency_key_str = worker_request_params
+            .idempotency_key
+            .clone()
+            .map(|k| k.to_string())
+            .unwrap_or("N/A".to_string());
+
         info!(
-            "Executing request for component: {}, worker: {}, invocation key: {}, invocation params: {:?}",
-            component_id, worker_name.clone(), invocation_key, invoke_parameters
+            "Executing request for component: {}, worker: {}, idempotency key: {}, invocation params: {:?}",
+            component_id, worker_name.clone(), idempotency_key_str, invoke_parameters
         );
 
         let invoke_result = default_executor
             .worker_service
             .invoke_and_await_function_typed_value(
                 &worker_id,
+                worker_request_params.idempotency_key,
                 worker_request_params.function_name,
-                &invocation_key,
                 Value::Array(invoke_parameters),
                 &CallingConvention::Component,
                 empty_worker_metadata(),

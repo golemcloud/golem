@@ -6,7 +6,7 @@ use bytes::Bytes;
 use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, CallingConvention, ComponentVersion, InvocationKey, Timestamp, WorkerId,
+    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, Timestamp, WorkerId,
     WorkerInvocation,
 };
 use crate::serialization::{serialize, try_deserialize};
@@ -35,7 +35,7 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         function_name: String,
         request: Vec<u8>,
-        invocation_key: InvocationKey,
+        idempotency_key: IdempotencyKey,
         calling_convention: Option<CallingConvention>,
     },
     /// The worker has completed an invocation
@@ -150,7 +150,7 @@ impl OplogEntry {
     pub fn exported_function_invoked<R: Encode>(
         function_name: String,
         request: &R,
-        invocation_key: InvocationKey,
+        idempotency_key: IdempotencyKey,
         calling_convention: Option<CallingConvention>,
     ) -> Result<OplogEntry, String> {
         let serialized_request = serialize(request)?.to_vec();
@@ -158,7 +158,7 @@ impl OplogEntry {
             timestamp: Timestamp::now_utc(),
             function_name,
             request: serialized_request,
-            invocation_key,
+            idempotency_key,
             calling_convention,
         })
     }
@@ -411,7 +411,7 @@ impl Display for WorkerError {
 mod tests {
     use golem_wasm_rpc::protobuf::{val, Val, ValResult};
 
-    use crate::model::{CallingConvention, InvocationKey};
+    use crate::model::{CallingConvention, IdempotencyKey};
 
     use super::{OplogEntry, WrappedFunctionType};
 
@@ -448,8 +448,8 @@ mod tests {
         let entry = OplogEntry::exported_function_invoked(
             "function_name".to_string(),
             &vec![val1.clone()],
-            InvocationKey {
-                value: "invocation_key".to_string(),
+            IdempotencyKey {
+                value: "idempotency-key".to_string(),
             },
             Some(CallingConvention::Stdio),
         )
