@@ -24,6 +24,7 @@ use integration_tests::benchmarks::{
 
 struct ColdStartEchoLarge {
     config: RunConfig,
+    params: CliParams,
 }
 
 #[async_trait]
@@ -46,8 +47,8 @@ impl Benchmark for ColdStartEchoLarge {
         benchmark_context.deps.kill_all()
     }
 
-    async fn create(_params: CliParams, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(params: CliParams, config: RunConfig) -> Self {
+        Self { config, params }
     }
 
     async fn setup_iteration(
@@ -62,13 +63,15 @@ impl Benchmark for ColdStartEchoLarge {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        // warmup with other workers
-        if let Some(WorkerId { component_id, .. }) = context.worker_ids.clone().first() {
-            start(
-                get_worker_ids(context.worker_ids.len(), component_id, "warmup-worker"),
-                benchmark_context.deps.clone(),
-            )
-            .await
+        if !self.params.mode.component_compilation_disabled() {
+            // warmup with other workers
+            if let Some(WorkerId { component_id, .. }) = context.worker_ids.clone().first() {
+                start(
+                    get_worker_ids(context.worker_ids.len(), component_id, "warmup-worker"),
+                    benchmark_context.deps.clone(),
+                )
+                .await
+            }
         }
     }
 

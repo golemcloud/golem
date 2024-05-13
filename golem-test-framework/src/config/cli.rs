@@ -280,6 +280,30 @@ pub enum TestMode {
     },
 }
 
+impl TestMode {
+    pub fn component_compilation_disabled(&self) -> bool {
+        match self {
+            TestMode::Provided { .. } => false,
+            TestMode::Docker {
+                component_compilation_disabled,
+                ..
+            } => *component_compilation_disabled,
+            TestMode::Minikube {
+                component_compilation_disabled,
+                ..
+            } => *component_compilation_disabled,
+            TestMode::Aws {
+                component_compilation_disabled,
+                ..
+            } => *component_compilation_disabled,
+            TestMode::Spawned {
+                component_compilation_disabled,
+                ..
+            } => *component_compilation_disabled,
+        }
+    }
+}
+
 impl CliTestDependencies {
     pub fn init_logging(params: &CliParams) {
         let ansi_layer = tracing_subscriber::fmt::layer()
