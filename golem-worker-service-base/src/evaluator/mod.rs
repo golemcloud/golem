@@ -1665,7 +1665,7 @@ mod tests {
             RequestDetails::from(
                 &HashMap::new(),
                 &HashMap::new(),
-                &vec![],
+                &[],
                 &request_body,
                 header_map,
             )
