@@ -130,8 +130,12 @@ impl ComponentApi {
     /// - `metadata` contains information extracted from the WASM itself
     /// - `metadata.exports` is a list of exported functions, including their parameter's and return value's types
     /// - `metadata.producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem component.
-    #[oai(path = "/:component_id", method = "get")]
-    async fn get_component_by_id(
+    #[oai(
+        path = "/:component_id",
+        method = "get",
+        operation_id = "get_component_metadata_all_versions"
+    )]
+    async fn get_component_metadata_all_versions(
         &self,
         component_id: Path<ComponentId>,
         token: GolemSecurityScheme,
@@ -142,7 +146,11 @@ impl ComponentApi {
     }
 
     /// Update a component
-    #[oai(path = "/:component_id/upload", method = "put")]
+    #[oai(
+        path = "/:component_id/upload",
+        method = "put",
+        operation_id = "update_component"
+    )]
     async fn update_component(
         &self,
         component_id: Path<ComponentId>,
@@ -158,11 +166,11 @@ impl ComponentApi {
         Ok(Json(response))
     }
 
-    /// Upload a new component
+    /// Create a new component
     ///
     /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-    #[oai(path = "/", method = "post")]
-    async fn upload_component(
+    #[oai(path = "/", method = "post", operation_id = "create_component")]
+    async fn create_component(
         &self,
         payload: UploadPayload,
         token: GolemSecurityScheme,
@@ -181,7 +189,11 @@ impl ComponentApi {
     /// Download a component
     ///
     /// Downloads a specific version of the component's WASM.
-    #[oai(path = "/:component_id/download", method = "get")]
+    #[oai(
+        path = "/:component_id/download",
+        method = "get",
+        operation_id = "download_component"
+    )]
     async fn download_component(
         &self,
         component_id: Path<ComponentId>,
@@ -198,11 +210,57 @@ impl ComponentApi {
         }))))
     }
 
+    /// Get the version of a given component
+    ///
+    /// Gets the version of a component.
+    #[oai(
+        path = "/:component_id/versions/:version",
+        method = "get",
+        operation_id = "get_component_metadata"
+    )]
+    async fn get_component_metadata(
+        &self,
+        #[oai(name = "component_id")] component_id: Path<ComponentId>,
+        #[oai(name = "version")] version: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<crate::model::Component>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let version_int = match version.0.parse::<u64>() {
+            Ok(v) => v,
+            Err(_) => {
+                return Err(ComponentError::BadRequest(Json(ErrorsBody {
+                    errors: vec!["Invalid version".to_string()],
+                })))
+            }
+        };
+
+        let versioned_component_id = VersionedComponentId {
+            component_id: component_id.0,
+            version: version_int,
+        };
+
+        let response = self
+            .component_service
+            .get_by_version(&versioned_component_id, &auth)
+            .await?;
+
+        match response {
+            Some(component) => Ok(Json(component)),
+            None => Err(ComponentError::NotFound(Json(ErrorBody {
+                error: "Component not found".to_string(),
+            }))),
+        }
+    }
+
     /// Get the latest version of a given component
     ///
     /// Gets the latest version of a component.
-    #[oai(path = "/:component_id/latest", method = "get")]
-    async fn get_latest_component(
+    #[oai(
+        path = "/:component_id/latest",
+        method = "get",
+        operation_id = "get_latest_component_metadata"
+    )]
+    async fn get_latest_component_metadata(
         &self,
         component_id: Path<ComponentId>,
         token: GolemSecurityScheme,
@@ -224,8 +282,8 @@ impl ComponentApi {
     /// Get all components
     ///
     /// Gets all components, optionally filtered by project and/or component name.
-    #[oai(path = "/", method = "get")]
-    async fn get_all_components(
+    #[oai(path = "/", method = "get", operation_id = "get_components")]
+    async fn get_components(
         &self,
         /// Project ID to filter by
         #[oai(name = "project-id")]
