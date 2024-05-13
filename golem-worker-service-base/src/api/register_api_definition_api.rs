@@ -47,7 +47,7 @@ pub struct Route {
 #[oai(rename_all = "camelCase")]
 pub struct GolemWorkerBinding {
     pub component: ComponentId,
-    pub worker_id: String,
+    pub worker_name: String,
     pub function_name: String,
     pub function_params: Vec<String>,
     pub idempotency_key: Option<String>,
@@ -162,7 +162,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
 
         Ok(Self {
             component: value.component,
-            worker_id,
+            worker_name: worker_id,
             function_name: value.function_name,
             function_params,
             idempotency_key,
@@ -183,7 +183,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             None => None,
         };
 
-        let worker_id: Expr = expression::from_string(self.worker_id).map_err(|e| e.to_string())?;
+        let worker_id: Expr = expression::from_string(self.worker_name).map_err(|e| e.to_string())?;
         let mut function_params = Vec::new();
 
         for param in self.function_params {
