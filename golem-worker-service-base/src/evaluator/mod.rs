@@ -815,7 +815,7 @@ mod tests {
             &HeaderMap::new(),
         );
 
-        let expr = expression::from_string("${worker_response.address.street}").unwrap();
+        let expr = expression::from_string("${worker.response.address.street}").unwrap();
         let result = expr.evaluate_with_request_details(&resolved_variables);
         assert!(result.is_err());
     }

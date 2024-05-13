@@ -350,7 +350,10 @@ mod tests {
 
         let result = expression_parser.parse("${worker.response.input[0]}");
         let worker = Expr::Worker();
-        let select_input = Expr::SelectField(Box::new(worker), "input".to_string());
+        let select_input = Expr::SelectField(
+            Box::new(Expr::SelectField(Box::new(worker), "response".to_string())),
+            "input".to_string(),
+        );
         let first_index = Expr::SelectIndex(Box::new(select_input), 0);
 
         assert_eq!(result, Ok(first_index));
@@ -868,7 +871,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::Worker()),
+            Box::new(Expr::SelectField(
+                Box::new(Expr::Worker()),
+                "response".to_string(),
+            )),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -899,7 +905,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::Worker()),
+            Box::new(Expr::SelectField(
+                Box::new(Expr::Worker()),
+                "response".to_string(),
+            )),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -936,7 +945,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::Worker()),
+            Box::new(Expr::SelectField(
+                Box::new(Expr::Worker()),
+                "response".to_string(),
+            )),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -946,7 +958,10 @@ mod tests {
                         )))],
                     )
                     .unwrap(),
-                    Box::new(Expr::Worker()),
+                    Box::new(Expr::SelectField(
+                        Box::new(Expr::Worker()),
+                        "response".to_string(),
+                    )),
                 )),
                 MatchArm((
                     ArmPattern::from("none", vec![]).unwrap(),
@@ -967,7 +982,10 @@ mod tests {
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::Worker()),
+            Box::new(Expr::SelectField(
+                Box::new(Expr::Worker()),
+                "response".to_string(),
+            )),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -981,7 +999,10 @@ mod tests {
                         .unwrap()],
                     )
                     .unwrap(),
-                    Box::new(Expr::Worker()),
+                    Box::new(Expr::SelectField(
+                        Box::new(Expr::Worker()),
+                        "response".to_string(),
+                    )),
                 )),
                 MatchArm((
                     ArmPattern::from("none", vec![]).unwrap(),
@@ -997,11 +1018,14 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker_response { some(foo) => 'foo', none => 'bar bar' } }")
+            .parse("${match worker.response { some(foo) => 'foo', none => 'bar bar' } }")
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::Worker()),
+            Box::new(Expr::SelectField(
+                Box::new(Expr::Worker()),
+                "response".to_string(),
+            )),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1033,12 +1057,15 @@ mod tests {
 
         let result = expression_parser
             .parse(
-                "${match worker_response { some(foo) => if foo > 1 then foo else 0, none => 0 } }",
+                "${match worker.response { some(foo) => if foo > 1 then foo else 0, none => 0 } }",
             )
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::Worker()),
+            Box::new(Expr::SelectField(
+                Box::new(Expr::Worker()),
+                "response".to_string(),
+            )),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1072,11 +1099,14 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker_response { some(foo) => if foo > 1 then { a : 'foo' } else 0, none => { a : 'bar' } } }")
+            .parse("${match worker.response { some(foo) => if foo > 1 then { a : 'foo' } else 0, none => { a : 'bar' } } }")
             .unwrap();
 
         let expected = Expr::PatternMatch(
-            Box::new(Expr::Worker()),
+            Box::new(Expr::SelectField(
+                Box::new(Expr::Worker()),
+                "response".to_string(),
+            )),
             vec![
                 MatchArm((
                     ArmPattern::from(
