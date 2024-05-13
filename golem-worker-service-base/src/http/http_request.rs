@@ -142,7 +142,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -175,7 +175,7 @@ mod tests {
             function_params: vec![serde_json::Value::Object(expected_map)],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -211,7 +211,7 @@ mod tests {
             function_params: vec![serde_json::Value::Object(expected_map)],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -255,7 +255,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -301,7 +301,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -372,7 +372,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -403,7 +403,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -438,7 +438,7 @@ mod tests {
             function_params: vec![serde_json::Value::String("address".to_string())],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -470,7 +470,7 @@ mod tests {
             function_params: vec![serde_json::Value::Bool(true)],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -502,7 +502,7 @@ mod tests {
             function_params: vec![serde_json::Value::Bool(true)],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -534,7 +534,7 @@ mod tests {
             function_params: vec![serde_json::Value::Number(serde_json::Number::from(1))],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -569,7 +569,7 @@ mod tests {
             function_params: vec![serde_json::Value::Number(serde_json::Number::from(0))],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -604,7 +604,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -657,7 +657,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -710,7 +710,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -759,7 +759,7 @@ mod tests {
             function_params: vec![serde_json::Value::Object(request_body.clone())],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -819,7 +819,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, Ok(expected));
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -839,11 +839,7 @@ mod tests {
 
             let resolved_route = api_request.resolve(&api_specification);
 
-            let result = match resolved_route {
-                Some(resolved_route) => WorkerRequest::from_resolved_route(resolved_route)
-                    .map_err(|err| err.to_string()),
-                None => Err("not found".to_string()),
-            };
+            let result = resolved_route.map(|x| x.worker_request);
 
             assert_eq!(result.is_ok(), ok);
         }
