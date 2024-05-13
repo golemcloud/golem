@@ -18,7 +18,7 @@ use golem_service_base::type_inference::*;
 // Refined Worker response is different from WorkerResponse, because,
 // it ensures that we are not returning a vector of result if they are not named results
 // or uni
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum RefinedWorkerResponse {
     Unit,
     SingleResult(TypeAnnotatedValue),

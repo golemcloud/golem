@@ -323,7 +323,13 @@ mod tests {
                                     )
                                 ])),
                             ),
-                            ("body".to_string(), Box::new(Expr::Worker()),),
+                            (
+                                "body".to_string(),
+                                Box::new(Expr::SelectField(
+                                    Box::new(Expr::Worker()),
+                                    "response".to_string(),
+                                )),
+                            ),
                             (
                                 "status".to_string(),
                                 Box::new(Expr::Number(InnerNumber::UnsignedInteger(200)))

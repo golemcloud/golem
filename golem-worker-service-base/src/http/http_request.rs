@@ -328,7 +328,7 @@ mod tests {
         let arg1 = "${{ user-id : request.path.user-id }}";
         let arg2 = "${request.path.token-id}";
         let arg3 = "age-${request.body.age}";
-        let arg4 = "${{user-name : request.header.username}}";
+        let arg4 = "${{user-name : request.headers.username}}";
 
         let function_params = format!("[\"{}\", \"{}\", \"{}\", \"{}\"]", arg1, arg2, arg3, arg4);
 
@@ -790,7 +790,7 @@ mod tests {
 
         let foo_key = "${request.body.foo_key}";
         let bar_key = "${request.body.bar_key[0]}";
-        let token_key = "${request.header.token}";
+        let token_key = "${request.headers.token}";
 
         let function_params = format!("[\"{}\", \"{}\", \"{}\"]", foo_key, bar_key, token_key);
 
