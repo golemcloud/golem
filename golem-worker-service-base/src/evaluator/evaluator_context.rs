@@ -7,6 +7,8 @@ use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, Worke
 
 // Evaluator of an expression doesn't necessarily need a context all the time, and can be empty.
 // or contain worker details, request details, worker_response or all of them.
+
+#[derive(Clone)]
 pub struct EvaluationContext {
     pub worker_request: Option<WorkerRequest>,
     pub worker_response: Option<RefinedWorkerResponse>,
@@ -42,8 +44,8 @@ impl EvaluationContext {
             (None, Some(req)) => req.clone().to_type_annotated_value().into(),
             (Some(res), None) => match res {
                 RefinedWorkerResponse::Unit => Some(EvaluationResult::Unit),
-                RefinedWorkerResponse::SingleResult(value) => Some(value.into()),
-                RefinedWorkerResponse::MultipleResults(value) => Some(value.into())
+                RefinedWorkerResponse::SingleResult(value) => Some(value.clone().into()),
+                RefinedWorkerResponse::MultipleResults(value) => Some(value.clone().into())
             }
             (None, None) => None
         }

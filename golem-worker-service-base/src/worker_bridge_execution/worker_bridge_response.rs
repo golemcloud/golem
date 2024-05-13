@@ -164,7 +164,6 @@ mod internal {
     use crate::worker_binding::{RequestDetails, ResponseMapping};
     use crate::worker_bridge_execution::worker_bridge_response::RefinedWorkerResponse;
     use golem_wasm_rpc::json::get_json_from_typed_value;
-    use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, StatusCode};
     use poem::{Body, ResponseParts};
     use std::collections::HashMap;
@@ -292,7 +291,7 @@ mod internal {
 
             for (header_name, header_value_expr) in header_mapping {
                 let value = header_value_expr
-                    .evaluate(input, None)?
+                    .evaluate(input)?
                     .get_value()
                     .ok_or("Unable to resolve header. Resulted in ()".to_string())?;
 
