@@ -2387,7 +2387,7 @@ components:
     GolemWorkerBinding:
       type: object
       properties:
-        component:
+        componentId:
           type: string
           format: uuid
         workerName:
@@ -2403,7 +2403,7 @@ components:
         response:
           type: string
       required:
-      - component
+      - componentId
       - workerName
       - functionName
       - functionParams

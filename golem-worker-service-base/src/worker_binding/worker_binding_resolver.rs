@@ -128,7 +128,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 
         let function_name = &binding.function_name;
 
-        let component_id = &binding.component;
+        let component_id = &binding.component_id;
 
         let mut function_params: Vec<Value> = vec![];
 

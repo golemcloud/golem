@@ -69,7 +69,7 @@ struct RouteView {
     #[table(title = "Component", justify = "Justify::Right")]
     pub component: String,
     #[table(title = "Worker")]
-    pub worker_id: String,
+    pub worker_name: String,
     #[table(title = "Function")]
     pub function_name: String,
 }
@@ -82,7 +82,7 @@ impl From<&Route> for RouteView {
             method: value.method.to_string(),
             path: value.path.to_string(),
             component: format!("*{component_end}"),
-            worker_id: value.binding.worker_id.to_string(),
+            worker_name: value.binding.worker_id.to_string(),
             function_name: value.binding.function_name.to_string(),
         }
     }

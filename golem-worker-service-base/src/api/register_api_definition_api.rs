@@ -46,7 +46,7 @@ pub struct Route {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GolemWorkerBinding {
-    pub component: ComponentId,
+    pub component_id: ComponentId,
     pub worker_name: String,
     pub function_name: String,
     pub function_params: Vec<String>,
@@ -161,7 +161,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
         };
 
         Ok(Self {
-            component: value.component,
+            component_id: value.component_id,
             worker_name: worker_id,
             function_name: value.function_name,
             function_params,
@@ -198,7 +198,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
         };
 
         Ok(crate::worker_binding::GolemWorkerBinding {
-            component: self.component,
+            component_id: self.component_id,
             worker_name: worker_id,
             function_name: self.function_name,
             function_params,
@@ -339,7 +339,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
         };
 
         let result = grpc_apidefinition::WorkerBinding {
-            component: Some(value.component.into()),
+            component: Some(value.component_id.into()),
             worker_id,
             function_name: value.function_name,
             function_params,
@@ -383,7 +383,7 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
         };
 
         let result = crate::worker_binding::GolemWorkerBinding {
-            component: component_id,
+            component_id: component_id,
             worker_name: worker_id,
             function_name: value.function_name,
             function_params,
