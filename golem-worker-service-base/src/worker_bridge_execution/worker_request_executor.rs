@@ -1,5 +1,5 @@
 use crate::service::worker::TypedResult;
-use crate::worker_bridge_execution::{WorkerRequest};
+use crate::worker_bridge_execution::WorkerRequest;
 use async_trait::async_trait;
 use golem_service_base::model::FunctionResult;
 use golem_wasm_rpc::TypeAnnotatedValue;

@@ -71,10 +71,15 @@ impl RefinedWorkerResponse {
         &self,
         response_mapping: &Option<ResponseMapping>,
         input_request: &RequestDetails,
-        worker_request: &WorkerRequest
+        worker_request: &WorkerRequest,
     ) -> poem::Response {
         if let Some(mapping) = response_mapping {
-            match internal::IntermediateHttpResponse::from(self, mapping, input_request, worker_request) {
+            match internal::IntermediateHttpResponse::from(
+                self,
+                mapping,
+                input_request,
+                worker_request,
+            ) {
                 Ok(intermediate_response) => intermediate_response.to_http_response(),
                 Err(e) => poem::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -118,7 +123,8 @@ impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
             component_id, worker_name, worker_request_params.function_name
         );
 
-        let function_params = serde_json::Value::Array(worker_request_params.function_params.clone());
+        let function_params =
+            serde_json::Value::Array(worker_request_params.function_params.clone());
 
         let sample_json_data = json!(
             [{
@@ -159,16 +165,16 @@ impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
 mod internal {
     use crate::api_definition::http::HttpResponseMapping;
     use crate::evaluator::Evaluator;
-    use crate::evaluator::{EvaluationError, EvaluationResult, EvaluationContext};
+    use crate::evaluator::{EvaluationContext, EvaluationError, EvaluationResult};
     use crate::expression::Expr;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::{RequestDetails, ResponseMapping};
     use crate::worker_bridge_execution::worker_bridge_response::RefinedWorkerResponse;
+    use crate::worker_bridge_execution::WorkerRequest;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use http::{HeaderMap, StatusCode};
     use poem::{Body, ResponseParts};
     use std::collections::HashMap;
-    use crate::worker_bridge_execution::WorkerRequest;
 
     pub(crate) struct IntermediateHttpResponse {
         body: EvaluationResult,
@@ -181,7 +187,7 @@ mod internal {
             worker_response: &RefinedWorkerResponse,
             response_mapping: &ResponseMapping,
             request_details: &RequestDetails,
-            worker_request: &WorkerRequest
+            worker_request: &WorkerRequest,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
             let evaluation_context =
                 EvaluationContext::from(worker_request, worker_response, request_details);
@@ -189,17 +195,12 @@ mod internal {
             let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
                 .map_err(EvaluationError::Message)?;
 
-            let status_code =
-                get_status_code(&http_response_mapping.status, &evaluation_context)?;
+            let status_code = get_status_code(&http_response_mapping.status, &evaluation_context)?;
 
-            let headers = ResolvedResponseHeaders::from(
-                &http_response_mapping.headers,
-                &evaluation_context,
-            )?;
+            let headers =
+                ResolvedResponseHeaders::from(&http_response_mapping.headers, &evaluation_context)?;
 
-            let response_body = http_response_mapping
-                .body
-                .evaluate(&evaluation_context)?;
+            let response_body = http_response_mapping.body.evaluate(&evaluation_context)?;
 
             Ok(IntermediateHttpResponse {
                 body: response_body,

@@ -1,16 +1,16 @@
-use std::collections::HashMap;
+use crate::api_definition::http::{QueryInfo, VarInfo};
+use crate::merge::Merge;
+use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::HeaderMap;
 use serde_json::Value;
-use golem_service_base::type_inference::infer_analysed_type;
-use crate::api_definition::http::{QueryInfo, VarInfo};
-use crate::merge::Merge;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub enum RequestDetails {
-    Http(TypedHttRequestDetails)
+    Http(TypedHttRequestDetails),
 }
 impl RequestDetails {
     pub fn from(
@@ -20,12 +20,18 @@ impl RequestDetails {
         request_body: &Value,
         headers: &HeaderMap,
     ) -> Result<Self, Vec<String>> {
-        Ok(Self::Http(TypedHttRequestDetails::from_input_http_request(path_params, query_variable_values, query_variable_names, request_body, headers)?))
+        Ok(Self::Http(TypedHttRequestDetails::from_input_http_request(
+            path_params,
+            query_variable_values,
+            query_variable_names,
+            request_body,
+            headers,
+        )?))
     }
 
     pub fn to_type_annotated_value(self) -> TypeAnnotatedValue {
         match self {
-            RequestDetails::Http(http) => http.to_type_annotated_value()
+            RequestDetails::Http(http) => http.to_type_annotated_value(),
         }
     }
 }
@@ -39,7 +45,6 @@ pub struct TypedHttRequestDetails {
 }
 
 impl TypedHttRequestDetails {
-
     fn to_type_annotated_value(self) -> TypeAnnotatedValue {
         let mut typed_path_values: TypeAnnotatedValue = self.typed_path_key_values.0.into();
         let typed_query_values: TypeAnnotatedValue = self.typed_query_values.0.into();
@@ -47,9 +52,15 @@ impl TypedHttRequestDetails {
 
         TypeAnnotatedValue::Record {
             typ: vec![
-                ("path".to_string(), AnalysedType::from(&merged_type_annotated_value)),
+                (
+                    "path".to_string(),
+                    AnalysedType::from(&merged_type_annotated_value),
+                ),
                 ("body".to_string(), (&self.typed_request_body.0).into()),
-                ("headers".to_string(), self.typed_header_values.0.clone().into()),
+                (
+                    "headers".to_string(),
+                    self.typed_header_values.0.clone().into(),
+                ),
             ],
             value: vec![
                 ("path".to_string(), merged_type_annotated_value),
@@ -57,7 +68,6 @@ impl TypedHttRequestDetails {
                 ("headers".to_string(), self.typed_header_values.0.into()),
             ],
         }
-
     }
 
     fn from_input_http_request(
@@ -67,17 +77,17 @@ impl TypedHttRequestDetails {
         request_body: &Value,
         headers: &HeaderMap,
     ) -> Result<Self, Vec<String>> {
-
         let request_body = TypedRequestBody::from(request_body)?;
         let path_params = TypedPathKeyValues::from(path_params);
-        let query_params = TypedQueryKeyValues::from(&query_variable_values, &query_variable_names)?;
+        let query_params =
+            TypedQueryKeyValues::from(&query_variable_values, &query_variable_names)?;
         let header_params = TypedHeaderValues::from(headers)?;
 
         Ok(Self {
             typed_path_key_values: path_params,
             typed_request_body: request_body,
             typed_query_values: query_params,
-            typed_header_values: header_params
+            typed_header_values: header_params,
         })
     }
 }
@@ -89,7 +99,10 @@ impl TypedPathKeyValues {
     fn from(path_variables: &HashMap<VarInfo, &str>) -> TypedPathKeyValues {
         let record_fields: Vec<TypedKeyValue> = path_variables
             .into_iter()
-            .map(|(key, value)| TypedKeyValue { name: key.key_name.clone(), value: internal::get_typed_value_from_primitive(value) })
+            .map(|(key, value)| TypedKeyValue {
+                name: key.key_name.clone(),
+                value: internal::get_typed_value_from_primitive(value),
+            })
             .collect();
 
         TypedPathKeyValues(TypedKeyValueCollection {
@@ -125,7 +138,6 @@ impl TypedQueryKeyValues {
             Err(unavailable_query_variables)
         }
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -207,12 +219,10 @@ pub struct TypedKeyValue {
     pub value: TypeAnnotatedValue,
 }
 
-
 mod internal {
-    
+
     use crate::primitive::{Number, Primitive};
     use golem_wasm_rpc::TypeAnnotatedValue;
-
 
     pub(crate) fn get_typed_value_from_primitive(value: impl AsRef<str>) -> TypeAnnotatedValue {
         let primitive = Primitive::from(value.as_ref().to_string());

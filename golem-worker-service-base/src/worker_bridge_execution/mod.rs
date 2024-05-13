@@ -4,10 +4,9 @@ use serde_json::Value;
 
 use golem_common::model::ComponentId;
 
-
+pub mod to_response;
 mod worker_bridge_response;
 mod worker_request_executor;
-pub mod to_response;
 
 pub use worker_bridge_response::*;
 pub use worker_request_executor::*;
@@ -31,9 +30,18 @@ impl WorkerRequest {
                 ("function_name".to_string(), AnalysedType::Str),
             ],
             value: vec![
-                ("component_id".to_string(), TypeAnnotatedValue::Str(self.component_id.0.to_string())),
-                ("name".to_string(), TypeAnnotatedValue::Str(self.worker_name)),
-                ("function_name".to_string(), TypeAnnotatedValue::Str(self.function_name)),
+                (
+                    "component_id".to_string(),
+                    TypeAnnotatedValue::Str(self.component_id.0.to_string()),
+                ),
+                (
+                    "name".to_string(),
+                    TypeAnnotatedValue::Str(self.worker_name),
+                ),
+                (
+                    "function_name".to_string(),
+                    TypeAnnotatedValue::Str(self.function_name),
+                ),
             ],
         }
     }

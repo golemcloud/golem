@@ -4,7 +4,6 @@ use crate::api_definition::ApiSiteString;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
 
-
 #[derive(Clone)]
 pub struct InputHttpRequest {
     pub input_path: ApiInputPath,
@@ -110,8 +109,8 @@ mod tests {
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
-    use crate::worker_bridge_execution::WorkerRequest;
     use crate::worker_binding::WorkerBindingResolver;
+    use crate::worker_bridge_execution::WorkerRequest;
 
     use super::*;
 
@@ -173,9 +172,7 @@ mod tests {
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Object(
-                expected_map,
-            )],
+            function_params: vec![serde_json::Value::Object(expected_map)],
         };
 
         assert_eq!(result, Ok(expected));
@@ -211,9 +208,7 @@ mod tests {
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Object(
-                expected_map,
-            )],
+            function_params: vec![serde_json::Value::Object(expected_map)],
         };
 
         assert_eq!(result, Ok(expected));
@@ -440,9 +435,7 @@ mod tests {
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::String(
-                "address".to_string(),
-            )],
+            function_params: vec![serde_json::Value::String("address".to_string())],
         };
 
         assert_eq!(result, Ok(expected));
@@ -538,9 +531,7 @@ mod tests {
                 .unwrap(),
             worker_name: "shopping-cart".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Number(
-                serde_json::Number::from(1),
-            )],
+            function_params: vec![serde_json::Value::Number(serde_json::Number::from(1))],
         };
 
         assert_eq!(result, Ok(expected));
@@ -575,9 +566,7 @@ mod tests {
                 .unwrap(),
             worker_name: "shopping-cart".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Number(
-                serde_json::Number::from(0),
-            )],
+            function_params: vec![serde_json::Value::Number(serde_json::Number::from(0))],
         };
 
         assert_eq!(result, Ok(expected));
@@ -767,9 +756,7 @@ mod tests {
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
             function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Object(
-                request_body.clone(),
-            )],
+            function_params: vec![serde_json::Value::Object(request_body.clone())],
         };
 
         assert_eq!(result, Ok(expected));

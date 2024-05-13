@@ -21,7 +21,6 @@ impl Primitive {
             Primitive::Bool(value) => value.to_string(),
         }
     }
-
 }
 
 impl From<String> for Primitive {

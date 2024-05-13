@@ -1,9 +1,9 @@
 pub use evaluator_context::*;
+mod evaluator_context;
 mod getter;
 mod math_op_evaluator;
 mod path;
 mod pattern_match_evaluator;
-mod evaluator_context;
 
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
@@ -71,10 +71,7 @@ impl<T: AsRef<str>> From<T> for EvaluationError {
 }
 
 impl Evaluator for Expr {
-    fn evaluate(
-        &self,
-        input: &EvaluationContext,
-    ) -> Result<EvaluationResult, EvaluationError> {
+    fn evaluate(&self, input: &EvaluationContext) -> Result<EvaluationResult, EvaluationError> {
         let expr: &Expr = self;
 
         // An expression evaluation needs to be careful with string values
@@ -84,16 +81,19 @@ impl Evaluator for Expr {
             input: &mut EvaluationContext,
         ) -> Result<EvaluationResult, EvaluationError> {
             match expr {
-                Expr::Request() =>
-                    match &input.request_data {
-                        Some(request_data) => Ok(request_data.clone().to_type_annotated_value().into()),
-                        None => Err(EvaluationError::Message("Request data is not available".to_string())),
-                    },
+                Expr::Request() => match &input.request_data {
+                    Some(request_data) => Ok(request_data.clone().to_type_annotated_value().into()),
+                    None => Err(EvaluationError::Message(
+                        "Request data is not available".to_string(),
+                    )),
+                },
 
                 // worker.response
                 Expr::Worker() => {
                     let worker_data = internal::merge_worker_request_response(input);
-                    worker_data.ok_or(EvaluationError::Message("Worker data is not available".to_string()))
+                    worker_data.ok_or(EvaluationError::Message(
+                        "Worker data is not available".to_string(),
+                    ))
                 }
 
                 Expr::SelectIndex(expr, index) => {
@@ -110,12 +110,13 @@ impl Evaluator for Expr {
                 }
 
                 Expr::SelectField(expr, field_name) => {
-                    let evaluation_result = go(expr, input)?.get_value().ok_or(
-                        EvaluationError::Message(format!(
-                            "The expression is evaluated to unit and doesn't have an field {}",
-                            field_name
-                        )),
-                    )?;
+                    let evaluation_result =
+                        go(expr, input)?
+                            .get_value()
+                            .ok_or(EvaluationError::Message(format!(
+                                "The expression is evaluated to unit and doesn't have an field {}",
+                                field_name
+                            )))?;
 
                     evaluation_result
                         .get(&Path::from_key(field_name.as_str()))
@@ -322,17 +323,14 @@ impl Evaluator for Expr {
                     InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(*f64).into()),
                 },
 
-                Expr::Variable(variable) => input.get_variable_value(variable.as_str())
+                Expr::Variable(variable) => input
+                    .get_variable_value(variable.as_str())
                     .map(|v| v.into())
                     .map_err(|err| err.into()),
 
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(*bool).into()),
                 Expr::PatternMatch(match_expression, arms) => {
-                    pattern_match_evaluator::evaluate_pattern_match(
-                        match_expression,
-                        arms,
-                        input,
-                    )
+                    pattern_match_evaluator::evaluate_pattern_match(match_expression, arms, input)
                 }
 
                 Expr::Option(option_expr) => match option_expr {
@@ -427,11 +425,16 @@ impl Evaluator for Expr {
 
 mod internal {
     use crate::evaluator::{EvaluationContext, EvaluationResult};
-    use crate::worker_bridge_execution::RefinedWorkerResponse;
     use crate::merge::Merge;
+    use crate::worker_bridge_execution::RefinedWorkerResponse;
 
-    pub(crate) fn merge_worker_request_response(evaluation_context: &EvaluationContext) -> Option<EvaluationResult> {
-        match (&evaluation_context.worker_response, &evaluation_context.worker_request) {
+    pub(crate) fn merge_worker_request_response(
+        evaluation_context: &EvaluationContext,
+    ) -> Option<EvaluationResult> {
+        match (
+            &evaluation_context.worker_response,
+            &evaluation_context.worker_request,
+        ) {
             (Some(res), Some(req)) => {
                 let mut typed_worker_data = req.clone().to_type_annotated_value();
 
@@ -440,18 +443,17 @@ mod internal {
                 }
 
                 Some(EvaluationResult::Value(typed_worker_data))
-            },
+            }
 
             (None, Some(req)) => Some(req.clone().to_type_annotated_value().into()),
             (Some(res), None) => match res {
                 RefinedWorkerResponse::Unit => Some(EvaluationResult::Unit),
                 RefinedWorkerResponse::SingleResult(value) => Some(value.clone().into()),
-                RefinedWorkerResponse::MultipleResults(value) => Some(value.clone().into())
-            }
-            (None, None) => None
+                RefinedWorkerResponse::MultipleResults(value) => Some(value.clone().into()),
+            },
+            (None, None) => None,
         }
     }
-
 }
 
 #[cfg(test)]
@@ -467,13 +469,13 @@ mod tests {
     use serde_json::{json, Value};
 
     use crate::api_definition::http::AllPathPatterns;
+    use crate::evaluator::evaluator_context::EvaluationContext;
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{EvaluationError, EvaluationResult, Evaluator};
     use crate::expression;
+    use crate::worker_binding::RequestDetails;
     use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerResponse};
     use test_utils::*;
-    use crate::evaluator::evaluator_context::EvaluationContext;
-    use crate::worker_binding::RequestDetails;
 
     trait EvaluatorTestExt {
         fn evaluate_with_request_details(
@@ -488,7 +490,7 @@ mod tests {
         fn evaluate_with(
             &self,
             input: &RequestDetails,
-            worker_response: &RefinedWorkerResponse
+            worker_response: &RefinedWorkerResponse,
         ) -> Result<TypeAnnotatedValue, EvaluationError>;
     }
 
@@ -511,7 +513,9 @@ mod tests {
                 value: vec![],
                 typ: vec![],
             };
-            let eval_result = self.evaluate(&EvaluationContext::from_worker_response(worker_bridge_response))?;
+            let eval_result = self.evaluate(&EvaluationContext::from_worker_response(
+                worker_bridge_response,
+            ))?;
             Ok(eval_result
                 .get_value()
                 .ok_or("The expression is evaluated to unit and doesn't have a value")?)
@@ -520,9 +524,8 @@ mod tests {
         fn evaluate_with(
             &self,
             input: &RequestDetails,
-            worker_response: &RefinedWorkerResponse
+            worker_response: &RefinedWorkerResponse,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
-
             let evaluation_context = EvaluationContext {
                 worker_request: None,
                 worker_response: Some(worker_response.clone()),
@@ -534,7 +537,6 @@ mod tests {
             Ok(eval_result
                 .get_value()
                 .ok_or("The expression is evaluated to unit and doesn't have a value")?)
-
         }
     }
 
@@ -1542,6 +1544,7 @@ mod tests {
         use crate::expression;
         use crate::http::router::RouterPattern;
         use crate::http::{ApiInputPath, InputHttpRequest};
+        use crate::worker_binding::RequestDetails;
         use crate::worker_bridge_execution::WorkerResponse;
         use golem_service_base::type_inference::infer_analysed_type;
         use golem_wasm_ast::analysis::AnalysedType;
@@ -1550,7 +1553,6 @@ mod tests {
         use http::{HeaderMap, Method, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;
-        use crate::worker_binding::RequestDetails;
 
         pub(crate) fn get_complex_variant_typed_value() -> TypeAnnotatedValue {
             TypeAnnotatedValue::Variant {
@@ -1648,8 +1650,9 @@ mod tests {
                 &HashMap::new(),
                 &vec![],
                 &request_body,
-                header_map
-            ).unwrap()
+                header_map,
+            )
+            .unwrap()
         }
 
         pub(crate) fn request_details_from_request_path_variables(
@@ -1683,8 +1686,9 @@ mod tests {
                 &HashMap::new(),
                 &path_pattern.query_params,
                 &Value::Null,
-                &HeaderMap::new()
-            ).unwrap()
+                &HeaderMap::new(),
+            )
+            .unwrap()
         }
 
         #[test]

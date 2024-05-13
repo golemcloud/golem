@@ -1,10 +1,10 @@
+use crate::evaluator::evaluator_context::EvaluationContext;
 use crate::evaluator::Evaluator;
 use crate::evaluator::{EvaluationError, EvaluationResult};
 use crate::expression::{ArmPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, MatchArm};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::ops::Deref;
-use crate::evaluator::evaluator_context::EvaluationContext;
 
 struct BindingVariable(String);
 
