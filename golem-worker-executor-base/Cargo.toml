@@ -84,7 +84,6 @@ golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 assert2 = "0.3.11"
 console-subscriber = { workspace = true }
 ctor = "0.2.6"
-fred = { workspace = true, features = ["metrics", "serde-json", "partial-tracing", "mocks"] }
 golem-wasm-ast = { workspace = true }
 proptest = { workspace = true }
 redis = { version = "0.25.2", features = ["default"] }

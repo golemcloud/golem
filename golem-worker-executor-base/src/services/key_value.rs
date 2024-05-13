@@ -12,16 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::Bytes;
-use golem_common::model::AccountId;
-use golem_common::redis::RedisPool;
 
-use crate::services::golem_config::KeyValueServiceConfig;
+use golem_common::model::AccountId;
+
+use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageLabelledApi};
 
 /// Service implementing a persistent key-value store
 #[async_trait]
@@ -79,40 +77,31 @@ pub trait KeyValueService {
     ) -> anyhow::Result<()>;
 }
 
-pub fn configured(
-    config: &KeyValueServiceConfig,
-    redis_pool: RedisPool,
-) -> Arc<dyn KeyValueService + Send + Sync> {
-    match config {
-        KeyValueServiceConfig::InMemory => Arc::new(KeyValueServiceInMemory::new()),
-        KeyValueServiceConfig::Redis => Arc::new(KeyValueServiceRedis::new(redis_pool.clone())),
-    }
-}
-
 #[derive(Clone, Debug)]
-pub struct KeyValueServiceRedis {
-    redis: RedisPool,
+pub struct DefaultKeyValueService {
+    key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
 }
 
-impl KeyValueServiceRedis {
-    pub fn new(redis: RedisPool) -> Self {
-        Self { redis }
+impl DefaultKeyValueService {
+    pub fn new(key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>) -> Self {
+        Self { key_value_storage }
     }
 }
 
 #[async_trait]
-impl KeyValueService for KeyValueServiceRedis {
+impl KeyValueService for DefaultKeyValueService {
     async fn delete(
         &self,
         account_id: AccountId,
         bucket: String,
         key: String,
     ) -> anyhow::Result<()> {
-        let bucket = format!("instance:keyvalue:{}:{}", account_id, bucket);
-        self.redis
+        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
+        self.key_value_storage
             .with("key_value", "delete")
-            .hdel(bucket, key)
-            .await?;
+            .del(Some(&bucket), &key)
+            .await
+            .map_err(|err| anyhow!(err))?;
         Ok(())
     }
 
@@ -122,11 +111,12 @@ impl KeyValueService for KeyValueServiceRedis {
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<()> {
-        let bucket = format!("instance:keyvalue:{}:{}", account_id, bucket);
-        self.redis
+        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
+        self.key_value_storage
             .with("key_value", "delete_many")
-            .hdel(bucket, keys)
-            .await?;
+            .del_many(Some(&bucket), keys)
+            .await
+            .map_err(|err| anyhow!(err))?;
         Ok(())
     }
 
@@ -136,12 +126,13 @@ impl KeyValueService for KeyValueServiceRedis {
         bucket: String,
         key: String,
     ) -> anyhow::Result<bool> {
-        let bucket = format!("instance:keyvalue:{}:{}", account_id, bucket);
+        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         let exists: bool = self
-            .redis
+            .key_value_storage
             .with("key_value", "exists")
-            .hexists(bucket, key)
-            .await?;
+            .exists(Some(&bucket), &key)
+            .await
+            .map_err(|err| anyhow!(err))?;
         Ok(exists)
     }
 
@@ -151,22 +142,25 @@ impl KeyValueService for KeyValueServiceRedis {
         bucket: String,
         key: String,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        let bucket = format!("instance:keyvalue:{}:{}", account_id, bucket);
+        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         let incoming_value: Option<Vec<u8>> = self
-            .redis
-            .with("key_value", "get")
-            .hget(bucket, key)
-            .await?;
+            .key_value_storage
+            .with_entity("key_value", "get", "custom")
+            .get_raw(Some(&bucket), &key)
+            .await
+            .map_err(|err| anyhow!(err))?
+            .map(|bytes| bytes.to_vec());
         Ok(incoming_value)
     }
 
     async fn get_keys(&self, account_id: AccountId, bucket: String) -> anyhow::Result<Vec<String>> {
-        let bucket = format!("instance:keyvalue:{}:{}", account_id, bucket);
+        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         let keys: Vec<String> = self
-            .redis
+            .key_value_storage
             .with("key_value", "get_keys")
-            .hkeys(bucket)
-            .await?;
+            .keys(Some(&bucket))
+            .await
+            .map_err(|err| anyhow!(err))?;
         Ok(keys)
     }
 
@@ -176,12 +170,13 @@ impl KeyValueService for KeyValueServiceRedis {
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
-        let bucket = format!("instance:keyvalue:{}:{}", account_id, bucket);
+        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         let incoming_values: Vec<Option<Vec<u8>>> = self
-            .redis
-            .with("key_value", "get_many")
-            .hmget(bucket, keys)
-            .await?;
+            .key_value_storage
+            .with_entity("key_value", "get_many", "custom")
+            .get_many(Some(&bucket), keys)
+            .await
+            .map_err(|err| anyhow!(err))?;
         Ok(incoming_values)
     }
 
@@ -192,11 +187,12 @@ impl KeyValueService for KeyValueServiceRedis {
         key: String,
         outgoing_value: Vec<u8>,
     ) -> anyhow::Result<()> {
-        let bucket = format!("instance:keyvalue:{}:{}", account_id, bucket);
-        self.redis
-            .with("key_value", "set")
-            .hset(bucket, (key, Bytes::from(outgoing_value)))
-            .await?;
+        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
+        self.key_value_storage
+            .with_entity("key_value", "set", "custom")
+            .set_raw(Some(&bucket), &key, &outgoing_value)
+            .await
+            .map_err(|err| anyhow!(err))?;
         Ok(())
     }
 
@@ -206,154 +202,16 @@ impl KeyValueService for KeyValueServiceRedis {
         bucket: String,
         key_values: Vec<(String, Vec<u8>)>,
     ) -> anyhow::Result<()> {
-        let bucket = format!("instance:keyvalue:{}:{}", account_id, bucket);
-        let key_values: Vec<(String, Bytes)> = key_values
-            .into_iter()
-            .map(|(key, value)| (key, Bytes::from(value)))
+        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
+        let key_values: Vec<(&str, &[u8])> = key_values
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_slice()))
             .collect();
-        self.redis
-            .with("key_value", "set_many")
-            .hmset(bucket, key_values)
-            .await?;
-        Ok(())
-    }
-}
-
-type Bucket = HashMap<String, Vec<u8>>;
-type Buckets = HashMap<String, Bucket>;
-
-pub struct KeyValueServiceInMemory {
-    buckets: Arc<RwLock<Buckets>>,
-}
-
-impl Default for KeyValueServiceInMemory {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl KeyValueServiceInMemory {
-    pub fn new() -> Self {
-        Self {
-            buckets: Arc::new(RwLock::new(Buckets::new())),
-        }
-    }
-}
-
-#[async_trait]
-impl KeyValueService for KeyValueServiceInMemory {
-    async fn delete(
-        &self,
-        _account_id: AccountId,
-        bucket: String,
-        key: String,
-    ) -> anyhow::Result<()> {
-        let mut buckets = self.buckets.write().unwrap();
-        if let Some(bucket) = buckets.get_mut(&bucket) {
-            match bucket.entry(key) {
-                Entry::Occupied(entry) => entry.remove(),
-                Entry::Vacant(_) => {
-                    anyhow::bail!("Key does not exist");
-                }
-            };
-            Ok(())
-        } else {
-            anyhow::bail!("Container does not exist");
-        }
-    }
-
-    async fn delete_many(
-        &self,
-        account_id: AccountId,
-        bucket: String,
-        keys: Vec<String>,
-    ) -> anyhow::Result<()> {
-        for key in keys {
-            self.delete(account_id.clone(), bucket.clone(), key).await?;
-        }
-        Ok(())
-    }
-
-    async fn exists(
-        &self,
-        _account_id: AccountId,
-        bucket: String,
-        key: String,
-    ) -> anyhow::Result<bool> {
-        let buckets = self.buckets.read().unwrap();
-        if let Some(bucket) = buckets.get(&bucket) {
-            Ok(bucket.contains_key(&key))
-        } else {
-            anyhow::bail!("Container does not exist");
-        }
-    }
-
-    async fn get(
-        &self,
-        _account_id: AccountId,
-        bucket: String,
-        key: String,
-    ) -> anyhow::Result<Option<Vec<u8>>> {
-        let buckets = self.buckets.read().unwrap();
-        if let Some(bucket) = buckets.get(&bucket) {
-            Ok(bucket.get(&key).cloned())
-        } else {
-            anyhow::bail!("Container does not exist");
-        }
-    }
-
-    async fn get_keys(
-        &self,
-        _account_id: AccountId,
-        bucket: String,
-    ) -> anyhow::Result<Vec<String>> {
-        let buckets = self.buckets.read().unwrap();
-        if let Some(bucket) = buckets.get(&bucket) {
-            Ok(bucket.keys().cloned().collect())
-        } else {
-            anyhow::bail!("Container does not exist");
-        }
-    }
-
-    async fn get_many(
-        &self,
-        _account_id: AccountId,
-        bucket: String,
-        keys: Vec<String>,
-    ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
-        let mut result = Vec::new();
-        for key in keys {
-            result.push(self.get(_account_id.clone(), bucket.clone(), key).await?);
-        }
-        Ok(result)
-    }
-
-    async fn set(
-        &self,
-        _account_id: AccountId,
-        bucket: String,
-        key: String,
-        outgoing_value: Vec<u8>,
-    ) -> anyhow::Result<()> {
-        let mut buckets = self.buckets.write().unwrap();
-        if let Some(bucket) = buckets.get_mut(&bucket) {
-            bucket.insert(key, outgoing_value);
-            Ok(())
-        } else {
-            anyhow::bail!("Container does not exist");
-        }
-    }
-
-    async fn set_many(
-        &self,
-        _account_id: AccountId,
-        bucket: String,
-        key_values: Vec<(String, Vec<u8>)>,
-    ) -> anyhow::Result<()> {
-        for (key, value) in key_values {
-            self.set(_account_id.clone(), bucket.clone(), key, value)
-                .await?;
-        }
+        self.key_value_storage
+            .with_entity("key_value", "set_many", "custom")
+            .set_many_raw(Some(&bucket), &key_values)
+            .await
+            .map_err(|err| anyhow!(err))?;
         Ok(())
     }
 }

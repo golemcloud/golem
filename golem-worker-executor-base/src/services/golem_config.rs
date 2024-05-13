@@ -33,10 +33,7 @@ pub struct GolemConfig {
     pub component_service: ComponentServiceConfig,
     pub compiled_component_service: CompiledComponentServiceConfig,
     pub blob_store_service: BlobStoreServiceConfig,
-    pub key_value_service: KeyValueServiceConfig,
-    pub promises: PromisesConfig,
     pub shard_manager_service: ShardManagerServiceConfig,
-    pub workers: WorkersServiceConfig,
     pub redis: RedisConfig,
     pub oplog: OplogConfig,
     pub suspend: SuspendConfig,
@@ -153,27 +150,6 @@ pub struct ShardManagerServiceGrpcConfig {
     pub host: String,
     pub port: u16,
     pub retries: RetryConfig,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum KeyValueServiceConfig {
-    Redis,
-    InMemory,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum PromisesConfig {
-    Redis,
-    InMemory,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum WorkersServiceConfig {
-    Redis,
-    InMemory,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -296,10 +272,7 @@ impl Default for GolemConfig {
             component_service: ComponentServiceConfig::default(),
             compiled_component_service: CompiledComponentServiceConfig::default(),
             blob_store_service: BlobStoreServiceConfig::default(),
-            key_value_service: KeyValueServiceConfig::default(),
-            promises: PromisesConfig::default(),
             shard_manager_service: ShardManagerServiceConfig::default(),
-            workers: WorkersServiceConfig::default(),
             redis: RedisConfig::default(),
             oplog: OplogConfig::default(),
             suspend: SuspendConfig::default(),
@@ -406,24 +379,6 @@ impl Default for ShardManagerServiceGrpcConfig {
             port: 9020,
             retries: RetryConfig::default(),
         }
-    }
-}
-
-impl Default for KeyValueServiceConfig {
-    fn default() -> Self {
-        Self::Redis
-    }
-}
-
-impl Default for PromisesConfig {
-    fn default() -> Self {
-        Self::Redis
-    }
-}
-
-impl Default for WorkersServiceConfig {
-    fn default() -> Self {
-        Self::Redis
     }
 }
 

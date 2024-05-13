@@ -159,7 +159,7 @@ pub struct BlobStoreServiceS3 {
 impl BlobStoreServiceS3 {
     fn bucket_name(&self, account_id: &AccountId, container_name: &String) -> String {
         format!(
-            "instance:blobstore:{}:{}:{}",
+            "worker:blobstore:{}:{}:{}",
             self.config.bucket_prefix, account_id, container_name
         )
     }

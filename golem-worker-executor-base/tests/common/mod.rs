@@ -23,8 +23,7 @@ use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
     BlobStoreServiceConfig, BlobStoreServiceInMemoryConfig, CompiledComponentServiceConfig,
     CompiledComponentServiceLocalConfig, ComponentServiceConfig, ComponentServiceLocalConfig,
-    GolemConfig, KeyValueServiceConfig, PromisesConfig, ShardManagerServiceConfig,
-    WorkerServiceGrpcConfig, WorkersServiceConfig,
+    GolemConfig, ShardManagerServiceConfig, WorkerServiceGrpcConfig,
 };
 
 use golem_worker_executor_base::durable_host::{
@@ -286,10 +285,7 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
             },
         ),
         blob_store_service: BlobStoreServiceConfig::InMemory(BlobStoreServiceInMemoryConfig {}),
-        key_value_service: KeyValueServiceConfig::Redis,
         shard_manager_service: ShardManagerServiceConfig::SingleShard,
-        promises: PromisesConfig::Redis,
-        workers: WorkersServiceConfig::Redis,
         redis: RedisConfig {
             port: redis.public_port(),
             key_prefix: context.redis_prefix(),

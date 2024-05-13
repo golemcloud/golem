@@ -72,7 +72,7 @@ max_delay = "1s"
 multiplier = 3
 
 [key_value_service]
-type = "Redis"
+type = "KeyValue"
 
 [redis]
 # host
@@ -112,7 +112,7 @@ drop_when_full = 0.25
 ttl = "8h"
 
 [promises]
-type = "Redis"
+type = "KeyValue"
 
 [workers]
 type = "Redis"
