@@ -2390,7 +2390,7 @@ components:
         component:
           type: string
           format: uuid
-        workerId:
+        workerName:
           type: string
         functionName:
           type: string
@@ -2404,7 +2404,7 @@ components:
           type: string
       required:
       - component
-      - workerId
+      - workerName
       - functionName
       - functionParams
     HealthcheckResponse:
