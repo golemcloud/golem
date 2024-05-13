@@ -6,6 +6,7 @@ use crate::worker_bridge_execution::RefinedWorkerResponse;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::ops::Deref;
+use crate::evaluator::evaluator_context::EvaluationContext;
 
 struct BindingVariable(String);
 
@@ -28,10 +29,9 @@ struct TypeMisMatchResult {
 pub(crate) fn evaluate_pattern_match(
     match_expr: &Expr,
     arms: &Vec<MatchArm>,
-    input: &mut TypeAnnotatedValue,
-    worker_bridge_response: Option<&RefinedWorkerResponse>,
+    input: &mut EvaluationContext,
 ) -> Result<EvaluationResult, EvaluationError> {
-    let match_evaluated = match_expr.evaluate(input, worker_bridge_response)?;
+    let match_evaluated = match_expr.evaluate(input)?;
 
     let mut resolved: Option<EvaluationResult> = None;
 
@@ -59,7 +59,7 @@ pub(crate) fn evaluate_pattern_match(
 
                 let arm_body = &arm.0 .1;
 
-                resolved = Some(arm_body.evaluate(input, worker_bridge_response)?);
+                resolved = Some(arm_body.evaluate(input)?);
                 break;
             }
             ArmPatternOutput::TypeMisMatch(type_mismatch) => {
@@ -81,7 +81,7 @@ pub(crate) fn evaluate_pattern_match(
 fn evaluate_arm_pattern(
     constructor_pattern: &ArmPattern,
     match_expr_result: &TypeAnnotatedValue,
-    input: &mut TypeAnnotatedValue,
+    input: &mut EvaluationContext,
     binding_variable: Option<BindingVariable>,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match constructor_pattern {
@@ -153,7 +153,7 @@ fn handle_ok(
     match_expr_result: &TypeAnnotatedValue,
     ok_variable: &ArmPattern,
     binding_variable: Option<BindingVariable>,
-    input: &mut TypeAnnotatedValue,
+    input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
         result @ TypeAnnotatedValue::Result {
@@ -187,7 +187,7 @@ fn handle_err(
     match_expr_result: &TypeAnnotatedValue,
     err_variable: &ArmPattern,
     binding_variable: Option<BindingVariable>,
-    input: &mut TypeAnnotatedValue,
+    input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
         result @ TypeAnnotatedValue::Result {
@@ -221,7 +221,7 @@ fn handle_some(
     match_expr_result: &TypeAnnotatedValue,
     some_variable: &ArmPattern,
     binding_variable: Option<BindingVariable>,
-    input: &mut TypeAnnotatedValue,
+    input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
         result @ TypeAnnotatedValue::Option {
@@ -277,7 +277,7 @@ fn handle_variant(
     match_expr_result: &TypeAnnotatedValue,
     variables: &[ArmPattern],
     binding_variable: Option<BindingVariable>,
-    input: &mut TypeAnnotatedValue,
+    input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
         result @ TypeAnnotatedValue::Variant {

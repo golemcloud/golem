@@ -15,6 +15,18 @@ pub struct EvaluationContext {
 }
 
 impl EvaluationContext {
+
+    pub fn merge(&mut self, variables: &TypeAnnotatedValue) {
+        match self.variables {
+            Some(ref mut existing) => {
+                existing.merge(variables);
+            },
+            None => {
+                self.variables = Some(variables.clone());
+            }
+        }
+    }
+
     pub fn merge_worker_data(&self) -> Option<EvaluationResult> {
         match (&self.worker_response, &self.worker_request) {
             (Some(res), Some(req)) => {
@@ -62,6 +74,15 @@ impl EvaluationContext {
             worker_response: None,
             variables: None,
             request_data: Some(request.clone())
+        }
+    }
+
+    pub fn from_variables(variables: &TypeAnnotatedValue) -> Self {
+        EvaluationContext {
+            worker_request: None,
+            worker_response: None,
+            variables: Some(variables.clone()),
+            request_data: None
         }
     }
 

@@ -141,12 +141,11 @@ impl Evaluator for Expr {
         fn go(
             expr: &Expr,
             input: &mut EvaluationContext,
-            worker_response: Option<&RefinedWorkerResponse>,
         ) -> Result<EvaluationResult, EvaluationError> {
             match expr {
                 Expr::Request() =>
-                    match input.get_request_data() {
-                        Some(request_data) => Ok(request_data.to_type_annotated_value().into()),
+                    match &input.request_data {
+                        Some(request_data) => Ok(request_data.clone().to_type_annotated_value().into()),
                         None => Err(EvaluationError::Message("Request data is not available".to_string())),
                     },
 
@@ -156,7 +155,7 @@ impl Evaluator for Expr {
                 }
 
                 Expr::SelectIndex(expr, index) => {
-                    let evaluation_result = go(expr, input, worker_response)?;
+                    let evaluation_result = go(expr, input)?;
                     evaluation_result
                         .get_value()
                         .ok_or(EvaluationError::Message(format!(
@@ -169,7 +168,7 @@ impl Evaluator for Expr {
                 }
 
                 Expr::SelectField(expr, field_name) => {
-                    let evaluation_result = go(expr, input, worker_response)?.get_value().ok_or(
+                    let evaluation_result = go(expr, input)?.get_value().ok_or(
                         EvaluationError::Message(format!(
                             "The expression is evaluated to unit and doesn't have an field {}",
                             field_name
@@ -183,40 +182,40 @@ impl Evaluator for Expr {
                 }
 
                 Expr::EqualTo(left, right) => {
-                    let left = go(left, input, worker_response)?;
-                    let right = go(right, input, worker_response)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left == right
                     })
                 }
                 Expr::GreaterThan(left, right) => {
-                    let left = go(left, input, worker_response)?;
-                    let right = go(right, input, worker_response)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left > right
                     })
                 }
                 Expr::GreaterThanOrEqualTo(left, right) => {
-                    let left = go(left, input, worker_response)?;
-                    let right = go(right, input, worker_response)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left >= right
                     })
                 }
                 Expr::LessThan(left, right) => {
-                    let left = go(left, input, worker_response)?;
-                    let right = go(right, input, worker_response)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left < right
                     })
                 }
                 Expr::LessThanOrEqualTo(left, right) => {
-                    let left = go(left, input, worker_response)?;
-                    let right = go(right, input, worker_response)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left <= right
@@ -224,7 +223,7 @@ impl Evaluator for Expr {
                 }
 
                 Expr::Not(expr) => {
-                    let evaluated_expr = expr.evaluate(input, worker_response)?;
+                    let evaluated_expr = expr.evaluate(input)?;
 
                     match evaluated_expr {
                         EvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => Ok(EvaluationResult::Value(TypeAnnotatedValue::Bool(!value))),
@@ -236,9 +235,9 @@ impl Evaluator for Expr {
                 }
 
                 Expr::Cond(pred0, left, right) => {
-                    let pred = go(pred0, input, worker_response)?;
-                    let left = go(left, input, worker_response)?;
-                    let right = go(right, input, worker_response)?;
+                    let pred = go(pred0, input)?;
+                    let left = go(left, input)?;
+                    let right = go(right, input)?;
 
                     match pred {
                         EvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => {
@@ -256,7 +255,7 @@ impl Evaluator for Expr {
                 }
 
                 Expr::Let(str, expr) => {
-                    let eval_result = go(expr, input, worker_response)?;
+                    let eval_result = go(expr, input)?;
 
                     eval_result
                         .get_value()
@@ -278,7 +277,7 @@ impl Evaluator for Expr {
                     let mut result: Vec<EvaluationResult> = vec![];
 
                     for expr in multiple {
-                        match go(expr, input, worker_response) {
+                        match go(expr, input) {
                             Ok(expr_result) => {
                                 if let Some(value) = expr_result.get_value() {
                                     input.merge(&value);
@@ -298,7 +297,7 @@ impl Evaluator for Expr {
                     let mut result: Vec<TypeAnnotatedValue> = vec![];
 
                     for expr in exprs {
-                        match go(expr, input, worker_response) {
+                        match go(expr, input) {
                             Ok(eval_result) => {
                                 if let Some(value) = eval_result.get_value() {
                                     result.push(value);
@@ -328,7 +327,7 @@ impl Evaluator for Expr {
                     let mut values: Vec<(String, TypeAnnotatedValue)> = vec![];
 
                     for (key, expr) in tuples {
-                        match go(expr, input, worker_response) {
+                        match go(expr, input) {
                             Ok(expr_result) => {
                                 if let Some(value) = expr_result.get_value() {
                                     values.push((key.to_string(), value));
@@ -357,7 +356,7 @@ impl Evaluator for Expr {
                     let mut result = String::new();
 
                     for expr in exprs {
-                        match go(expr, input, worker_response) {
+                        match go(expr, input) {
                             Ok(value) => {
                                 if let Some(primitive) = value.get_primitive() {
                                     result.push_str(primitive.to_string().as_str())
@@ -392,13 +391,12 @@ impl Evaluator for Expr {
                         match_expression,
                         arms,
                         input,
-                        worker_response,
                     )
                 }
 
                 Expr::Option(option_expr) => match option_expr {
                     Some(expr) => {
-                        let expr_result = go(expr, input, worker_response)?;
+                        let expr_result = go(expr, input)?;
 
                         if let Some(value) = expr_result.get_value() {
                             let analysed_type = AnalysedType::from(&value);
@@ -419,7 +417,7 @@ impl Evaluator for Expr {
 
                 Expr::Result(result_expr) => match result_expr {
                     Ok(expr) => {
-                        let expr_result = go(expr, input, worker_response)?;
+                        let expr_result = go(expr, input)?;
 
                         if let Some(value) = expr_result.get_value() {
                             let analysed_type = AnalysedType::from(&value);
@@ -435,7 +433,7 @@ impl Evaluator for Expr {
                         }
                     }
                     Err(expr) => {
-                        let eval_result = go(expr, input, worker_response)?;
+                        let eval_result = go(expr, input)?;
 
                         if let Some(value) = eval_result.get_value() {
                             let analysed_type = AnalysedType::from(&value);
@@ -456,7 +454,7 @@ impl Evaluator for Expr {
                     let mut result: Vec<TypeAnnotatedValue> = vec![];
 
                     for expr in tuple_exprs {
-                        let eval_result = go(expr, input, worker_response)?;
+                        let eval_result = go(expr, input)?;
 
                         if let Some(value) = eval_result.get_value() {
                             result.push(value);
@@ -482,7 +480,7 @@ impl Evaluator for Expr {
         }
 
         let mut input = input.clone();
-        go(expr, &mut input, worker_response)
+        go(expr, &mut input)
     }
 }
 
@@ -504,6 +502,7 @@ mod tests {
     use crate::expression;
     use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerResponse};
     use test_utils::*;
+    use crate::evaluator::evaluator_context::EvaluationContext;
 
     trait EvaluatorTestExt {
         fn evaluate_input(
@@ -521,7 +520,7 @@ mod tests {
             &self,
             input: &TypeAnnotatedValue,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
-            let eval_result = self.evaluate(input, None)?;
+            let eval_result = self.evaluate(&EvaluationContext::from_variables(input))?;
             Ok(eval_result
                 .get_value()
                 .ok_or("The expression is evaluated to unit and doesn't have a value")?)
@@ -535,7 +534,7 @@ mod tests {
                 value: vec![],
                 typ: vec![],
             };
-            let eval_result = self.evaluate(&empty_input, Some(worker_bridge_response))?;
+            let eval_result = self.evaluate(&EvaluationContext::from_worker_response(worker_bridge_response))?;
             Ok(eval_result
                 .get_value()
                 .ok_or("The expression is evaluated to unit and doesn't have a value")?)
