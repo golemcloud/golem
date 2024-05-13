@@ -427,7 +427,7 @@ impl Evaluator for Expr {
 }
 
 mod internal {
-    use crate::evaluator::{EvaluationContext, EvaluationResult};
+    use crate::evaluator::EvaluationResult;
     use crate::merge::Merge;
     use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
     use golem_wasm_ast::analysis::AnalysedType;
