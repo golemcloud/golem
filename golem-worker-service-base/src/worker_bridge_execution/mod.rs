@@ -2,7 +2,7 @@ use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
 
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, IdempotencyKey};
 
 use crate::evaluator::{Evaluator, RawString};
 use crate::worker_binding::ResolvedWorkerBinding;
@@ -21,6 +21,7 @@ pub struct WorkerRequest {
     pub worker_id: String,
     pub function: String,
     pub function_params: Value,
+    pub idempotency_key: Option<IdempotencyKey>,
 }
 
 impl WorkerRequest {
@@ -40,7 +41,7 @@ impl WorkerRequest {
                 return Err(format!(
                     "Worker id is not a string. {}",
                     get_json_from_typed_value(&worker_id_value)
-                ))
+                ));
             }
         };
 
@@ -58,7 +59,7 @@ impl WorkerRequest {
                 return Err(format!(
                     "Function name is not a string. {}",
                     get_json_from_typed_value(&function_name_value)
-                ))
+                ));
             }
         };
 
@@ -77,6 +78,28 @@ impl WorkerRequest {
             function_params.push(json);
         }
 
+        let idempotency_key = if let Some(expr) = &resolved_route
+            .resolved_worker_binding_template
+            .idempotency_key
+        {
+            let idempotency_key_value = expr
+                .evaluate(&resolved_route.typed_value_from_input)
+                .map_err(|err| err.to_string())?;
+
+            let idempotency_key = match idempotency_key_value {
+                TypeAnnotatedValue::Str(value) => value,
+                _ => return Err("Idempotency Key is not a string".to_string()),
+            };
+
+            Some(IdempotencyKey::new(idempotency_key))
+        } else {
+            resolved_route
+                .headers
+                .get("idempotency-key")
+                .and_then(|h| h.to_str().ok())
+                .map(|value| IdempotencyKey::new(value.to_string()))
+        };
+
         Ok(WorkerRequest {
             worker_id,
             component: resolved_route
@@ -85,6 +108,7 @@ impl WorkerRequest {
                 .clone(),
             function: function_name,
             function_params: Value::Array(function_params),
+            idempotency_key,
         })
     }
 }

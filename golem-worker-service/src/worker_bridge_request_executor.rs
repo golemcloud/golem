@@ -30,7 +30,7 @@ impl WorkerRequestExecutor<poem::Response> for WorkerRequestToHttpResponse {
 mod internal {
     use crate::empty_worker_metadata;
     use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
-    use golem_common::model::{CallingConvention, IdempotencyKey};
+    use golem_common::model::CallingConvention;
     use golem_service_base::model::WorkerId;
     use golem_worker_service_base::auth::EmptyAuthCtx;
 
@@ -56,21 +56,24 @@ mod internal {
             worker_request_params.function
         );
 
-        // TODO: use one from WorkerRequest if available (and set it from headers and/or Rig)
-        let idempotency_key = IdempotencyKey::fresh();
-
         let invoke_parameters = worker_request_params.function_params;
+
+        let idempotency_key_str = worker_request_params
+            .idempotency_key
+            .clone()
+            .map(|k| k.to_string())
+            .unwrap_or("N/A".to_string());
 
         info!(
             "Executing request for component: {}, worker: {}, idempotency key: {}, invocation params: {:?}",
-            component_id, worker_name.clone(), idempotency_key, invoke_parameters
+            component_id, worker_name.clone(), idempotency_key_str, invoke_parameters
         );
 
         let invoke_result = default_executor
             .worker_service
             .invoke_and_await_function_typed_value(
                 &worker_id,
-                Some(idempotency_key),
+                worker_request_params.idempotency_key,
                 worker_request_params.function,
                 invoke_parameters,
                 &CallingConvention::Component,

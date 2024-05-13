@@ -31,6 +31,11 @@ fn make(
             text_component_update,
         ),
         Trial::test_in_context(
+            format!("text_component_get{suffix}"),
+            ctx.clone(),
+            text_component_get,
+        ),
+        Trial::test_in_context(
             format!("text_component_list{suffix}"),
             ctx.clone(),
             text_component_list,
@@ -197,6 +202,57 @@ fn text_component_update(
         *lines.first().unwrap(),
         format!(
             "Updated component with ID {}. New version: 1. Component size is 72309 bytes.",
+            component.component_id
+        )
+    );
+    assert_eq!(
+        *lines.get(1).unwrap(),
+        format!("Component name: {component_name}.")
+    );
+    assert_eq!(*lines.get(2).unwrap(), "Exports:");
+    assert_eq!(
+        *lines.get(3).unwrap(),
+        "\tgolem:it/api/get-environment() -> result<list<tuple<string, string>>, string>"
+    );
+    assert_eq!(
+        *lines.get(4).unwrap(),
+        "\tgolem:it/api/get-arguments() -> result<list<string>, string>"
+    );
+
+    Ok(())
+}
+
+fn text_component_get(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let component_name = format!("{name} text component get");
+    let env_service = deps.component_directory().join("environment-service.wasm");
+    let cfg = &cli.config;
+    let component: ComponentView = cli.run(&[
+        "component",
+        "add",
+        &cfg.arg('c', "component-name"),
+        &component_name,
+        env_service.to_str().unwrap(),
+    ])?;
+
+    let get_res = cli.with_format(Format::Text).run_string(&[
+        "component",
+        "get",
+        &cfg.arg('c', "component-name"),
+        &component_name,
+    ])?;
+
+    let lines = get_res.lines().collect::<Vec<_>>();
+
+    assert_eq!(
+        *lines.first().unwrap(),
+        format!(
+            "Component with ID {}. Version: 0. Component size is 72309 bytes.",
             component.component_id
         )
     );
