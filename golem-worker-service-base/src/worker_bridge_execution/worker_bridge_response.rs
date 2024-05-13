@@ -14,11 +14,12 @@ use crate::worker_bridge_execution::worker_request_executor::{
 };
 use crate::worker_bridge_execution::{WorkerRequest, WorkerResponse};
 use golem_service_base::type_inference::*;
-use crate::evaluator::{EvaluatorInputContext, Evaluator};
+use crate::evaluator::{EvaluationContext, Evaluator};
 
 // Refined Worker response is different from WorkerResponse, because,
 // it ensures that we are not returning a vector of result if they are not named results
-// or unit
+// or uni
+#[derive(Clone)]
 pub enum RefinedWorkerResponse {
     Unit,
     SingleResult(TypeAnnotatedValue),
@@ -26,6 +27,14 @@ pub enum RefinedWorkerResponse {
 }
 
 impl RefinedWorkerResponse {
+    pub(crate) fn to_type_annotated_value(&self) -> Option<TypeAnnotatedValue> {
+        match self {
+            RefinedWorkerResponse::Unit => None,
+            RefinedWorkerResponse::SingleResult(value) => Some(value.clone()),
+            RefinedWorkerResponse::MultipleResults(results) => Some(results.clone()),
+        }
+    }
+
     pub(crate) fn from_worker_response(
         worker_response: &WorkerResponse,
     ) -> Result<RefinedWorkerResponse, String> {
@@ -148,7 +157,7 @@ impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
 mod internal {
     use crate::api_definition::http::HttpResponseMapping;
     use crate::evaluator::Evaluator;
-    use crate::evaluator::{EvaluationError, EvaluationResult, EvaluatorInputContext}
+    use crate::evaluator::{EvaluationError, EvaluationResult, EvaluationContext}
     use crate::expression::Expr;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::{RequestDetails, ResponseMapping};
@@ -174,7 +183,7 @@ mod internal {
             worker_request: &WorkerRequest
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
             let evaluation_context =
-                EvaluatorInputContext::from_all(worker_request, worker_response, request_details);
+                EvaluationContext::from(worker_request, worker_response, request_details);
 
             let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
                 .map_err(EvaluationError::Message)?;
@@ -235,7 +244,7 @@ mod internal {
 
     fn get_status_code(
         status_expr: &Expr,
-        evaluator_context: &EvaluatorInputContext,
+        evaluator_context: &EvaluationContext,
     ) -> Result<StatusCode, EvaluationError> {
         let status_value = status_expr.evaluate(evaluator_context)?;
         let status_res: Result<u16, EvaluationError> =

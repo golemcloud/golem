@@ -1,39 +1,76 @@
+use golem_wasm_rpc::TypeAnnotatedValue;
+use crate::evaluator::EvaluationResult;
+use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails};
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerResponse};
 
 
 // Evaluator of an expression doesn't necessarily need a context all the time, and can be empty.
 // or contain worker details, request details, worker_response or all of them.
-pub enum EvaluatorInputContext<'t> {
-    WorkerRequest(&'t WorkerRequest),
-    WorkerResponse(&'t RefinedWorkerResponse),
-    RequestData(&'t RequestDetails),
-    All {
-        worker_request: &'t WorkerRequest,
-        worker_response: &'t RefinedWorkerResponse,
-        request: &'t RequestDetails
-    },
-    Empty,
+pub struct EvaluationContext {
+    pub worker_request: Option<WorkerRequest>,
+    pub worker_response: Option<RefinedWorkerResponse>,
+    pub variables: Option<TypeAnnotatedValue>,
+    pub request_data: Option<RequestDetails>
 }
 
-impl EvaluatorInputContext{
+impl EvaluationContext {
+    pub fn merge_worker_data(&self) -> Option<EvaluationResult> {
+        match (&self.worker_response, &self.worker_request) {
+            (Some(res), Some(req)) => {
+                let mut typed_worker_data = req.clone().to_type_annotated_value();
+
+                if let Some(typed_res) = res.to_type_annotated_value() {
+                    typed_worker_data.merge(&typed_res);
+                }
+
+               Some(EvaluationResult::Value(typed_worker_data))
+            },
+
+            (None, Some(req)) => req.clone().to_type_annotated_value().into(),
+            (Some(res), None) => match res {
+                RefinedWorkerResponse::Unit => Some(EvaluationResult::Unit),
+                RefinedWorkerResponse::SingleResult(value) => Some(value.into()),
+                RefinedWorkerResponse::MultipleResults(value) => Some(value.into())
+            }
+            (None, None) => None
+        }
+    }
+
+
     pub fn from_worker_data(worker_metadata: &WorkerRequest) -> Self {
-        EvaluatorInputContext::WorkerRequest(worker_metadata)
+       EvaluationContext {
+              worker_request: Some(worker_metadata.clone()),
+              worker_response: None,
+              variables: None,
+              request_data: None
+       }
     }
 
     pub fn from_worker_response(worker_response: &RefinedWorkerResponse) -> Self {
-        EvaluatorInputContext::WorkerResponse(worker_response)
+        EvaluationContext {
+            worker_request: None,
+            worker_response: Some(worker_response.clone()),
+            variables: None,
+            request_data: None
+        }
     }
 
     pub fn from_request_data(request: &RequestDetails) -> Self {
-        EvaluatorInputContext::RequestData(request)
+        EvaluationContext {
+            worker_request: None,
+            worker_response: None,
+            variables: None,
+            request_data: Some(request.clone())
+        }
     }
 
-    pub fn from_all(worker_request: &WorkerRequest, worker_response: &RefinedWorkerResponse, request: &RequestDetails) -> Self {
-        EvaluatorInputContext::All {
-            worker_request: worker_request,
-            worker_response: worker_response,
-            request: request
+    pub fn from(worker_request: &WorkerRequest, worker_response: &RefinedWorkerResponse, request: &RequestDetails) -> Self {
+        EvaluationContext {
+            worker_request: Some(worker_request.clone()),
+            worker_response: Some(worker_response.clone()),
+            variables: None,
+            request_data: Some(request.clone())
         }
     }
 

@@ -8,7 +8,7 @@ use crate::worker_bridge_execution::RefinedWorkerResponse;
 use getter::GetError;
 use getter::Getter;
 use path::Path;
-use crate::evaluator::EvaluatorInputContext;
+use crate::evaluator::EvaluationContext;
 
 use crate::expression::{Expr, InnerNumber};
 use crate::merge::Merge;
@@ -26,7 +26,7 @@ mod evaluator_context;
 pub trait Evaluator {
     fn evaluate(
         &self,
-        evaluator_namespace: &EvaluatorInputContext,
+        evaluator_namespace: &EvaluationContext,
     ) -> Result<EvaluationResult, EvaluationError>;
 }
 
@@ -93,7 +93,7 @@ impl<'t> RawString<'t> {
 impl<'t> Evaluator for RawString<'t> {
     fn evaluate(
         &self,
-        input: &EvaluatorInputContext,
+        input: &EvaluationContext,
     ) -> Result<EvaluationResult, EvaluationError> {
         let mut combined_string = String::new();
         let mut tokenizer: Tokenizer = Tokenizer::new(self.input);
@@ -132,7 +132,7 @@ impl<'t> Evaluator for RawString<'t> {
 impl Evaluator for Expr {
     fn evaluate(
         &self,
-        input: &EvaluatorInputContext,
+        input: &EvaluationContext,
     ) -> Result<EvaluationResult, EvaluationError> {
         let expr: &Expr = self;
 
@@ -140,26 +140,19 @@ impl Evaluator for Expr {
         // and therefore returns ValueTyped
         fn go(
             expr: &Expr,
-            input: &mut EvaluatorInputContext,
+            input: &mut EvaluationContext,
             worker_response: Option<&RefinedWorkerResponse>,
         ) -> Result<EvaluationResult, EvaluationError> {
             match expr {
-                Expr::Request() => input
-                    .get(&Path::from_key(Token::request().to_string().as_str()))
-                    .map(|x| x.into())
-                    .map_err(|err| err.into()),
+                Expr::Request() =>
+                    match input.get_request_data() {
+                        Some(request_data) => Ok(request_data.to_type_annotated_value().into()),
+                        None => Err(EvaluationError::Message("Request data is not available".to_string())),
+                    },
 
                 Expr::Worker() => {
-                    let result = match worker_response {
-                        Some(RefinedWorkerResponse::MultipleResults(results)) => {
-                            results.clone().into()
-                        }
-                        Some(RefinedWorkerResponse::SingleResult(result)) => result.clone().into(),
-                        Some(RefinedWorkerResponse::Unit) => EvaluationResult::Unit,
-                        None => Err("Worker response is not available".to_string())?,
-                    };
-
-                    Ok(result)
+                    let worker_data = input.merge_worker_data();
+                    worker_data.ok_or(EvaluationError::Message("Worker data is not available".to_string()))
                 }
 
                 Expr::SelectIndex(expr, index) => {

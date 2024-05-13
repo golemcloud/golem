@@ -1,18 +1,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use golem_wasm_rpc::json::get_json_from_typed_value;
-use golem_wasm_rpc::TypeAnnotatedValue;
-use http::StatusCode;
-use poem::{Body, EndpointExt, Response};
+use poem::{EndpointExt};
 use serde_json::Value;
-use tracing::error;
 use uuid::Uuid;
 use golem_common::model::ComponentId;
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
 use crate::http::http_request::router;
 use crate::http::InputHttpRequest;
 use crate::http::router::RouterPattern;
-use crate::evaluator::{EvaluatorInputContext};
+use crate::evaluator::{EvaluationContext};
 use crate::evaluator::Evaluator;
 use crate::primitive::GetPrimitive;
 
@@ -36,14 +33,15 @@ pub struct ResolvedWorkerBinding {
 }
 
 impl ResolvedWorkerBinding {
-    pub async fn execute_with<A>(&self, executor: &Arc<dyn WorkerRequestExecutor>) -> A where
-        WorkerResponse: ToResponse<A>, WorkerRequestExecutorError: ToResponse<A> {
+    pub async fn execute_with<R>(&self, executor: &Arc<dyn WorkerRequestExecutor>) -> R where
+        WorkerResponse: ToResponse<R>, WorkerRequestExecutorError: ToResponse<R> {
         let worker_request = &self.worker_request;
-        let worker_response = executor.execute(worker_request.clone()).await;
+        let worker_response =
+            executor.execute(worker_request.clone()).await;
 
         match worker_response {
             Ok(worker_response) => {
-                worker_response.to_response(&self.response_mapping.clone(), &self.request_details);
+                worker_response.to_response(&self.response_mapping, &self.request_details);
             }
             Err(error) => {
                 error.to_response(&self.response_mapping.clone(), &self.request_details);
@@ -77,7 +75,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
         let request_details =
             RequestDetails::from(&zipped_path_params, &request_query_variables, query_params, request_body, headers)?;
 
-        let request_evaluation_context = EvaluatorInputContext::from_request_data(&request_details);
+        let request_evaluation_context = EvaluationContext::from_request_data(&request_details);
 
         let worker_name: String =
             binding
@@ -85,14 +83,23 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             .evaluate(&request_evaluation_context)
             .map_err(|err| err.to_string())?
             .get_value()
-            .ok_or("Worker id is not a text value".to_string())?.get_primitive().ok_or("Worker id is not a primitive".to_string())?.as_string();
+            .ok_or("Failed to evaluate worker name expression".to_string())?.get_primitive().ok_or("Worker name is not a String".to_string())?.as_string();
 
         let function_name =
             &binding.function_name
             .evaluate(&request_evaluation_context)
             .map_err(|err| err.to_string())?
                 .get_value()
-                .ok_or("Worker id is not a text value".to_string())?.get_primitive().ok_or("Worker id is not a primitive".to_string())?.as_string();
+                .ok_or("Failed to evaluate function_name expression".to_string())?.get_primitive().ok_or("function_name is not a String".to_string())?.as_string();
+
+        let component_id_text: String = binding
+            .worker_id
+            .evaluate(&request_evaluation_context)
+            .map_err(|err| err.to_string())?
+            .get_value()
+            .ok_or("Failed to evaluate component_id expression".to_string())?.get_primitive().ok_or("component_id is not a String".to_string())?.as_string();
+
+        let component_id = ComponentId(Uuid::parse_str(&component_id_text).map_err(|err| err.to_string())?);
 
         let mut function_params: Vec<Value> = vec![];
 
@@ -109,15 +116,6 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 
             function_params.push(json);
         }
-
-        let component_id_text: String = binding
-            .worker_id
-            .evaluate(&request_evaluation_context)
-            .map_err(|err| err.to_string())?
-            .get_value()
-            .ok_or("Worker id is not a text value".to_string())?.get_primitive().ok_or("Worker id is not a primitive".to_string())?.as_string();
-
-        let component_id = ComponentId(Uuid::parse_str(&component_id_text).map_err(|err| err.to_string())?);
 
 
         let worker_request = WorkerRequest {
