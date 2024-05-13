@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
 use golem_wasm_rpc::json::get_json_from_typed_value;
-use poem::{EndpointExt};
 use serde_json::Value;
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
 use crate::http::http_request::router;

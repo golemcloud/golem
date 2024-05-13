@@ -49,39 +49,12 @@ impl EvaluationContext {
         }
     }
 
-    pub fn from_worker_data(worker_metadata: &WorkerRequest) -> Self {
-       EvaluationContext {
-              worker_request: Some(worker_metadata.clone()),
-              worker_response: None,
-              variables: None,
-              request_data: None
-       }
-    }
-
-    pub fn from_worker_response(worker_response: &RefinedWorkerResponse) -> Self {
-        EvaluationContext {
-            worker_request: None,
-            worker_response: Some(worker_response.clone()),
-            variables: None,
-            request_data: None
-        }
-    }
-
     pub fn from_request_data(request: &RequestDetails) -> Self {
         EvaluationContext {
             worker_request: None,
             worker_response: None,
             variables: None,
             request_data: Some(request.clone())
-        }
-    }
-
-    pub fn from_variables(variables: &TypeAnnotatedValue) -> Self {
-        EvaluationContext {
-            worker_request: None,
-            worker_response: None,
-            variables: Some(variables.clone()),
-            request_data: None
         }
     }
 
