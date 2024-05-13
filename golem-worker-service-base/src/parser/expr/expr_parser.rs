@@ -963,7 +963,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker_response { some(some(foo)) => worker_response, none => 'nothing' } }")
+            .parse("${match worker.response { some(some(foo)) => worker.response, none => 'nothing' } }")
             .unwrap();
 
         let expected = Expr::PatternMatch(

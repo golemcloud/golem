@@ -1754,7 +1754,7 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${if worker_response == {flag1, flag2} then {flag1, flag2} else 'failed'}".to_string();
+            "${if worker.response == {flag1, flag2} then {flag1, flag2} else 'failed'}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
