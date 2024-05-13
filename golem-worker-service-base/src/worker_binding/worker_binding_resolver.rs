@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
+use golem_common::model::IdempotencyKey;
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::to_response::ToResponse;
@@ -143,23 +144,19 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             function_params.push(json);
         }
 
-        let idempotency_key = if let Some(expr) = &resolved_route
-            .resolved_worker_binding_template
+        let idempotency_key = if let Some(expr) = &binding
             .idempotency_key
         {
             let idempotency_key_value = expr
-                .evaluate(&resolved_route.typed_value_from_input)
+                .evaluate(&request_evaluation_context)
                 .map_err(|err| err.to_string())?;
 
-            let idempotency_key = match idempotency_key_value {
-                TypeAnnotatedValue::Str(value) => value,
-                _ => return Err("Idempotency Key is not a string".to_string()),
-            };
+            let idempotency_key =
+                idempotency_key_value.get_primitive().ok_or("Idempotency Key is not a string")?.as_string();
 
             Some(IdempotencyKey::new(idempotency_key))
         } else {
-            resolved_route
-                .headers
+            headers
                 .get("idempotency-key")
                 .and_then(|h| h.to_str().ok())
                 .map(|value| IdempotencyKey::new(value.to_string()))
@@ -170,6 +167,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             worker_name,
             function_name: function_name.to_string(),
             function_params,
+            idempotency_key
         };
 
         let resolved_binding = ResolvedWorkerBinding {
