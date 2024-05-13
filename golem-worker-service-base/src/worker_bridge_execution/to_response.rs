@@ -8,12 +8,12 @@ pub trait ToResponse<A> {
 }
 
 impl ToResponse<poem::Response> for WorkerResponse {
-    fn to_response(&self, response_mapping: &Option<ResponseMapping>, request_details: &RequestDetails) -> poem::Response {
+    fn to_response(&self, worker_details: WorkerDetails , response_mapping: &Option<ResponseMapping>, request_details: &RequestDetails) -> poem::Response {
         let refined_worker_response = RefinedWorkerResponse::from_worker_response(self);
 
         match refined_worker_response {
             Ok(refined) =>
-                refined.to_http_response(response_mapping, request_details),
+                refined.to_http_response(response_mapping, request_details, ),
             Err(e) => {
                 poem::Response::builder()
                     .status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)

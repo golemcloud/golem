@@ -33,7 +33,7 @@ pub struct ResolvedWorkerBinding {
 }
 
 impl ResolvedWorkerBinding {
-    pub async fn execute_with<R>(&self, executor: &Arc<dyn WorkerRequestExecutor>) -> R where
+    pub async fn execute_with<R>(&self, executor: &Arc<dyn WorkerRequestExecutor + Sync + Send>,) -> R where
         WorkerResponse: ToResponse<R>, WorkerRequestExecutorError: ToResponse<R> {
         let worker_request = &self.worker_request;
         let worker_response =
@@ -92,14 +92,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
                 .get_value()
                 .ok_or("Failed to evaluate function_name expression".to_string())?.get_primitive().ok_or("function_name is not a String".to_string())?.as_string();
 
-        let component_id_text: String = binding
-            .worker_id
-            .evaluate(&request_evaluation_context)
-            .map_err(|err| err.to_string())?
-            .get_value()
-            .ok_or("Failed to evaluate component_id expression".to_string())?.get_primitive().ok_or("component_id is not a String".to_string())?.as_string();
-
-        let component_id = ComponentId(Uuid::parse_str(&component_id_text).map_err(|err| err.to_string())?);
+        let component_id = &binding.component;
 
         let mut function_params: Vec<Value> = vec![];
 
@@ -119,7 +112,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 
 
         let worker_request = WorkerRequest {
-            component_id,
+            component_id: component_id.clone(),
             worker_name,
             function_name: function_name.to_string(),
             function_params

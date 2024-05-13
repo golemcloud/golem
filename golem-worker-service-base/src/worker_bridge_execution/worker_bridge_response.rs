@@ -72,9 +72,10 @@ impl RefinedWorkerResponse {
         &self,
         response_mapping: &Option<ResponseMapping>,
         input_request: &RequestDetails,
+        worker_request: &WorkerRequest
     ) -> poem::Response {
         if let Some(mapping) = response_mapping {
-            match internal::IntermediateHttpResponse::from(self, mapping, input_request) {
+            match internal::IntermediateHttpResponse::from(self, mapping, input_request, worker_request) {
                 Ok(intermediate_response) => intermediate_response.to_http_response(),
                 Err(e) => poem::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -157,7 +158,7 @@ impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
 mod internal {
     use crate::api_definition::http::HttpResponseMapping;
     use crate::evaluator::Evaluator;
-    use crate::evaluator::{EvaluationError, EvaluationResult, EvaluationContext}
+    use crate::evaluator::{EvaluationError, EvaluationResult, EvaluationContext};
     use crate::expression::Expr;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::{RequestDetails, ResponseMapping};
@@ -189,16 +190,16 @@ mod internal {
                 .map_err(EvaluationError::Message)?;
 
             let status_code =
-                get_status_code(&http_response_mapping.status, &type_annotated_value)?;
+                get_status_code(&http_response_mapping.status, &evaluation_context)?;
 
             let headers = ResolvedResponseHeaders::from(
                 &http_response_mapping.headers,
-                &type_annotated_value,
+                &evaluation_context,
             )?;
 
             let response_body = http_response_mapping
                 .body
-                .evaluate(&type_annotated_value, Some(worker_response))?;
+                .evaluate(&evaluation_context)?;
 
             Ok(IntermediateHttpResponse {
                 body: response_body,
@@ -285,7 +286,7 @@ mod internal {
         // to the http response. Here we resolve the expression based on the resolved variables (that was formed from the response of the worker)
         fn from(
             header_mapping: &HashMap<String, Expr>,
-            input: &TypeAnnotatedValue, // The input to evaluating header expression is a type annotated value
+            input: &EvaluationContext, // The input to evaluating header expression is a type annotated value
         ) -> Result<ResolvedResponseHeaders, EvaluationError> {
             let mut resolved_headers: HashMap<String, String> = HashMap::new();
 
