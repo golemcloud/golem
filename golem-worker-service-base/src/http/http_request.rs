@@ -111,9 +111,7 @@ mod tests {
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::worker_binding::WorkerBindingResolver;
     use crate::worker_bridge_execution::WorkerRequest;
-
-    use super::*;
-
+    
     #[test]
     fn test_worker_request_resolution() {
         let empty_headers = HeaderMap::new();

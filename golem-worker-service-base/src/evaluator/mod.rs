@@ -1487,10 +1487,10 @@ mod tests {
 
         let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::Flags {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Flags {
             typ: vec!["A".to_string(), "B".to_string(), "C".to_string()],
             values: vec!["A".to_string(), "B".to_string(), "C".to_string()],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
@@ -1536,13 +1536,13 @@ mod tests {
 
         let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::Bool(false));
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Bool(false)));
 
         assert_eq!(result, expected);
     }
 
     mod test_utils {
-        use crate::api_definition::http::{AllPathPatterns, PathPattern};
+        use crate::api_definition::http::{AllPathPatterns, PathPattern, VarInfo};
         use crate::evaluator::tests::{EvaluatorTestExt, WorkerBridgeExt};
         use crate::expression;
         use crate::http::router::RouterPattern;
@@ -1682,10 +1682,10 @@ mod tests {
                     PathPattern::Literal(_) => None,
                     PathPattern::Var(var) => Some((var, base_path[index])),
                 })
-                .collect();
+                .collect::<HashMap<VarInfo, &str>>();
 
             RequestDetails::from(
-                path_params,
+                &path_params,
                 &HashMap::new(),
                 &path_pattern.query_params,
                 &Value::Null,
