@@ -935,8 +935,8 @@ mod tests {
             path: {}
             binding:
               type: wit-worker
-              component: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
-              workerId: '{}'
+              componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              workerName: '{}'
               functionName: golem:it/api/get-cart-contents
               functionParams: {}
         "#,
