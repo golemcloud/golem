@@ -98,7 +98,7 @@ impl TypedPathKeyValues {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TypedQueryKeyValues(pub TypedKeyValueCollection);
 
 impl TypedQueryKeyValues {
@@ -128,7 +128,7 @@ impl TypedQueryKeyValues {
 
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TypedHeaderValues(TypedKeyValueCollection);
 impl TypedHeaderValues {
     fn from(headers: &HeaderMap) -> Result<TypedHeaderValues, Vec<String>> {
@@ -146,7 +146,7 @@ impl TypedHeaderValues {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TypedRequestBody(TypeAnnotatedValue);
 
 impl TypedRequestBody {

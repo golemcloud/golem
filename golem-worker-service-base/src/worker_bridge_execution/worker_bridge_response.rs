@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use figment::value::Value;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::{get_json_from_typed_value, get_typed_value_from_json};
 use golem_wasm_rpc::TypeAnnotatedValue;
@@ -119,6 +120,8 @@ impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
             component_id, worker_name, worker_request_params.function_name
         );
 
+        let function_params = serde_json::Value::Array(worker_request_params.function_params.clone());
+
         let sample_json_data = json!(
             [{
               "description" : "This is a sample in-memory response",
@@ -135,7 +138,7 @@ impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
               },
               "hobbies": ["reading", "hiking", "gaming"],
               "scores": [95, 88, 76, 92],
-              "input" : worker_request_params.function_params.to_string()
+              "input" : function_params.to_string()
             }]
         );
 

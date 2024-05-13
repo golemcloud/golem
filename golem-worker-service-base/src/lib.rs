@@ -3,8 +3,7 @@ pub mod api;
 pub mod api_definition;
 pub mod app_config;
 pub mod auth;
-
-pub(crate) mod evaluator;
+mod evaluator;
 mod expression;
 pub mod http;
 mod merge;

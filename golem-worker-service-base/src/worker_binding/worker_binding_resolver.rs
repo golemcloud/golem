@@ -28,7 +28,7 @@ pub trait WorkerBindingResolver<ApiDefinition> {
 
 
 #[derive(Debug)]
-struct WorkerBindingResolutionError(pub String);
+pub struct WorkerBindingResolutionError(pub String);
 
 impl<A: AsRef<str>> From<A> for WorkerBindingResolutionError {
     fn from(message: A) -> Self {
