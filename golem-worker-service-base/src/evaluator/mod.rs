@@ -464,8 +464,12 @@ mod internal {
                 (None, Some(req)) => Some(req.clone().to_type_annotated_value().into()),
                 (Some(res), None) => match res {
                     RefinedWorkerResponse::Unit => Some(EvaluationResult::Unit),
-                    RefinedWorkerResponse::SingleResult(typed_value) => Some(with_response_key(typed_value.clone()).into()),
-                    RefinedWorkerResponse::MultipleResults(typed_value) =>  Some(with_response_key(typed_value.clone()).into()),
+                    RefinedWorkerResponse::SingleResult(typed_value) => {
+                        Some(with_response_key(typed_value.clone()).into())
+                    }
+                    RefinedWorkerResponse::MultipleResults(typed_value) => {
+                        Some(with_response_key(typed_value.clone()).into())
+                    }
                 },
                 (None, None) => None,
             }

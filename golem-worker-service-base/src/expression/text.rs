@@ -182,8 +182,7 @@ mod record_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let record_string =
-            "{a: (request, worker), b: (request, worker)}".to_string();
+        let record_string = "{a: (request, worker), b: (request, worker)}".to_string();
         let expected_record_str = format!("${{{}}}", record_string); // Just wrapping it with interpolation
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
