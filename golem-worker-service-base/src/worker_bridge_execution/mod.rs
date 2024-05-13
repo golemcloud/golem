@@ -8,6 +8,7 @@ pub mod to_response;
 mod worker_bridge_response;
 mod worker_request_executor;
 
+use crate::merge::Merge;
 pub use worker_bridge_response::*;
 pub use worker_request_executor::*;
 
@@ -24,7 +25,7 @@ pub struct WorkerRequest {
 
 impl WorkerRequest {
     pub fn to_type_annotated_value(self) -> TypeAnnotatedValue {
-        TypeAnnotatedValue::Record {
+        let mut required = TypeAnnotatedValue::Record {
             typ: vec![
                 ("component_id".to_string(), AnalysedType::Str),
                 ("name".to_string(), AnalysedType::Str),
@@ -44,6 +45,23 @@ impl WorkerRequest {
                     TypeAnnotatedValue::Str(self.function_name),
                 ),
             ],
+        };
+
+        let optional_idempotency_key = self.idempotency_key.map(|x| TypeAnnotatedValue::Record {
+            // Idempotency key can exist in header of the request in which case users can refer to it as
+            // request.headers.idempotency-key. In order to keep some consistency, we are keeping the same key name here,
+            // if it exists as part of the API definition
+            typ: vec![("idempotency-key".to_string(), AnalysedType::Str)],
+            value: vec![(
+                "idempotency-key".to_string(),
+                TypeAnnotatedValue::Str(x.to_string()),
+            )],
+        });
+
+        if let Some(idempotency_key) = optional_idempotency_key {
+            required = required.merge(&idempotency_key).clone();
         }
+
+        required
     }
 }

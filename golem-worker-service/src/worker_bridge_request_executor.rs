@@ -29,12 +29,12 @@ impl WorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
 }
 
 mod internal {
-    use serde_json::Value;
     use crate::empty_worker_metadata;
     use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
     use golem_common::model::CallingConvention;
     use golem_service_base::model::WorkerId;
     use golem_worker_service_base::auth::EmptyAuthCtx;
+    use serde_json::Value;
 
     use golem_worker_service_base::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutorError, WorkerResponse,

@@ -537,11 +537,6 @@ mod tests {
             &self,
             worker_bridge_response: &RefinedWorkerResponse,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
-            let empty_input = TypeAnnotatedValue::Record {
-                value: vec![],
-                typ: vec![],
-            };
-
             let eval_result = self.evaluate(&EvaluationContext {
                 worker_request: None,
                 worker_response: Some(worker_bridge_response.clone()),
@@ -1576,14 +1571,13 @@ mod tests {
         use crate::evaluator::tests::{EvaluatorTestExt, WorkerBridgeExt};
         use crate::expression;
         use crate::http::router::RouterPattern;
-        use crate::http::{ApiInputPath, InputHttpRequest};
         use crate::worker_binding::RequestDetails;
         use crate::worker_bridge_execution::WorkerResponse;
         use golem_service_base::type_inference::infer_analysed_type;
         use golem_wasm_ast::analysis::AnalysedType;
         use golem_wasm_rpc::json::get_typed_value_from_json;
         use golem_wasm_rpc::TypeAnnotatedValue;
-        use http::{HeaderMap, Method, Uri};
+        use http::{HeaderMap, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;
 
@@ -1668,16 +1662,6 @@ mod tests {
         ) -> RequestDetails {
             let request_body: Value = serde_json::from_str(input).expect("Failed to parse json");
 
-            let input_http_request = InputHttpRequest {
-                req_body: request_body.clone(),
-                headers: header_map.clone(),
-                req_method: Method::GET,
-                input_path: ApiInputPath {
-                    base_path: "/api".to_string(),
-                    query_path: None,
-                },
-            };
-
             RequestDetails::from(
                 &HashMap::new(),
                 &HashMap::new(),
@@ -1692,16 +1676,6 @@ mod tests {
             uri: Uri,
             path_pattern: AllPathPatterns,
         ) -> RequestDetails {
-            let input_http_request = InputHttpRequest {
-                req_body: serde_json::Value::Null,
-                headers: HeaderMap::new(),
-                req_method: Method::GET,
-                input_path: ApiInputPath {
-                    base_path: uri.path().to_string(),
-                    query_path: uri.query().map(|x| x.to_string()),
-                },
-            };
-
             let base_path: Vec<&str> = RouterPattern::split(uri.path()).collect();
 
             let path_params = path_pattern

@@ -889,9 +889,10 @@ mod tests {
 
             let resolved_route = api_request.resolve(&api_specification).unwrap();
 
-            let result = WorkerRequest::from_resolved_route(resolved_route).unwrap();
-
-            assert_eq!(result.idempotency_key, idempotency_key);
+            assert_eq!(
+                resolved_route.worker_request.idempotency_key,
+                idempotency_key
+            );
         }
 
         test_key(&HeaderMap::new(), None);

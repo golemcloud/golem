@@ -92,8 +92,9 @@ impl Services {
             routing_table_service.clone(),
         ));
 
-        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> =
-            Arc::new(UnauthorisedWorkerRequestExecutor::new(worker_service.clone()));
+        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
+            UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
+        );
 
         let definition_repo: Arc<
             dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
@@ -188,8 +189,9 @@ impl Services {
             api_definition_validator_service.clone(),
         ));
 
-        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> =
-            Arc::new(UnauthorisedWorkerRequestExecutor::new(worker_service.clone()));
+        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
+            UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
+        );
 
         Services {
             worker_service,

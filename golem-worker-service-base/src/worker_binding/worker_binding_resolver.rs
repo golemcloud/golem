@@ -5,12 +5,12 @@ use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
 use crate::primitive::GetPrimitive;
+use golem_common::model::IdempotencyKey;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
-use golem_common::model::IdempotencyKey;
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::to_response::ToResponse;
@@ -144,15 +144,15 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             function_params.push(json);
         }
 
-        let idempotency_key = if let Some(expr) = &binding
-            .idempotency_key
-        {
+        let idempotency_key = if let Some(expr) = &binding.idempotency_key {
             let idempotency_key_value = expr
                 .evaluate(&request_evaluation_context)
                 .map_err(|err| err.to_string())?;
 
-            let idempotency_key =
-                idempotency_key_value.get_primitive().ok_or("Idempotency Key is not a string")?.as_string();
+            let idempotency_key = idempotency_key_value
+                .get_primitive()
+                .ok_or("Idempotency Key is not a string")?
+                .as_string();
 
             Some(IdempotencyKey::new(idempotency_key))
         } else {
@@ -167,7 +167,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             worker_name,
             function_name: function_name.to_string(),
             function_params,
-            idempotency_key
+            idempotency_key,
         };
 
         let resolved_binding = ResolvedWorkerBinding {
