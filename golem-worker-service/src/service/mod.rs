@@ -34,7 +34,6 @@ use golem_worker_service_base::repo::api_deployment_repo::{
 use golem_worker_service_base::service::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
 };
-use poem::Response;
 use std::sync::Arc;
 use tracing::error;
 
@@ -54,7 +53,7 @@ pub struct Services {
     pub deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send>,
     pub http_definition_lookup_service:
         Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
-    pub worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+    pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     pub api_definition_validator_service: Arc<
         dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
     >,
@@ -93,7 +92,7 @@ impl Services {
             routing_table_service.clone(),
         ));
 
-        let worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
+        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> =
             Arc::new(UnauthorisedWorkerRequestExecutor::new(worker_service.clone()));
 
         let definition_repo: Arc<
@@ -189,7 +188,7 @@ impl Services {
             api_definition_validator_service.clone(),
         ));
 
-        let worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
+        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> =
             Arc::new(UnauthorisedWorkerRequestExecutor::new(worker_service.clone()));
 
         Services {
