@@ -67,6 +67,17 @@ pub enum ComponentSubcommand {
         #[arg(short, long)]
         component_name: Option<ComponentName>,
     },
+    /// Get component
+    #[command()]
+    Get {
+        /// The Golem component id or name
+        #[command(flatten)]
+        component_id_or_name: ComponentIdOrName,
+
+        /// The version of the component
+        #[arg(short = 't', long)]
+        version: Option<u64>,
+    },
 }
 
 #[async_trait]
@@ -121,6 +132,17 @@ impl<'p, C: ComponentClient + Send + Sync, P: ProjectClient + Sync + Send> Compo
                 let components = self.client.find(project_id, component_name).await?;
 
                 Ok(GolemResult::Ok(Box::new(components)))
+            }
+            ComponentSubcommand::Get {
+                component_id_or_name,
+                version,
+            } => {
+                let component_id = self.resolve_id(component_id_or_name).await?;
+                let component = match version {
+                    Some(v) => self.client.get_metadata(&component_id, v).await?,
+                    None => self.client.get_latest_metadata(&component_id).await?,
+                };
+                Ok(GolemResult::Ok(Box::new(component)))
             }
         }
     }

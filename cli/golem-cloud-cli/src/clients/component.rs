@@ -29,6 +29,15 @@ use crate::{ProjectId, RawComponentId};
 
 #[async_trait]
 pub trait ComponentClient {
+    async fn get_metadata(
+        &self,
+        component_id: &RawComponentId,
+        version: u64,
+    ) -> Result<ComponentView, GolemError>;
+    async fn get_latest_metadata(
+        &self,
+        component_id: &RawComponentId,
+    ) -> Result<ComponentView, GolemError>;
     async fn find(
         &self,
         project_id: Option<ProjectId>,
@@ -195,6 +204,32 @@ fn show_exported_function(
 impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
     for ComponentClientLive<C>
 {
+    async fn get_metadata(
+        &self,
+        component_id: &RawComponentId,
+        version: u64,
+    ) -> Result<ComponentView, GolemError> {
+        info!("Getting component version");
+        let component = self
+            .client
+            .get_component_metadata(&component_id.0, &version.to_string())
+            .await?;
+        Ok((&component).into())
+    }
+
+    async fn get_latest_metadata(
+        &self,
+        component_id: &RawComponentId,
+    ) -> Result<ComponentView, GolemError> {
+        info!("Getting latest component version");
+
+        let component = self
+            .client
+            .get_latest_component_metadata(&component_id.0)
+            .await?;
+        Ok((&component).into())
+    }
+
     async fn find(
         &self,
         project_id: Option<ProjectId>,
@@ -207,7 +242,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
 
         let components: Vec<Component> = self
             .client
-            .get(project_id.as_ref(), name.as_deref())
+            .get_components(project_id.as_ref(), name.as_deref())
             .await?;
         let views = components.iter().map(|c| c.into()).collect();
         Ok(views)
@@ -232,7 +267,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .await
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
-                self.client.post(&query, file).await?
+                self.client.create_component(&query, file).await?
             }
             PathBufOrStdin::Stdin => {
                 let mut bytes = Vec::new();
@@ -241,7 +276,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .read_to_end(&mut bytes) // TODO: steaming request from stdin
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
-                self.client.post(&query, bytes).await?
+                self.client.create_component(&query, bytes).await?
             }
         };
 
@@ -261,7 +296,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .await
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
-                self.client.component_id_upload_put(&id.0, file).await?
+                self.client.update_component(&id.0, file).await?
             }
             PathBufOrStdin::Stdin => {
                 let mut bytes = Vec::new();
@@ -270,7 +305,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .read_to_end(&mut bytes) // TODO: steaming request from stdin
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
-                self.client.component_id_upload_put(&id.0, bytes).await?
+                self.client.update_component(&id.0, bytes).await?
             }
         };
 
