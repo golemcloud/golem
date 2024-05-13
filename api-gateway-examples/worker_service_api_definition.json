@@ -14,9 +14,9 @@
         "response" : {
           "status": "200",
           "body": {
-            "name" : "${worker_response[0][0].name}",
-            "price" : "${worker_response[0][0].price}",
-            "quantity" : "${worker_response[0][0].quantity}"
+            "name" : "${worker.response[0][0].name}",
+            "price" : "${worker.response[0][0].price}",
+            "quantity" : "${worker.response[0][0].quantity}"
           },
           "headers": {}
         }

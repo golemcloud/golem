@@ -385,7 +385,7 @@ mod test {
                     "function-name": "golem:it/api/get-cart-contents",
                     "function-params": [],
                     "component-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-                    "response" : "${{headers : {ContentType: 'json', userid: 'foo'}, body: worker_response, status: 200}}"
+                    "response" : "${{headers : {ContentType: 'json', userid: 'foo'}, body: worker.response, status: 200}}"
                   },
                   "get": {
                     "summary": "Get Cart Contents",

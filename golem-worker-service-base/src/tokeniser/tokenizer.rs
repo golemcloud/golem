@@ -166,7 +166,7 @@ impl Display for Token {
                     MultiCharTokens::LessThanOrEqualTo => "<=",
                     MultiCharTokens::If => "if",
                     MultiCharTokens::Then => "then",
-                    MultiCharTokens::Worker => "worker_response",
+                    MultiCharTokens::Worker => "worker",
                     MultiCharTokens::Request => "request",
                     MultiCharTokens::Ok => "ok",
                     MultiCharTokens::Err => "err",
@@ -1022,7 +1022,7 @@ else${z}
     #[test]
     fn test_token_processing_with_match_expr() {
         let tokens: Vec<Token> = Tokenizer::new(
-            "${match worker_response { some(value) => worker_response, none => 'some_value' } }",
+            "${match worker.response { some(value) => worker.response, none => 'some_value' } }",
         )
         .collect();
 

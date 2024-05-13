@@ -350,7 +350,7 @@ mod tests {
     fn expr_parser_with_worker_result_path() {
         let expression_parser = ExprParser {};
 
-        let result = expression_parser.parse("${worker_response.input[0]}");
+        let result = expression_parser.parse("${worker.response.input[0]}");
         let worker = Expr::Worker();
         let select_input = Expr::SelectField(Box::new(worker), "input".to_string());
         let first_index = Expr::SelectIndex(Box::new(select_input), 0);
@@ -866,7 +866,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker_response { some(foo) => foo, none => result2 } }")
+            .parse("${match worker.response { some(foo) => foo, none => result2 } }")
             .unwrap();
 
         let expected = Expr::PatternMatch(
@@ -897,7 +897,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker_response { ok(foo) => foo, err(bar) => result2 } }")
+            .parse("${match worker.response { ok(foo) => foo, err(bar) => result2 } }")
             .unwrap();
 
         let expected = Expr::PatternMatch(
@@ -934,7 +934,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker_response { some(foo) => worker_response, none => 'nothing' } }")
+            .parse("${match worker.response { some(foo) => worker.response, none => 'nothing' } }")
             .unwrap();
 
         let expected = Expr::PatternMatch(
