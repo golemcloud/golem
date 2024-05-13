@@ -1,32 +1,30 @@
+pub use evaluator_context::*;
+mod getter;
+mod math_op_evaluator;
+mod path;
+mod pattern_match_evaluator;
+mod evaluator_context;
+
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 
 use crate::expression;
 use crate::primitive::{GetPrimitive, Primitive};
-use crate::worker_bridge_execution::RefinedWorkerResponse;
 use getter::GetError;
 use getter::Getter;
 use path::Path;
-use crate::evaluator::EvaluationContext;
 
 use crate::expression::{Expr, InnerNumber};
 use crate::merge::Merge;
 
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-pub(crate) use evaluator_context::*;
-mod getter;
-mod math_op_evaluator;
-mod path;
-mod pattern_match_evaluator;
-
-mod evaluator_context;
 
 pub trait Evaluator {
     fn evaluate(
         &self,
-        evaluator_namespace: &EvaluationContext,
+        evaluation_context: &EvaluationContext,
     ) -> Result<EvaluationResult, EvaluationError>;
 }
 
@@ -76,59 +74,6 @@ impl<T: AsRef<str>> From<T> for EvaluationError {
     }
 }
 
-pub struct RawString<'t> {
-    pub input: &'t str,
-}
-
-// When we expect only primitives within a string, and uses ${} not as an expr,
-// but as a mere place-holder. This type disallows complex structures to end up
-// in values such as function-name.
-impl<'t> RawString<'t> {
-    pub fn new(str: &'t str) -> RawString<'t> {
-        RawString { input: str }
-    }
-}
-
-// Foo/{user-id}
-impl<'t> Evaluator for RawString<'t> {
-    fn evaluate(
-        &self,
-        input: &EvaluationContext,
-    ) -> Result<EvaluationResult, EvaluationError> {
-        let mut combined_string = String::new();
-        let mut tokenizer: Tokenizer = Tokenizer::new(self.input);
-
-        while let Some(token) = tokenizer.next_token() {
-            match token {
-                Token::MultiChar(MultiCharTokens::InterpolationStart) => {
-                    let place_holder_name = tokenizer.capture_string_until(&Token::RParen);
-
-                    if let Some(place_holder_name) = place_holder_name {
-                        let type_annotated_value =
-                            input.get(&Path::from_key(place_holder_name.as_str()))?;
-
-                        match type_annotated_value.get_primitive() {
-                            Some(primitive) => {
-                                combined_string.push_str(primitive.to_string().as_str())
-                            }
-
-                            None => {
-                                return Err(EvaluationError::Message(format!(
-                                    "Unsupported json type to be replaced in place holder. Make sure the values are primitive {}",
-                                    place_holder_name,
-                                )));
-                            }
-                        }
-                    }
-                }
-                token => combined_string.push_str(token.to_string().as_str()),
-            }
-        }
-
-        Ok(TypeAnnotatedValue::Str(combined_string).into())
-    }
-}
-
 impl Evaluator for Expr {
     fn evaluate(
         &self,
@@ -149,6 +94,7 @@ impl Evaluator for Expr {
                         None => Err(EvaluationError::Message("Request data is not available".to_string())),
                     },
 
+                // worker.response
                 Expr::Worker() => {
                     let worker_data = input.merge_worker_data();
                     worker_data.ok_or(EvaluationError::Message("Worker data is not available".to_string()))

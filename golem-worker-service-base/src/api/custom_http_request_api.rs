@@ -92,7 +92,7 @@ impl CustomHttpRequestApi {
 
         match api_request.resolve(&api_definition) {
             Some(resolved_worker_request) =>
-                resolved_worker_request.execute_with(&self.worker_request_executor_service).await,
+                resolved_worker_request.execute_with::<poem::Response>(&self.worker_request_executor_service).await,
 
             None => {
                 error!(

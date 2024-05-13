@@ -48,8 +48,8 @@ impl TypedHttRequestDetails {
         TypeAnnotatedValue::Record {
             typ: vec![
                 ("path".to_string(), AnalysedType::from(&merged_type_annotated_value)),
-                ("body".to_string(), self.typed_request_body.0.into()),
-                ("headers".to_string(), self.typed_header_values.0.into()),
+                ("body".to_string(), (&self.typed_request_body.0).into()),
+                ("headers".to_string(), self.typed_header_values.0.clone().into()),
             ],
             value: vec![
                 ("path".to_string(), merged_type_annotated_value),
@@ -176,7 +176,7 @@ impl Default for TypedKeyValueCollection {
 }
 
 impl From<TypedKeyValueCollection> for AnalysedType {
-    fn from(typed_key_value_collection: &TypedKeyValueCollection) -> Self {
+    fn from(typed_key_value_collection: TypedKeyValueCollection) -> Self {
         let mut typ: Vec<(String, AnalysedType)> = vec![];
 
         for record in &typed_key_value_collection.fields {

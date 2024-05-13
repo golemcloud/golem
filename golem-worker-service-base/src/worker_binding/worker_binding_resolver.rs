@@ -41,10 +41,10 @@ impl ResolvedWorkerBinding {
 
         match worker_response {
             Ok(worker_response) => {
-                worker_response.to_response(&self.response_mapping, &self.request_details);
+                worker_response.to_response(&self.worker_request, &self.response_mapping, &self.request_details)
             }
             Err(error) => {
-                error.to_response(&self.response_mapping.clone(), &self.request_details);
+                error.to_response(&self.worker_request, &self.response_mapping.clone(), &self.request_details)
             }
         }
     }
@@ -85,12 +85,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             .get_value()
             .ok_or("Failed to evaluate worker name expression".to_string())?.get_primitive().ok_or("Worker name is not a String".to_string())?.as_string();
 
-        let function_name =
-            &binding.function_name
-            .evaluate(&request_evaluation_context)
-            .map_err(|err| err.to_string())?
-                .get_value()
-                .ok_or("Failed to evaluate function_name expression".to_string())?.get_primitive().ok_or("function_name is not a String".to_string())?.as_string();
+        let function_name = &binding.function_name;
 
         let component_id = &binding.component;
 

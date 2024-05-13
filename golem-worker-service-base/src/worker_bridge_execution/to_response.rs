@@ -1,5 +1,5 @@
 use http::StatusCode;
-use poem::{Body, Response};
+use poem::{Body};
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutorError, WorkerResponse};
 
@@ -27,7 +27,7 @@ impl ToResponse<poem::Response> for WorkerResponse {
 
 impl ToResponse<poem::Response> for WorkerRequestExecutorError {
     fn to_response(&self, _worker_request: &WorkerRequest,  _response_mapping: &Option<ResponseMapping>, _request_details: &RequestDetails) -> poem::Response {
-        Response::builder()
+        poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::from_string(
                 format!("API request error {}", self.to_string()).to_string(),

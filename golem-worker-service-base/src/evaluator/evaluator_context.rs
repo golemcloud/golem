@@ -41,7 +41,7 @@ impl EvaluationContext {
                Some(EvaluationResult::Value(typed_worker_data))
             },
 
-            (None, Some(req)) => req.clone().to_type_annotated_value().into(),
+            (None, Some(req)) => Some(req.clone().to_type_annotated_value().into()),
             (Some(res), None) => match res {
                 RefinedWorkerResponse::Unit => Some(EvaluationResult::Unit),
                 RefinedWorkerResponse::SingleResult(value) => Some(value.clone().into()),
