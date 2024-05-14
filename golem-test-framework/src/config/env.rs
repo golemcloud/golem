@@ -136,8 +136,10 @@ impl EnvBasedTestDependencies {
             let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
                 if Self::use_docker() {
                     Arc::new(DockerComponentService::new(
-                        DockerComponentCompilationService::NAME,
-                        DockerComponentCompilationService::GRPC_PORT,
+                        Some((
+                            DockerComponentCompilationService::NAME,
+                            DockerComponentCompilationService::GRPC_PORT,
+                        )),
                         rdb.clone(),
                         Self::default_verbosity(),
                     ))
@@ -148,7 +150,7 @@ impl EnvBasedTestDependencies {
                             Path::new("../golem-component-service"),
                             8081,
                             9091,
-                            9094,
+                            Some(9094),
                             rdb.clone(),
                             Self::default_verbosity(),
                             Self::default_stdout_level(),
