@@ -24,7 +24,7 @@ use golem_common::model::WorkerId;
 use tracing::error;
 
 use crate::metrics::oplog::record_oplog_call;
-use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi};
+use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 
 #[async_trait]
 pub trait OplogService {
@@ -110,7 +110,7 @@ impl OplogService for DefaultOplogService {
         let already_exists: bool = self
             .indexed_storage
             .with("oplog", "create")
-            .exists(None, &key)
+            .exists(IndexedStorageNamespace::OpLog, &key)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to check if oplog exists for worker {worker_id} in indexed storage: {err}")
@@ -122,7 +122,7 @@ impl OplogService for DefaultOplogService {
 
         self.indexed_storage
             .with_entity("oplog", "create", "entry")
-            .append(None, &key, 1, &initial_entry)
+            .append(IndexedStorageNamespace::OpLog, &key, 1, &initial_entry)
             .await
             .unwrap_or_else(|err| {
                 panic!(
@@ -138,7 +138,7 @@ impl OplogService for DefaultOplogService {
         let oplog_size: u64 = self
             .indexed_storage
             .with("oplog", "open")
-            .length(None, &key)
+            .length(IndexedStorageNamespace::OpLog, &key)
             .await
             .unwrap_or_else(|err| {
                 panic!(
@@ -159,7 +159,7 @@ impl OplogService for DefaultOplogService {
 
         self.indexed_storage
             .with("oplog", "get_size")
-            .length(None, &Self::oplog_key(worker_id))
+            .length(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
             .await
             .unwrap_or_else(|err| {
                 panic!(
@@ -173,7 +173,7 @@ impl OplogService for DefaultOplogService {
 
         self.indexed_storage
             .with("oplog", "drop")
-            .delete(None, &Self::oplog_key(worker_id))
+            .delete(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to drop oplog for worker {worker_id} in indexed storage: {err}")
@@ -185,7 +185,12 @@ impl OplogService for DefaultOplogService {
 
         self.indexed_storage
             .with_entity("oplog", "read", "entry")
-            .read(None, &Self::oplog_key(worker_id), idx + 1, idx + n)
+            .read(
+                IndexedStorageNamespace::OpLog,
+                &Self::oplog_key(worker_id),
+                idx + 1,
+                idx + n,
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to read oplog for worker {worker_id} from indexed storage: {err}")
@@ -240,7 +245,7 @@ impl DefaultOplogState {
 
             self.indexed_storage
                 .with_entity("oplog", "append", "entry")
-                .append(None, &self.key, id, entry)
+                .append(IndexedStorageNamespace::OpLog, &self.key, id, entry)
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -285,7 +290,12 @@ impl DefaultOplogState {
         let entries: Vec<OplogEntry> = self
             .indexed_storage
             .with_entity("oplog", "read", "entry")
-            .read(None, &self.key, oplog_index + 1, oplog_index + 1)
+            .read(
+                IndexedStorageNamespace::OpLog,
+                &self.key,
+                oplog_index + 1,
+                oplog_index + 1,
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!(

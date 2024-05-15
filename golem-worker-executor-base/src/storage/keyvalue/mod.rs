@@ -18,10 +18,10 @@ pub mod redis;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
+use golem_common::model::AccountId;
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 
-// TODO: review namespace parameter, possibly make it non-Option? Maybe non-string?
 #[async_trait]
 pub trait KeyValueStorage: Debug {
     async fn set(
@@ -29,7 +29,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String>;
@@ -39,7 +39,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String>;
 
@@ -48,7 +48,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<bool, String>;
@@ -58,7 +58,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<Bytes>, String>;
 
@@ -67,7 +67,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
     ) -> Result<Vec<Option<Bytes>>, String>;
 
@@ -75,7 +75,7 @@ pub trait KeyValueStorage: Debug {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<(), String>;
 
@@ -83,7 +83,7 @@ pub trait KeyValueStorage: Debug {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
     ) -> Result<(), String>;
 
@@ -91,7 +91,7 @@ pub trait KeyValueStorage: Debug {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<bool, String>;
 
@@ -99,7 +99,7 @@ pub trait KeyValueStorage: Debug {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<String>, String>;
 
     async fn add_to_set(
@@ -107,7 +107,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String>;
@@ -117,7 +117,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String>;
@@ -127,7 +127,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<Bytes>, String>;
 
@@ -136,7 +136,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         score: f64,
         value: &[u8],
@@ -147,7 +147,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String>;
@@ -157,7 +157,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<(f64, Bytes)>, String>;
 
@@ -166,7 +166,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         min: f64,
         max: f64,
@@ -213,25 +213,33 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
         }
     }
 
-    pub async fn del(&self, namespace: Option<&str>, key: &str) -> Result<(), String> {
+    pub async fn del(&self, namespace: KeyValueStorageNamespace, key: &str) -> Result<(), String> {
         self.storage
             .del(self.svc_name, self.api_name, namespace, key)
             .await
     }
 
-    pub async fn del_many(&self, namespace: Option<&str>, keys: Vec<String>) -> Result<(), String> {
+    pub async fn del_many(
+        &self,
+        namespace: KeyValueStorageNamespace,
+        keys: Vec<String>,
+    ) -> Result<(), String> {
         self.storage
             .del_many(self.svc_name, self.api_name, namespace, keys)
             .await
     }
 
-    pub async fn exists(&self, namespace: Option<&str>, key: &str) -> Result<bool, String> {
+    pub async fn exists(
+        &self,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+    ) -> Result<bool, String> {
         self.storage
             .exists(self.svc_name, self.api_name, namespace, key)
             .await
     }
 
-    pub async fn keys(&self, namespace: Option<&str>) -> Result<Vec<String>, String> {
+    pub async fn keys(&self, namespace: KeyValueStorageNamespace) -> Result<Vec<String>, String> {
         self.storage
             .keys(self.svc_name, self.api_name, namespace)
             .await
@@ -262,7 +270,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn set<V: Encode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &V,
     ) -> Result<(), String> {
@@ -282,7 +290,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn set_raw(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
@@ -300,7 +308,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn set_if_not_exists<V: Encode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &V,
     ) -> Result<bool, String> {
@@ -319,7 +327,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn set_many<V: Encode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &V)],
     ) -> Result<(), String> {
         let pairs = pairs
@@ -343,7 +351,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn set_many_raw(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String> {
         self.storage
@@ -359,7 +367,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn get<V: Decode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<V>, String> {
         let maybe_bytes = self
@@ -382,7 +390,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn get_raw(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<Bytes>, String> {
         self.storage
@@ -398,7 +406,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn get_many<V: Decode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
     ) -> Result<Vec<Option<V>>, String> {
         let maybe_bytes = self
@@ -425,7 +433,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn get_many_raw(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
     ) -> Result<Vec<Option<Bytes>>, String> {
         self.storage
@@ -441,7 +449,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn add_to_set<V: Encode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &V,
     ) -> Result<(), String> {
@@ -460,7 +468,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn remove_from_set<V: Encode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &V,
     ) -> Result<(), String> {
@@ -479,7 +487,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn members_of_set<V: Decode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<V>, String> {
         let maybe_bytes = self
@@ -502,7 +510,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn add_to_sorted_set<V: Encode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         score: f64,
         value: &V,
@@ -523,7 +531,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn remove_from_sorted_set<V: Encode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &V,
     ) -> Result<(), String> {
@@ -542,7 +550,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn get_sorted_set<V: Decode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<(f64, V)>, String> {
         let maybe_bytes = self
@@ -565,7 +573,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 
     pub async fn query_sorted_set<V: Decode>(
         &self,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         min: f64,
         max: f64,
@@ -589,4 +597,15 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         }
         Ok(values)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
+pub enum KeyValueStorageNamespace {
+    Worker,
+    Promise,
+    Schedule,
+    UserDefined {
+        account_id: AccountId,
+        bucket: String,
+    },
 }

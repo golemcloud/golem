@@ -19,7 +19,9 @@ use async_trait::async_trait;
 
 use golem_common::model::AccountId;
 
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageLabelledApi};
+use crate::storage::keyvalue::{
+    KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
+};
 
 /// Service implementing a persistent key-value store
 #[async_trait]
@@ -96,10 +98,12 @@ impl KeyValueService for DefaultKeyValueService {
         bucket: String,
         key: String,
     ) -> anyhow::Result<()> {
-        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         self.key_value_storage
             .with("key_value", "delete")
-            .del(Some(&bucket), &key)
+            .del(
+                KeyValueStorageNamespace::UserDefined { account_id, bucket },
+                &key,
+            )
             .await
             .map_err(|err| anyhow!(err))?;
         Ok(())
@@ -111,10 +115,12 @@ impl KeyValueService for DefaultKeyValueService {
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<()> {
-        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         self.key_value_storage
             .with("key_value", "delete_many")
-            .del_many(Some(&bucket), keys)
+            .del_many(
+                KeyValueStorageNamespace::UserDefined { account_id, bucket },
+                keys,
+            )
             .await
             .map_err(|err| anyhow!(err))?;
         Ok(())
@@ -126,11 +132,13 @@ impl KeyValueService for DefaultKeyValueService {
         bucket: String,
         key: String,
     ) -> anyhow::Result<bool> {
-        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         let exists: bool = self
             .key_value_storage
             .with("key_value", "exists")
-            .exists(Some(&bucket), &key)
+            .exists(
+                KeyValueStorageNamespace::UserDefined { account_id, bucket },
+                &key,
+            )
             .await
             .map_err(|err| anyhow!(err))?;
         Ok(exists)
@@ -142,11 +150,13 @@ impl KeyValueService for DefaultKeyValueService {
         bucket: String,
         key: String,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         let incoming_value: Option<Vec<u8>> = self
             .key_value_storage
             .with_entity("key_value", "get", "custom")
-            .get_raw(Some(&bucket), &key)
+            .get_raw(
+                KeyValueStorageNamespace::UserDefined { account_id, bucket },
+                &key,
+            )
             .await
             .map_err(|err| anyhow!(err))?
             .map(|bytes| bytes.to_vec());
@@ -154,11 +164,10 @@ impl KeyValueService for DefaultKeyValueService {
     }
 
     async fn get_keys(&self, account_id: AccountId, bucket: String) -> anyhow::Result<Vec<String>> {
-        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         let keys: Vec<String> = self
             .key_value_storage
             .with("key_value", "get_keys")
-            .keys(Some(&bucket))
+            .keys(KeyValueStorageNamespace::UserDefined { account_id, bucket })
             .await
             .map_err(|err| anyhow!(err))?;
         Ok(keys)
@@ -170,11 +179,13 @@ impl KeyValueService for DefaultKeyValueService {
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
-        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         let incoming_values: Vec<Option<Vec<u8>>> = self
             .key_value_storage
             .with_entity("key_value", "get_many", "custom")
-            .get_many(Some(&bucket), keys)
+            .get_many(
+                KeyValueStorageNamespace::UserDefined { account_id, bucket },
+                keys,
+            )
             .await
             .map_err(|err| anyhow!(err))?;
         Ok(incoming_values)
@@ -187,10 +198,13 @@ impl KeyValueService for DefaultKeyValueService {
         key: String,
         outgoing_value: Vec<u8>,
     ) -> anyhow::Result<()> {
-        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         self.key_value_storage
             .with_entity("key_value", "set", "custom")
-            .set_raw(Some(&bucket), &key, &outgoing_value)
+            .set_raw(
+                KeyValueStorageNamespace::UserDefined { account_id, bucket },
+                &key,
+                &outgoing_value,
+            )
             .await
             .map_err(|err| anyhow!(err))?;
         Ok(())
@@ -202,14 +216,16 @@ impl KeyValueService for DefaultKeyValueService {
         bucket: String,
         key_values: Vec<(String, Vec<u8>)>,
     ) -> anyhow::Result<()> {
-        let bucket = format!("worker:keyvalue:{}:{}", account_id, bucket);
         let key_values: Vec<(&str, &[u8])> = key_values
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_slice()))
             .collect();
         self.key_value_storage
             .with_entity("key_value", "set_many", "custom")
-            .set_many_raw(Some(&bucket), &key_values)
+            .set_many_raw(
+                KeyValueStorageNamespace::UserDefined { account_id, bucket },
+                &key_values,
+            )
             .await
             .map_err(|err| anyhow!(err))?;
         Ok(())

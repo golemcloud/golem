@@ -28,7 +28,9 @@ use tracing::debug;
 
 use crate::error::GolemError;
 use crate::metrics::promises::record_promise_created;
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageLabelledApi};
+use crate::storage::keyvalue::{
+    KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
+};
 
 /// Service implementing creation, completion and polling of promises
 #[async_trait]
@@ -76,15 +78,16 @@ impl DefaultPromiseService {
     async fn exists(&self, promise_id: &PromiseId) -> bool {
         self.key_value_storage
             .with("promise", "complete")
-            .exists(PROMISES_NS, &get_promise_redis_key(promise_id))
+            .exists(
+                KeyValueStorageNamespace::Promise,
+                &get_promise_redis_key(promise_id),
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to check if promise {promise_id} exists in Redis: {err}")
             })
     }
 }
-
-const PROMISES_NS: Option<&str> = Some("promises");
 
 #[async_trait]
 impl PromiseService for DefaultPromiseService {
@@ -98,7 +101,11 @@ impl PromiseService for DefaultPromiseService {
         let key = get_promise_redis_key(&promise_id);
         self.key_value_storage
             .with_entity("promise", "create", "promise")
-            .set_if_not_exists(PROMISES_NS, &key, &RedisPromiseState::Pending)
+            .set_if_not_exists(
+                KeyValueStorageNamespace::Promise,
+                &key,
+                &RedisPromiseState::Pending,
+            )
             .await
             .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
 
@@ -113,7 +120,10 @@ impl PromiseService for DefaultPromiseService {
             let response: Option<RedisPromiseState> = self
                 .key_value_storage
                 .with_entity("promise", "await", "promise")
-                .get(PROMISES_NS, &get_promise_result_redis_key(&promise_id))
+                .get(
+                    KeyValueStorageNamespace::Promise,
+                    &get_promise_result_redis_key(&promise_id),
+                )
                 .await
                 .unwrap_or_else(|err| {
                     panic!("failed to get promise {promise_id} from Redis: {err}")
@@ -163,7 +173,10 @@ impl PromiseService for DefaultPromiseService {
             let response: Option<RedisPromiseState> = self
                 .key_value_storage
                 .with_entity("promise", "poll", "promise")
-                .get(PROMISES_NS, &get_promise_result_redis_key(&promise_id))
+                .get(
+                    KeyValueStorageNamespace::Promise,
+                    &get_promise_result_redis_key(&promise_id),
+                )
                 .await
                 .unwrap_or_else(|err| {
                     panic!("failed to get promise {promise_id} from Redis: {err}")
@@ -183,7 +196,7 @@ impl PromiseService for DefaultPromiseService {
             .key_value_storage
             .with_entity("promise", "complete", "promise")
             .set_if_not_exists(
-                PROMISES_NS,
+                KeyValueStorageNamespace::Promise,
                 &key,
                 &RedisPromiseState::Complete(data.clone()),
             )
@@ -228,7 +241,7 @@ impl PromiseService for DefaultPromiseService {
         let key2 = get_promise_result_redis_key(&promise_id);
         self.key_value_storage
             .with("promise", "delete")
-            .del_many(PROMISES_NS, vec![key1, key2])
+            .del_many(KeyValueStorageNamespace::Promise, vec![key1, key2])
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to delete promise {promise_id} from Redis: {err}")

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::keyvalue::KeyValueStorage;
+use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::mapref::entry::Entry;
@@ -52,8 +52,8 @@ impl InMemoryKeyValueStorage {
         &self.sorted_sets
     }
 
-    fn composite_key(namespace: Option<&str>, key: &str) -> String {
-        format!("{}/{}", namespace.unwrap_or(""), key)
+    fn composite_key(namespace: &KeyValueStorageNamespace, key: &str) -> String {
+        format!("{namespace:?}/{key}")
     }
 }
 
@@ -64,12 +64,12 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
         self.kvs
-            .insert(Self::composite_key(namespace, key), value.to_vec());
+            .insert(Self::composite_key(&namespace, key), value.to_vec());
         Ok(())
     }
 
@@ -78,12 +78,12 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String> {
         for (key, value) in pairs {
             self.kvs
-                .insert(Self::composite_key(namespace, key), value.to_vec());
+                .insert(Self::composite_key(&namespace, key), value.to_vec());
         }
         Ok(())
     }
@@ -93,11 +93,11 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<bool, String> {
-        match self.kvs.entry(Self::composite_key(namespace, key)) {
+        match self.kvs.entry(Self::composite_key(&namespace, key)) {
             Entry::Occupied(_) => Ok(false),
             Entry::Vacant(entry) => {
                 entry.insert(value.to_vec());
@@ -111,10 +111,10 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<Bytes>, String> {
-        match self.kvs.get(&Self::composite_key(namespace, key)) {
+        match self.kvs.get(&Self::composite_key(&namespace, key)) {
             Some(value) => Ok(Some(Bytes::from(value.value().clone()))),
             None => Ok(None),
         }
@@ -125,13 +125,13 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
     ) -> Result<Vec<Option<Bytes>>, String> {
         let mut result = Vec::new();
         for key in keys {
             result.push(
-                self.get(svc_name, api_name, entity_name, namespace, &key)
+                self.get(svc_name, api_name, entity_name, namespace.clone(), &key)
                     .await?,
             );
         }
@@ -142,10 +142,10 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<(), String> {
-        self.kvs.remove(&Self::composite_key(namespace, key));
+        self.kvs.remove(&Self::composite_key(&namespace, key));
         Ok(())
     }
 
@@ -153,11 +153,12 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
     ) -> Result<(), String> {
         for key in keys {
-            self.del(svc_name, api_name, namespace, &key).await?;
+            self.del(svc_name, api_name, namespace.clone(), &key)
+                .await?;
         }
         Ok(())
     }
@@ -166,23 +167,23 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<bool, String> {
-        Ok(self.kvs.contains_key(&Self::composite_key(namespace, key)))
+        Ok(self.kvs.contains_key(&Self::composite_key(&namespace, key)))
     }
 
     async fn keys(
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<String>, String> {
         Ok(self
             .kvs
             .iter()
             .filter_map(|item| {
-                if item.key().starts_with(&Self::composite_key(namespace, "")) {
+                if item.key().starts_with(&Self::composite_key(&namespace, "")) {
                     Some(item.key().clone())
                 } else {
                     None
@@ -196,13 +197,13 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
         let set = self
             .sets
-            .entry(Self::composite_key(namespace, key))
+            .entry(Self::composite_key(&namespace, key))
             .or_default();
         set.insert(value.to_vec());
         Ok(())
@@ -213,11 +214,11 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
-        match self.sets.get_mut(&Self::composite_key(namespace, key)) {
+        match self.sets.get_mut(&Self::composite_key(&namespace, key)) {
             Some(mut entry) => {
                 entry.value_mut().remove(value);
                 Ok(())
@@ -231,10 +232,10 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<Bytes>, String> {
-        match self.sets.get(&Self::composite_key(namespace, key)) {
+        match self.sets.get(&Self::composite_key(&namespace, key)) {
             Some(entry) => Ok(entry
                 .value()
                 .iter()
@@ -249,14 +250,14 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         score: f64,
         value: &[u8],
     ) -> Result<(), String> {
         let mut entry = self
             .sorted_sets
-            .entry(Self::composite_key(namespace, key))
+            .entry(Self::composite_key(&namespace, key))
             .or_default();
         entry.push((score, value.to_vec()));
         entry.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -268,13 +269,13 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
         let mut entry = self
             .sorted_sets
-            .entry(Self::composite_key(namespace, key))
+            .entry(Self::composite_key(&namespace, key))
             .or_default();
         entry.retain(|(_, v)| v != value);
         entry.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -286,10 +287,10 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<(f64, Bytes)>, String> {
-        match self.sorted_sets.get(&Self::composite_key(namespace, key)) {
+        match self.sorted_sets.get(&Self::composite_key(&namespace, key)) {
             Some(entry) => Ok(entry
                 .iter()
                 .map(|(score, value)| (*score, Bytes::from(value.clone())))
@@ -303,12 +304,12 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         min: f64,
         max: f64,
     ) -> Result<Vec<(f64, Bytes)>, String> {
-        match self.sorted_sets.get(&Self::composite_key(namespace, key)) {
+        match self.sorted_sets.get(&Self::composite_key(&namespace, key)) {
             Some(entry) => Ok(entry
                 .iter()
                 .filter(|(score, _)| *score >= min && *score <= max)

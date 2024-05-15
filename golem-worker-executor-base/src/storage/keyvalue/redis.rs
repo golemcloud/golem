@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
 use golem_common::redis::RedisPool;
 
-use crate::storage::keyvalue::KeyValueStorage;
+use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 
 #[derive(Debug)]
 pub struct RedisKeyValueStorage {
@@ -31,6 +31,17 @@ impl RedisKeyValueStorage {
     pub fn new(redis: RedisPool) -> Self {
         Self { redis }
     }
+
+    fn use_hash(namespace: &KeyValueStorageNamespace) -> Option<String> {
+        match namespace {
+            KeyValueStorageNamespace::Worker => None,
+            KeyValueStorageNamespace::Promise => Some("promises".to_string()),
+            KeyValueStorageNamespace::Schedule => None,
+            KeyValueStorageNamespace::UserDefined { account_id, bucket } => {
+                Some(format!("user-defined:{account_id}:{bucket}"))
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -40,13 +51,13 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
-        match namespace {
+        match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
@@ -67,7 +78,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String> {
         let mut map: HashMap<&str, &[u8]> = HashMap::new();
@@ -75,7 +86,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
             map.insert(*k, *v);
             record_redis_serialized_size(svc_name, entity_name, v.len());
         }
-        match namespace {
+        match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
@@ -96,13 +107,13 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<bool, String> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
-        match namespace {
+        match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
@@ -123,10 +134,10 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<Bytes>, String> {
-        let serialized: Option<Bytes> = match namespace {
+        let serialized: Option<Bytes> = match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
@@ -154,10 +165,10 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
     ) -> Result<Vec<Option<Bytes>>, String> {
-        let serialized: Vec<Option<Bytes>> = match namespace {
+        let serialized: Vec<Option<Bytes>> = match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
@@ -183,10 +194,10 @@ impl KeyValueStorage for RedisKeyValueStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<(), String> {
-        match namespace {
+        match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
@@ -206,10 +217,10 @@ impl KeyValueStorage for RedisKeyValueStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
     ) -> Result<(), String> {
-        match namespace {
+        match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
@@ -229,10 +240,10 @@ impl KeyValueStorage for RedisKeyValueStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<bool, String> {
-        match namespace {
+        match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
@@ -252,9 +263,9 @@ impl KeyValueStorage for RedisKeyValueStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<String>, String> {
-        match namespace {
+        match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
@@ -270,13 +281,13 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
-        let key = match namespace {
+        let key = match Self::use_hash(&namespace) {
             Some(ns) => format!("{}:{}", ns, key),
             None => key.to_string(),
         };
@@ -292,13 +303,13 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
-        let key = match namespace {
+        let key = match Self::use_hash(&namespace) {
             Some(ns) => format!("{}:{}", ns, key),
             None => key.to_string(),
         };
@@ -314,10 +325,10 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<Bytes>, String> {
-        let key = match namespace {
+        let key = match Self::use_hash(&namespace) {
             Some(ns) => format!("{}:{}", ns, key),
             None => key.to_string(),
         };
@@ -340,14 +351,14 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         score: f64,
         value: &[u8],
     ) -> Result<(), String> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
-        let key = match namespace {
+        let key = match Self::use_hash(&namespace) {
             Some(ns) => format!("{}:{}", ns, key),
             None => key.to_string(),
         };
@@ -363,13 +374,13 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
-        let key = match namespace {
+        let key = match Self::use_hash(&namespace) {
             Some(ns) => format!("{}:{}", ns, key),
             None => key.to_string(),
         };
@@ -385,10 +396,10 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<(f64, Bytes)>, String> {
-        let key = match namespace {
+        let key = match Self::use_hash(&namespace) {
             Some(ns) => format!("{}:{}", ns, key),
             None => key.to_string(),
         };
@@ -411,12 +422,12 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: KeyValueStorageNamespace,
         key: &str,
         min: f64,
         max: f64,
     ) -> Result<Vec<(f64, Bytes)>, String> {
-        let key = match namespace {
+        let key = match Self::use_hash(&namespace) {
             Some(ns) => format!("{}:{}", ns, key),
             None => key.to_string(),
         };

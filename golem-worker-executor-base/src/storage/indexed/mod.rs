@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod memory;
-pub mod redis;
-
 use std::fmt::Debug;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
+
 use golem_common::serialization::{deserialize, serialize};
+
+pub mod memory;
+pub mod redis;
 
 type ScanCursor = u64;
 
-// TODO: review namespace parameter, possibly make it non-Option? Maybe non-string?
 #[async_trait]
 pub trait IndexedStorage: Debug {
     async fn number_of_replicas(
@@ -46,7 +46,7 @@ pub trait IndexedStorage: Debug {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<bool, String>;
 
@@ -54,7 +54,7 @@ pub trait IndexedStorage: Debug {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         pattern: &str,
         cursor: ScanCursor,
         count: u64,
@@ -65,7 +65,7 @@ pub trait IndexedStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
         value: &[u8],
@@ -75,7 +75,7 @@ pub trait IndexedStorage: Debug {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<u64, String>;
 
@@ -83,7 +83,7 @@ pub trait IndexedStorage: Debug {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<(), String>;
 
@@ -92,7 +92,7 @@ pub trait IndexedStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
         start_id: u64,
         end_id: u64,
@@ -151,7 +151,11 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
             .await
     }
 
-    pub async fn exists(&self, namespace: Option<&str>, key: &str) -> Result<bool, String> {
+    pub async fn exists(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<bool, String> {
         self.storage
             .exists(self.svc_name, self.api_name, namespace, key)
             .await
@@ -159,7 +163,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
 
     pub async fn scan(
         &self,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         pattern: &str,
         cursor: ScanCursor,
         count: u64,
@@ -176,13 +180,21 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
             .await
     }
 
-    pub async fn length(&self, namespace: Option<&str>, key: &str) -> Result<u64, String> {
+    pub async fn length(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<u64, String> {
         self.storage
             .length(self.svc_name, self.api_name, namespace, key)
             .await
     }
 
-    pub async fn delete(&self, namespace: Option<&str>, key: &str) -> Result<(), String> {
+    pub async fn delete(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<(), String> {
         self.storage
             .delete(self.svc_name, self.api_name, namespace, key)
             .await
@@ -213,7 +225,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 
     pub async fn append<V: Encode>(
         &self,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
         value: &V,
@@ -233,7 +245,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 
     pub async fn append_raw(
         &self,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
         value: &[u8],
@@ -253,7 +265,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 
     pub async fn read<V: Decode>(
         &self,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
         start_id: u64,
         end_id: u64,
@@ -279,7 +291,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 
     pub async fn read_raw(
         &self,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
         from: u64,
         count: u64,
@@ -296,4 +308,9 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             )
             .await
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
+pub enum IndexedStorageNamespace {
+    OpLog,
 }

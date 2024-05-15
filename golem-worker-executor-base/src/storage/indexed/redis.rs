@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::indexed::{IndexedStorage, ScanCursor};
+use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
 use async_trait::async_trait;
 use bytes::Bytes;
 use fred::types::{RedisKey, RedisValue};
@@ -31,10 +31,9 @@ impl RedisIndexedStorage {
         Self { redis }
     }
 
-    fn composite_key(namespace: Option<&str>, key: &str) -> String {
+    fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
-            Some(namespace) => format!("{}:{}", namespace, key),
-            None => key.to_string(),
+            IndexedStorageNamespace::OpLog => key.to_string(),
         }
     }
 
@@ -74,7 +73,7 @@ impl IndexedStorage for RedisIndexedStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<bool, String> {
         self.redis
@@ -88,7 +87,7 @@ impl IndexedStorage for RedisIndexedStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         pattern: &str,
         cursor: ScanCursor,
         count: u64,
@@ -105,7 +104,7 @@ impl IndexedStorage for RedisIndexedStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
         value: &[u8],
@@ -134,7 +133,7 @@ impl IndexedStorage for RedisIndexedStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<u64, String> {
         self.redis
@@ -148,7 +147,7 @@ impl IndexedStorage for RedisIndexedStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<(), String> {
         self.redis
@@ -163,7 +162,7 @@ impl IndexedStorage for RedisIndexedStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
         start_id: u64,
         end_id: u64,

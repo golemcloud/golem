@@ -4,7 +4,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
 use crate::services::worker::WorkerService;
 use crate::services::{HasConfig, HasOplogService, HasWorkerService};
-use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi};
+use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use crate::worker::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -145,7 +145,12 @@ impl DefaultWorkerEnumerationService {
         let (new_scan_cursor, keys) = self
             .indexed_storage
             .with("worker_enumeration", "scan")
-            .scan(None, &Self::key_pattern(component_id), cursor, count)
+            .scan(
+                IndexedStorageNamespace::OpLog,
+                &Self::key_pattern(component_id),
+                cursor,
+                count,
+            )
             .await
             .map_err(GolemError::unknown)?;
 

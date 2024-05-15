@@ -154,7 +154,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         ) = match &golem_config.key_value_storage {
             KeyValueStorageConfig::Redis(redis) => {
                 info!("Using Redis for key-value storage at {}", redis.url());
-                let pool = RedisPool::configured(&redis)
+                let pool = RedisPool::configured(redis)
                     .await
                     .map_err(|err| anyhow!(err))?;
                 let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
@@ -178,7 +178,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             }
             IndexedStorageConfig::Redis(redis) => {
                 info!("Using Redis for indexed-storage at {}", redis.url());
-                let pool = RedisPool::configured(&redis).await?;
+                let pool = RedisPool::configured(redis).await?;
                 Arc::new(RedisIndexedStorage::new(pool.clone()))
             }
             IndexedStorageConfig::InMemory => {

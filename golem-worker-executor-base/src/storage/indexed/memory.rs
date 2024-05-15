@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::indexed::{IndexedStorage, ScanCursor};
+use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -38,8 +38,8 @@ impl InMemoryIndexedStorage {
         }
     }
 
-    fn composite_key(namespace: Option<&str>, key: &str) -> String {
-        format!("{}/{}", namespace.unwrap_or(""), key)
+    fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
+        format!("{:?}/{}", namespace, key)
     }
 }
 
@@ -67,7 +67,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<bool, String> {
         let composite_key = Self::composite_key(namespace, key);
@@ -78,7 +78,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         pattern: &str,
         cursor: ScanCursor,
         _count: u64,
@@ -115,7 +115,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
         value: &[u8],
@@ -130,7 +130,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<u64, String> {
         let composite_key = Self::composite_key(namespace, key);
@@ -144,7 +144,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<(), String> {
         let composite_key = Self::composite_key(namespace, key);
@@ -157,7 +157,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         _entity_name: &'static str,
-        namespace: Option<&str>,
+        namespace: IndexedStorageNamespace,
         key: &str,
         start_id: u64,
         end_id: u64,

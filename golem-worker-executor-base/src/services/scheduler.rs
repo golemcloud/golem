@@ -27,7 +27,9 @@ use crate::metrics::promises::record_scheduled_promise_completed;
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageLabelledApi};
+use crate::storage::keyvalue::{
+    KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
+};
 
 #[async_trait]
 pub trait SchedulerService {
@@ -86,7 +88,7 @@ impl SchedulerServiceDefault {
         let all_from_prev_hour: Vec<(f64, PromiseId)> = self
             .key_value_storage
             .with_entity("scheduler", "process", "promise_id")
-            .get_sorted_set(None, &previous_hour_key)
+            .get_sorted_set(KeyValueStorageNamespace::Schedule, &previous_hour_key)
             .await?;
 
         let mut all: Vec<(&str, PromiseId)> = all_from_prev_hour
@@ -97,7 +99,12 @@ impl SchedulerServiceDefault {
         let all_from_this_hour: Vec<(f64, PromiseId)> = self
             .key_value_storage
             .with_entity("scheduler", "process", "promise_id")
-            .query_sorted_set(None, &current_hour_key, 0.0, remainder)
+            .query_sorted_set(
+                KeyValueStorageNamespace::Schedule,
+                &current_hour_key,
+                0.0,
+                remainder,
+            )
             .await?;
 
         all.extend(
@@ -120,7 +127,7 @@ impl SchedulerServiceDefault {
             worker_ids.insert(promise_id.worker_id.clone());
             self.key_value_storage
                 .with_entity("scheduler", "process", "promise_id")
-                .remove_from_sorted_set(None, key, &promise_id)
+                .remove_from_sorted_set(KeyValueStorageNamespace::Schedule, key, &promise_id)
                 .await?;
             self.promise_service
                 .complete(promise_id, vec![])
@@ -174,7 +181,12 @@ impl SchedulerService for SchedulerServiceDefault {
 
         self.key_value_storage
             .with_entity("scheduler", "schedule", "promise_id")
-            .add_to_sorted_set(None, &Self::schedule_key(&id), remainder, &promise_id)
+            .add_to_sorted_set(
+                KeyValueStorageNamespace::Schedule,
+                &Self::schedule_key(&id),
+                remainder,
+                &promise_id,
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to add schedule for promise id {promise_id} in KV storage: {err}")
@@ -186,7 +198,11 @@ impl SchedulerService for SchedulerServiceDefault {
     async fn cancel(&self, id: ScheduleId) {
         self.key_value_storage
             .with_entity("scheduler", "cancel", "promise_id")
-            .remove_from_sorted_set(None, &Self::schedule_key(&id), &id.promise_id)
+            .remove_from_sorted_set(
+                KeyValueStorageNamespace::Schedule,
+                &Self::schedule_key(&id),
+                &id.promise_id,
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!(

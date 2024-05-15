@@ -24,7 +24,9 @@ use crate::metrics::workers::record_worker_call;
 
 use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageLabelledApi};
+use crate::storage::keyvalue::{
+    KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
+};
 
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
@@ -66,7 +68,7 @@ impl DefaultWorkerService {
         let value: Vec<WorkerId> = self
             .key_value_storage
             .with_entity("worker", "enum", "worker_id")
-            .members_of_set(None, key)
+            .members_of_set(KeyValueStorageNamespace::Worker, key)
             .await
             .unwrap_or_else(|err| panic!("failed to get worker ids from KV storage: {err}"));
 
@@ -112,7 +114,7 @@ impl WorkerService for DefaultWorkerService {
         self.key_value_storage
             .with_entity("worker", "add", "worker_status")
             .set(
-                None,
+                KeyValueStorageNamespace::Worker,
                 &Self::status_key(worker_id),
                 &worker_metadata.last_known_status,
             )
@@ -130,7 +132,7 @@ impl WorkerService for DefaultWorkerService {
             self
                 .key_value_storage
                 .with_entity("worker", "add", "worker_id")
-                .add_to_set(None, &Self::running_in_shard_key(&shard_id), worker_id)
+                .add_to_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), worker_id)
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -178,7 +180,7 @@ impl WorkerService for DefaultWorkerService {
                 let status_value: Option<WorkerStatusRecord> = self
                     .key_value_storage
                     .with_entity("worker", "get", "worker_status")
-                    .get(None, &Self::status_key(wid))
+                    .get(KeyValueStorageNamespace::Worker, &Self::status_key(wid))
                     .await
                     .unwrap_or_else(|err| {
                         panic!("failed to get worker status for {wid} from KV storage: {err}")
@@ -214,7 +216,10 @@ impl WorkerService for DefaultWorkerService {
 
         self.key_value_storage
             .with("worker", "remove")
-            .del(None, &Self::status_key(worker_id))
+            .del(
+                KeyValueStorageNamespace::Worker,
+                &Self::status_key(worker_id),
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to remove worker status for {worker_id} in the KV storage: {err}")
@@ -226,7 +231,7 @@ impl WorkerService for DefaultWorkerService {
         self
             .key_value_storage
             .with_entity("worker", "remove", "worker_id")
-            .remove_from_set(None, &Self::running_in_shard_key(&shard_id), worker_id)
+            .remove_from_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), worker_id)
             .await
             .unwrap_or_else(|err| {
                 panic!(
@@ -241,7 +246,11 @@ impl WorkerService for DefaultWorkerService {
         debug!("updating worker status for {worker_id} to {status_value:?}");
         self.key_value_storage
             .with_entity("worker", "update_status", "worker_status")
-            .set(None, &Self::status_key(worker_id), status_value)
+            .set(
+                KeyValueStorageNamespace::Worker,
+                &Self::status_key(worker_id),
+                status_value,
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to set worker status for {worker_id} in KV storage: {err}")
@@ -256,7 +265,7 @@ impl WorkerService for DefaultWorkerService {
             self
                 .key_value_storage
                 .with_entity("worker", "add", "worker_id")
-                .add_to_set(None, &Self::running_in_shard_key(&shard_id), worker_id)
+                .add_to_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), worker_id)
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -271,7 +280,7 @@ impl WorkerService for DefaultWorkerService {
             self
                 .key_value_storage
                 .with_entity("worker", "remove", "worker_id")
-                .remove_from_set(None, &Self::running_in_shard_key(&shard_id), worker_id)
+                .remove_from_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), worker_id)
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
