@@ -13,50 +13,50 @@ description = "Base functionalities of Golem Worker Service"
 golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
-golem-wasm-rpc = { workspace = true }
-wasm-wave = "0.5.1"
-
 golem-wasm-ast = { workspace = true }
+golem-wasm-rpc = { workspace = true }
+
+anyhow = { workspace = true }
 async-trait = { workspace = true }
-regex = "1.10.3"
 bincode = "2.0.0-rc.3"
+bytes = { workspace = true }
+derive_more = "0.99.17"
+figment = { workspace = true }
+futures = "0.3.30"
+futures-util = { workspace = true }
+http = "1.0.0"
+http_02 = { workspace = true }
+humantime-serde = { workspace = true }
+hyper = { workspace = true }
+lazy_static = { workspace = true }
+nom = "7.1.3"
+openapiv3 = "2.0.0"
+opentelemetry = { workspace = true }
+opentelemetry-prometheus = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+poem = { workspace = true, features = ["prometheus", "opentelemetry", "test"] }
+poem-openapi = { workspace = true }
+prometheus = "0.13.3"
+regex = "1.10.3"
+rustc-hash = "1.1.0"
 serde = { version = "1.0.196", features = ["derive"] }
 serde_json = "1.0.113"
 serde_yaml = "0.9.31"
 strum = "0.26.1"
 strum_macros = "0.26.1"
-poem = { workspace = true, features = ["prometheus", "opentelemetry", "test"] }
-poem-openapi = { workspace = true }
-derive_more = "0.99.17"
-uuid = { workspace = true }
-lazy_static = { workspace = true }
-nom = "7.1.3"
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["fmt", "std", "json"] }
-http = "1.0.0"
-humantime-serde = { workspace = true }
-tonic = "0.10.2"
-tonic-health = { workspace = true }
-tonic-reflection = { workspace = true }
-figment = { workspace = true }
-url = { workspace = true }
-http_02 = { workspace = true }
-hyper = { workspace = true }
-bytes = { workspace = true }
+tap = "1.0.1"
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = "0.7.10"
-prometheus = "0.13.3"
-futures = "0.3.30"
-openapiv3 = "2.0.0"
-opentelemetry = { workspace = true }
-opentelemetry_sdk = { workspace = true }
-opentelemetry-prometheus = { workspace = true }
-futures-util = { workspace = true }
-tap = "1.0.1"
-thiserror = { workspace = true }
-anyhow = { workspace = true }
-rustc-hash = "1.1.0"
+tonic = "0.10.2"
+tonic-health = { workspace = true }
+tonic-reflection = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "std", "json"] }
+url = { workspace = true }
+uuid = { workspace = true }
+wasm-wave = "=0.4.0"
 
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }

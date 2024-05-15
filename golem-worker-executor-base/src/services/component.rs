@@ -44,6 +44,7 @@ use crate::services::compiled_component::CompiledComponentService;
 use crate::services::golem_config::{
     CompiledComponentServiceConfig, ComponentCacheConfig, ComponentServiceConfig,
 };
+use crate::storage::blob::BlobStorage;
 
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
@@ -68,8 +69,9 @@ pub async fn configured(
     config: &ComponentServiceConfig,
     cache_config: &ComponentCacheConfig,
     compiled_config: &CompiledComponentServiceConfig,
+    blob_storage: Arc<dyn BlobStorage + Send + Sync>,
 ) -> Arc<dyn ComponentService + Send + Sync> {
-    let compiled_component_service = compiled_component::configured(compiled_config).await;
+    let compiled_component_service = compiled_component::configured(compiled_config, blob_storage);
     match config {
         ComponentServiceConfig::Grpc(config) => {
             info!("Using component API at {}", config.url());
