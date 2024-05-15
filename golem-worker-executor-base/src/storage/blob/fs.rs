@@ -26,14 +26,14 @@ pub struct FileSystemBlobStorage {
 
 impl FileSystemBlobStorage {
     pub async fn new(root: &Path) -> Result<Self, String> {
-        let canonical = async_fs::canonicalize(root)
-            .await
-            .map_err(|err| err.to_string())?;
-        if async_fs::metadata(&canonical).await.is_err() {
-            async_fs::create_dir_all(&canonical)
+        if async_fs::metadata(root).await.is_err() {
+            async_fs::create_dir_all(root)
                 .await
                 .map_err(|err| format!("Failed to create local compiled component store: {err}"))?
         }
+        let canonical = async_fs::canonicalize(root)
+            .await
+            .map_err(|err| err.to_string())?;
         Ok(Self { root: canonical })
     }
 
