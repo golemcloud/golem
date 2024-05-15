@@ -312,8 +312,7 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
 fn env_vars(
     http_port: u16,
     grpc_port: u16,
-    component_compilation_service_host: &str,
-    component_compilation_service_port: u16,
+    component_compilation_service: Option<(&str, u16)>,
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     verbosity: Level,
 ) -> HashMap<String, String> {
@@ -321,9 +320,6 @@ fn env_vars(
     let vars: &[(&str, &str)] = &[
         ("RUST_LOG"                     , &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
         ("RUST_BACKTRACE"               , "1"),
-        ("GOLEM__COMPILATION__TYPE", "Enabled"),
-        ("GOLEM__COMPILATION__CONFIG__HOST", component_compilation_service_host),
-        ("GOLEM__COMPILATION__CONFIG__PORT", &component_compilation_service_port.to_string()),
         ("GOLEM__COMPONENT_STORE__TYPE", "Local"),
         ("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", ""),
         ("GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH", "/tmp/ittest-local-object-store/golem"),
@@ -333,6 +329,30 @@ fn env_vars(
 
     let mut vars: HashMap<String, String> =
         HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+
+    match component_compilation_service {
+        Some((host, port)) => {
+            vars.insert(
+                "GOLEM__COMPILATION__TYPE".to_string(),
+                "Enabled".to_string(),
+            );
+            vars.insert(
+                "GOLEM__COMPILATION__CONFIG__HOST".to_string(),
+                host.to_string(),
+            );
+            vars.insert(
+                "GOLEM__COMPILATION__CONFIG__PORT".to_string(),
+                port.to_string(),
+            );
+        }
+        _ => {
+            vars.insert(
+                "GOLEM__COMPILATION__TYPE".to_string(),
+                "Disabled".to_string(),
+            );
+        }
+    };
+
     vars.extend(rdb.info().env().clone());
     vars
 }
