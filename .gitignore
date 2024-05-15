@@ -4,14 +4,14 @@ target/
 **/*.rs.bk
 *.pdb
 .idea/
-./golem-worker-executor/data/
-./golem-worker-executor-base/data/
-./golem-worker-executor-base/golem-wit/
+golem-worker-executor/data/
+golem-worker-executor-base/data/
+golem-worker-executor-base/golem-wit/
 zig-cache/
 dump.rdb
-./test-components/*.wat
-./test-components/**/*.wat
-./test-components/**/*.wasm
+test-components/*.wat
+test-components/**/*.wat
+test-components/**/*.wasm
 test-components/c-1/c_api*
 test-components/csharp-1/bin/
 test-components/csharp-1/obj/
@@ -20,5 +20,3 @@ test-components/tinygo-wasi*/tinygo_wasi/
 golem-client/*
 !golem-client/Cargo.toml
 !golem-client/build.rs
-golem-worker-executor-base
-test-components
