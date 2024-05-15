@@ -176,6 +176,7 @@ args = [
 
 [tasks.integration-tests]
 description = "Runs integration tests only"
+dependencies = ["build"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [
@@ -190,6 +191,7 @@ args = [
 
 [tasks.sharding-tests]
 description = "Runs sharding integration tests only"
+dependencies = ["build"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [
@@ -205,6 +207,7 @@ args = [
 
 [tasks.cli-tests]
 description = "Runs CLI tests only"
+dependencies = ["build"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [
