@@ -27,10 +27,7 @@ mod tests {
         std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__HOST", "localhost");
         std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__PORT", "1234");
         std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN", "token");
-        std::env::set_var(
-            "GOLEM__BLOB_STORAGE__CONFIG__REGION",
-            "us-east-1",
-        );
+        std::env::set_var("GOLEM__BLOB_STORAGE__CONFIG__REGION", "us-east-1");
         std::env::set_var(
             "GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET",
             "golem-compiled-components",
@@ -39,10 +36,7 @@ mod tests {
             "GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET",
             "golem-custom-data",
         );
-        std::env::set_var(
-            "GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX",
-            "",
-        );
+        std::env::set_var("GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX", "");
         std::env::set_var("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST", "localhost");
         std::env::set_var("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT", "4567");
         std::env::set_var("GOLEM__PUBLIC_WORKER_API__HOST", "localhost");
