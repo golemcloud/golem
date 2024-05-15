@@ -13,11 +13,17 @@ min_delay = "100ms"
 max_delay = "1s"
 multiplier = 3
 
-[compiled_component_service]
+[blob_storage]
 type = "S3"
-[compiled_component_service.config]
+
+[blob_storage.config]
+# region
+# aws_endpoint_url
 object_prefix = ""
-[compiled_component_service.config.retries]
+compilation_cache_bucket = "compilation-cache"
+custom_data_bucket = "custom-data"
+
+[blob_storage.config.retries]
 max_attempts = 3
 min_delay = "100ms"
 max_delay = "1s"

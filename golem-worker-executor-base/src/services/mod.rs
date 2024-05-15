@@ -325,7 +325,10 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let key_value_service = Arc::new(key_value::DefaultKeyValueService::new(Arc::new(
             crate::storage::keyvalue::memory::InMemoryKeyValueStorage::new(),
         )));
-        let blob_store_service = Arc::new(blob_store::BlobStoreServiceInMemory::new());
+        let blob_storage = Arc::new(crate::storage::blob::memory::InMemoryBlobStorage::new());
+        let blob_store_service = Arc::new(blob_store::DefaultBlobStoreService::new(
+            blob_storage.clone(),
+        ));
         let oplog_service = Arc::new(oplog::OplogServiceMock::new());
         let recovery_management = Arc::new(recovery::RecoveryManagementMock::new());
         let rpc = Arc::new(rpc::RpcMock::new());

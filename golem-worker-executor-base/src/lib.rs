@@ -26,9 +26,11 @@ pub mod wasi_host;
 pub mod worker;
 pub mod workerctx;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutorServer;
+use golem_common::redis::RedisPool;
 use prometheus::Registry;
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -41,10 +43,12 @@ use wasmtime::{Config, Engine};
 use crate::grpc::WorkerExecutorImpl;
 use crate::http_server::HttpServerImpl;
 use crate::services::active_workers::ActiveWorkers;
-use crate::services::blob_store::BlobStoreService;
+use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
-use crate::services::golem_config::GolemConfig;
+use crate::services::golem_config::{
+    BlobStorageConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
+};
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::{DefaultOplogService, OplogService};
 use crate::services::promise::{DefaultPromiseService, PromiseService};
@@ -58,9 +62,12 @@ use crate::services::worker_enumeration::{
     RunningWorkerEnumerationServiceDefault, WorkerEnumerationService,
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
-use crate::services::{blob_store, component, shard_manager, All};
+use crate::services::{component, shard_manager, All};
+use crate::storage::blob::s3::S3BlobStorage;
+use crate::storage::blob::BlobStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
+use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
 use crate::storage::keyvalue::KeyValueStorage;
 use crate::workerctx::WorkerCtx;
@@ -141,17 +148,71 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             "Worker executor is running",
         );
 
-        info!("Using Redis at {}", golem_config.redis.url());
-        let pool = golem_common::redis::RedisPool::configured(&golem_config.redis).await?;
-        let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
-            Arc::new(RedisKeyValueStorage::new(pool.clone())); // TODO: configured
-        let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
-            Arc::new(RedisIndexedStorage::new(pool.clone())); // TODO: configured
+        let (redis, key_value_storage): (
+            Option<RedisPool>,
+            Arc<dyn KeyValueStorage + Send + Sync>,
+        ) = match &golem_config.key_value_storage {
+            KeyValueStorageConfig::Redis(redis) => {
+                info!("Using Redis for key-value storage at {}", redis.url());
+                let pool = RedisPool::configured(&redis)
+                    .await
+                    .map_err(|err| anyhow!(err))?;
+                let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                    Arc::new(RedisKeyValueStorage::new(pool.clone()));
+                (Some(pool), key_value_storage)
+            }
+            KeyValueStorageConfig::InMemory => {
+                info!("Using in-memory key-value storage");
+                (None, Arc::new(InMemoryKeyValueStorage::new()))
+            }
+        };
+
+        let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = match &golem_config
+            .indexed_storage
+        {
+            IndexedStorageConfig::KVStoreRedis => {
+                info!("Using the same Redis for indexed-storage");
+                let redis = redis
+                    .expect("Redis must be configured key-value storage when using KVStoreRedis");
+                Arc::new(RedisIndexedStorage::new(redis.clone()))
+            }
+            IndexedStorageConfig::Redis(redis) => {
+                info!("Using Redis for indexed-storage at {}", redis.url());
+                let pool = RedisPool::configured(&redis).await?;
+                Arc::new(RedisIndexedStorage::new(pool.clone()))
+            }
+            IndexedStorageConfig::InMemory => {
+                info!("Using in-memory indexed storage");
+                Arc::new(storage::indexed::memory::InMemoryIndexedStorage::new())
+            }
+        };
+        let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &golem_config.blob_storage {
+            BlobStorageConfig::S3(config) => {
+                info!("Using S3 for blob storage");
+                Arc::new(S3BlobStorage::new(config.clone()).await)
+            }
+            BlobStorageConfig::LocalFileSystem(config) => {
+                info!(
+                    "Using local file system for blob storage at {:?}",
+                    config.root
+                );
+                Arc::new(
+                    storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                        .await
+                        .map_err(|err| anyhow!(err))?,
+                )
+            }
+            BlobStorageConfig::InMemory => {
+                info!("Using in-memory blob storage");
+                Arc::new(storage::blob::memory::InMemoryBlobStorage::new())
+            }
+        };
 
         let component_service = component::configured(
             &golem_config.component_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
+            blob_storage.clone(),
         )
         .await;
 
@@ -206,7 +267,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let key_value_service = Arc::new(DefaultKeyValueService::new(key_value_storage.clone()));
 
-        let blob_store_service = blob_store::configured(&golem_config.blob_store_service).await;
+        let blob_store_service = Arc::new(DefaultBlobStoreService::new(blob_storage.clone()));
 
         let scheduler_service = SchedulerServiceDefault::new(
             key_value_storage.clone(),

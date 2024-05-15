@@ -37,14 +37,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         record_host_function_call("blobstore::blobstore", "create_container");
         let account_id = self.state.account_id.clone();
-        let result = Durability::<Ctx, u64, SerializableError>::wrap(
+        let name_clone = name.clone();
+        let result: Result<u64, anyhow::Error> = Durability::<Ctx, u64, SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem blobstore::blobstore::create_container",
             |ctx| {
-                ctx.state
-                    .blob_store_service
-                    .create_container(account_id.clone(), name.clone())
+                Box::pin(async move {
+                    let _ = ctx
+                        .state
+                        .blob_store_service
+                        .create_container(account_id.clone(), name_clone.clone())
+                        .await?;
+                    Ok(ctx
+                        .state
+                        .blob_store_service
+                        .get_container(account_id.clone(), name_clone)
+                        .await?
+                        .unwrap())
+                })
             },
         )
         .await;

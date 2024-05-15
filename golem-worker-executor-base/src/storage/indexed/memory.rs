@@ -121,10 +121,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         value: &[u8],
     ) -> Result<(), String> {
         let composite_key = Self::composite_key(namespace, key);
-        let mut entry = self
-            .data
-            .entry(composite_key.clone())
-            .or_default();
+        let mut entry = self.data.entry(composite_key.clone()).or_default();
         entry.insert(id, value.to_vec());
         Ok(())
     }

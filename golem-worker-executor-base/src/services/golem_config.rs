@@ -12,34 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::Context;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::Context;
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
-use golem_common::config::{RedisConfig, RetryConfig};
 use http::Uri;
 use serde::Deserialize;
 use url::Url;
 
+use golem_common::config::{RedisConfig, RetryConfig};
+
 /// The shared global Golem configuration
 #[derive(Clone, Debug, Deserialize)]
 pub struct GolemConfig {
+    pub key_value_storage: KeyValueStorageConfig,
+    pub indexed_storage: IndexedStorageConfig,
+    pub blob_storage: BlobStorageConfig,
     pub limits: Limits,
     pub retry: RetryConfig,
     pub component_cache: ComponentCacheConfig,
     pub component_service: ComponentServiceConfig,
     pub compiled_component_service: CompiledComponentServiceConfig,
-    pub blob_store_service: BlobStoreServiceConfig,
     pub shard_manager_service: ShardManagerServiceConfig,
-    pub redis: RedisConfig,
     pub oplog: OplogConfig,
     pub suspend: SuspendConfig,
     pub active_workers: ActiveWorkersConfig,
     pub scheduler: SchedulerConfig,
-    pub invocation_keys: InvocationKeysConfig, // TODO: review and remove?
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
@@ -93,50 +94,15 @@ pub struct ComponentServiceLocalConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum CompiledComponentServiceConfig {
-    S3(CompiledComponentServiceS3Config),
-    Local(CompiledComponentServiceLocalConfig),
+    Enabled(CompiledComponentServiceEnabledConfig),
     Disabled(CompiledComponentServiceDisabledConfig),
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct CompiledComponentServiceS3Config {
-    pub retries: RetryConfig,
-    pub region: String,
-    pub bucket: String,
-    pub object_prefix: String,
-    pub aws_endpoint_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct CompiledComponentServiceLocalConfig {
-    pub root: PathBuf,
-}
+pub struct CompiledComponentServiceEnabledConfig {}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CompiledComponentServiceDisabledConfig {}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum BlobStoreServiceConfig {
-    S3(BlobStoreServiceS3Config),
-    InMemory(BlobStoreServiceInMemoryConfig),
-    Local(BlobStoreServiceLocalConfig),
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct BlobStoreServiceS3Config {
-    pub retries: RetryConfig,
-    pub region: String,
-    pub bucket_prefix: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct BlobStoreServiceInMemoryConfig {}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct BlobStoreServiceLocalConfig {
-    pub root: PathBuf,
-}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
@@ -257,27 +223,58 @@ pub struct OplogConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct InvocationKeysConfig {
-    #[serde(with = "humantime_serde")]
-    pub pending_key_retention: Duration,
-    pub confirm_queue_capacity: usize,
+#[serde(tag = "type", content = "config")]
+pub enum KeyValueStorageConfig {
+    Redis(RedisConfig),
+    InMemory,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum IndexedStorageConfig {
+    KVStoreRedis,
+    Redis(RedisConfig),
+    InMemory,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum BlobStorageConfig {
+    S3(S3BlobStorageConfig),
+    LocalFileSystem(LocalFileSystemBlobStorageConfig),
+    InMemory,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct S3BlobStorageConfig {
+    pub retries: RetryConfig,
+    pub region: String,
+    pub object_prefix: String,
+    pub aws_endpoint_url: Option<String>,
+    pub compilation_cache_bucket: String,
+    pub custom_data_bucket: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct LocalFileSystemBlobStorageConfig {
+    pub root: PathBuf,
 }
 
 impl Default for GolemConfig {
     fn default() -> Self {
         Self {
+            key_value_storage: KeyValueStorageConfig::default(),
+            indexed_storage: IndexedStorageConfig::default(),
+            blob_storage: BlobStorageConfig::default(),
             limits: Limits::default(),
             retry: RetryConfig::default(),
             component_cache: ComponentCacheConfig::default(),
             component_service: ComponentServiceConfig::default(),
             compiled_component_service: CompiledComponentServiceConfig::default(),
-            blob_store_service: BlobStoreServiceConfig::default(),
             shard_manager_service: ShardManagerServiceConfig::default(),
-            redis: RedisConfig::default(),
             oplog: OplogConfig::default(),
             suspend: SuspendConfig::default(),
             scheduler: SchedulerConfig::default(),
-            invocation_keys: InvocationKeysConfig::default(),
             active_workers: ActiveWorkersConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             enable_tracing_console: false,
@@ -334,34 +331,19 @@ impl Default for ComponentServiceGrpcConfig {
 
 impl Default for CompiledComponentServiceConfig {
     fn default() -> Self {
-        Self::S3(CompiledComponentServiceS3Config::default())
+        Self::Enabled(CompiledComponentServiceEnabledConfig {})
     }
 }
 
-impl Default for CompiledComponentServiceS3Config {
+impl Default for S3BlobStorageConfig {
     fn default() -> Self {
         Self {
             retries: RetryConfig::default(),
             region: "us-east-1".to_string(),
-            bucket: "golem-compiled-components".to_string(),
+            compilation_cache_bucket: "golem-compiled-components".to_string(),
+            custom_data_bucket: "custom-data".to_string(),
             object_prefix: "".to_string(),
             aws_endpoint_url: None,
-        }
-    }
-}
-
-impl Default for BlobStoreServiceConfig {
-    fn default() -> Self {
-        Self::S3(BlobStoreServiceS3Config::default())
-    }
-}
-
-impl Default for BlobStoreServiceS3Config {
-    fn default() -> Self {
-        Self {
-            retries: RetryConfig::default(),
-            region: "us-east-1".to_string(),
-            bucket_prefix: "".to_string(),
         }
     }
 }
@@ -417,15 +399,6 @@ impl Default for SchedulerConfig {
     }
 }
 
-impl Default for InvocationKeysConfig {
-    fn default() -> Self {
-        Self {
-            pending_key_retention: Duration::from_secs(60),
-            confirm_queue_capacity: 1024,
-        }
-    }
-}
-
 impl Default for WorkerServiceGrpcConfig {
     fn default() -> Self {
         Self {
@@ -433,5 +406,23 @@ impl Default for WorkerServiceGrpcConfig {
             port: 9090,
             access_token: "access_token".to_string(),
         }
+    }
+}
+
+impl Default for KeyValueStorageConfig {
+    fn default() -> Self {
+        Self::Redis(RedisConfig::default())
+    }
+}
+
+impl Default for IndexedStorageConfig {
+    fn default() -> Self {
+        Self::KVStoreRedis
+    }
+}
+
+impl Default for BlobStorageConfig {
+    fn default() -> Self {
+        Self::S3(S3BlobStorageConfig::default())
     }
 }

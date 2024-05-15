@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_common::config::RetryConfig;
-use golem_worker_executor_base::services::golem_config::CompiledComponentServiceConfig;
+use golem_worker_executor_base::services::golem_config::{BlobStorageConfig, CompiledComponentServiceConfig, S3BlobStorageConfig};
 use http::Uri;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -13,6 +13,7 @@ pub struct ServerConfig {
     // Services.
     pub component_service: ComponentServiceConfig,
     pub compiled_component_service: CompiledComponentServiceConfig,
+    pub blob_storage: BlobStorageConfig,
 
     // Workers.
     pub upload_worker: UploadWorkerConfig,

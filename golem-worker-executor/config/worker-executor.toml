@@ -4,6 +4,42 @@ enable_json_log = false
 grpc_address = "0.0.0.0"
 http_address = "0.0.0.0"
 
+[key_value_storage]
+type = "Redis"
+
+[key_value_storage.config]
+# host
+# port
+database = 0
+tracing = false
+pool_size = 8
+key_prefix = ""
+
+[key_value_storage.config.retries]
+max_attempts = 5
+min_delay = "100ms"
+max_delay = "2s"
+multiplier = 2
+
+[indexed_storage]
+type = "KVStoreRedis"
+
+[blob_storage]
+type = "S3"
+
+[blob_storage.config]
+# region
+# aws_endpoint_url
+object_prefix = ""
+compilation_cache_bucket = "compilation-cache"
+custom_data_bucket = "custom-data"
+
+[blob_storage.config.retries]
+max_attempts = 3
+min_delay = "100ms"
+max_delay = "1s"
+multiplier = 3
+
 [oplog]
 max_operations_before_commit = 128
 operations_to_load = 128
@@ -45,48 +81,7 @@ max_delay = "1s"
 multiplier = 3
 
 [compiled_component_service]
-type = "S3"
-
-[compiled_component_service.config]
-object_prefix = ""
-# region
-# bucket
-
-[compiled_component_service.config.retries]
-max_attempts = 3
-min_delay = "100ms"
-max_delay = "1s"
-multiplier = 3
-
-[blob_store_service]
-type = "S3"
-
-[blob_store_service.config]
-bucket_prefix = ""
-# region
-
-[blob_store_service.config.retries]
-max_attempts = 3
-min_delay = "100ms"
-max_delay = "1s"
-multiplier = 3
-
-[key_value_service]
-type = "KeyValue"
-
-[redis]
-# host
-# port
-database = 0
-tracing = false
-pool_size = 8
-key_prefix = ""
-
-[redis.retries]
-max_attempts = 5
-min_delay = "100ms"
-max_delay = "2s"
-multiplier = 2
+type = "Enabled"
 
 [shard_manager_service]
 type = "Grpc"
@@ -110,12 +105,6 @@ suspend_after = "10s"
 [active_workers]
 drop_when_full = 0.25
 ttl = "8h"
-
-[promises]
-type = "KeyValue"
-
-[workers]
-type = "Redis"
 
 [invocation_keys]
 pending_key_retention = "1m"

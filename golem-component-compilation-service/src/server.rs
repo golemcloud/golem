@@ -9,6 +9,7 @@ use std::{
 use crate::service::compile_service::ComponentCompilationServiceImpl;
 use config::ServerConfig;
 use golem_api_grpc::proto::golem::componentcompilation::component_compilation_service_server::ComponentCompilationServiceServer;
+use golem_worker_executor_base::storage::blob::s3::S3BlobStorage;
 use golem_worker_executor_base::{http_server::HttpServerImpl, services::compiled_component};
 use tracing_subscriber::EnvFilter;
 
@@ -20,7 +21,7 @@ mod service;
 
 fn main() {
     let prometheus = metrics::register_all();
-    let config = crate::config::ServerConfig::new();
+    let config = ServerConfig::new();
 
     if config.enable_tracing_console {
         // NOTE: also requires RUSTFLAGS="--cfg tokio_unstable" cargo build
@@ -49,8 +50,9 @@ fn main() {
 }
 
 async fn run(config: ServerConfig, prometheus: Registry) {
+    let blob_storage = Arc::new(S3BlobStorage::new(config.s3.clone()).await); // TODO: configurable
     let compiled_component =
-        compiled_component::configured(&config.compiled_component_service).await;
+        compiled_component::configured(&config.compiled_component_service, blob_storage.clone());
     let engine = wasmtime::Engine::new(&create_wasmtime_config()).expect("Failed to create engine");
 
     // Start metrics and healthcheck server.
