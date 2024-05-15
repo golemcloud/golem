@@ -3589,6 +3589,7 @@ dependencies = [
  "derive_more",
  "fastrand 2.0.2",
  "figment",
+ "futures",
  "futures-util",
  "golem-api-grpc",
  "golem-common",
