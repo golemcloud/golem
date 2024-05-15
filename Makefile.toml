@@ -188,7 +188,6 @@ description = "Runs worker executor tests only (group 2/4)"
 env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration guest_languages -- --nocapture
-cargo test --package golem-worker-executor-base --test integration hot_update -- --nocapture
 cargo test --package golem-worker-executor-base --test integration rpc -- --nocapture
 '''
 
@@ -205,6 +204,7 @@ description = "Runs worker executor tests only (group 4/4)"
 env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration scalability -- --nocapture
+cargo test --package golem-worker-executor-base --test integration hot_update -- --nocapture
 '''
 
 [tasks.integration-tests]
