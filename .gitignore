@@ -20,3 +20,5 @@ test-components/tinygo-wasi*/tinygo_wasi/
 golem-client/*
 !golem-client/Cargo.toml
 !golem-client/build.rs
+golem-worker-executor-base
+test-components

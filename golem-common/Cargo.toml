@@ -14,7 +14,6 @@ description = "Shared code between Golem services"
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-wasm-rpc = { workspace = true }
-golem-workspace-hack = { version = "0.1", path = "../golem-workspace-hack" }
 
 async-trait = { workspace = true }
 bincode = { workspace = true }

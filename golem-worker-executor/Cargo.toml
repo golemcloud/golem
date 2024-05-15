@@ -19,7 +19,6 @@ golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-wasm-rpc = { workspace = true }
 golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "0.0.0" }
-golem-workspace-hack = { version = "0.1", path = "../golem-workspace-hack" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

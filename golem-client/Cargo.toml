@@ -12,8 +12,6 @@ include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 [lib]
 
 [dependencies]
-golem-workspace-hack = { version = "0.1", path = "../golem-workspace-hack" }
-
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }

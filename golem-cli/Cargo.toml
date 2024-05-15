@@ -17,7 +17,6 @@ harness = false
 
 [dependencies]
 golem-client = { path = "../golem-client", version = "0.0.0" }
-golem-workspace-hack = { version = "0.1", path = "../golem-workspace-hack" }
 
 async-trait = { workspace = true }
 chrono = { workspace = true }

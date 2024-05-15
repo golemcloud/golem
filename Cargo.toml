@@ -16,7 +16,6 @@ members = [
     "golem-worker-executor",
     "golem-worker-service-base",
     "golem-worker-service",
-    "golem-workspace-hack",
     "integration-tests",
 ]
 
