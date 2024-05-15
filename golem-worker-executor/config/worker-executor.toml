@@ -82,6 +82,7 @@ multiplier = 3
 
 [compiled_component_service]
 type = "Enabled"
+[compiled_component_service.config]
 
 [shard_manager_service]
 type = "Grpc"

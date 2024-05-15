@@ -336,9 +336,9 @@ mod tests {
         assert_eq!(
             result,
                 HashMap::from_iter(vec![
-                    ("/worker:schedule:469329".to_string(), vec![
+                    ("Schedule/worker:schedule:469329".to_string(), vec![
                         (3540000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}").to_string())))]),
-                    ("/worker:schedule:469330".to_string(), vec![
+                    ("Schedule/worker:schedule:469330".to_string(), vec![
                         (300000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}").to_string()))),
                         (301000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}").to_string())))])
                 ])
@@ -417,8 +417,8 @@ mod tests {
             result,
             HashMap::from(
                 [
-                    ("/worker:schedule:469329".to_string(), vec![]),
-                    ("/worker:schedule:469330".to_string(), vec![(300000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}").to_string())))])
+                    ("Schedule/worker:schedule:469329".to_string(), vec![]),
+                    ("Schedule/worker:schedule:469330".to_string(), vec![(300000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}").to_string())))])
                 ]
             )
         );
@@ -498,7 +498,7 @@ mod tests {
             result,
             HashMap::from(
                 [
-                    ("/worker:schedule:469330".to_string(), vec![(3540000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}").to_string())))])
+                    ("Schedule/worker:schedule:469330".to_string(), vec![(3540000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}").to_string())))])
                 ]
             )
         );
@@ -581,8 +581,8 @@ mod tests {
         assert_eq!(
             result,
             HashMap::from([
-                ("/worker:schedule:469329".to_string(), vec![]),
-                ("/worker:schedule:469330".to_string(), vec![])
+                ("Schedule/worker:schedule:469329".to_string(), vec![]),
+                ("Schedule/worker:schedule:469330".to_string(), vec![])
             ])
         );
 
@@ -674,8 +674,8 @@ mod tests {
         assert_eq!(
             result,
             HashMap::from([
-                ("/worker:schedule:469329".to_string(), vec![]),
-                ("/worker:schedule:469330".to_string(), vec![])
+                ("Schedule/worker:schedule:469329".to_string(), vec![]),
+                ("Schedule/worker:schedule:469330".to_string(), vec![])
             ])
         );
 
@@ -758,8 +758,8 @@ mod tests {
         assert_eq!(
             result,
             HashMap::from([
-                ("/worker:schedule:469329".to_string(), vec![]),
-                ("/worker:schedule:469330".to_string(), vec![])
+                ("Schedule/worker:schedule:469329".to_string(), vec![]),
+                ("Schedule/worker:schedule:469330".to_string(), vec![])
             ])
         );
 

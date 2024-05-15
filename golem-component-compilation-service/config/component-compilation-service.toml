@@ -29,6 +29,10 @@ min_delay = "100ms"
 max_delay = "1s"
 multiplier = 3
 
+[compiled_component_service]
+type = "Enabled"
+[compiled_component_service.config]
+
 [upload_worker]
 num_workers = 10
 [upload_worker.retries]

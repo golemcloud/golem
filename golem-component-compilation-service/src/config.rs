@@ -95,15 +95,19 @@ fn config_load() {
     );
 
     std::env::set_var(
-        "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__REGION",
+        "GOLEM__BLOB_STORAGE__CONFIG__REGION",
         "us-east-1",
     );
     std::env::set_var(
-        "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__BUCKET",
+        "GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET",
         "golem-compiled-components",
     );
     std::env::set_var(
-        "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__OBJECT_PREFIX",
+        "GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET",
+        "golem-custom-data",
+    );
+    std::env::set_var(
+        "GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX",
         "",
     );
 
