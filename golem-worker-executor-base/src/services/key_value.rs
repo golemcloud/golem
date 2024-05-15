@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use bytes::Bytes;
 
 use golem_common::model::AccountId;
 
@@ -179,16 +180,19 @@ impl KeyValueService for DefaultKeyValueService {
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
-        let incoming_values: Vec<Option<Vec<u8>>> = self
+        let incoming_values: Vec<Option<Bytes>> = self
             .key_value_storage
             .with_entity("key_value", "get_many", "custom")
-            .get_many(
+            .get_many_raw(
                 KeyValueStorageNamespace::UserDefined { account_id, bucket },
                 keys,
             )
             .await
             .map_err(|err| anyhow!(err))?;
-        Ok(incoming_values)
+        Ok(incoming_values
+            .into_iter()
+            .map(|mb| mb.map(|b| b.to_vec()))
+            .collect())
     }
 
     async fn set(
