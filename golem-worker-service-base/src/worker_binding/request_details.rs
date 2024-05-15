@@ -7,6 +7,9 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
+use poem::web::headers::ContentType;
+use crate::primitive::GetPrimitive;
+use std::str::FromStr;
 
 #[derive(Clone, Debug)]
 pub enum RequestDetails {
@@ -27,6 +30,20 @@ impl RequestDetails {
             request_body,
             headers,
         )?))
+    }
+
+    pub fn get_content_type(&self) -> Option<ContentType> {
+        match self {
+            RequestDetails::Http(http) => {
+                let possible_header = http.typed_header_values.0.fields.iter()
+                    .find(|(key_value)| key_value.name.to_lowercase() == "content-type".to_string())
+                    .map(|result| result.value.get_primitive().map(|prim| prim.as_string())).flatten();
+
+                let with_default = possible_header.unwrap_or("application/json".to_string());
+
+                Some(ContentType::from_str(with_default.as_str()).unwrap())
+            }
+        }
     }
 
     pub fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
