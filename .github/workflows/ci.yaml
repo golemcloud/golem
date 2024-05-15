@@ -212,7 +212,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-router.outputs.tags }}
           labels: ${{ steps.meta-golem-router.outputs.labels }}
-  unit-tests:
+  build:
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -227,6 +227,36 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: debug
+          save-if: true
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.3
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build all targets
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo make build
+  unit-tests:
+    needs: [build]
+    runs-on: ubuntu-latest-large
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: debug
+          save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
@@ -250,7 +280,7 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo make check-openapi
   worker-tests:
-    needs: [unit-tests]
+    needs: [build]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -260,6 +290,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: debug
+          save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - name: Setup Rust
@@ -283,7 +314,7 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo make worker-executor-tests
   integration-tests:
-    needs: [unit-tests]
+    needs: [build]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -293,6 +324,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: debug
+          save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - name: Setup Rust

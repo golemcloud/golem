@@ -39,7 +39,7 @@ dependencies = [
 [tasks.build]
 description = "Builds everything in debug mode"
 command = "cargo"
-args = ["build"]
+args = ["build", "--workspace", "--all-targets"]
 
 [tasks.build-worker-service]
 description = "Builds the worker-service"
@@ -59,7 +59,7 @@ dependencies = [
     "set-version",
     "build-release-default",
     "build-release-override-linux-amd64",
-    "build-release-override-linux-arm64"
+    "build-release-override-linux-arm64",
 ]
 
 # There are three variants of build-release, and only one of them will run based on the value of
@@ -83,26 +83,28 @@ condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
 command = "cargo"
 args = [
     "build",
-    "-p", "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
-    "-p", "golem-worker-executor",
-    "-p", "golem-component-service",
-    "-p", "golem-worker-service",
-    "-p", "golem-component-compilation-service",
+    "-p",
+    "golem-shard-manager",                                               # NOTE: Not all projects are cross-compilable because of an openssl dependency
+    "-p",
+    "golem-worker-executor",
+    "-p",
+    "golem-component-service",
+    "-p",
+    "golem-worker-service",
+    "-p",
+    "golem-component-compilation-service",
     "--release",
     "--target",
     "aarch64-unknown-linux-gnu",
     "--config",
-    "target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'"
+    "target.aarch64-unknown-linux-gnu.linker = 'aarch64-linux-gnu-gcc'",
 ]
 
 ## ** CHECK **
 
 [tasks.check]
 description = "Runs rustfmt and clippy checks without applying any fix"
-dependencies = [
-    "check-rustfmt",
-    "check-clippy"
-]
+dependencies = ["check-rustfmt", "check-clippy"]
 
 [tasks.check-rustfmt]
 description = "Runs rustfmt checks without applying any fix"
@@ -120,10 +122,7 @@ args = ["clippy", "--no-deps", "--all-targets", "--", "-Dwarnings"]
 
 [tasks.fix]
 description = "Runs rustfmt and clippy checks and applies fixes"
-dependencies = [
-    "fix-rustfmt",
-    "fix-clippy"
-]
+dependencies = ["fix-rustfmt", "fix-clippy"]
 
 [tasks.fix-rustfmt]
 description = "Runs rustfmt checks and applies fixes"
@@ -135,7 +134,14 @@ args = ["fmt", "--all"]
 description = "Runs clippy checks and applies fixes"
 install_crate = "clippy"
 command = "cargo"
-args = ["clippy", "--fix", "--allow-dirty", "--allow-staged", "--", "-Dwarnings"]
+args = [
+    "clippy",
+    "--fix",
+    "--allow-dirty",
+    "--allow-staged",
+    "--",
+    "-Dwarnings",
+]
 
 ## ** TEST **
 
@@ -160,28 +166,61 @@ description = "Runs worker executor tests only"
 dependencies = ["build"]
 env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 command = "cargo"
-args = ["test", "--package", "golem-worker-executor-base", "--test", "*", "--", "--nocapture"]
+args = [
+    "test",
+    "--package",
+    "golem-worker-executor-base",
+    "--test",
+    "*",
+    "--",
+    "--nocapture",
+]
 
 [tasks.integration-tests]
 description = "Runs integration tests only"
 dependencies = ["build"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
-args = ["test", "--package", "integration-tests", "--test", "integration", "--", "--nocapture"]
+args = [
+    "test",
+    "--package",
+    "integration-tests",
+    "--test",
+    "integration",
+    "--",
+    "--nocapture",
+]
 
 [tasks.sharding-tests]
 description = "Runs sharding integration tests only"
 dependencies = ["build"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
-args = ["test", "--package", "integration-tests", "--test", "sharding", "--", "--nocapture", "--test-threads=1"]
+args = [
+    "test",
+    "--package",
+    "integration-tests",
+    "--test",
+    "sharding",
+    "--",
+    "--nocapture",
+    "--test-threads=1",
+]
 
 [tasks.cli-tests]
 description = "Runs CLI tests only"
 dependencies = ["build"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
-args = ["test", "--package", "golem-cli", "--test", "integration", "--", "--nocapture"]
+args = [
+    "test",
+    "--package",
+    "golem-cli",
+    "--test",
+    "integration",
+    "--",
+    "--nocapture",
+]
 
 ## ** CHECK-OPENAPI **
 [tasks.check-openapi]
@@ -190,7 +229,7 @@ dependencies = [
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
     "merge-openapi",
-    "diff-openapi"
+    "diff-openapi",
 ]
 
 [tasks.diff-openapi]
@@ -214,7 +253,7 @@ dependencies = [
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
     "merge-openapi",
-    "store-openapi"
+    "store-openapi",
 ]
 
 [tasks.generate-worker-service-openapi]
@@ -229,9 +268,19 @@ script = "./target/debug/golem-component-service --dump-openapi-yaml > ./target/
 
 [tasks.merge-openapi]
 install_crate = { crate_name = "golem-openapi-client-generator", version = "0.0.7" }
-dependencies = ["generate-worker-service-openapi", "generate-component-service-openapi"]
+dependencies = [
+    "generate-worker-service-openapi",
+    "generate-component-service-openapi",
+]
 command = "golem-openapi-client-generator"
-args = ["merge", "--spec-yaml", "./target/golem-component-service.yaml", "./target/golem-worker-service.yaml", "--output-yaml", "./target/golem-service.yaml"]
+args = [
+    "merge",
+    "--spec-yaml",
+    "./target/golem-component-service.yaml",
+    "./target/golem-worker-service.yaml",
+    "--output-yaml",
+    "./target/golem-service.yaml",
+]
 
 [tasks.store-openapi]
 description = "Stores the generated openapi spec in the openapi directory"
@@ -247,7 +296,7 @@ dependencies = [
     "publish-golem-api-grpc",
     "publish-golem-common",
     "publish-golem-test-framework",
-    "publish-golem-cli"
+    "publish-golem-cli",
 ]
 
 [tasks.set-version]
@@ -273,19 +322,40 @@ args = ["publish", "-p", "golem-client", "--all-features", "--allow-dirty"]
 description = "Publishes golem-api-grpc package to crates.io"
 dependencies = ["build-release"]
 command = "cargo"
-args = ["publish", "-p", "golem-api-grpc", "--all-features", "--allow-dirty", "--no-verify"]
+args = [
+    "publish",
+    "-p",
+    "golem-api-grpc",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
 
 [tasks.publish-golem-common]
 description = "Publishes golem-common package to crates.io"
 dependencies = ["build-release"]
 command = "cargo"
-args = ["publish", "-p", "golem-common", "--all-features", "--allow-dirty", "--no-verify"]
+args = [
+    "publish",
+    "-p",
+    "golem-common",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
 
 [tasks.publish-golem-test-framework]
 description = "Publishes golem-test-framework package to crates.io"
 dependencies = ["build-release"]
 command = "cargo"
-args = ["publish", "-p", "golem-test-framework", "--all-features", "--allow-dirty", "--no-verify"]
+args = [
+    "publish",
+    "-p",
+    "golem-test-framework",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
 
 [tasks.publish-golem-cli]
 description = "Publishes golem-cli package to crates.io"
@@ -303,7 +373,7 @@ description = "Packages the project's release artifact"
 dependencies = [
     "package-release-default",
     "package-release-override-linux-amd64",
-    "package-release-override-linux-arm64"
+    "package-release-override-linux-arm64",
 ]
 
 [tasks.package-release-base]
@@ -318,7 +388,7 @@ args = [
     "${PLATFORM_TARGET}/release/worker-executor",
     "${PLATFORM_TARGET}/release/golem-component-service",
     "${PLATFORM_TARGET}/release/golem-worker-service",
-    "${PLATFORM_TARGET}/release/golem-component-compilation-service"
+    "${PLATFORM_TARGET}/release/golem-component-compilation-service",
 ]
 
 
@@ -342,4 +412,3 @@ condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
 env = { "PLATFORM_TARGET" = "aarch64-unknown-linux-gnu" }
 extend = "package-release-base"
 dependencies = ["build-release-override-linux-arm64"]
-
