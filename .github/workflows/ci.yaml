@@ -213,6 +213,35 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-router.outputs.tags }}
           labels: ${{ steps.meta-golem-router.outputs.labels }}
+  check:
+    runs-on: ubuntu-latest-large
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.3
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check formatting and clippy rules
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo make check
   build:
     runs-on: ubuntu-latest-large
     steps:
@@ -285,6 +314,14 @@ jobs:
   worker-tests:
     needs: [build]
     runs-on: ubuntu-latest-large
+    strategy:
+      fail-fast: true
+      matrix:
+        group:
+          - name: group1
+          - name: group2
+          - name: group3
+          - name: group4
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -316,7 +353,7 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-        run: cargo make worker-executor-tests
+        run: cargo make worker-executor-tests-${{ matrix.group.name }}
   integration-tests:
     needs: [build]
     runs-on: ubuntu-latest-large
@@ -367,7 +404,7 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo make cli-tests
   publish:
-    needs: [unit-tests, worker-tests, integration-tests]
+    needs: [check, unit-tests, worker-tests, integration-tests]
     if: "startsWith(github.ref, 'refs/tags/v')"
     runs-on: ubuntu-latest
     steps:
