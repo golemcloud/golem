@@ -1,7 +1,7 @@
-use crate::evaluator::EvaluationError;
+use crate::evaluator::evaluator_context::EvaluationContext;
 use crate::evaluator::Evaluator;
+use crate::evaluator::{EvaluationError, EvaluationResult};
 use crate::expression::{ArmPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, MatchArm};
-use crate::merge::Merge;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::ops::Deref;
@@ -27,23 +27,29 @@ struct TypeMisMatchResult {
 pub(crate) fn evaluate_pattern_match(
     match_expr: &Expr,
     arms: &Vec<MatchArm>,
-    input: &mut TypeAnnotatedValue,
-) -> Result<TypeAnnotatedValue, EvaluationError> {
+    input: &mut EvaluationContext,
+) -> Result<EvaluationResult, EvaluationError> {
     let match_evaluated = match_expr.evaluate(input)?;
 
-    let mut resolved: Option<TypeAnnotatedValue> = None;
+    let mut resolved: Option<EvaluationResult> = None;
 
     for arm in arms {
         let constructor_pattern = &arm.0 .0;
-        let match_arm_evaluated =
-            evaluate_arm_pattern(constructor_pattern, &match_evaluated, input, None)?;
+        let match_arm_evaluated = evaluate_arm_pattern(
+            constructor_pattern,
+            &match_evaluated
+                .get_value()
+                .ok_or("Unit cannot be part of match expression".to_string())?,
+            input,
+            None,
+        )?;
 
         match match_arm_evaluated {
             ArmPatternOutput::Matched(match_result) => {
                 if let Some(binding_variable) = &match_result.binding_variable {
                     let typ = AnalysedType::from(&match_result.result);
 
-                    input.merge(&TypeAnnotatedValue::Record {
+                    input.merge_variables(&TypeAnnotatedValue::Record {
                         value: vec![(binding_variable.0.clone(), match_result.result)],
                         typ: vec![(binding_variable.0.clone(), typ)],
                     });
@@ -73,7 +79,7 @@ pub(crate) fn evaluate_pattern_match(
 fn evaluate_arm_pattern(
     constructor_pattern: &ArmPattern,
     match_expr_result: &TypeAnnotatedValue,
-    input: &mut TypeAnnotatedValue,
+    input: &mut EvaluationContext,
     binding_variable: Option<BindingVariable>,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match constructor_pattern {
@@ -145,7 +151,7 @@ fn handle_ok(
     match_expr_result: &TypeAnnotatedValue,
     ok_variable: &ArmPattern,
     binding_variable: Option<BindingVariable>,
-    input: &mut TypeAnnotatedValue,
+    input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
         result @ TypeAnnotatedValue::Result {
@@ -157,7 +163,7 @@ fn handle_ok(
             ))?;
 
             if let Some(bv) = binding_variable {
-                input.merge(&TypeAnnotatedValue::Record {
+                input.merge_variables(&TypeAnnotatedValue::Record {
                     value: vec![(bv.0.clone(), result.clone())],
                     typ: vec![(bv.0.clone(), AnalysedType::from(result))],
                 });
@@ -179,7 +185,7 @@ fn handle_err(
     match_expr_result: &TypeAnnotatedValue,
     err_variable: &ArmPattern,
     binding_variable: Option<BindingVariable>,
-    input: &mut TypeAnnotatedValue,
+    input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
         result @ TypeAnnotatedValue::Result {
@@ -191,7 +197,7 @@ fn handle_err(
             ))?;
 
             if let Some(bv) = binding_variable {
-                input.merge(&TypeAnnotatedValue::Record {
+                input.merge_variables(&TypeAnnotatedValue::Record {
                     value: vec![(bv.0.clone(), result.clone())],
                     typ: vec![(bv.0.clone(), AnalysedType::from(result))],
                 });
@@ -213,7 +219,7 @@ fn handle_some(
     match_expr_result: &TypeAnnotatedValue,
     some_variable: &ArmPattern,
     binding_variable: Option<BindingVariable>,
-    input: &mut TypeAnnotatedValue,
+    input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
         result @ TypeAnnotatedValue::Option {
@@ -223,7 +229,7 @@ fn handle_some(
             let type_annotated_value_in_some = *some_value.clone();
 
             if let Some(bv) = binding_variable {
-                input.merge(&TypeAnnotatedValue::Record {
+                input.merge_variables(&TypeAnnotatedValue::Record {
                     value: vec![(bv.0.clone(), result.clone())],
                     typ: vec![(bv.0.clone(), AnalysedType::from(result))],
                 });
@@ -269,7 +275,7 @@ fn handle_variant(
     match_expr_result: &TypeAnnotatedValue,
     variables: &[ArmPattern],
     binding_variable: Option<BindingVariable>,
-    input: &mut TypeAnnotatedValue,
+    input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
         result @ TypeAnnotatedValue::Variant {
@@ -283,7 +289,7 @@ fn handle_variant(
                 )?;
 
                 if let Some(bv) = binding_variable {
-                    input.merge(&TypeAnnotatedValue::Record {
+                    input.merge_variables(&TypeAnnotatedValue::Record {
                         value: vec![(bv.0.clone(), result.clone())],
                         typ: vec![(bv.0.clone(), AnalysedType::from(result))],
                     });

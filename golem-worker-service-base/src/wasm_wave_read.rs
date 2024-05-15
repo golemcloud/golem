@@ -1,4 +1,4 @@
-use crate::evaluator::Evaluator;
+use crate::evaluator::{EvaluationContext, Evaluator};
 use crate::expression;
 use golem_wasm_rpc::{TypeAnnotatedValue, Value};
 
@@ -21,11 +21,13 @@ fn read_wasm_wave_string_internal(
     wave_syntax_str: impl AsRef<str>,
 ) -> Result<TypeAnnotatedValue, String> {
     let expr = expression::from_string(wave_syntax_str).map_err(|e| e.to_string())?;
-    expr.evaluate(&TypeAnnotatedValue::Record {
-        typ: vec![],
-        value: vec![],
-    })
-    .map_err(|e| e.to_string())
+    let result = expr
+        .evaluate(&EvaluationContext::empty())
+        .map_err(|err| err.to_string())?;
+
+    result
+        .get_value()
+        .ok_or("Unable to evaluate wave_syntax".to_string())
 }
 
 #[cfg(test)]
