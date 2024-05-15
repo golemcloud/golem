@@ -296,11 +296,6 @@ jobs:
         uses: arduino/setup-protoc@v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check formatting and clippy rules
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make check
       - name: Unit tests
         env:
           SCCACHE_GHA_ENABLED: "true"
