@@ -13,6 +13,16 @@ pub(crate) enum Primitive {
     Bool(bool),
 }
 
+impl Primitive {
+    pub fn as_string(&self) -> String {
+        match self {
+            Primitive::Num(number) => number.to_string(),
+            Primitive::String(value) => value.clone(),
+            Primitive::Bool(value) => value.to_string(),
+        }
+    }
+}
+
 impl From<String> for Primitive {
     fn from(value: String) -> Self {
         if let Ok(u64) = value.parse::<u64>() {

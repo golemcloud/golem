@@ -46,8 +46,8 @@ pub struct Route {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GolemWorkerBinding {
-    pub component: ComponentId,
-    pub worker_id: String,
+    pub component_id: ComponentId,
+    pub worker_name: String,
     pub function_name: String,
     pub function_params: Vec<String>,
     pub idempotency_key: Option<String>,
@@ -147,7 +147,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             }
             None => None,
         };
-        let worker_id = expression::to_string(&value.worker_id).map_err(|e| e.to_string())?;
+        let worker_id = expression::to_string(&value.worker_name).map_err(|e| e.to_string())?;
         let mut function_params = Vec::new();
         for param in value.function_params {
             let v = expression::to_string(&param).map_err(|e| e.to_string())?;
@@ -161,8 +161,8 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
         };
 
         Ok(Self {
-            component: value.component,
-            worker_id,
+            component_id: value.component_id,
+            worker_name: worker_id,
             function_name: value.function_name,
             function_params,
             idempotency_key,
@@ -183,7 +183,9 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             None => None,
         };
 
-        let worker_id: Expr = expression::from_string(self.worker_id).map_err(|e| e.to_string())?;
+        let worker_name: Expr =
+            expression::from_string(self.worker_name).map_err(|e| e.to_string())?;
+
         let mut function_params = Vec::new();
 
         for param in self.function_params {
@@ -198,8 +200,8 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
         };
 
         Ok(crate::worker_binding::GolemWorkerBinding {
-            component: self.component,
-            worker_id,
+            component_id: self.component_id,
+            worker_name,
             function_name: self.function_name,
             function_params,
             idempotency_key,
@@ -325,7 +327,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
             None => None,
         };
 
-        let worker_id = expression::to_string(&value.worker_id).map_err(|e| e.to_string())?;
+        let worker_id = expression::to_string(&value.worker_name).map_err(|e| e.to_string())?;
         let function_params = value
             .function_params
             .into_iter()
@@ -339,7 +341,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
         };
 
         let result = grpc_apidefinition::WorkerBinding {
-            component: Some(value.component.into()),
+            component: Some(value.component_id.into()),
             worker_id,
             function_name: value.function_name,
             function_params,
@@ -363,7 +365,7 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             None => None,
         };
 
-        let worker_id = value
+        let worker_name = value
             .worker_id
             .parse()
             .map_err(|e: ParseError| e.to_string())?;
@@ -383,8 +385,8 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
         };
 
         let result = crate::worker_binding::GolemWorkerBinding {
-            component: component_id,
-            worker_id,
+            component_id,
+            worker_name,
             function_name: value.function_name,
             function_params,
             idempotency_key,

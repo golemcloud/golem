@@ -7,18 +7,19 @@ use golem_worker_service_base::worker_bridge_execution::{
     WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
 };
 
-pub struct WorkerRequestToHttpResponse {
+// The open source deviates from the proprietary codebase here, only in terms of authorisation
+pub struct UnauthorisedWorkerRequestExecutor {
     pub worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
 }
 
-impl WorkerRequestToHttpResponse {
+impl UnauthorisedWorkerRequestExecutor {
     pub fn new(worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>) -> Self {
         Self { worker_service }
     }
 }
 
 #[async_trait]
-impl WorkerRequestExecutor<poem::Response> for WorkerRequestToHttpResponse {
+impl WorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
     async fn execute(
         &self,
         worker_request_params: WorkerRequest,
@@ -29,10 +30,11 @@ impl WorkerRequestExecutor<poem::Response> for WorkerRequestToHttpResponse {
 
 mod internal {
     use crate::empty_worker_metadata;
-    use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
+    use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
     use golem_common::model::CallingConvention;
     use golem_service_base::model::WorkerId;
     use golem_worker_service_base::auth::EmptyAuthCtx;
+    use serde_json::Value;
 
     use golem_worker_service_base::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
@@ -40,12 +42,12 @@ mod internal {
     use tracing::info;
 
     pub(crate) async fn execute(
-        default_executor: &WorkerRequestToHttpResponse,
+        default_executor: &UnauthorisedWorkerRequestExecutor,
         worker_request_params: WorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        let worker_name = worker_request_params.worker_id;
+        let worker_name = worker_request_params.worker_name;
 
-        let component_id = worker_request_params.component;
+        let component_id = worker_request_params.component_id;
 
         let worker_id = WorkerId::new(component_id.clone(), worker_name.clone())?;
 
@@ -53,7 +55,7 @@ mod internal {
             "Executing request for component: {}, worker: {}, function: {}",
             component_id,
             worker_name.clone(),
-            worker_request_params.function
+            worker_request_params.function_name
         );
 
         let invoke_parameters = worker_request_params.function_params;
@@ -74,8 +76,8 @@ mod internal {
             .invoke_and_await_function_typed_value(
                 &worker_id,
                 worker_request_params.idempotency_key,
-                worker_request_params.function,
-                invoke_parameters,
+                worker_request_params.function_name,
+                Value::Array(invoke_parameters),
                 &CallingConvention::Component,
                 empty_worker_metadata(),
                 &EmptyAuthCtx {},

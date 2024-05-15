@@ -25,7 +25,7 @@ use golem_common::model::{
     Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
-    GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
+    FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
 };
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
@@ -81,7 +81,7 @@ pub trait WorkerService<AuthCtx> {
         calling_convention: &CallingConvention,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<TypeAnnotatedValue>;
+    ) -> WorkerResult<TypedResult>;
 
     async fn invoke_and_await_function_proto(
         &self,
@@ -154,6 +154,11 @@ pub trait WorkerService<AuthCtx> {
         target_version: ComponentVersion,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
+}
+
+pub struct TypedResult {
+    pub result: TypeAnnotatedValue,
+    pub function_result_types: Vec<FunctionResult>,
 }
 
 #[derive(Clone, Debug)]
@@ -343,7 +348,7 @@ where
             )
             .await?;
 
-        Ok(get_json_from_typed_value(&typed_value))
+        Ok(get_json_from_typed_value(&typed_value.result))
     }
 
     async fn invoke_and_await_function_typed_value(
@@ -355,7 +360,7 @@ where
         calling_convention: &CallingConvention,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<TypeAnnotatedValue> {
+    ) -> WorkerResult<TypedResult> {
         let component_details = self
             .try_get_component_for_worker(worker_id, auth_ctx)
             .await?;
@@ -398,6 +403,10 @@ where
         results_val
             .result
             .validate_function_result(function_results, *calling_convention)
+            .map(|result| TypedResult {
+                result,
+                function_result_types: function_type.results,
+            })
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
     }
 
@@ -1346,10 +1355,13 @@ where
         _calling_convention: &CallingConvention,
         _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<TypeAnnotatedValue> {
-        Ok(TypeAnnotatedValue::Tuple {
-            value: vec![],
-            typ: vec![],
+    ) -> WorkerResult<TypedResult> {
+        Ok(TypedResult {
+            result: TypeAnnotatedValue::Tuple {
+                value: vec![],
+                typ: vec![],
+            },
+            function_result_types: vec![],
         })
     }
 
