@@ -63,7 +63,7 @@ jobs:
           sudo apt-get install gcc-aarch64-linux-gnu
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-gcc-aarch64-linux-gnu
+          shared-key: release-gcc-aarch64-linux-gnu
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - name: Build Executables
@@ -226,7 +226,7 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v2
         with:
-          key: debug
+          shared-key: debug
           save-if: true
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
@@ -255,7 +255,7 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v2
         with:
-          key: debug
+          shared-key: debug
           save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
@@ -289,7 +289,7 @@ jobs:
           submodules: recursive
       - uses: Swatinem/rust-cache@v2
         with:
-          key: debug
+          shared-key: debug
           save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
@@ -323,7 +323,7 @@ jobs:
           submodules: recursive
       - uses: Swatinem/rust-cache@v2
         with:
-          key: debug
+          shared-key: debug
           save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
@@ -372,7 +372,7 @@ jobs:
           submodules: recursive
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release
+          shared-key: release
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - name: Setup Rust
