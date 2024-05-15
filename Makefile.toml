@@ -225,6 +225,7 @@ args = [
 [tasks.check-openapi]
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
 dependencies = [
+    "build",
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
     "merge-openapi",
@@ -247,17 +248,18 @@ script = '''
 
 ## ** GENERATE-OPENAPI **
 [tasks.generate-openapi]
-description = "Generates openapi spec from the code and saves it to the openapi directory"
 dependencies = [
+    "build-worker-service",
+    "build-component-service",
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
     "merge-openapi",
     "store-openapi",
 ]
+description = "Generates openapi spec from the code and saves it to the openapi directory"
 
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
-dependencies = ["build-worker-service"]
 script = "./target/debug/golem-worker-service --dump-openapi-yaml > ./target/golem-worker-service.yaml"
 
 [tasks.generate-component-service-openapi]
