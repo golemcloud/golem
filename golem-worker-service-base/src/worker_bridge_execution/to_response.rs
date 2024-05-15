@@ -73,15 +73,14 @@ mod internal {
     use crate::expression::Expr;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::{RequestDetails, ResponseMapping};
+    use crate::worker_bridge_execution::content_type_mapper::ContentTypeMapper;
     use crate::worker_bridge_execution::worker_bridge_response::RefinedWorkerResponse;
     use crate::worker_bridge_execution::WorkerRequest;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use http::{HeaderMap, StatusCode};
+    use poem::web::headers::ContentType;
     use poem::{Body, IntoResponse, ResponseParts};
     use std::collections::HashMap;
-    use poem::web::headers::ContentType;
-    use crate::worker_bridge_execution::content_type_mapper::ContentTypeMapper;
-
 
     pub(crate) struct IntermediateHttpResponse {
         body: EvaluationResult,
@@ -103,10 +102,13 @@ mod internal {
                 let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
                     .map_err(EvaluationError::Message)?;
 
-                let status_code = get_status_code(&http_response_mapping.status, &evaluation_context)?;
+                let status_code =
+                    get_status_code(&http_response_mapping.status, &evaluation_context)?;
 
-                let headers =
-                    ResolvedResponseHeaders::from(&http_response_mapping.headers, &evaluation_context)?;
+                let headers = ResolvedResponseHeaders::from(
+                    &http_response_mapping.headers,
+                    &evaluation_context,
+                )?;
 
                 let evaluation_result = http_response_mapping.body.evaluate(&evaluation_context)?;
 
@@ -117,9 +119,9 @@ mod internal {
                 })
             } else {
                 Ok(IntermediateHttpResponse {
-                    body:  EvaluationResult::from(worker_response),
+                    body: EvaluationResult::from(worker_response),
                     status: StatusCode::default(),
-                    headers: ResolvedResponseHeaders::default()
+                    headers: ResolvedResponseHeaders::default(),
                 })
             }
         }
@@ -142,15 +144,15 @@ mod internal {
 
                     match eval_result {
                         EvaluationResult::Value(type_annotated_value) => {
-
-                            let content_type =
-                                request_details.get_content_type().unwrap_or(ContentType::json());
+                            let content_type = request_details
+                                .get_content_type()
+                                .unwrap_or(ContentType::json());
 
                             match type_annotated_value.map(&content_type) {
-                                Ok(body) =>  poem::Response::from_parts(parts, body),
+                                Ok(body) => poem::Response::from_parts(parts, body),
                                 Err(content_map_error) => poem::Response::builder()
                                     .status(StatusCode::BAD_REQUEST)
-                                    .body(Body::from_string(content_map_error.to_string()))
+                                    .body(Body::from_string(content_map_error.to_string())),
                             }
                         }
                         EvaluationResult::Unit => poem::Response::from_parts(parts, Body::empty()),

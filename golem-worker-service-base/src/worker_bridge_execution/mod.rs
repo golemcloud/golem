@@ -4,10 +4,10 @@ use serde_json::Value;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
 
+mod content_type_mapper;
 pub mod to_response;
 mod worker_bridge_response;
 mod worker_request_executor;
-mod content_type_mapper;
 
 use crate::merge::Merge;
 pub use worker_bridge_response::*;

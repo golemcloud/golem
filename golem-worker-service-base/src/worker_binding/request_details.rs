@@ -1,14 +1,14 @@
 use crate::api_definition::http::{QueryInfo, VarInfo};
 use crate::merge::Merge;
+use crate::primitive::GetPrimitive;
 use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::HeaderMap;
+use poem::web::headers::ContentType;
 use serde_json::Value;
 use std::collections::HashMap;
-use poem::web::headers::ContentType;
-use crate::primitive::GetPrimitive;
 use std::str::FromStr;
 
 #[derive(Clone, Debug)]
@@ -35,9 +35,14 @@ impl RequestDetails {
     pub fn get_content_type(&self) -> Option<ContentType> {
         match self {
             RequestDetails::Http(http) => {
-                let possible_header = http.typed_header_values.0.fields.iter()
+                let possible_header = http
+                    .typed_header_values
+                    .0
+                    .fields
+                    .iter()
                     .find(|(key_value)| key_value.name.to_lowercase() == "content-type".to_string())
-                    .map(|result| result.value.get_primitive().map(|prim| prim.as_string())).flatten();
+                    .map(|result| result.value.get_primitive().map(|prim| prim.as_string()))
+                    .flatten();
 
                 let with_default = possible_header.unwrap_or("application/json".to_string());
 

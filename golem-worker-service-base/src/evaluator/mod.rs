@@ -35,8 +35,12 @@ impl From<RefinedWorkerResponse> for EvaluationResult {
     fn from(value: RefinedWorkerResponse) -> Self {
         match value {
             RefinedWorkerResponse::Unit => EvaluationResult::Unit,
-            RefinedWorkerResponse::SingleResult(typed_value) => EvaluationResult::Value(typed_value),
-            RefinedWorkerResponse::MultipleResults(typed_value) => EvaluationResult::Value(typed_value)
+            RefinedWorkerResponse::SingleResult(typed_value) => {
+                EvaluationResult::Value(typed_value)
+            }
+            RefinedWorkerResponse::MultipleResults(typed_value) => {
+                EvaluationResult::Value(typed_value)
+            }
         }
     }
 }
