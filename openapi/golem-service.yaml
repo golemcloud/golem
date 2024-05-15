@@ -2387,10 +2387,10 @@ components:
     GolemWorkerBinding:
       type: object
       properties:
-        component:
+        componentId:
           type: string
           format: uuid
-        workerId:
+        workerName:
           type: string
         functionName:
           type: string
@@ -2403,8 +2403,8 @@ components:
         response:
           type: string
       required:
-      - component
-      - workerId
+      - componentId
+      - workerName
       - functionName
       - functionParams
     HealthcheckResponse:

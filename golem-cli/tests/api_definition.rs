@@ -112,8 +112,8 @@ fn golem_def_with_response(
             method: MethodPattern::Get,
             path: "/{user-id}/get-cart-contents".to_string(),
             binding: GolemWorkerBinding {
-                component: Uuid::parse_str(component_id).unwrap(),
-                worker_id: "worker-${request.path.user-id}".to_string(),
+                component_id: Uuid::parse_str(component_id).unwrap(),
+                worker_name: "worker-${request.path.user-id}".to_string(),
                 function_name: "golem:it/api/get-cart-contents".to_string(),
                 function_params: vec![],
                 idempotency_key: None,
