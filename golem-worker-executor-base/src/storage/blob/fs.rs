@@ -29,11 +29,28 @@ impl FileSystemBlobStorage {
         if async_fs::metadata(root).await.is_err() {
             async_fs::create_dir_all(root)
                 .await
-                .map_err(|err| format!("Failed to create local compiled component store: {err}"))?
+                .map_err(|err| format!("Failed to create local blob storage: {err}"))?
         }
         let canonical = async_fs::canonicalize(root)
             .await
             .map_err(|err| err.to_string())?;
+
+        let compilation_cache = canonical.join("compilation_cache");
+
+        if async_fs::metadata(&compilation_cache).await.is_err() {
+            async_fs::create_dir_all(&compilation_cache)
+                .await
+                .map_err(|err| format!("Failed to create compilation_cache directory: {err}"))?;
+        }
+
+        let custom_data = canonical.join("custom_data");
+
+        if async_fs::metadata(&custom_data).await.is_err() {
+            async_fs::create_dir_all(&custom_data)
+                .await
+                .map_err(|err| format!("Failed to create custom_data directory: {err}"))?;
+        }
+
         Ok(Self { root: canonical })
     }
 
@@ -76,7 +93,7 @@ impl BlobStorage for FileSystemBlobStorage {
         if async_fs::metadata(&full_path).await.is_ok() {
             let data = async_fs::read(&full_path)
                 .await
-                .map_err(|err| err.to_string())?;
+                .map_err(|err| format!("Failed to read file from {full_path:?}: {err}"))?;
             Ok(Some(Bytes::from(data)))
         } else {
             Ok(None)
@@ -120,9 +137,17 @@ impl BlobStorage for FileSystemBlobStorage {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
+        if let Some(parent) = full_path.parent() {
+            if async_fs::metadata(parent).await.is_err() {
+                async_fs::create_dir_all(parent).await.map_err(|err| {
+                    format!("Failed to create parent directory {parent:?}: {err}")
+                })?;
+            }
+        }
+
         async_fs::write(&full_path, data)
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| format!("Failed to store file at {full_path:?}: {err}"))
     }
 
     async fn delete(
@@ -137,7 +162,7 @@ impl BlobStorage for FileSystemBlobStorage {
 
         async_fs::remove_file(&full_path)
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| format!("Failed to delete file at {full_path:?}: {err}"))
     }
 
     async fn create_dir(

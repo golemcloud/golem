@@ -403,18 +403,21 @@ impl KeyValueStorage for RedisKeyValueStorage {
             Some(ns) => format!("{}:{}", ns, key),
             None => key.to_string(),
         };
-        let pairs: Vec<(f64, Bytes)> = self
+        let pairs: Vec<(Bytes, f64)> = self
             .redis
             .with(svc_name, api_name)
             .zrange(&key, 0, -1, None, false, None, true)
             .await
             .map_err(|e| e.to_string())?;
 
-        for (_score, data) in &pairs {
+        for (data, _score) in &pairs {
             record_redis_deserialized_size(svc_name, entity_name, data.len());
         }
 
-        Ok(pairs)
+        Ok(pairs
+            .into_iter()
+            .map(|(data, score)| (score, data))
+            .collect())
     }
 
     async fn query_sorted_set(
@@ -431,17 +434,20 @@ impl KeyValueStorage for RedisKeyValueStorage {
             Some(ns) => format!("{}:{}", ns, key),
             None => key.to_string(),
         };
-        let pairs: Vec<(f64, Bytes)> = self
+        let pairs: Vec<(Bytes, f64)> = self
             .redis
             .with(svc_name, api_name)
             .zrangebyscore(&key, min, max, true, None)
             .await
             .map_err(|e| e.to_string())?;
 
-        for (_score, data) in &pairs {
+        for (data, _score) in &pairs {
             record_redis_deserialized_size(svc_name, entity_name, data.len());
         }
 
-        Ok(pairs)
+        Ok(pairs
+            .into_iter()
+            .map(|(data, score)| (score, data))
+            .collect())
     }
 }
