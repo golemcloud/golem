@@ -77,8 +77,11 @@ mod internal {
     use crate::worker_bridge_execution::WorkerRequest;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use http::{HeaderMap, StatusCode};
-    use poem::{Body, ResponseParts};
+    use poem::{Body, IntoResponse, ResponseParts};
     use std::collections::HashMap;
+    use poem::web::headers::ContentType;
+    use crate::worker_bridge_execution::content_type_mapper::ContentTypeMapper;
+
 
     pub(crate) struct IntermediateHttpResponse {
         body: EvaluationResult,
@@ -120,7 +123,7 @@ mod internal {
                 })
             }
         }
-        pub(crate) fn to_http_response(&self) -> poem::Response {
+        pub(crate) fn to_http_response(&self, request_details: RequestDetails) -> poem::Response {
             let headers: Result<HeaderMap, String> = (&self.headers.headers)
                 .try_into()
                 .map_err(|e: hyper::http::Error| e.to_string());
@@ -138,10 +141,17 @@ mod internal {
                     };
 
                     match eval_result {
-                        EvaluationResult::Value(value) => {
-                            let json = get_json_from_typed_value(value);
-                            let body: Body = Body::from_json(json).unwrap();
-                            poem::Response::from_parts(parts, body)
+                        EvaluationResult::Value(type_annotated_value) => {
+
+                            let content_type =
+                                request_details.get_content_type().unwrap_or(ContentType::json());
+
+                            match type_annotated_value.map(&content_type) {
+                                Ok(body) =>  poem::Response::from_parts(parts, body),
+                                Err(content_map_error) => poem::Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .body(Body::from_string(content_map_error.to_string()))
+                            }
                         }
                         EvaluationResult::Unit => poem::Response::from_parts(parts, Body::empty()),
                     }

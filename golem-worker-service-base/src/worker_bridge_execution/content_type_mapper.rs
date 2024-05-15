@@ -1,32 +1,39 @@
-use std::ops::Deref;
+use std::fmt::{Display, Formatter};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
-use poem::{Body, Response};
+use poem::{Body, IntoResponse, Response};
 use poem::web::headers::ContentType;
+use crate::api_definition::ApiDefinitionId;
 use crate::primitive::GetPrimitive;
 use crate::worker_bridge_execution::to_response::ToResponse;
 
-trait ContentTypeMapper {
-    fn map(&self, content_type: ContentType) -> Result<Body, ContentTypeMapError>;
+pub trait ContentTypeMapper {
+    fn map(&self, content_type: &ContentType) -> Result<Body, ContentTypeMapError>;
 }
 
 impl ContentTypeMapper for TypeAnnotatedValue {
-    fn map(&self, content_type: ContentType) -> Result<Body, ContentTypeMapError> {
-        if content_type == ContentType::octet_stream() {
+    fn map(&self, content_type: &ContentType) -> Result<Body, ContentTypeMapError> {
+        if content_type == &ContentType::octet_stream() {
             get_vec_u8(self,  Body::from_vec)
-        } else if content_type == ContentType::json() {
+        } else if content_type == &ContentType::json() {
             Ok(get_json(self))
-        } else if content_type == ContentType::text() {
+        } else if content_type == &ContentType::text() {
             Ok(get_text(self))
-        } else if content_type == ContentType::html() {
+        } else if content_type == &ContentType::html() {
             Ok(get_text(self))
-        } else if content_type == ContentType::jpeg() {
-            get_vec_u8(self, Body::from_vec)
-        } else if content_type == ContentType::text_utf8() {
+        } else if content_type == &ContentType::jpeg() {
+            get_vec_u8(self,  Body::from_vec)
+        } else if content_type == &ContentType::text_utf8() {
             Ok(get_text(self))
-        } else if content_type == ContentType::xml() {
-            Ok(get_)
+        } else if content_type == &ContentType::xml() {
+            Ok(get_text(self))
+        } else if content_type == &ContentType::form_url_encoded() {
+            Ok(get_text(self))
+        } else if content_type == &ContentType::png() {
+            get_vec_u8(self,  Body::from_vec)
+        } else {
+            Err(ContentTypeMapError::internal("Unsupported content type"))
         }
     }
 }
@@ -37,6 +44,25 @@ enum ContentTypeMapError {
     },
 
     InternalError(String)
+}
+
+impl Display for ContentTypeMapError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ContentTypeMapError::UnsupportedWorkerFunctionResult { expected, obtained } => {
+                write!(f, "Failed to map to required content type. Expected: {}, Obtained: {}",  expected, obtained)
+            }
+            ContentTypeMapError::InternalError(message) => {
+                write!(f, "{}",  message)
+            }
+        }
+    }
+
+    impl Display for ApiDefinitionId {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
 }
 
 impl ContentTypeMapError {
