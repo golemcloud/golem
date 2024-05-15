@@ -64,6 +64,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-gcc-aarch64-linux-gnu
+          cache-all-crates: true
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - name: Build Executables
@@ -227,6 +228,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
+          cache-all-crates: true
           save-if: true
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
@@ -256,6 +258,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
+          cache-all-crates: true
           save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
@@ -295,6 +298,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
+          cache-all-crates: true
           save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
@@ -329,6 +333,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
+          cache-all-crates: true
           save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
@@ -378,6 +383,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release
+          cache-all-crates: true
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
