@@ -34,8 +34,7 @@ impl DockerComponentService {
     const GRPC_PORT: u16 = 9091;
 
     pub fn new(
-        component_compilation_service_host: &str,
-        component_compilation_service_port: u16,
+        component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
     ) -> Self {
@@ -44,8 +43,7 @@ impl DockerComponentService {
         let env_vars = env_vars(
             Self::HTTP_PORT,
             Self::GRPC_PORT,
-            component_compilation_service_host,
-            component_compilation_service_port,
+            component_compilation_service,
             rdb,
             verbosity,
         );
