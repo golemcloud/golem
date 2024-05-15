@@ -166,6 +166,7 @@ env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 command = "cargo"
 args = [
     "test",
+    "--verbose",
     "--package",
     "golem-worker-executor-base",
     "--test",
