@@ -29,6 +29,11 @@ impl FileSystemBlobStorage {
         let canonical = async_fs::canonicalize(root)
             .await
             .map_err(|err| err.to_string())?;
+        if async_fs::metadata(&canonical).await.is_err() {
+            async_fs::create_dir_all(&canonical)
+                .await
+                .map_err(|err| format!("Failed to create local compiled component store: {err}"))?
+        }
         Ok(Self { root: canonical })
     }
 
