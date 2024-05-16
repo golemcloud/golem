@@ -99,7 +99,7 @@ mod internal {
                 EvaluationContext::from(worker_request, worker_response, request_details);
 
             if let Some(res_map) = response_mapping {
-                let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
+                let http_response_mapping = HttpResponseMapping::try_from(res_map)
                     .map_err(EvaluationError::Message)?;
 
                 let status_code =

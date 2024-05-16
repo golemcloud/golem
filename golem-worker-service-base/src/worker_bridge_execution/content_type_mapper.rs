@@ -26,7 +26,7 @@ impl GetHttpResponseBody for TypeAnnotatedValue {
 }
 
 #[derive(PartialEq, Debug)]
-enum ContentTypeMapError {
+pub enum ContentTypeMapError {
     UnsupportedWorkerFunctionResult {
         expected: AnalysedType,
         obtained: AnalysedType,
@@ -119,7 +119,7 @@ mod internal {
         } else if content_type == &ContentType::text() {
             Ok(get_text(type_annotated_value))
         } else {
-            get_vec_u8(type_annotated_value, |bytes| Body::from_vec(bytes)),
+            get_vec_u8(type_annotated_value, |bytes| Body::from_vec(bytes))
         }
     }
 
