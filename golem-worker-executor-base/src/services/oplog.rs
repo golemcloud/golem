@@ -19,8 +19,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::WorkerId;
+use bincode::{Decode, Encode};
+use bytes::Bytes;
+use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, WrappedFunctionType};
+use golem_common::model::{CallingConvention, IdempotencyKey, Timestamp, WorkerId};
+use golem_common::serialization::{serialize, try_deserialize};
 use tracing::error;
 
 use crate::metrics::oplog::record_oplog_call;
@@ -63,6 +66,84 @@ pub trait Oplog: Debug {
         self.add(entry).await;
         self.commit().await;
         idx
+    }
+
+    async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String>;
+    async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String>;
+}
+
+#[async_trait]
+pub trait OplogOps: Oplog {
+    async fn add_imported_function_invoked<R: Encode + Sync>(
+        &self,
+        function_name: String,
+        response: &R,
+        wrapped_function_type: WrappedFunctionType,
+    ) -> Result<OplogEntry, String> {
+        let serialized_response = serialize(response)?.to_vec();
+
+        let payload = self.upload_payload(&serialized_response).await?;
+        Ok(OplogEntry::ImportedFunctionInvoked {
+            timestamp: Timestamp::now_utc(),
+            function_name,
+            response: payload,
+            wrapped_function_type,
+        })
+    }
+
+    async fn add_exported_function_invoked<R: Encode + Sync>(
+        &self,
+        function_name: String,
+        request: &R,
+        idempotency_key: IdempotencyKey,
+        calling_convention: Option<CallingConvention>,
+    ) -> Result<OplogEntry, String> {
+        let serialized_request = serialize(request)?.to_vec();
+
+        let payload = self.upload_payload(&serialized_request).await?;
+        Ok(OplogEntry::ExportedFunctionInvoked {
+            timestamp: Timestamp::now_utc(),
+            function_name,
+            request: payload,
+            idempotency_key,
+            calling_convention,
+        })
+    }
+
+    async fn add_exported_function_completed<R: Encode + Sync>(
+        &self,
+        response: &R,
+        consumed_fuel: i64,
+    ) -> Result<OplogEntry, String> {
+        let serialized_response = serialize(response)?.to_vec();
+
+        let payload = self.upload_payload(&serialized_response).await?;
+        Ok(OplogEntry::ExportedFunctionCompleted {
+            timestamp: Timestamp::now_utc(),
+            response: payload,
+            consumed_fuel,
+        })
+    }
+
+    async fn get_payload_of_entry<T: Decode>(
+        &self,
+        entry: &OplogEntry,
+    ) -> Result<Option<T>, String> {
+        match entry {
+            OplogEntry::ImportedFunctionInvoked { response, .. } => {
+                let response_bytes: Bytes = self.download_payload(response).await?;
+                try_deserialize(&response_bytes)
+            }
+            OplogEntry::ExportedFunctionInvoked { request, .. } => {
+                let response_bytes: Bytes = self.download_payload(request).await?;
+                try_deserialize(&response_bytes)
+            }
+            OplogEntry::ExportedFunctionCompleted { response, .. } => {
+                let response_bytes: Bytes = self.download_payload(response).await?;
+                try_deserialize(&response_bytes)
+            }
+            _ => Ok(None),
+        }
     }
 }
 
@@ -346,7 +427,22 @@ impl Oplog for DefaultOplog {
         let state = self.state.lock().await;
         state.read(oplog_index).await
     }
+
+    async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String> {
+        // TODO: check size and upload to blob storage if needed
+        Ok(OplogPayload::Inline(data.to_vec()))
+    }
+
+    async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
+        match payload {
+            OplogPayload::Inline(data) => Ok(Bytes::copy_from_slice(data)),
+            OplogPayload::External { .. } => todo!(), // TODO
+        }
+    }
 }
+
+#[async_trait]
+impl<O: Oplog + ?Sized> OplogOps for O {}
 
 #[cfg(any(feature = "mocks", test))]
 pub struct OplogServiceMock {}

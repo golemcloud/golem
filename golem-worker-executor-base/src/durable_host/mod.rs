@@ -46,7 +46,7 @@ use async_trait::async_trait;
 use cap_std::ambient_authority;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, SnapshotSource, UpdateDescription, WrappedFunctionType,
+    OplogEntry, OplogIndex, OplogPayload, UpdateDescription, WrappedFunctionType,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -69,7 +69,7 @@ use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::wasm_rpc::UriExtensions;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
-use crate::services::oplog::{Oplog, OplogService};
+use crate::services::oplog::{Oplog, OplogOps, OplogService};
 use crate::services::recovery::RecoveryManagement;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
@@ -397,11 +397,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
         match pending_update {
             Some(pending_update) => match result {
                 Ok(_) => {
-                    if let UpdateDescription::SnapshotBased { source, .. } =
+                    if let UpdateDescription::SnapshotBased { payload, .. } =
                         &pending_update.description
                     {
-                        match source {
-                            SnapshotSource::Inline(data) => {
+                        match payload {
+                            OplogPayload::Inline(data) => {
                                 let idempotency_key = IdempotencyKey::fresh();
                                 store
                                     .as_context_mut()
@@ -470,7 +470,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     false
                                 }
                             }
-                            SnapshotSource::BlobStore { .. } => {
+                            OplogPayload::External { .. } => {
                                 panic!("Snapshot-based updates using the blob store are not supported yet")
                             }
                         }
@@ -592,22 +592,25 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .iter()
                 .map(|value| value.clone().into())
                 .collect();
-            let oplog_entry = OplogEntry::exported_function_invoked(
-                full_function_name.to_string(),
-                &proto_function_input,
-                self.get_current_idempotency_key().await.ok_or(anyhow!(
-                    "No active invocation key is associated with the worker"
-                ))?,
-                calling_convention,
-            )
-            .unwrap_or_else(|err| {
-                panic!(
-                    "could not encode function input for {full_function_name} on {}: {err}",
-                    self.worker_id()
-                )
-            });
 
-            self.state.oplog.add_and_commit(oplog_entry).await;
+            self.state
+                .oplog
+                .add_exported_function_invoked(
+                    full_function_name.to_string(),
+                    &proto_function_input,
+                    self.get_current_idempotency_key().await.ok_or(anyhow!(
+                        "No active invocation key is associated with the worker"
+                    ))?,
+                    calling_convention,
+                )
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "could not encode function input for {full_function_name} on {}: {err}",
+                        self.worker_id()
+                    )
+                });
+            self.state.oplog.commit().await;
         }
         Ok(())
     }
@@ -706,15 +709,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             if self.state.snapshotting_mode.is_none() {
                 let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
                     output.iter().map(|value| value.clone().into()).collect();
-                let oplog_entry =
-                    OplogEntry::exported_function_completed(&proto_output, consumed_fuel)
-                        .unwrap_or_else(|err| {
-                            panic!(
-                                "could not encode function result for {full_function_name}: {err}"
-                            )
-                        });
 
-                let oplog_idx = self.state.oplog.add_and_commit(oplog_entry).await;
+                let oplog_idx = self.state.oplog.current_oplog_index().await;
+                self.state
+                    .oplog
+                    .add_exported_function_completed(&proto_output, consumed_fuel)
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!("could not encode function result for {full_function_name}: {err}")
+                    });
+                self.state.oplog.commit().await;
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
@@ -1253,8 +1257,10 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         calling_convention,
                         ..
                     } => {
-                        let request: Vec<golem_wasm_rpc::protobuf::Val> = oplog_entry
-                            .payload()
+                        let request: Vec<golem_wasm_rpc::protobuf::Val> = self
+                            .oplog
+                            .get_payload_of_entry(&oplog_entry)
+                            .await
                             .expect("failed to deserialize function request payload")
                             .unwrap();
                         let request = request
@@ -1293,8 +1299,10 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 let oplog_entry = self.get_oplog_entry().await;
                 match &oplog_entry {
                     OplogEntry::ExportedFunctionCompleted { .. } => {
-                        let response: Vec<golem_wasm_rpc::protobuf::Val> = oplog_entry
-                            .payload()
+                        let response: Vec<golem_wasm_rpc::protobuf::Val> = self
+                            .oplog
+                            .get_payload_of_entry(&oplog_entry)
+                            .await
                             .expect("failed to deserialize function response payload")
                             .unwrap();
                         let response = response

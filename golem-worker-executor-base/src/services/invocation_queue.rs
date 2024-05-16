@@ -27,13 +27,13 @@ use crate::error::GolemError;
 use crate::invocation::invoke_worker;
 use crate::model::{InterruptKind, LookupResult, TrapType};
 use crate::services::events::{Event, Events};
-use crate::services::oplog::Oplog;
+use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::worker_activator::WorkerActivator;
 use crate::services::{HasInvocationQueue, HasOplog};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, SnapshotSource, TimestampedUpdateDescription, UpdateDescription,
+    OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
@@ -546,7 +546,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                                         parent
                                             .enqueue_update(UpdateDescription::SnapshotBased {
                                                 target_version,
-                                                source: SnapshotSource::Inline(bytes),
+                                                payload: OplogPayload::Inline(bytes),
                                             })
                                             .await;
 
@@ -641,7 +641,7 @@ impl InvocationResult {
 
             let result = match entry {
                 OplogEntry::ExportedFunctionCompleted { .. } => {
-                    let values: Vec<golem_wasm_rpc::protobuf::Val> = entry.payload().expect("failed to deserialize function response payload").unwrap();
+                    let values: Vec<golem_wasm_rpc::protobuf::Val> = oplog.get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
                     let values = values
                         .into_iter()
                         .map(|val| {

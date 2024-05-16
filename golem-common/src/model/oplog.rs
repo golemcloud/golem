@@ -1,17 +1,46 @@
 use std::fmt::{Display, Formatter};
 
-use bincode::{Decode, Encode};
-use bytes::Bytes;
+use bincode::{BorrowDecode, Decode, Encode};
+use bincode::de::{BorrowDecoder, Decoder};
+use bincode::de::read::Reader;
+use bincode::enc::Encoder;
+use bincode::enc::write::Writer;
+use bincode::error::{DecodeError, EncodeError};
+use uuid::Uuid;
 
 use crate::config::RetryConfig;
-use crate::model::regions::OplogRegion;
 use crate::model::{
     AccountId, CallingConvention, ComponentVersion, IdempotencyKey, Timestamp, WorkerId,
     WorkerInvocation,
 };
-use crate::serialization::{serialize, try_deserialize};
+use crate::model::regions::OplogRegion;
 
 pub type OplogIndex = u64;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PayloadId(pub Uuid);
+
+impl Encode for PayloadId {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        encoder.writer().write(self.0.as_bytes())
+    }
+}
+
+impl Decode for PayloadId {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let mut bytes = [0u8; 16];
+        decoder.reader().read(&mut bytes)?;
+        Ok(Self(Uuid::from_bytes(bytes)))
+    }
+}
+
+impl<'de> BorrowDecode<'de> for PayloadId {
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let mut bytes = [0u8; 16];
+        decoder.reader().read(&mut bytes)?;
+        Ok(Self(Uuid::from_bytes(bytes)))
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
@@ -27,21 +56,21 @@ pub enum OplogEntry {
     ImportedFunctionInvoked {
         timestamp: Timestamp,
         function_name: String,
-        response: Vec<u8>,
+        response: OplogPayload,
         wrapped_function_type: WrappedFunctionType,
     },
     /// The worker has been invoked
     ExportedFunctionInvoked {
         timestamp: Timestamp,
         function_name: String,
-        request: Vec<u8>,
+        request: OplogPayload,
         idempotency_key: IdempotencyKey,
         calling_convention: Option<CallingConvention>,
     },
     /// The worker has completed an invocation
     ExportedFunctionCompleted {
         timestamp: Timestamp,
-        response: Vec<u8>,
+        response: OplogPayload,
         consumed_fuel: i64,
     },
     /// Worker suspended
@@ -130,49 +159,6 @@ impl OplogEntry {
             env,
             account_id,
         }
-    }
-
-    pub fn imported_function_invoked<R: Encode>(
-        function_name: String,
-        response: &R,
-        wrapped_function_type: WrappedFunctionType,
-    ) -> Result<OplogEntry, String> {
-        let serialized_response = serialize(response)?.to_vec();
-
-        Ok(OplogEntry::ImportedFunctionInvoked {
-            timestamp: Timestamp::now_utc(),
-            function_name,
-            response: serialized_response,
-            wrapped_function_type,
-        })
-    }
-
-    pub fn exported_function_invoked<R: Encode>(
-        function_name: String,
-        request: &R,
-        idempotency_key: IdempotencyKey,
-        calling_convention: Option<CallingConvention>,
-    ) -> Result<OplogEntry, String> {
-        let serialized_request = serialize(request)?.to_vec();
-        Ok(OplogEntry::ExportedFunctionInvoked {
-            timestamp: Timestamp::now_utc(),
-            function_name,
-            request: serialized_request,
-            idempotency_key,
-            calling_convention,
-        })
-    }
-
-    pub fn exported_function_completed<R: Encode>(
-        response: &R,
-        consumed_fuel: i64,
-    ) -> Result<OplogEntry, String> {
-        let serialized_response = serialize(response)?.to_vec();
-        Ok(OplogEntry::ExportedFunctionCompleted {
-            timestamp: Timestamp::now_utc(),
-            response: serialized_response,
-            consumed_fuel,
-        })
     }
 
     pub fn jump(jump: OplogRegion) -> OplogEntry {
@@ -298,24 +284,6 @@ impl OplogEntry {
         )
     }
 
-    pub fn payload<T: Decode>(&self) -> Result<Option<T>, String> {
-        match &self {
-            OplogEntry::ImportedFunctionInvoked { response, .. } => {
-                let response_bytes: Bytes = Bytes::copy_from_slice(response);
-                try_deserialize(&response_bytes)
-            }
-            OplogEntry::ExportedFunctionInvoked { request, .. } => {
-                let response_bytes: Bytes = Bytes::copy_from_slice(request);
-                try_deserialize(&response_bytes)
-            }
-            OplogEntry::ExportedFunctionCompleted { response, .. } => {
-                let response_bytes: Bytes = Bytes::copy_from_slice(response);
-                try_deserialize(&response_bytes)
-            }
-            _ => Ok(None),
-        }
-    }
-
     pub fn timestamp(&self) -> Timestamp {
         match self {
             OplogEntry::Create { timestamp, .. }
@@ -350,7 +318,7 @@ pub enum UpdateDescription {
     /// Custom update by loading a given snapshot on the new version
     SnapshotBased {
         target_version: ComponentVersion,
-        source: SnapshotSource,
+        payload: OplogPayload,
     },
 }
 
@@ -371,15 +339,15 @@ pub struct TimestampedUpdateDescription {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum SnapshotSource {
-    /// Load the snapshot from the given byte array
+pub enum OplogPayload {
+    /// Load the payload from the given byte array
     Inline(Vec<u8>),
 
-    /// Load the snapshot from the blob store
-    BlobStore {
+    /// Load the payload from the blob storage
+    External {
         account_id: AccountId,
-        container: String,
-        object: String,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
     },
 }
 
