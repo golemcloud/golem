@@ -43,8 +43,7 @@ multiplier = 3
 
 [oplog]
 max_operations_before_commit = 128
-operations_to_load = 128
-debug_enabled = false
+max_payload_size = 65536
 
 [limits]
 max_active_workers = 1024
