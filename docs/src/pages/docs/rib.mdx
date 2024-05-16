@@ -11,8 +11,8 @@ Rib lets you adapt inputs and outputs without having to change the definitions o
 
 Currently, the Worker Bridge allows you to import OpenAPI specification with HTTP endpoints (or define API Definition in worker-bridge's format), each having its own worker-binding. Refer worker-bridge documentation for more detail.
 
-A worker-binding generally includes the worker ID, the name of function in the worker to be invoked, it's function parameters, and the response mapping, which tells how to change the worker response to the API response.
-The Rib language is used in many places in this context. Example: You can utilize this language to construct the worker ID, which can be based on the request object, a constant literal, or a combination of both. For example: `foo-${request.body.user}`.
+A worker-binding generally includes the worker name, the name of function in the worker to be invoked, it's function parameters, and the response mapping, which tells how to change the worker response to the API response.
+The Rib language is used in many places in this context. Example: You can utilize this language to construct the worker name, which can be based on the request object, a constant literal, or a combination of both. For example: `foo-${request.body.user}`.
 
 For further guidance on using Rib language in conjunction with the Worker Bridge, refer to the Worker Bridge documentation.
 

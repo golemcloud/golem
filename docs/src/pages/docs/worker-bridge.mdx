@@ -11,7 +11,7 @@ let's say we have to expose an endpoint to get the cart contents for a user. In 
 At this point, worker-bridge is acting as an API-Gateway, but the major difference here is, it is geared
 to work seamlessly with `Golem`. In other words, we don't need to specifically write a custom backend service as worker-bridge gives it for free.
 
-Here is a simple API definition. You have to replace with the correct template-id and function name once you update your shopping-cart template to golem.
+Here is a simple API definition. You have to replace with the correct component-id and function name once you update your shopping-cart component to golem.
 
 ```json
 {
@@ -23,8 +23,8 @@ Here is a simple API definition. You have to replace with the correct template-i
       "path": "/{user-id}/get-cart-contents",
       "binding": {
         "type": "wit-worker",
-        "template": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-        "workerId": "worker-${request.path.user-id}",
+        "componentId": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+        "workerName": "worker-${request.path.user-id}",
         "functionName": "golem:it/api/get-cart-contents",
         "functionParams": [],
         "response": "${ { body: worker.response, status: 200 } }"
@@ -54,10 +54,10 @@ Let's break down the binding object.
 
 **type**: Specifies the type of binding. Here, it is set to "wit-worker", indicating that the binding involves a Golem worker. Currently, the only supported type is "wit-worker".
 
-**template**: Provides the template ID associated with the worker binding.
+**componentId**: Provides the component ID associated with the worker binding.
 
-**workerId**: Specifies the ID of the Golem worker responsible for handling the request. The value is wrapped in code block starting with `${` and ending with `}`. Anything wrapped in this block is an `expression`.
-Refer to expression language details on various possibilities. In this example `${request.path.user-id}`, indicating that the worker ID is determined based on the user-id path parameter of the incoming request.
+**workerName**: Specifies the Name of the Golem worker responsible for handling the request. The value is wrapped in code block starting with `${` and ending with `}`. Anything wrapped in this block is an `expression`.
+Refer to expression language details on various possibilities. In this example `${request.path.user-id}`, indicating that the worker name is determined based on the user-id path parameter of the incoming request.
 You would still use the same expression if `user-id` is a query parameter. Similarly, you can refer to the header values using `${request.header.user-id}`. In our example we are using path parameter and not headers or body.
 
 **functionName**: Specifies the name of the function within the Golem worker that should be invoked to handle the request. Here, it is set to "golem:it/api/get-cart-contents".
@@ -116,7 +116,7 @@ curl -X GET http://localhost:9006/123/get-cart-contents
 
 ```
 
-Now worker-bridge identifies the user to be `123` and evaluates the worker-id expr to be `worker-123`. It then forwards the request to the worker with id `worker-123` and invokes the function `golem:it/api/get-cart-contents` with empty parameters,
+Now worker-bridge identifies the user to be `123` and evaluates the worker-name expr to be `worker-123`. It then forwards the request to the worker with id `worker-123` and invokes the function `golem:it/api/get-cart-contents` with empty parameters,
 and simply get the worker-response (which is a WASM value) and converts it to `Json` and sends it back to the client.
 
 ### Response Mapping
@@ -126,20 +126,18 @@ We recommend taking a quick look at the expression language before reading furth
 
 Since we are using Http protocol, worker-bridge allows you to write a record expression that consist of `status`, `headers` and `body` fields. The `status` field is the HTTP status code, `headers` is a map of HTTP headers, and `body` is the response body.
 
-Usually our `worker.response` is an Array of WASM values. This is regardless of the domain/use-case. It implies, in shopping cart example, the response is an `[[...]]`. Each object in the inner array represents a product in the cart.
-That is `worker.response[0]` will fetch the first element in the array, and this element is a sequence of product information.
-In this case, our expression of response can be something like this. Note that we are also injecting some headers in the response using expression language.
+Here is an example of a response mapping:
 
 ```bash filename="Terminal" copy
 ...
-{ status: 200, body : worker.response[0], headers: {etag: '1234567890abcdef'} }
+{ status: 200, body : worker.response, headers: {etag: '1234567890abcdef'} }
 ```
 
 Now the above expression can be embedded into the response field of API definition. Now we know that it is going to be read as an expression only if we wrap it in `${` code block
 
 ```bash filename="Terminal" copy
 
-"response" : "${ { status: 200, body : worker.response[0], headers: {etag: '1234567890abcdef'} } }"
+"response" : "${ { status: 200, body : worker.response, headers: {etag: '1234567890abcdef'} } }"
 ```
 
 With Golem Cloud UI, you can easily write these expression in dedicated UI blocks making it even easier.
@@ -150,9 +148,9 @@ Let's write a more complex example, where we need to respond back with certain d
 {
   status: 200,
   body : {
-    name: worker.response[0][0].name,
-    price: worker.response[0][0].price,
-    quantity: worker.response[0][0].quantity
+    name: worker.response[0].name,
+    price: worker.response[0].price,
+    quantity: worker.response[0].quantity
   }
   headers: { etag: '1234567890abcdef' }
 }
@@ -173,8 +171,8 @@ In this case, the functionParams field will contain an array of expressions that
       "path": "/{user-id}/get-cart-contents",
       "binding": {
         "type": "wit-worker",
-        "template": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-        "workerId": "worker-${request.path.user-id}",
+        "componentId": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+        "workerName": "worker-${request.path.user-id}",
         "functionName": "golem:it/api/get-cart-contents",
         "functionParams": ["${request.path.user-id}", "${1}", "hardcoded"],
         "response": "${worker.response}"
@@ -193,7 +191,7 @@ For example, we can form a response mapping in the following way
 
 ```bash filename="Terminal" copy
 match worker.response {
-  ok(response) => { status: 200, body : response[0], headers: {etag: '1234567890abcdef'} },
+  ok(response) => { status: 200, body : response, headers: {etag: '1234567890abcdef'} },
   error(error) => { status: 500, body : { error: error.message }, headers: {} }
 }
 ```
@@ -205,7 +203,7 @@ You can also use `if-else` expression
 
 ```bash filename="Terminal" copy
 if request.path.user == 'admin'
-then { status: 200, body : worker.response[0], headers: {etag: '1234567890abcdef'}  }
+then { status: 200, body : worker.response, headers: {etag: '1234567890abcdef'}  }
 else { status: 401, body : { error: 'Unauthorised' }, headers: {} }
 
 ```
@@ -231,11 +229,11 @@ The main advantage of this feature is the re-usability of the same endpoint defi
   "paths": {
     "/{user-id}/get-cart-contents": {
       "x-golem-worker-bridge": {
-        "worker-id": "worker-${request.path.user-id}",
+        "worker-name": "worker-${request.path.user-id}",
         "function-name": "golem:it/api/get-cart-contents",
         "function-params": [],
-        "template-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-        "response": "${ { headers : { ContentType: 'json', userid: 'foo'}, { body: worker.response[0][0] }, { status: 200 } } }"
+        "component-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+        "response": "${ { headers : { ContentType: 'json', userid: 'foo'}, { body: worker.response }, { status: 200 } } }"
       },
       "get": {
         "summary": "Get Cart Contents",
@@ -291,7 +289,7 @@ The main advantage of this feature is the re-usability of the same endpoint defi
 
 Here you can see the usual OpenAPI spec integrated with worker-bridge info.
 The extensions of "x-golem-api-definition-version" and "x-golem-api-definition-id" are used to specify the version and id of the worker-bridge API definition.
-The "x-golem-worker-bridge" object contains the worker-bridge specific information, such as worker-id, function-name, function-params, template-id, and response mapping.
+The "x-golem-worker-bridge" object contains the worker-bridge specific information, such as worker-name, function-name, function-params, component-id, and response mapping.
 This will be part of each path object in the OpenAPI spec. In the future, we will support for x-golem-worker-bridge to be part of each method so that it supports
 different bindings for different methods in the same path.
 
@@ -347,11 +345,11 @@ you will need to give the machine IP address to reach the worker-bridge URL.
   "paths": {
     "/{user-id}/get-cart-contents": {
       "x-golem-worker-bridge": {
-        "worker-id": "worker-${request.path.user-id}",
+        "worker-name": "worker-${request.path.user-id}",
         "function-name": "golem:it/api/get-cart-contents",
         "function-params": [],
-        "template-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-        "response": "${ { headers : { ContentType: 'json', userid: 'foo'}, { body: worker.response[0][0] }, { status: 200 } } }"
+        "component-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+        "response": "${ { headers : { ContentType: 'json', userid: 'foo'}, { body: worker.response[0] }, { status: 200 } } }"
       },
       "get": {
         "summary": "Get Cart Contents",
