@@ -330,6 +330,7 @@ jobs:
         with:
           shared-key: debug-workertests
           cache-all-crates: true
+          save-if: ${{ matrix.group.name == 'group1' }}
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
