@@ -301,7 +301,6 @@ script = "./target/debug/golem-worker-service --dump-openapi-yaml > ./target/gol
 
 [tasks.generate-component-service-openapi]
 description = "Generates openapi spec for component service"
-dependencies = ["build-component-service"]
 script = "./target/debug/golem-component-service --dump-openapi-yaml > ./target/golem-component-service.yaml"
 
 [tasks.merge-openapi]
