@@ -41,6 +41,11 @@ description = "Builds everything in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--all-targets"]
 
+[tasks.build-bins]
+description = "Builds all executables in debug mode"
+command = "cargo"
+args = ["build", "--workspace", "--bins"]
+
 [tasks.build-worker-service]
 description = "Builds the worker-service"
 command = "cargo"
@@ -209,7 +214,7 @@ cargo test --package golem-worker-executor-base --test integration rpc -- --noca
 
 [tasks.integration-tests]
 description = "Runs integration tests only"
-dependencies = ["build"]
+dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [
@@ -224,7 +229,7 @@ args = [
 
 [tasks.sharding-tests]
 description = "Runs sharding integration tests only"
-dependencies = ["build"]
+dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [
@@ -240,7 +245,7 @@ args = [
 
 [tasks.cli-tests]
 description = "Runs CLI tests only"
-dependencies = ["build"]
+dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [
@@ -257,7 +262,7 @@ args = [
 [tasks.check-openapi]
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
 dependencies = [
-    "build",
+    "build-bins",
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
     "merge-openapi",
