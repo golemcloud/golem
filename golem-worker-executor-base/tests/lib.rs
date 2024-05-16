@@ -31,6 +31,7 @@ mod common;
 pub mod api;
 pub mod blobstore;
 pub mod guest_languages;
+pub mod guest_languages2;
 pub mod hot_update;
 pub mod keyvalue;
 pub mod rpc;

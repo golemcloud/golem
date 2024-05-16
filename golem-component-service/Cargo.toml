@@ -10,25 +10,28 @@ path = "src/server.rs"
 [lib]
 
 [dependencies]
+golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-component-service-base = { version = "0.0.0", path = "../golem-component-service-base" }
-golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-service-base = { path = "../golem-service-base" }
 golem-wasm-rpc = { workspace = true }
 
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 console-subscriber = { workspace = true }
-golem-wasm-ast = { workspace = true }
-mappable-rc = "0.1.1"
 figment = { workspace = true }
 futures-util = { workspace = true }
+golem-wasm-ast = { workspace = true }
+http_02 = { workspace = true }
+humantime-serde = { workspace = true }
 lazy_static = { workspace = true }
-poem = { workspace = true, features = ["prometheus", "opentelemetry"] }
-poem-openapi = { workspace = true }
-prometheus = { workspace = true }
+mappable-rc = "0.1.1"
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
+poem = { workspace = true }
+poem-openapi = { workspace = true }
+prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { version = "0.7", features = [
@@ -39,17 +42,14 @@ sqlx = { version = "0.7", features = [
     "migrate",
     "chrono",
 ] }
-tap = "1.0.1"
+tap = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
-tokio = { workspace = true }
-tokio-stream = { workspace = true }
-tokio-util = "0.7.10"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
-humantime-serde = { workspace = true }
-http_02 = { workspace = true }
-thiserror.workspace = true
-anyhow.workspace = true

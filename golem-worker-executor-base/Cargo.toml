@@ -17,8 +17,8 @@ path = "src/lib.rs"
 mocks = []
 
 [dependencies]
-golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
+golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-wasm-rpc = { workspace = true }
 
 anyhow = { workspace = true }
@@ -31,9 +31,9 @@ aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
 bitflags = "2.4.2"
 bytes = { workspace = true }
-cap-fs-ext = "2.0.0" # keep in sync with wasmtime
-cap-std = "2.0.0" # keep in sync with wasmtime
-cap-time-ext = "2.0.0" # keep in sync with wasmtime
+cap-fs-ext = "2.0.0"                                # keep in sync with wasmtime
+cap-std = { workspace = true }
+cap-time-ext = "2.0.0"                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
 figment = { workspace = true }
@@ -46,7 +46,7 @@ gethostname = "0.4.3"
 golem-wit = { version = "0.2.10" }
 http = { workspace = true }
 http_02 = { workspace = true }
-http-body = "1.0.0" # keep in sync with wasmtime
+http-body = "1.0.0"                                 # keep in sync with wasmtime
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
 io-extras = "0.18.0"
@@ -72,23 +72,23 @@ tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 warp = { workspace = true }
-wasmtime = { version = "=17.0.0", features = ["component-model"] }
-wasmtime-runtime = { version = "=17.0.0" }
-wasmtime-wasi = { version = "=17.0.0" }
-wasmtime-wasi-http = { version = "=17.0.0" }
+wasmtime = { workspace = true }
+wasmtime-runtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
 windows-sys = "0.52.0"
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 
-assert2 = "0.3.11"
+assert2 = { workspace = true }
 console-subscriber = { workspace = true }
-ctor = "0.2.6"
+ctor = { workspace = true }
 golem-wasm-ast = { workspace = true }
 proptest = { workspace = true }
-redis = { version = "0.25.2", features = ["default"] }
+redis = { workspace = true }
 serde_json = { workspace = true }
-testcontainers = { version = "0.15.0", features = ["async-trait", "tokio"] }
+testcontainers = { workspace = true }
 tracing-subscriber = { workspace = true }
 warp = { workspace = true }
 

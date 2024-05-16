@@ -3039,16 +3039,16 @@ dependencies = [
  "golem-wasm-rpc-stubgen",
  "h2 0.3.25",
  "http 1.1.0",
- "hyper 0.14.28",
+ "hyper 1.2.0",
  "indoc",
- "itertools 0.11.0",
+ "itertools 0.12.1",
  "libtest-mimic",
  "log",
  "native-tls",
  "openapiv3",
  "postgres",
  "rand 0.8.5",
- "redis 0.24.0",
+ "redis",
  "regex",
  "reqwest",
  "serde",
@@ -3056,8 +3056,8 @@ dependencies = [
  "serde_json_path",
  "serde_yaml",
  "strip-ansi-escapes",
- "strum 0.25.0",
- "strum_macros 0.25.3",
+ "strum",
+ "strum_macros",
  "testcontainers",
  "testcontainers-modules",
  "textwrap 0.16.1",
@@ -3226,8 +3226,8 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
- "strum 0.26.2",
- "strum_macros 0.26.2",
+ "strum",
+ "strum_macros",
 ]
 
 [[package]]
@@ -3334,7 +3334,7 @@ dependencies = [
  "kube-derive",
  "once_cell",
  "postgres",
- "redis 0.25.3",
+ "redis",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3501,7 +3501,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "prost 0.12.3",
- "redis 0.25.3",
+ "redis",
  "ringbuf",
  "rustls 0.22.3",
  "serde",
@@ -3562,8 +3562,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "strum 0.26.2",
- "strum_macros 0.26.2",
+ "strum",
+ "strum_macros",
  "tap",
  "tokio",
  "tokio-stream",
@@ -3614,8 +3614,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "strum 0.26.2",
- "strum_macros 0.26.2",
+ "strum",
+ "strum_macros",
  "tap",
  "thiserror",
  "tokio",
@@ -6251,21 +6251,6 @@ dependencies = [
 
 [[package]]
 name = "redis"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c580d9cbbe1d1b479e8d67cf9daf6a62c957e6846048408b80b43ac3f6af84cd"
-dependencies = [
- "combine",
- "itoa",
- "percent-encoding",
- "ryu",
- "sha1_smol",
- "socket2 0.4.10",
- "url",
-]
-
-[[package]]
-name = "redis"
 version = "0.25.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6472825949c09872e8f2c50bde59fcefc17748b6be5c90fd67cd8b4daca73bfd"
@@ -7522,28 +7507,9 @@ checksum = "5ee073c9e4cd00e28217186dbe12796d692868f432bf2e97ee73bed0c56dfa01"
 
 [[package]]
 name = "strum"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "290d54ea6f91c969195bdbcd7442c8c2a2ba87da8bf60a7ee86a235d4bc1e125"
-
-[[package]]
-name = "strum"
 version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d8cec3501a5194c432b2b7976db6b7d10ec95c253208b45f83f7136aa985e29"
-
-[[package]]
-name = "strum_macros"
-version = "0.25.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23dc1fa9ac9c169a78ba62f0b841814b7abae11bdd047b9c58f893439e309ea0"
-dependencies = [
- "heck 0.4.1",
- "proc-macro2",
- "quote",
- "rustversion",
- "syn 2.0.55",
-]
 
 [[package]]
 name = "strum_macros"
