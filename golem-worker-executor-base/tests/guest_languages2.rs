@@ -2,7 +2,7 @@ use assert2::{check, let_assert};
 
 use golem_wasm_rpc::Value;
 
-use golem_test_framework::dsl::{TestDsl};
+use golem_test_framework::dsl::TestDsl;
 
 use crate::common::{start, TestContext};
 
