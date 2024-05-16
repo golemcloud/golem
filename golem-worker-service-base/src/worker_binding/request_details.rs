@@ -32,7 +32,6 @@ impl RequestDetails {
         )?))
     }
 
-
     pub fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
         match self {
             RequestDetails::Http(http) => http.clone().to_type_annotated_value(),
@@ -50,18 +49,16 @@ pub struct TypedHttRequestDetails {
 
 impl TypedHttRequestDetails {
     pub fn get_content_type(&self) -> Option<ContentType> {
-                let content_type = self
-                    .typed_header_values
-                    .0
-                    .fields
-                    .iter()
-                    .find(|(key_value)| key_value.name.to_lowercase() == "content-type".to_string())
-                    .map(|result| result.value.get_primitive().map(|prim| prim.as_string()))
-                    .flatten()?;
+        let content_type = self
+            .typed_header_values
+            .0
+            .fields
+            .iter()
+            .find(|(key_value)| key_value.name.to_lowercase() == "content-type".to_string())
+            .map(|result| result.value.get_primitive().map(|prim| prim.as_string()))
+            .flatten()?;
 
-
-                Some(ContentType::from_str(content_type.as_str()).unwrap())
-
+        Some(ContentType::from_str(content_type.as_str()).unwrap())
     }
 
     fn to_type_annotated_value(&self) -> TypeAnnotatedValue {

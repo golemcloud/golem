@@ -31,7 +31,9 @@ impl ToResponse<poem::Response> for WorkerResponse {
                     request_details,
                     worker_request,
                 ) {
-                    Ok(intermediate_response) => intermediate_response.to_http_response(request_details),
+                    Ok(intermediate_response) => {
+                        intermediate_response.to_http_response(request_details)
+                    }
                     Err(e) => poem::Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body(Body::from_string(format!(
