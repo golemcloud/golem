@@ -307,7 +307,6 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo make check-openapi
   worker-tests:
-    needs: [build]
     runs-on: ubuntu-latest-large
     strategy:
       fail-fast: true
@@ -330,9 +329,8 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: debug
+          shared-key: debug-wt
           cache-all-crates: true
-          save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
@@ -351,7 +349,6 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo make worker-executor-tests-${{ matrix.group.name }}
   integration-tests:
-    needs: [build]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -365,9 +362,8 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: debug
+          shared-key: debug-it
           cache-all-crates: true
-          save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
