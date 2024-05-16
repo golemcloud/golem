@@ -328,9 +328,8 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: debug
+          shared-key: debug-workertests
           cache-all-crates: true
-          save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
