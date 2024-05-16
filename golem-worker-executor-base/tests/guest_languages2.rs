@@ -1,10 +1,9 @@
-use assert2::{check, let_assert};
-
-use golem_wasm_rpc::Value;
-
-use golem_test_framework::dsl::TestDsl;
-
 use crate::common::{start, TestContext};
+use assert2::{check, let_assert};
+use chrono::Datelike;
+use golem_test_framework::dsl::{events_to_lines, TestDsl};
+use golem_wasm_rpc::Value;
+use std::time::Duration;
 
 #[tokio::test]
 #[tracing::instrument]
@@ -90,4 +89,32 @@ async fn python_example_1() {
     drop(executor);
 
     check!(result == vec![Value::U64(11)]);
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn swift_example_1() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_component("swift-1").await;
+    let worker_id = executor.start_worker(&component_id, "swift-1").await;
+
+    let mut rx = executor.capture_output(&worker_id).await;
+
+    let _ = executor
+        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0/run", vec![])
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let lines = events_to_lines(&mut rx).await;
+
+    drop(executor);
+
+    let now = chrono::Local::now();
+    let year = now.year();
+
+    check!(lines[0] == "Hello world!".to_string());
+    check!(lines[1] == year.to_string());
 }
