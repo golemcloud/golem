@@ -272,7 +272,6 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo make build
   unit-tests:
-    needs: [build]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -307,7 +306,6 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo make check-openapi
   worker-tests:
-    needs: [build]
     runs-on: ubuntu-latest-large
     strategy:
       fail-fast: true
@@ -351,7 +349,6 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo make worker-executor-tests-${{ matrix.group.name }}
   integration-tests:
-    needs: [build]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -400,7 +397,7 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo make cli-tests
   publish:
-    needs: [check, unit-tests, worker-tests, integration-tests]
+    needs: [build, check, unit-tests, worker-tests, integration-tests]
     if: "startsWith(github.ref, 'refs/tags/v')"
     runs-on: ubuntu-latest
     steps:
