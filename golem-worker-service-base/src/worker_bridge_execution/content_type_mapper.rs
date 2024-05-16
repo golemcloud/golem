@@ -114,11 +114,12 @@ mod internal {
         type_annotated_value: &TypeAnnotatedValue,
         content_type: &ContentType,
     ) -> Result<Body, ContentTypeMapError> {
-        match content_type {
-            ContentType::json() => get_json(type_annotated_value),
-            ContentType::text() => Ok(get_text(type_annotated_value)),
-            // For all other content type, we REQUIRE byte stream equivalent
-            _ => get_vec_u8(type_annotated_value, |bytes| Body::from_vec(bytes)),
+        if content_type == &ContentType::json() {
+            get_json(type_annotated_value)
+        } else if content_type == &ContentType::text() {
+            Ok(get_text(type_annotated_value))
+        } else {
+            get_vec_u8(type_annotated_value, |bytes| Body::from_vec(bytes)),
         }
     }
 

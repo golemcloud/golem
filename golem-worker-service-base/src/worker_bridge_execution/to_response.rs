@@ -41,8 +41,6 @@ impl ToResponse<poem::Response> for WorkerResponse {
                             e
                         ))),
                 }
-
-                refined.to_http_response(response_mapping, request_details, worker_request)
             }
             Err(e) => poem::Response::builder()
                 .status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
