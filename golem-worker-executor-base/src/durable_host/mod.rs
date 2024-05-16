@@ -45,9 +45,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use cap_std::ambient_authority;
 use golem_common::config::RetryConfig;
-use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, OplogPayload, UpdateDescription, WrappedFunctionType,
-};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
@@ -397,11 +395,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
         match pending_update {
             Some(pending_update) => match result {
                 Ok(_) => {
-                    if let UpdateDescription::SnapshotBased { payload, .. } =
-                        &pending_update.description
-                    {
-                        match payload {
-                            OplogPayload::Inline(data) => {
+                    if let UpdateDescription::SnapshotBased { .. } = &pending_update.description {
+                        let target_version = *pending_update.description.target_version();
+
+                        match store
+                            .as_context_mut()
+                            .data_mut()
+                            .get_public_state()
+                            .oplog()
+                            .get_upload_description_payload(&pending_update.description)
+                            .await
+                        {
+                            Ok(Some(data)) => {
                                 let idempotency_key = IdempotencyKey::fresh();
                                 store
                                     .as_context_mut()
@@ -428,8 +433,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     .data_mut()
                                     .end_call_snapshotting_function();
 
-                                let target_version = *pending_update.description.target_version();
-
                                 let failed = match load_result {
                                     Some(Err(error)) => Some(format!(
                                         "Manual update failed to load snapshot: {error}"
@@ -437,16 +440,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     Some(Ok(value)) => {
                                         if value.len() == 1 {
                                             match &value[0] {
-                                                Value::Result(Err(Some(boxed_error_value))) => {
-                                                    match &**boxed_error_value {
-                                                        Value::String(error) =>
-                                                            Some(format!("Manual update failed to load snapshot: {error}")),
-                                                        _ =>
-                                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                                    Value::Result(Err(Some(boxed_error_value))) => {
+                                                        match &**boxed_error_value {
+                                                            Value::String(error) =>
+                                                                Some(format!("Manual update failed to load snapshot: {error}")),
+                                                            _ =>
+                                                                Some("Unexpected result value from the snapshot load function".to_string())
+                                                        }
                                                     }
+                                                    _ => None
                                                 }
-                                                _ => None
-                                            }
                                         } else {
                                             Some("Unexpected result value from the snapshot load function".to_string())
                                         }
@@ -470,8 +473,24 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     false
                                 }
                             }
-                            OplogPayload::External { .. } => {
-                                panic!("Snapshot-based updates using the blob store are not supported yet")
+                            Ok(None) => {
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .on_worker_update_failed(
+                                        target_version,
+                                        Some("Failed to find snapshot data for update".to_string()),
+                                    )
+                                    .await;
+                                true
+                            }
+                            Err(error) => {
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .on_worker_update_failed(target_version, Some(error))
+                                    .await;
+                                true
                             }
                         }
                     } else {

@@ -28,6 +28,7 @@ use golem_common::retries::with_retries;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
+#[derive(Debug)]
 pub struct S3BlobStorage {
     client: aws_sdk_s3::Client,
     config: S3BlobStorageConfig,
@@ -60,6 +61,7 @@ impl S3BlobStorage {
         match namespace {
             BlobStorageNamespace::CompilationCache => &self.config.compilation_cache_bucket,
             BlobStorageNamespace::CustomStorage(_account_id) => &self.config.custom_data_bucket,
+            BlobStorageNamespace::OplogPayload { .. } => &self.config.oplog_payload_bucket,
         }
     }
 
@@ -75,6 +77,23 @@ impl S3BlobStorage {
                 } else {
                     Path::new(&self.config.object_prefix)
                         .join(account_id_string)
+                        .to_path_buf()
+                }
+            }
+            BlobStorageNamespace::OplogPayload {
+                account_id,
+                worker_id,
+            } => {
+                let account_id_string = account_id.to_string();
+                let worker_id_string = worker_id.to_string();
+                if self.config.object_prefix.is_empty() {
+                    Path::new(&account_id_string)
+                        .join(worker_id_string)
+                        .to_path_buf()
+                } else {
+                    Path::new(&self.config.object_prefix)
+                        .join(account_id_string)
+                        .join(worker_id_string)
                         .to_path_buf()
                 }
             }
@@ -168,9 +187,7 @@ impl S3BlobStorage {
         true
     }
 
-    fn is_copy_object_error_retriable(
-        error: &SdkError<aws_sdk_s3::operation::copy_object::CopyObjectError>,
-    ) -> bool {
+    fn is_copy_object_error_retriable(error: &SdkError<CopyObjectError>) -> bool {
         match error {
             SdkError::ServiceError(service_error) => !matches!(
                 service_error.err(),

@@ -19,10 +19,12 @@ use dashmap::DashMap;
 use golem_common::model::Timestamp;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug)]
 pub struct InMemoryBlobStorage {
     data: DashMap<BlobStorageNamespace, DashMap<String, DashMap<String, Entry>>>,
 }
 
+#[derive(Debug)]
 struct Entry {
     data: Bytes,
     metadata: BlobMetadata,

@@ -33,6 +33,7 @@ type = "S3"
 object_prefix = ""
 compilation_cache_bucket = "compilation-cache"
 custom_data_bucket = "custom-data"
+oplog_payload_bucket = "oplog-payload"
 
 [blob_storage.config.retries]
 max_attempts = 3

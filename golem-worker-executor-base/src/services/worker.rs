@@ -108,7 +108,7 @@ impl WorkerService for DefaultWorkerService {
             worker_metadata.account_id.clone(),
         );
         self.oplog_service
-            .create(worker_id, initial_oplog_entry)
+            .create(&worker_metadata.account_id, worker_id, initial_oplog_entry)
             .await;
 
         self.key_value_storage

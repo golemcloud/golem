@@ -33,7 +33,7 @@ use crate::services::{HasInvocationQueue, HasOplog};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription, UpdateDescription,
+    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
@@ -542,22 +542,35 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                             Some(Ok(result)) => {
                                 if let Some(parent) = parent.upgrade() {
                                     if let Some(bytes) = Self::decode_snapshot_result(result) {
-                                        // Enqueue the update
-                                        parent
-                                            .enqueue_update(UpdateDescription::SnapshotBased {
+                                        match store
+                                            .data_mut()
+                                            .get_public_state()
+                                            .oplog()
+                                            .create_snapshot_based_update_description(
                                                 target_version,
-                                                payload: OplogPayload::Inline(bytes),
-                                            })
-                                            .await;
+                                                &bytes,
+                                            )
+                                            .await
+                                        {
+                                            Ok(update_description) => {
+                                                // Enqueue the update
+                                                parent.enqueue_update(update_description).await;
 
-                                        // Make sure to update the pending updates queue
-                                        store.data_mut().update_pending_updates().await;
+                                                // Make sure to update the pending updates queue
+                                                store.data_mut().update_pending_updates().await;
 
-                                        // Reactivate the worker in the background
-                                        worker_activator.reactivate_worker(&worker_id).await;
+                                                // Reactivate the worker in the background
+                                                worker_activator
+                                                    .reactivate_worker(&worker_id)
+                                                    .await;
 
-                                        // Stop processing the queue to avoid race conditions
-                                        break;
+                                                // Stop processing the queue to avoid race conditions
+                                                break;
+                                            }
+                                            Err(error) => {
+                                                Self::fail_update(target_version, format!("failed to store the snapshot for manual update: {error}"), store).await;
+                                            }
+                                        }
                                     } else {
                                         Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store)
                                             .await;

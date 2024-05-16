@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio_stream::StreamExt;
 
+#[derive(Debug)]
 pub struct FileSystemBlobStorage {
     root: PathBuf,
 }
@@ -62,6 +63,14 @@ impl FileSystemBlobStorage {
             BlobStorageNamespace::CustomStorage(account_id) => {
                 result.push("custom_data");
                 result.push(account_id.to_string());
+            }
+            BlobStorageNamespace::OplogPayload {
+                account_id,
+                worker_id,
+            } => {
+                result.push("oplog_payload");
+                result.push(account_id.to_string());
+                result.push(worker_id.to_string());
             }
         }
 
