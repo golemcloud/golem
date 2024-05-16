@@ -28,17 +28,30 @@ impl GetHttpResponseBody for TypeAnnotatedValue {
 #[derive(PartialEq, Debug)]
 pub enum ContentTypeMapError {
     UnsupportedWorkerFunctionResult {
-        expected: AnalysedType,
-        obtained: AnalysedType,
+        expected: Vec<AnalysedType>,
+        actual: AnalysedType,
     },
 
     InternalError(String),
 }
 
+impl ContentTypeMapError {
+    fn internal(msg: &str) -> ContentTypeMapError {
+        ContentTypeMapError::InternalError(msg.to_string())
+    }
+
+    fn expect_only_binary_stream(actual: &AnalysedType) -> ContentTypeMapError {
+        ContentTypeMapError::UnsupportedWorkerFunctionResult {
+            expected: vec![AnalysedType::List(Box::new(AnalysedType::U8)), AnalysedType::Str],
+            actual: actual.clone()
+        }
+    }
+}
+
 impl Display for ContentTypeMapError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ContentTypeMapError::UnsupportedWorkerFunctionResult { expected, obtained } => {
+            ContentTypeMapError::UnsupportedWorkerFunctionResult { expected, actual: obtained } => {
                 write!(
                     f,
                     "Failed to map to required content type. Expected: {:?}, Obtained: {:?}",
@@ -59,7 +72,7 @@ mod internal {
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use poem::web::headers::ContentType;
-    use poem::Body;
+    use poem::{Body, IntoResponse};
 
     // Convert a type annotated value to Body, given no specific content type
     pub(crate) fn get_response_body(
@@ -115,42 +128,40 @@ mod internal {
         content_type: &ContentType,
     ) -> Result<Body, ContentTypeMapError> {
         if content_type == &ContentType::json() {
-            get_json(type_annotated_value)
-        } else if content_type == &ContentType::text() {
-            Ok(get_text(type_annotated_value))
+            get_json_or_binary_stream(type_annotated_value)
         } else {
-            get_vec_u8(type_annotated_value, |bytes| Body::from_bytes(bytes::Bytes::from(bytes)))
+            convert_only_if_binary_stream(type_annotated_value)
         }
     }
 
-    impl ContentTypeMapError {
-        fn internal(msg: &str) -> ContentTypeMapError {
-            ContentTypeMapError::InternalError(msg.to_string())
-        }
-    }
-
-    fn get_vec_u8<F>(
-        type_annoted_value: &TypeAnnotatedValue,
-        f: F,
-    ) -> Result<Body, ContentTypeMapError>
-    where
-        F: Fn(Vec<u8>) -> Body,
-    {
-        match type_annoted_value {
-            TypeAnnotatedValue::List { values, typ } => match typ {
-                AnalysedType::U8 => {
-                    let bytes = get_byte_stream(values)?;
-                    Ok(f(bytes))
-                }
-                other => Err(ContentTypeMapError::UnsupportedWorkerFunctionResult {
-                    expected: AnalysedType::List(Box::new(AnalysedType::U8)),
-                    obtained: AnalysedType::List(Box::new(other.clone())),
-                }),
+    fn convert_only_if_binary_stream(type_annotated_value: &TypeAnnotatedValue) -> Result<Body, ContentTypeMapError> {
+       match type_annotated_value {
+            TypeAnnotatedValue::List { typ, values } => match typ {
+                // It is already a binary stream and we keep it as is
+                AnalysedType::U8 => get_byte_stream(values).map(|bytes| Body::from_bytes(bytes::Bytes::from(bytes))),
+                // Convert to Json otherwise
+                other => Err(ContentTypeMapError::expect_only_binary_stream(other))
             },
-            other => Err(ContentTypeMapError::UnsupportedWorkerFunctionResult {
-                expected: AnalysedType::List(Box::new(AnalysedType::U8)),
-                obtained: AnalysedType::from(other),
-            }),
+            // A string is considered as a binary stream
+            TypeAnnotatedValue::Str(str) => Ok(Body::from(str.to_string())),
+            other => Err(ContentTypeMapError::expect_only_binary_stream(&AnalysedType::from(other)))
+       }
+    }
+
+
+    // If the request Content-Type is application/json, then we can allow ANY component model type of value as the response.
+    // However, only Rib return values which are not equivalent to a binary stream are automatically converted into JSON (jsonification).
+    fn get_json_or_binary_stream(type_annotated_value: &TypeAnnotatedValue) -> Result<Body, ContentTypeMapError> {
+        match type_annotated_value {
+            TypeAnnotatedValue::List { typ, values } => match typ {
+                // It is already a binary stream and we keep it as is
+                AnalysedType::U8 => get_byte_stream(values).map(|bytes| Body::from_bytes(bytes::Bytes::from(bytes))),
+                // Convert to Json otherwise
+                _ => get_json(type_annotated_value),
+            },
+            // A string is considered as a binary stream
+            TypeAnnotatedValue::Str(str) => Ok(Body::from(str.to_string())),
+            _ => get_json(type_annotated_value),
         }
     }
 
