@@ -74,7 +74,7 @@ mod internal {
                     // If the elements are u8, we consider it as a byte stream
                     AnalysedType::U8 => {
                         let bytes = get_byte_stream(values)?;
-                        Ok(Body::from_vec(bytes))
+                        Ok(Body::from_bytes(bytes::Bytes::from(bytes)))
                     }
                     _ => get_json(type_annotated_value),
                 }
@@ -119,7 +119,7 @@ mod internal {
         } else if content_type == &ContentType::text() {
             Ok(get_text(type_annotated_value))
         } else {
-            get_vec_u8(type_annotated_value, |bytes| Body::from_vec(bytes))
+            get_vec_u8(type_annotated_value, |bytes| Body::from_bytes(bytes::Bytes::from(bytes)))
         }
     }
 

@@ -6,7 +6,6 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::HeaderMap;
-use poem::web::headers::ContentType;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -48,18 +47,6 @@ pub struct TypedHttRequestDetails {
 }
 
 impl TypedHttRequestDetails {
-    pub fn get_content_type(&self) -> Option<ContentType> {
-        let content_type = self
-            .typed_header_values
-            .0
-            .fields
-            .iter()
-            .find(|key_value| key_value.name.to_lowercase() == "content-type".to_string())
-            .map(|result| result.value.get_primitive().map(|prim| prim.as_string()))
-            .flatten()?;
-
-        Some(ContentType::from_str(content_type.as_str()).unwrap())
-    }
 
     fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
         let mut typed_path_values: TypeAnnotatedValue = self.typed_path_key_values.clone().0.into();

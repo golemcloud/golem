@@ -78,9 +78,11 @@ mod internal {
     use crate::worker_bridge_execution::WorkerRequest;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use http::{HeaderMap, StatusCode};
-    
+    use std::str::FromStr;
+
     use poem::{Body, ResponseParts};
     use std::collections::HashMap;
+    use poem::web::headers::ContentType;
 
     pub(crate) struct IntermediateHttpResponse {
         body: EvaluationResult,
@@ -135,6 +137,9 @@ mod internal {
 
             match headers {
                 Ok(response_headers) => {
+                    let content_type_opt =
+                        get_content_type_from_response_headers(&response_headers);
+
                     let parts = ResponseParts {
                         status: *status,
                         version: Default::default(),
@@ -143,11 +148,8 @@ mod internal {
                     };
 
                     match eval_result {
-                        EvaluationResult::Value(type_annotated_value) => {
-                            let content_type_opt = match request_details {
-                                RequestDetails::Http(http_req) => http_req.get_content_type(),
-                            };
 
+                        EvaluationResult::Value(type_annotated_value) => {
                             match type_annotated_value.to_response_body(&content_type_opt) {
                                 Ok(body) => poem::Response::from_parts(parts, body),
                                 Err(content_map_error) => poem::Response::builder()
@@ -166,6 +168,19 @@ mod internal {
                     ))),
             }
         }
+    }
+
+    fn get_content_type_from_response_headers(
+        response_headers: &HeaderMap,
+    ) -> Option<ContentType> {
+        response_headers
+            .get("content-type")
+            .and_then(|header_value| {
+                header_value
+                    .to_str()
+                    .ok()
+                    .and_then(|header_str| ContentType::from_str(header_str).ok())
+            })
     }
 
     fn get_status_code(
