@@ -57,6 +57,12 @@ impl Timestamp {
     pub fn now_utc() -> Timestamp {
         Timestamp(iso8601_timestamp::Timestamp::now_utc())
     }
+
+    pub fn to_millis(&self) -> u64 {
+        self.0
+            .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH)
+            .whole_milliseconds() as u64
+    }
 }
 
 impl Display for Timestamp {

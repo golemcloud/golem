@@ -26,7 +26,7 @@ impl RouteValidationError {
         Self {
             method: route.method,
             path: route.path.to_string(),
-            component: route.binding.component,
+            component: route.binding.component_id,
             detail,
         }
     }
@@ -100,7 +100,7 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
             errors.push(RouteValidationError {
                 method: route.method.clone(),
                 path: route.path.to_string(),
-                component: route.binding.component.clone(),
+                component: route.binding.component_id.clone(),
                 detail,
             });
         }
@@ -113,7 +113,7 @@ fn validate_route(
     route: Route,
     components: &HashMap<&ComponentId, &ComponentMetadata>,
 ) -> Result<(), RouteValidationError> {
-    let component_id = route.binding.component.clone();
+    let component_id = route.binding.component_id.clone();
     // We can unwrap here because we've already validated that all components are present.
     let component = components.get(&component_id).unwrap();
 
@@ -157,8 +157,8 @@ fn test_unique_routes() {
             method,
             path: crate::api_definition::http::AllPathPatterns::parse(path).unwrap(),
             binding: crate::worker_binding::GolemWorkerBinding {
-                component: ComponentId::new_v4(),
-                worker_id: crate::expression::Expr::Request(),
+                component_id: ComponentId::new_v4(),
+                worker_name: crate::expression::Expr::Request(),
                 function_name: "test".into(),
                 function_params: vec![],
                 idempotency_key: None,

@@ -66,23 +66,23 @@ struct RouteView {
     pub method: String,
     #[table(title = "Path")]
     pub path: String,
-    #[table(title = "Component", justify = "Justify::Right")]
-    pub component: String,
-    #[table(title = "Worker")]
-    pub worker_id: String,
+    #[table(title = "ComponentId", justify = "Justify::Right")]
+    pub component_id: String,
+    #[table(title = "WorkerName")]
+    pub worker_name: String,
     #[table(title = "Function")]
     pub function_name: String,
 }
 
 impl From<&Route> for RouteView {
     fn from(value: &Route) -> Self {
-        let component_str = value.binding.component.to_string();
+        let component_str = value.binding.component_id.to_string();
         let component_end = &component_str[component_str.len() - 7..];
         RouteView {
             method: value.method.to_string(),
             path: value.path.to_string(),
-            component: format!("*{component_end}"),
-            worker_id: value.binding.worker_id.to_string(),
+            component_id: format!("*{component_end}"),
+            worker_name: value.binding.worker_name.to_string(),
             function_name: value.binding.function_name.to_string(),
         }
     }

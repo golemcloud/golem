@@ -7,27 +7,79 @@ use poem::Body;
 use serde_json::json;
 use tracing::info;
 
-use golem_service_base::type_inference::*;
-
-use crate::tokeniser::tokenizer::Token;
-use crate::worker_binding::ResponseMapping;
+use crate::service::worker::TypedResult;
+use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::worker_request_executor::{
     WorkerRequestExecutor, WorkerRequestExecutorError,
 };
-use crate::worker_bridge_execution::WorkerRequest;
+use crate::worker_bridge_execution::{WorkerRequest, WorkerResponse};
+use golem_service_base::type_inference::*;
 
-pub struct WorkerResponse {
-    pub result: TypeAnnotatedValue,
+// Refined Worker response is different from WorkerResponse, because,
+// it ensures that we are not returning a vector of result if they are not named results
+// or uni
+#[derive(Debug, Clone)]
+pub enum RefinedWorkerResponse {
+    Unit,
+    SingleResult(TypeAnnotatedValue),
+    MultipleResults(TypeAnnotatedValue),
 }
 
-impl WorkerResponse {
+impl RefinedWorkerResponse {
+    pub(crate) fn to_type_annotated_value(&self) -> Option<TypeAnnotatedValue> {
+        match self {
+            RefinedWorkerResponse::Unit => None,
+            RefinedWorkerResponse::SingleResult(value) => Some(value.clone()),
+            RefinedWorkerResponse::MultipleResults(results) => Some(results.clone()),
+        }
+    }
+
+    pub(crate) fn from_worker_response(
+        worker_response: &WorkerResponse,
+    ) -> Result<RefinedWorkerResponse, String> {
+        let result = &worker_response.result.result;
+        let function_result_types = &worker_response.result.function_result_types;
+
+        if function_result_types.iter().all(|r| r.name.is_none())
+            && !function_result_types.is_empty()
+        {
+            match result {
+                TypeAnnotatedValue::Tuple { value, .. } => {
+                    if value.len() == 1 {
+                        Ok(RefinedWorkerResponse::SingleResult(value[0].clone()))
+                    } else if value.is_empty() {
+                        Ok(RefinedWorkerResponse::Unit)
+                    } else {
+                        Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple with 1 element if results are unnamed. Obtained {:?}", AnalysedType::from(result)))
+                    }
+                }
+                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple if results ae unnamed. Obtained {:?}", AnalysedType::from(ty))),
+            }
+        } else {
+            match &worker_response.result.result  {
+                TypeAnnotatedValue::Record { .. } => {
+                    Ok(RefinedWorkerResponse::MultipleResults(worker_response.result.result.clone()))
+                }
+
+                // See wasm-rpc implementations for more details
+                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Record if results are named. Obtained {:?}", AnalysedType::from(ty))),
+            }
+        }
+    }
+
     pub(crate) fn to_http_response(
         &self,
         response_mapping: &Option<ResponseMapping>,
-        input_request: &TypeAnnotatedValue,
+        input_request: &RequestDetails,
+        worker_request: &WorkerRequest,
     ) -> poem::Response {
         if let Some(mapping) = response_mapping {
-            match internal::IntermediateHttpResponse::from(self, mapping, input_request) {
+            match internal::IntermediateHttpResponse::from(
+                self,
+                mapping,
+                input_request,
+                worker_request,
+            ) {
                 Ok(intermediate_response) => intermediate_response.to_http_response(),
                 Err(e) => poem::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -37,33 +89,20 @@ impl WorkerResponse {
                     ))),
             }
         } else {
-            let json = get_json_from_typed_value(&self.result);
-            let body: Body = Body::from_json(json).unwrap();
-            poem::Response::builder().body(body)
-        }
-    }
+            let type_annotated_value = match self {
+                RefinedWorkerResponse::Unit => None,
+                RefinedWorkerResponse::SingleResult(value) => Some(value.clone()),
+                RefinedWorkerResponse::MultipleResults(results) => Some(results.clone()),
+            };
 
-    // This makes sure that the result is injected into the worker.response field
-    // So that clients can refer to the worker response using worker.response keyword
-    pub(crate) fn result_with_worker_response_key(&self) -> TypeAnnotatedValue {
-        let worker_response_value = &self.result;
-        let worker_response_typ = AnalysedType::from(worker_response_value);
-        let response_key = "response".to_string();
-
-        let response_type = vec![(response_key.clone(), worker_response_typ.clone())];
-
-        TypeAnnotatedValue::Record {
-            typ: vec![(
-                Token::worker().to_string(),
-                AnalysedType::Record(response_type.clone()),
-            )],
-            value: vec![(
-                Token::worker().to_string(),
-                TypeAnnotatedValue::Record {
-                    typ: response_type.clone(),
-                    value: vec![(response_key.clone(), worker_response_value.clone())],
-                },
-            )],
+            match type_annotated_value {
+                Some(value) => {
+                    let json = get_json_from_typed_value(&value);
+                    let body: Body = Body::from_json(json).unwrap();
+                    poem::Response::builder().body(body)
+                }
+                None => poem::Response::builder().status(StatusCode::OK).finish(),
+            }
         }
     }
 }
@@ -71,18 +110,21 @@ impl WorkerResponse {
 pub struct NoOpWorkerRequestExecutor {}
 
 #[async_trait]
-impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
+impl WorkerRequestExecutor for NoOpWorkerRequestExecutor {
     async fn execute(
         &self,
         worker_request_params: WorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        let worker_name = worker_request_params.worker_id;
-        let component_id = worker_request_params.component;
+        let worker_name = worker_request_params.worker_name;
+        let component_id = worker_request_params.component_id;
 
         info!(
             "Executing request for component: {}, worker: {}, function: {}",
-            component_id, worker_name, worker_request_params.function
+            component_id, worker_name, worker_request_params.function_name
         );
+
+        let function_params =
+            serde_json::Value::Array(worker_request_params.function_params.clone());
 
         let sample_json_data = json!(
             [{
@@ -100,7 +142,7 @@ impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
               },
               "hobbies": ["reading", "hiking", "gaming"],
               "scores": [95, 88, 76, 92],
-              "input" : worker_request_params.function_params.to_string()
+              "input" : function_params.to_string()
             }]
         );
 
@@ -110,7 +152,10 @@ impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
             get_typed_value_from_json(&sample_json_data, &analysed_type).unwrap();
 
         let worker_response = WorkerResponse {
-            result: type_anntoated_value,
+            result: TypedResult {
+                result: type_anntoated_value,
+                function_result_types: vec![],
+            },
         };
 
         Ok(worker_response)
@@ -119,46 +164,43 @@ impl WorkerRequestExecutor<poem::Response> for NoOpWorkerRequestExecutor {
 
 mod internal {
     use crate::api_definition::http::HttpResponseMapping;
-    use crate::evaluator::EvaluationError;
     use crate::evaluator::Evaluator;
+    use crate::evaluator::{EvaluationContext, EvaluationError, EvaluationResult};
     use crate::expression::Expr;
-    use crate::merge::Merge;
     use crate::primitive::{GetPrimitive, Primitive};
-    use crate::worker_binding::ResponseMapping;
-    use crate::worker_bridge_execution::WorkerResponse;
+    use crate::worker_binding::{RequestDetails, ResponseMapping};
+    use crate::worker_bridge_execution::worker_bridge_response::RefinedWorkerResponse;
+    use crate::worker_bridge_execution::WorkerRequest;
     use golem_wasm_rpc::json::get_json_from_typed_value;
-    use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, StatusCode};
     use poem::{Body, ResponseParts};
     use std::collections::HashMap;
 
     pub(crate) struct IntermediateHttpResponse {
-        body: TypeAnnotatedValue,
+        body: EvaluationResult,
         status: StatusCode,
         headers: ResolvedResponseHeaders,
     }
 
     impl IntermediateHttpResponse {
         pub(crate) fn from(
-            worker_response: &WorkerResponse,
+            worker_response: &RefinedWorkerResponse,
             response_mapping: &ResponseMapping,
-            input_request: &TypeAnnotatedValue,
+            request_details: &RequestDetails,
+            worker_request: &WorkerRequest,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
-            let mut input_request = input_request.clone();
-            let type_annotated_value =
-                input_request.merge(&worker_response.result_with_worker_response_key());
+            let evaluation_context =
+                EvaluationContext::from(worker_request, worker_response, request_details);
 
             let http_response_mapping = HttpResponseMapping::try_from(response_mapping)
                 .map_err(EvaluationError::Message)?;
 
-            let status_code = get_status_code(&http_response_mapping.status, type_annotated_value)?;
+            let status_code = get_status_code(&http_response_mapping.status, &evaluation_context)?;
 
-            let headers = ResolvedResponseHeaders::from(
-                &http_response_mapping.headers,
-                type_annotated_value,
-            )?;
+            let headers =
+                ResolvedResponseHeaders::from(&http_response_mapping.headers, &evaluation_context)?;
 
-            let response_body = http_response_mapping.body.evaluate(type_annotated_value)?;
+            let response_body = http_response_mapping.body.evaluate(&evaluation_context)?;
 
             Ok(IntermediateHttpResponse {
                 body: response_body,
@@ -172,7 +214,7 @@ mod internal {
                 .map_err(|e: hyper::http::Error| e.to_string());
 
             let status = &self.status;
-            let body = &self.body;
+            let eval_result = &self.body;
 
             match headers {
                 Ok(response_headers) => {
@@ -182,8 +224,15 @@ mod internal {
                         headers: response_headers,
                         extensions: Default::default(),
                     };
-                    let body: Body = Body::from_json(get_json_from_typed_value(body)).unwrap();
-                    poem::Response::from_parts(parts, body)
+
+                    match eval_result {
+                        EvaluationResult::Value(value) => {
+                            let json = get_json_from_typed_value(value);
+                            let body: Body = Body::from_json(json).unwrap();
+                            poem::Response::from_parts(parts, body)
+                        }
+                        EvaluationResult::Unit => poem::Response::from_parts(parts, Body::empty()),
+                    }
                 }
                 Err(err) => poem::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -197,9 +246,9 @@ mod internal {
 
     fn get_status_code(
         status_expr: &Expr,
-        resolved_variables: &TypeAnnotatedValue,
+        evaluator_context: &EvaluationContext,
     ) -> Result<StatusCode, EvaluationError> {
-        let status_value = status_expr.evaluate(resolved_variables)?;
+        let status_value = status_expr.evaluate(evaluator_context)?;
         let status_res: Result<u16, EvaluationError> =
             match status_value.get_primitive() {
                 Some(Primitive::String(status_str)) => status_str.parse().map_err(|e| {
@@ -238,12 +287,15 @@ mod internal {
         // to the http response. Here we resolve the expression based on the resolved variables (that was formed from the response of the worker)
         fn from(
             header_mapping: &HashMap<String, Expr>,
-            input: &TypeAnnotatedValue, // The input to evaluating header expression is a type annotated value
+            input: &EvaluationContext, // The input to evaluating header expression is a type annotated value
         ) -> Result<ResolvedResponseHeaders, EvaluationError> {
             let mut resolved_headers: HashMap<String, String> = HashMap::new();
 
             for (header_name, header_value_expr) in header_mapping {
-                let value = header_value_expr.evaluate(input)?;
+                let value = header_value_expr
+                    .evaluate(input)?
+                    .get_value()
+                    .ok_or("Unable to resolve header. Resulted in ()".to_string())?;
 
                 let value_str = value
                     .get_primitive()

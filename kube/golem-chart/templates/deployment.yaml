@@ -136,22 +136,26 @@ spec:
               value: "2s"
             - name: GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER
               value: "2"
-            - name: GOLEM__REDIS__KEY_PREFIX
+            - name: GOLEM__KEY_VALUE_STORAGE__TYPE
+              value: "Redis"
+            - name: GOLEM__INDEXED_STORAGE__TYPE
+              value: "KVStoreRedis"
+            - name: GOLEM__KEY_VALUE_STORAGE__CONFIG__KEY_PREFIX
               value: {{.Values.env}}
-            - name: GOLEM__REDIS__HOST
+            - name: GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST
               value: {{ .Values.workerExecutor.redis.host }}
-            - name: GOLEM__REDIS__PORT
+            - name: GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT
               value: "{{ .Values.workerExecutor.redis.port }}"
-            - name: GOLEM__REDIS__DATABASE
+            - name: GOLEM__KEY_VALUE_STORAGE__CONFIG__DATABASE
               value: "{{ .Values.workerExecutor.redis.database }}"
-            - name: GOLEM__REDIS__USERNAME
+            - name: GOLEM__KEY_VALUE_STORAGE__CONFIG__USERNAME
               value: "{{ .Values.workerExecutor.redis.username }}"
 {{- if .Values.workerExecutor.redis.password.plain }}
-            - name: GOLEM__REDIS__PASSWORD
+            - name: GOLEM__KEY_VALUE_STORAGE__CONFIG__PASSWORD
               value: "{{ .Values.workerExecutor.redis.password.plain }}"
 {{- end }}
 {{- if .Values.workerExecutor.redis.password.fromSecret.name }}
-            - name: GOLEM__REDIS__PASSWORD
+            - name: GOLEM__KEY_VALUE_STORAGE__CONFIG__PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.workerExecutor.redis.password.fromSecret.name }}
@@ -183,7 +187,7 @@ spec:
 {{- end }}
 {{- if eq .Values.componentCompiledStore.type "s3" }}
             - name: GOLEM__COMPILED_COMPONENT_SERVICE__TYPE
-              value: "S3"
+              value: "Enabled"
             - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__REGION
               value: {{ .Values.componentCompiledStore.s3.region }}
             - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__OBJECT_PREFIX
@@ -192,19 +196,17 @@ spec:
               value: {{ .Values.componentCompiledStore.s3.bucket }}
 {{- end }}
 {{- if eq .Values.workerBlobStore.type "pvc" }}
-            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__TYPE
-              value: "Local"
-            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__ROOT
-              value: "/golem/worker/blob"
-            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION
-              value: ""
+            - name: GOLEM__BLOB_STORAGE__TYPE
+              value: "LocalFileSystem"
+            - name: GOLEM__BLOB_STORAGE__CONFIG__ROOT
+              value: "/golem"
 {{- end }}
 {{- if eq .Values.workerBlobStore.type "s3" }}
-            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__TYPE
+            - name: GOLEM__BLOB_STORAGE__TYPE
               value: "S3"
-            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION
+            - name: GOLEM__BLOB_STORAGE__CONFIG__REGION
               value: {{ .Values.workerBlobStore.s3.region }}
-            - name: GOLEM__BLOB_STORE_SERVICE__CONFIG__BUCKET_PREFIX
+            - name: GOLEM__BLOB_STORAGE__CONFIG__BUCKET_PREFIX
               value: {{ .Values.workerBlobStore.s3.bucketPrefix }}
 {{- end }}
             - name: POD_NAME
@@ -526,19 +528,21 @@ spec:
               value: "{{ .Values.componentCompilationService.ports.grpc }}"
 {{- if eq .Values.componentCompiledStore.type "pvc" }}
             - name: GOLEM__COMPILED_COMPONENT_SERVICE__TYPE
-              value: "Local"
-            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__ROOT
-              value: "/golem/component/compiled"
+              value: "Enabled"
+            - name: GOLEM__BLOB_STORAGE__TYPE
+              value: "LocalFileSystem"
+            - name: GOLEM__BLOB_STORAGE__CONFIG__ROOT
+              value: "/golem"
 {{- end }}
 {{- if eq .Values.componentCompiledStore.type "s3" }}
             - name: GOLEM__COMPILED_COMPONENT_SERVICE__TYPE
+              value: "Enabled"
+            - name: GOLEM__BLOB_STORAGE__TYPE
               value: "S3"
-            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__REGION
+            - name: GOLEM__BLOB_STORAGE__CONFIG__REGION
               value: {{ .Values.componentCompiledStore.s3.region }}
-            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__OBJECT_PREFIX
+            - name: GOLEM__BLOB_STORAGE__CONFIG__BUCKET_PREFIX
               value: {{ .Values.componentCompiledStore.s3.objectPrefix }}
-            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__BUCKET
-              value: {{ .Values.componentCompiledStore.s3.bucket }}
 {{- end }}
           ports:
             - name: http

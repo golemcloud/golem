@@ -1,14 +1,14 @@
 use crate::error::GolemError;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::golem_config::GolemConfig;
-use crate::services::oplog::{OplogService, RedisOplogService};
-use crate::services::worker::{WorkerService, WorkerServiceInMemory, WorkerServiceRedis};
-use crate::services::{golem_config, HasConfig, HasOplogService, HasWorkerService};
+use crate::services::oplog::OplogService;
+use crate::services::worker::WorkerService;
+use crate::services::{HasConfig, HasOplogService, HasWorkerService};
+use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use crate::worker::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus};
-use golem_common::redis::RedisPool;
 use std::sync::Arc;
 use tracing::info;
 
@@ -28,7 +28,7 @@ pub struct RunningWorkerEnumerationServiceDefault<Ctx: WorkerCtx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
-    for crate::services::worker_enumeration::RunningWorkerEnumerationServiceDefault<Ctx>
+    for RunningWorkerEnumerationServiceDefault<Ctx>
 {
     async fn get(
         &self,
@@ -61,9 +61,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
     }
 }
 
-impl<Ctx: WorkerCtx>
-    crate::services::worker_enumeration::RunningWorkerEnumerationServiceDefault<Ctx>
-{
+impl<Ctx: WorkerCtx> RunningWorkerEnumerationServiceDefault<Ctx> {
     pub fn new(active_workers: Arc<ActiveWorkers<Ctx>>) -> Self {
         Self { active_workers }
     }
@@ -73,14 +71,14 @@ impl<Ctx: WorkerCtx>
 pub struct RunningWorkerEnumerationServiceMock {}
 
 #[cfg(any(feature = "mocks", test))]
-impl Default for crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock {
+impl Default for RunningWorkerEnumerationServiceMock {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[cfg(any(feature = "mocks", test))]
-impl crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock {
+impl RunningWorkerEnumerationServiceMock {
     pub fn new() -> Self {
         Self {}
     }
@@ -88,9 +86,7 @@ impl crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock {
 
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
-impl RunningWorkerEnumerationService
-    for crate::services::worker_enumeration::RunningWorkerEnumerationServiceMock
-{
+impl RunningWorkerEnumerationService for RunningWorkerEnumerationServiceMock {
     async fn get(
         &self,
         _component_id: &ComponentId,
@@ -113,22 +109,22 @@ pub trait WorkerEnumerationService {
 }
 
 #[derive(Clone)]
-pub struct WorkerEnumerationServiceRedis {
-    redis: RedisPool,
-    worker_service: Arc<WorkerServiceRedis>,
-    oplog_service: Arc<RedisOplogService>,
-    golem_config: Arc<golem_config::GolemConfig>,
+pub struct DefaultWorkerEnumerationService {
+    indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+    worker_service: Arc<dyn WorkerService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    golem_config: Arc<GolemConfig>,
 }
 
-impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
+impl DefaultWorkerEnumerationService {
     pub fn new(
-        redis: RedisPool,
-        worker_service: Arc<WorkerServiceRedis>,
-        oplog_service: Arc<RedisOplogService>,
-        golem_config: Arc<golem_config::GolemConfig>,
+        indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        golem_config: Arc<GolemConfig>,
     ) -> Self {
         Self {
-            redis,
+            indexed_storage,
             worker_service,
             oplog_service,
             golem_config,
@@ -146,17 +142,20 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
         let mut new_cursor: Option<u64> = None;
         let mut workers: Vec<WorkerMetadata> = vec![];
 
-        let worker_redis_key = get_worker_redis_key(component_id);
-
-        let (new_redis_cursor, worker_redis_keys) = self
-            .redis
+        let (new_scan_cursor, keys) = self
+            .indexed_storage
             .with("worker_enumeration", "scan")
-            .scan(worker_redis_key, cursor, count)
+            .scan(
+                IndexedStorageNamespace::OpLog,
+                &Self::key_pattern(component_id),
+                cursor,
+                count,
+            )
             .await
-            .map_err(|e| GolemError::unknown(e.details()))?;
+            .map_err(GolemError::unknown)?;
 
-        for worker_redis_key in worker_redis_keys {
-            let worker_id = get_worker_id_from_redis_key(&worker_redis_key, component_id)?;
+        for key in keys {
+            let worker_id = Self::get_worker_id_from_key(&key, component_id)?;
             let worker_metadata = self.worker_service.get(&worker_id).await;
 
             if let Some(worker_metadata) = worker_metadata {
@@ -181,36 +180,56 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceRedis {
             }
         }
 
-        if new_redis_cursor > 0 {
-            new_cursor = Some(new_redis_cursor);
+        if new_scan_cursor > 0 {
+            new_cursor = Some(new_scan_cursor);
         }
 
         Ok((new_cursor, workers))
     }
+
+    fn key_pattern(component_id: &ComponentId) -> String {
+        format!("worker:oplog:{}*", component_id.0)
+    }
+
+    fn get_worker_id_from_key(
+        key: &str,
+        component_id: &ComponentId,
+    ) -> Result<WorkerId, GolemError> {
+        let redis_prefix = format!("worker:oplog:{}:", component_id.0);
+        if key.starts_with(&redis_prefix) {
+            let worker_name = &key[redis_prefix.len()..];
+            Ok(WorkerId {
+                worker_name: worker_name.to_string(),
+                component_id: component_id.clone(),
+            })
+        } else {
+            Err(GolemError::unknown(
+                "Failed to get worker id from indexed storage key",
+            ))
+        }
+    }
 }
 
-impl HasOplogService for WorkerEnumerationServiceRedis {
+impl HasOplogService for DefaultWorkerEnumerationService {
     fn oplog_service(&self) -> Arc<dyn OplogService + Send + Sync> {
         self.oplog_service.clone()
     }
 }
 
-impl HasWorkerService for WorkerEnumerationServiceRedis {
+impl HasWorkerService for DefaultWorkerEnumerationService {
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync> {
         self.worker_service.clone()
     }
 }
 
-impl HasConfig for WorkerEnumerationServiceRedis {
+impl HasConfig for DefaultWorkerEnumerationService {
     fn config(&self) -> Arc<GolemConfig> {
         self.golem_config.clone()
     }
 }
 
 #[async_trait]
-impl WorkerEnumerationService
-    for crate::services::worker_enumeration::WorkerEnumerationServiceRedis
-{
+impl WorkerEnumerationService for DefaultWorkerEnumerationService {
     async fn get(
         &self,
         component_id: &ComponentId,
@@ -255,95 +274,18 @@ impl WorkerEnumerationService
     }
 }
 
-fn get_worker_redis_key(component_id: &ComponentId) -> String {
-    format!("instance:oplog:{}*", component_id.0)
-}
-
-fn get_worker_id_from_redis_key(
-    worker_redis_key: &str,
-    component_id: &ComponentId,
-) -> Result<WorkerId, GolemError> {
-    let redis_prefix = format!("instance:oplog:{}:", component_id.0);
-    if worker_redis_key.starts_with(&redis_prefix) {
-        let worker_name = &worker_redis_key[redis_prefix.len()..];
-        Ok(WorkerId {
-            worker_name: worker_name.to_string(),
-            component_id: component_id.clone(),
-        })
-    } else {
-        Err(GolemError::unknown(
-            "Failed to get worker id from redis key",
-        ))
-    }
-}
-
-#[derive(Clone)]
-pub struct WorkerEnumerationServiceInMemory {
-    worker_service: Arc<WorkerServiceInMemory>,
-}
-
-impl crate::services::worker_enumeration::WorkerEnumerationServiceInMemory {
-    pub fn new(worker_service: Arc<WorkerServiceInMemory>) -> Self {
-        Self { worker_service }
-    }
-}
-
-#[async_trait]
-impl WorkerEnumerationService
-    for crate::services::worker_enumeration::WorkerEnumerationServiceInMemory
-{
-    async fn get(
-        &self,
-        component_id: &ComponentId,
-        filter: Option<WorkerFilter>,
-        cursor: u64,
-        count: u64,
-        _precise: bool,
-    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
-        let workers = self.worker_service.enumerate().await;
-
-        let all_workers_count = workers.len() as u64;
-
-        if all_workers_count > cursor {
-            let mut component_workers: Vec<WorkerMetadata> = vec![];
-            let mut index = 0;
-            for worker in workers {
-                if index >= cursor
-                    && worker.worker_id.component_id == *component_id
-                    && filter.clone().map_or(true, |f| f.matches(&worker))
-                {
-                    component_workers.push(worker);
-                }
-
-                index += 1;
-
-                if (component_workers.len() as u64) == count {
-                    break;
-                }
-            }
-            if index >= all_workers_count {
-                Ok((None, component_workers))
-            } else {
-                Ok((Some(index), component_workers))
-            }
-        } else {
-            Ok((None, vec![]))
-        }
-    }
-}
-
 #[cfg(any(feature = "mocks", test))]
 pub struct WorkerEnumerationServiceMock {}
 
 #[cfg(any(feature = "mocks", test))]
-impl Default for crate::services::worker_enumeration::WorkerEnumerationServiceMock {
+impl Default for WorkerEnumerationServiceMock {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[cfg(any(feature = "mocks", test))]
-impl crate::services::worker_enumeration::WorkerEnumerationServiceMock {
+impl WorkerEnumerationServiceMock {
     pub fn new() -> Self {
         Self {}
     }
@@ -351,9 +293,7 @@ impl crate::services::worker_enumeration::WorkerEnumerationServiceMock {
 
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
-impl WorkerEnumerationService
-    for crate::services::worker_enumeration::WorkerEnumerationServiceMock
-{
+impl WorkerEnumerationService for WorkerEnumerationServiceMock {
     async fn get(
         &self,
         _component_id: &ComponentId,

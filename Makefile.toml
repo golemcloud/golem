@@ -162,7 +162,7 @@ args = ["test", "--lib", "--bins", "--all-features"]
 
 [tasks.worker-executor-tests]
 description = "Runs worker executor tests only"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_BACKTRACE" = "1", "RUST_LOG" = "info" }
 command = "cargo"
 args = [
     "test",
