@@ -271,16 +271,6 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo make build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: debug-executables
-          path: |
-            target/debug/golem-cli
-            target/debug/golem-component-compilation-service
-            target/debug/golem-component-service
-            target/debug/golem-shard-manager
-            target/debug/golem-worker-service
-            target/debug/worker-executor
   unit-tests:
     needs: [build]
     runs-on: ubuntu-latest-large
@@ -318,7 +308,6 @@ jobs:
         run: cargo make check-openapi
   worker-tests:
     runs-on: ubuntu-latest-large
-    needs: [build]
     strategy:
       fail-fast: true
       matrix:
@@ -354,9 +343,6 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
-      - uses: actions/download-artifact@v4
-        with:
-          name: debug-executables
       - name: Worker Executor integration tests
         env:
           SCCACHE_GHA_ENABLED: "true"
@@ -364,7 +350,6 @@ jobs:
         run: cargo make worker-executor-tests-${{ matrix.group.name }}
   integration-tests:
     runs-on: ubuntu-latest-large
-    needs: [build]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -391,9 +376,6 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
-      - uses: actions/download-artifact@v4
-        with:
-          name: debug-executables
       - name: Integration tests
         env:
           QUIET: 1
