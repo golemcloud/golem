@@ -1,39 +1,22 @@
 use crate::primitive::GetPrimitive;
 use crate::worker_bridge_execution::to_response::ToResponse;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use poem::web::headers::ContentType;
 use poem::{Body, IntoResponse};
 use std::fmt::{Display, Formatter};
 
-pub trait ContentTypeMapper {
-    fn map(&self, content_type: &ContentType) -> Result<Body, ContentTypeMapError>;
+pub trait GetHttpResponseBody {
+    fn to_response_body(&self, content_type_opt: &Option<ContentType>) -> Result<Body, ContentTypeMapError>;
 }
 
-impl ContentTypeMapper for TypeAnnotatedValue {
-    fn map(&self, content_type: &ContentType) -> Result<Body, ContentTypeMapError> {
-        if content_type == &ContentType::octet_stream() {
-            get_vec_u8(self, Body::from_vec)
-        } else if content_type == &ContentType::json() {
-            Ok(get_json(self))
-        } else if content_type == &ContentType::text() {
-            Ok(get_text(self))
-        } else if content_type == &ContentType::html() {
-            Ok(get_text(self))
-        } else if content_type == &ContentType::jpeg() {
-            get_vec_u8(self, Body::from_vec)
-        } else if content_type == &ContentType::text_utf8() {
-            Ok(get_text(self))
-        } else if content_type == &ContentType::xml() {
-            Ok(get_text(self))
-        } else if content_type == &ContentType::form_url_encoded() {
-            Ok(get_text(self))
-        } else if content_type == &ContentType::png() {
-            get_vec_u8(self, Body::from_vec)
-        } else {
-            Err(ContentTypeMapError::internal("Unsupported content type"))
+impl GetHttpResponseBody for TypeAnnotatedValue {
+    fn to_response_body(&self, content_type: &Option<ContentType>) -> Result<Body, ContentTypeMapError> {
+        match content_type {
+            Some(content_type) => internal::get_response_body_from_content_type(self, content_type),
+            None => internal::get_response_body(self)
         }
+
     }
 }
 
@@ -64,116 +47,165 @@ impl Display for ContentTypeMapError {
     }
 }
 
-impl ContentTypeMapError {
-    fn internal(msg: &str) -> ContentTypeMapError {
-        ContentTypeMapError::InternalError(msg.to_string())
-    }
-}
+mod internal {
+    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::json::get_json_from_typed_value;
+    use golem_wasm_rpc::TypeAnnotatedValue;
+    use poem::Body;
+    use poem::web::headers::ContentType;
+    use crate::worker_bridge_execution::content_type_mapper::ContentTypeMapError;
+    use crate::primitive::GetPrimitive;
 
-fn get_vec_u8<F>(type_annoted_value: &TypeAnnotatedValue, f: F) -> Result<Body, ContentTypeMapError>
-    where
-        F: Fn(Vec<u8>) -> Body,
-{
-    match type_annoted_value {
-        TypeAnnotatedValue::List { values, typ } => match typ {
-            AnalysedType::U8 => {
-                let bytes = values
-                    .into_iter()
-                    .map(|v| match v {
-                        TypeAnnotatedValue::U8(u8) => Ok(*u8),
-                        _ => Err(ContentTypeMapError::internal(
-                            "Internal error in fetching vec<u8>",
-                        )),
-                    })
-                    .collect::<Result<Vec<_>, ContentTypeMapError>>()?;
-
-                Ok(f(bytes))
+    // Convert a type annotated value to Body, given no specific content type
+    pub(crate) fn get_response_body(type_annotated_value: &TypeAnnotatedValue) -> Result<Body, ContentTypeMapError> {
+        match type_annotated_value {
+            // If record, we must jsonify it given the user hasn't provided any other content type
+            TypeAnnotatedValue::Record { .. } => get_json(type_annotated_value),
+            // Given no content type, we must jsonify it if it's not a byte stream
+            TypeAnnotatedValue::List { values, typ } => {
+                match typ {
+                    // If the elements are u8, we consider it as a byte stream
+                    AnalysedType::U8 => {
+                        let bytes = get_byte_stream(values)?;
+                        Ok(Body::from_vec(bytes))
+                    }
+                    _ => get_json(type_annotated_value)
+                }
             }
+
+            TypeAnnotatedValue::Bool(bool) => {
+                Ok(Body::from_string(bool.to_string()))
+            }
+            TypeAnnotatedValue::S8(s8) => {
+                Ok(Body::from_string(s8.to_string()))
+            }
+            TypeAnnotatedValue::U8(u8) => {
+                Ok(Body::from_string(u8.to_string()))
+            }
+            TypeAnnotatedValue::S16(s16) => {
+                Ok(Body::from_string(s16.to_string()))
+            }
+            TypeAnnotatedValue::U16(u16) => {
+                Ok(Body::from_string(u16.to_string()))
+            }
+            TypeAnnotatedValue::S32(s32) => {
+                Ok(Body::from_string(s32.to_string()))
+            }
+            TypeAnnotatedValue::U32(u32) => {
+                Ok(Body::from_string(u32.to_string()))
+            }
+            TypeAnnotatedValue::S64(s64) => {
+                Ok(Body::from_string(s64.to_string()))
+            }
+            TypeAnnotatedValue::U64(u64) => {
+                Ok(Body::from_string(u64.to_string()))
+            }
+            TypeAnnotatedValue::F32(f32) => {
+                Ok(Body::from_string(f32.to_string()))
+            }
+            TypeAnnotatedValue::F64(f64) => {
+                Ok(Body::from_string(f64.to_string()))
+            }
+            TypeAnnotatedValue::Chr(char) => {
+                Ok(Body::from_string(char.to_string()))
+            }
+            TypeAnnotatedValue::Str(string) => {
+                Ok(Body::from_string(string.to_string()))
+            }
+            TypeAnnotatedValue::Tuple { .. } => get_json(type_annotated_value),
+            TypeAnnotatedValue::Flags { .. } => get_json(type_annotated_value),
+            // Variant is considered as a record of 1 element with type name and details
+            // Confirm this behaviour
+            TypeAnnotatedValue::Variant { .. } => get_json(type_annotated_value),
+            TypeAnnotatedValue::Enum { value, .. } => {
+                Ok(Body::from_string(value.to_string()))
+            }
+            // Confirm this behaviour, given there is no specific content type
+            TypeAnnotatedValue::Option { value, .. } => {
+                match value {
+                    Some(value) => get_response_body(value),
+                    None => Ok(Body::empty())
+                }
+            }
+            // Can be considered as a record
+            TypeAnnotatedValue::Result { .. } => get_json(type_annotated_value),
+            TypeAnnotatedValue::Handle { .. } => get_json(type_annotated_value)
+        }
+    }
+
+    pub(crate) fn get_response_body_from_content_type(type_annotated_value: &TypeAnnotatedValue, content_type: &ContentType) -> Result<Body, ContentTypeMapError> {
+        match content_type {
+            ContentType::json() => {
+                get_json(type_annotated_value)
+            }
+            ContentType::text() => {
+                Ok(get_text(type_annotated_value))
+            }
+            // For all other content type, we REQUIRE byte stream equivalent
+            _ => {
+                get_vec_u8(type_annotated_value, |bytes| Body::from_vec(bytes))
+            }
+
+        }
+    }
+
+    impl ContentTypeMapError {
+        fn internal(msg: &str) -> ContentTypeMapError {
+            ContentTypeMapError::InternalError(msg.to_string())
+        }
+    }
+
+    fn get_vec_u8<F>(type_annoted_value: &TypeAnnotatedValue, f: F) -> Result<Body, ContentTypeMapError>
+        where
+            F: Fn(Vec<u8>) -> Body,
+    {
+        match type_annoted_value {
+            TypeAnnotatedValue::List { values, typ } => match typ {
+                AnalysedType::U8 => {
+                    let bytes = get_byte_stream(values)?;
+                    Ok(f(bytes))
+                }
+                other => Err(ContentTypeMapError::UnsupportedWorkerFunctionResult {
+                    expected: AnalysedType::List(Box::new(AnalysedType::U8)),
+                    obtained: AnalysedType::List(Box::new(other.clone())),
+                }),
+            },
             other => Err(ContentTypeMapError::UnsupportedWorkerFunctionResult {
                 expected: AnalysedType::List(Box::new(AnalysedType::U8)),
-                obtained: AnalysedType::List(Box::new(other.clone())),
+                obtained: AnalysedType::from(other),
             }),
-        },
-        other => Err(ContentTypeMapError::UnsupportedWorkerFunctionResult {
-            expected: AnalysedType::List(Box::new(AnalysedType::U8)),
-            obtained: AnalysedType::from(other),
-        }),
+        }
     }
-}
 
-fn get_json(type_annotated_value: &TypeAnnotatedValue) -> Body {
-    let json = get_json_from_typed_value(type_annotated_value);
-    Body::from_json(json).unwrap()
-}
-
-fn get_text(type_annotated_value: &TypeAnnotatedValue) -> Body {
-    if let Some(primitive) = type_annotated_value.get_primitive() {
-        let string = primitive.as_string();
-        Body::from_string(string)
-    } else {
+    fn get_json(type_annotated_value: &TypeAnnotatedValue) -> Result<Body, ContentTypeMapError> {
         let json = get_json_from_typed_value(type_annotated_value);
-        let json_str = json.to_string();
-        Body::from_string(json_str)
+        Body::from_json(json).map_err(|_| ContentTypeMapError::internal("Failed to convert to json"))
     }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
 
-    #[test]
-    fn test_content_type_mapping() {
-        // Create a TypeAnnotatedValue instance for testing
-        let type_annotated_value = TypeAnnotatedValue::List {
-            values: vec![
-                TypeAnnotatedValue::U8(65),
-                TypeAnnotatedValue::U8(66),
-                TypeAnnotatedValue::U8(67),
-            ],
-            typ: AnalysedType::U8,
-        };
-
-        // // Test mapping for various content types
-        //
-        // // Test mapping for ContentType::octet_stream()
-        // let result_octet_stream = type_annotated_value.map(&ContentType::octet_stream()).map(|x| x.into_string().awa);
-        // assert_eq!(result_octet_stream, Ok(vec![65, 66, 67]));
-        //
-        // // Test mapping for ContentType::json()
-        // let result_json = type_annotated_value.map(&ContentType::json());
-        // assert_eq!(result_json, Ok(Body::from_json(json!([65, 66, 67])).unwrap()));
-        //
-        // // Test mapping for ContentType::text()
-        // let result_text = type_annotated_value.map(&ContentType::text());
-        // assert_eq!(result_text, Ok(Body::from_string("ABC".to_string())));
-        //
-        // // Test mapping for ContentType::html()
-        // let result_html = type_annotated_value.map(&ContentType::html());
-        // assert_eq!(result_html, Ok(Body::from_string("ABC".to_string())));
-        //
-        // // Test mapping for ContentType::jpeg()
-        // let result_jpeg = type_annotated_value.map(&ContentType::jpeg());
-        // assert_eq!(result_jpeg, Ok(Body::from_vec(vec![65, 66, 67])));
-        //
-        // // Test mapping for ContentType::text_utf8()
-        // let result_text_utf8 = type_annotated_value.map(&ContentType::text_utf8());
-        // assert_eq!(result_text_utf8, Ok(Body::from_string("ABC".to_string())));
-        //
-        // // Test mapping for ContentType::xml()
-        // let result_xml = type_annotated_value.map(&ContentType::xml());
-        // assert_eq!(result_xml, Ok(Body::from_string("ABC".to_string())));
-        //
-        // // Test mapping for ContentType::form_url_encoded()
-        // let result_form_url_encoded = type_annotated_value.map(&ContentType::form_url_encoded());
-        // assert_eq!(result_form_url_encoded, Ok(Body::from_string("ABC".to_string())));
-        //
-        // // Test mapping for ContentType::png()
-        // let result_png = type_annotated_value.map(&ContentType::png());
-        // assert_eq!(result_png, Ok(Body::from_vec(vec![65, 66, 67])));
-        //
-        // // Test mapping for an unsupported content type
-        // let result_unsupported = type_annotated_value.map(&ContentType::unknown());
-        // assert!(result_unsupported.is_err());
+    fn get_text(type_annotated_value: &TypeAnnotatedValue) -> Body {
+        if let Some(primitive) = type_annotated_value.get_primitive() {
+            let string = primitive.as_string();
+            Body::from_string(string)
+        } else {
+            let json = get_json_from_typed_value(type_annotated_value);
+            let json_str = json.to_string();
+            Body::from_string(json_str)
+        }
     }
-}
 
+    fn get_byte_stream(values: &Vec<TypeAnnotatedValue>) -> Result<Vec<u8>, ContentTypeMapError> {
+        let bytes = values
+            .into_iter()
+            .map(|v| match v {
+                TypeAnnotatedValue::U8(u8) => Ok(*u8),
+                _ => Err(ContentTypeMapError::internal(
+                    "Internal error in fetching vec<u8>",
+                )),
+            })
+            .collect::<Result<Vec<_>, ContentTypeMapError>>()?;
+
+        Ok(bytes)
+    }
+
+
+}

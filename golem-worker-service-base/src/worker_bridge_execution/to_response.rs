@@ -73,7 +73,7 @@ mod internal {
     use crate::expression::Expr;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::{RequestDetails, ResponseMapping};
-    use crate::worker_bridge_execution::content_type_mapper::ContentTypeMapper;
+    use crate::worker_bridge_execution::content_type_mapper::GetHttpResponseBody;
     use crate::worker_bridge_execution::worker_bridge_response::RefinedWorkerResponse;
     use crate::worker_bridge_execution::WorkerRequest;
     use golem_wasm_rpc::json::get_json_from_typed_value;
@@ -144,11 +144,11 @@ mod internal {
 
                     match eval_result {
                         EvaluationResult::Value(type_annotated_value) => {
-                            let content_type = request_details
-                                .get_content_type()
-                                .unwrap_or(ContentType::json());
+                            let content_type_opt = match request_details {
+                                RequestDetails::Http(http_req) => http_req.get_content_type(),
+                            };
 
-                            match type_annotated_value.map(&content_type) {
+                            match type_annotated_value.to_response_body(&content_type_opt) {
                                 Ok(body) => poem::Response::from_parts(parts, body),
                                 Err(content_map_error) => poem::Response::builder()
                                     .status(StatusCode::BAD_REQUEST)
