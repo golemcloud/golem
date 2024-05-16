@@ -13,6 +13,14 @@ pub enum RefinedWorkerResponse {
 }
 
 impl RefinedWorkerResponse {
+    pub(crate) fn to_type_annotated_value(&self) -> Option<TypeAnnotatedValue> {
+        match self {
+            RefinedWorkerResponse::Unit => None,
+            RefinedWorkerResponse::SingleResult(value) => Some(value.clone()),
+            RefinedWorkerResponse::MultipleResults(results) => Some(results.clone()),
+        }
+    }
+
     pub(crate) fn from_worker_response(
         worker_response: &WorkerResponse,
     ) -> Result<RefinedWorkerResponse, String> {

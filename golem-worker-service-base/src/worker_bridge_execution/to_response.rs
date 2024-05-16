@@ -31,7 +31,7 @@ impl ToResponse<poem::Response> for WorkerResponse {
                     request_details,
                     worker_request,
                 ) {
-                    Ok(intermediate_response) => intermediate_response.to_http_response(),
+                    Ok(intermediate_response) => intermediate_response.to_http_response(request_details),
                     Err(e) => poem::Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body(Body::from_string(format!(
@@ -125,7 +125,7 @@ mod internal {
                 })
             }
         }
-        pub(crate) fn to_http_response(&self, request_details: RequestDetails) -> poem::Response {
+        pub(crate) fn to_http_response(&self, request_details: &RequestDetails) -> poem::Response {
             let headers: Result<HeaderMap, String> = (&self.headers.headers)
                 .try_into()
                 .map_err(|e: hyper::http::Error| e.to_string());
