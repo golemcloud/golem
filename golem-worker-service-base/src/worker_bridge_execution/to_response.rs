@@ -78,8 +78,8 @@ mod internal {
     use crate::worker_bridge_execution::WorkerRequest;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use http::{HeaderMap, StatusCode};
-    use poem::web::headers::ContentType;
-    use poem::{Body, IntoResponse, ResponseParts};
+    
+    use poem::{Body, ResponseParts};
     use std::collections::HashMap;
 
     pub(crate) struct IntermediateHttpResponse {

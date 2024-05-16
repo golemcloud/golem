@@ -1,9 +1,9 @@
-use crate::primitive::GetPrimitive;
-use crate::worker_bridge_execution::to_response::ToResponse;
+
+
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use poem::web::headers::ContentType;
-use poem::{Body, IntoResponse};
+use poem::{Body};
 use std::fmt::{Display, Formatter};
 
 pub trait GetHttpResponseBody {

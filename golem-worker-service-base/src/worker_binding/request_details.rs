@@ -54,7 +54,7 @@ impl TypedHttRequestDetails {
             .0
             .fields
             .iter()
-            .find(|(key_value)| key_value.name.to_lowercase() == "content-type".to_string())
+            .find(|key_value| key_value.name.to_lowercase() == "content-type".to_string())
             .map(|result| result.value.get_primitive().map(|prim| prim.as_string()))
             .flatten()?;
 
