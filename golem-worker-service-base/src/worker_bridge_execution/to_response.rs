@@ -69,7 +69,9 @@ mod internal {
     use crate::expression::Expr;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::{RequestDetails, ResponseMapping};
-    use crate::worker_bridge_execution::content_type_mapper::{ContentTypeHeaders, HttpContentTypeResponseMapper};
+    use crate::worker_bridge_execution::content_type_mapper::{
+        ContentTypeHeaders, HttpContentTypeResponseMapper,
+    };
     use crate::worker_bridge_execution::refined_worker_response::RefinedWorkerResponse;
     use crate::worker_bridge_execution::WorkerRequest;
     use golem_wasm_rpc::json::get_json_from_typed_value;
@@ -138,10 +140,11 @@ mod internal {
                         get_content_type_from_response_headers(&response_headers);
 
                     let accepted_content_types = match request_details {
-                        RequestDetails::Http(http) => http.get_accept_content_type_header()
+                        RequestDetails::Http(http) => http.get_accept_content_type_header(),
                     };
 
-                    let content_type = ContentTypeHeaders::from(response_content_type, accepted_content_types);
+                    let content_type =
+                        ContentTypeHeaders::from(response_content_type, accepted_content_types);
 
                     match evaluation_result {
                         EvaluationResult::Value(type_annotated_value) => {

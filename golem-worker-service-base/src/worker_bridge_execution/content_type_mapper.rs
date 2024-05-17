@@ -19,15 +19,17 @@ pub enum ContentTypeHeaders {
 }
 
 impl ContentTypeHeaders {
-
-    pub fn from(response_content_type: Option<ContentType>, accepted_content_types: Vec<ContentType>) -> Self {
-      if let Some(response_content_type) = response_content_type {
+    pub fn from(
+        response_content_type: Option<ContentType>,
+        accepted_content_types: Vec<ContentType>,
+    ) -> Self {
+        if let Some(response_content_type) = response_content_type {
             ContentTypeHeaders::Response(response_content_type)
         } else if !accepted_content_types.is_empty() {
             ContentTypeHeaders::Accept(accepted_content_types)
         } else {
             ContentTypeHeaders::Empty
-      }
+        }
     }
 
     pub fn from_accept(accept_content_headers: Vec<ContentType>) -> Self {
@@ -53,7 +55,10 @@ impl HttpContentTypeResponseMapper for TypeAnnotatedValue {
                 internal::get_body_from_response_content_type(self, &content_type)
             }
             ContentTypeHeaders::Accept(accept_content_headers) => {
-                internal::get_response_body_from_accept_content_headers(self, &accept_content_headers)
+                internal::get_response_body_from_accept_content_headers(
+                    self,
+                    &accept_content_headers,
+                )
             }
             ContentTypeHeaders::Empty => internal::get_response_body(self),
         }
@@ -75,8 +80,8 @@ pub enum ContentTypeMapError {
 }
 
 impl ContentTypeMapError {
-    fn internal(msg: &str) -> ContentTypeMapError {
-        ContentTypeMapError::InternalError(msg.to_string())
+    fn internal<A: AsRef<str>>(msg: A) -> ContentTypeMapError {
+        ContentTypeMapError::InternalError(msg.as_ref().to_string())
     }
 
     fn illegal_mapping(
@@ -131,7 +136,6 @@ impl Display for ContentTypeMapError {
 }
 
 mod internal {
-    use crate::primitive::GetPrimitive;
     use crate::worker_bridge_execution::content_type_mapper::ContentTypeMapError;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_json_from_typed_value;
@@ -140,19 +144,7 @@ mod internal {
     use poem::web::WithContentType;
     use poem::{Body, IntoResponse};
     use std::fmt::Display;
-    use openapiv3::Content;
 
-    const CONTENT_HEADERS_IN_PRIORITY: Vec<ContentType> = vec![
-        ContentType::json(),
-        ContentType::text(),
-        ContentType::text_utf8(),
-        ContentType::html(),
-        ContentType::xml(),
-        ContentType::form_url_encoded(),
-        ContentType::jpeg(),
-        ContentType::png(),
-        ContentType::octet_stream(),
-    ];
 
     // Accept headers are provided, but the response type header is not set
     pub(crate) fn get_response_body_from_accept_content_headers(
@@ -202,49 +194,46 @@ mod internal {
             TypeAnnotatedValue::Chr(char) => {
                 handle_primitive(char, &AnalysedType::Chr, accept_content_headers)
             }
-            TypeAnnotatedValue::Str(string) => {
-                handle_string(string, accept_content_headers)
+            TypeAnnotatedValue::Str(string) => handle_string(string, accept_content_headers),
+            TypeAnnotatedValue::Tuple { .. } => {
+                handle_complex(type_annotated_value, accept_content_headers)
             }
-            TypeAnnotatedValue::Tuple { .. } => handle_complex(
-                type_annotated_value,
-                accept_content_headers,
-            ),
-            TypeAnnotatedValue::Flags { .. } => handle_complex(
-                type_annotated_value,
-                accept_content_headers,
-            ),
-            TypeAnnotatedValue::Variant { .. } => handle_record_with_accepted_headers(
-                type_annotated_value,
-                accept_content_headers,
-            ),
-            TypeAnnotatedValue::Enum { value, .. } =>
-                handle_string(value, accept_content_headers),
+            TypeAnnotatedValue::Flags { .. } => {
+                handle_complex(type_annotated_value, accept_content_headers)
+            }
+            TypeAnnotatedValue::Variant { .. } => {
+                handle_record_with_accepted_headers(type_annotated_value, accept_content_headers)
+            }
+            TypeAnnotatedValue::Enum { value, .. } => handle_string(value, accept_content_headers),
             // Confirm this behaviour, given there is no specific content type
             TypeAnnotatedValue::Option { value, .. } => match value {
                 Some(value) => {
-                    get_response_body_from_accept_content_headers(
-                        value,
-                        accept_content_headers,
-                    )
+                    get_response_body_from_accept_content_headers(value, accept_content_headers)
                 }
-                None => if accept_content_headers.contains(&ContentType::json()) {
-                    get_json_null()
-                } else {
-                    Err(ContentTypeMapError::illegal_mapping(
-                        &AnalysedType::from(type_annotated_value),
-                        accept_content_headers,
-                    ))
-                },
+                None => {
+                    if accept_content_headers.contains(&ContentType::json()) {
+                        get_json_null()
+                    } else {
+                        Err(ContentTypeMapError::illegal_mapping(
+                            &AnalysedType::from(type_annotated_value),
+                            accept_content_headers,
+                        ))
+                    }
+                }
             },
             // Can be considered as a record
-            TypeAnnotatedValue::Result { .. } => handle_complex(type_annotated_value, accept_content_headers),
-            TypeAnnotatedValue::Handle { .. } => handle_complex(type_annotated_value, accept_content_headers),
+            TypeAnnotatedValue::Result { .. } => {
+                handle_complex(type_annotated_value, accept_content_headers)
+            }
+            TypeAnnotatedValue::Handle { .. } => {
+                handle_complex(type_annotated_value, accept_content_headers)
+            }
         }
     }
 
     fn handle_complex(
         complex: &TypeAnnotatedValue,
-        accepted_headers: &Vec<ContentType>
+        accepted_headers: &Vec<ContentType>,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         if accepted_headers.contains(&ContentType::json()) {
             get_json(complex)
@@ -322,15 +311,21 @@ mod internal {
         }
     }
 
-    fn handle_primitive<A: Display>(
+    fn handle_primitive<A: Display + serde::Serialize>(
         input: &A,
         primitive_type: &AnalysedType,
         accepted_content_type: &Vec<ContentType>,
-    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> where {
         if accepted_content_type.contains(&ContentType::text()) {
             Ok(get_text_body(input))
         } else if accepted_content_type.contains(&ContentType::json()) {
-            get_json(input)
+            let json = serde_json::to_value(input)
+                .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))?;
+
+            let body = Body::from_json(json).map_err(|_| ContentTypeMapError::internal(format!("Failed to convert {} to json body", input)))?;
+
+            Ok(body.with_content_type(ContentType::json().to_string()))
+
         } else {
             Err(ContentTypeMapError::illegal_mapping(
                 primitive_type,
@@ -342,8 +337,20 @@ mod internal {
     fn pick_highest_priority_content_type(
         input_content_types: &[ContentType],
     ) -> Result<ContentType, ContentTypeMapError> {
+        let content_headers_in_priority: Vec<ContentType> = vec![
+            ContentType::json(),
+            ContentType::text(),
+            ContentType::text_utf8(),
+            ContentType::html(),
+            ContentType::xml(),
+            ContentType::form_url_encoded(),
+            ContentType::jpeg(),
+            ContentType::png(),
+            ContentType::octet_stream(),
+        ];
+
         let mut prioritised_content_type = None;
-        for content_type in &CONTENT_HEADERS_IN_PRIORITY {
+        for content_type in &content_headers_in_priority {
             if input_content_types.contains(content_type) {
                 prioritised_content_type = Some(content_type.clone());
                 break;
