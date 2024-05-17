@@ -1244,7 +1244,6 @@ mod match_tests {
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        dbg!(expr_str.clone());
         let expected_str =
             "${match request {  ok(foo) => {field: request}, err(msg) => 'failure' } }".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -1530,7 +1529,6 @@ mod match_tests {
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        dbg!(expr_str.clone());
         let expected_str =
             "${match request {  name @ foo1(_) => ok('foo'), bar(c) => err('bar') } }".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -1588,7 +1586,6 @@ mod match_tests {
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        dbg!(expr_str.clone());
         let expected_str =
             "${match request {  a @ foo(b @ _) => ok('foo'), c @ bar(d @ baz(x)) => err('bar') } }"
                 .to_string();

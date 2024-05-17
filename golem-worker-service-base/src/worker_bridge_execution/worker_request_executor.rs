@@ -34,7 +34,6 @@ impl WorkerResponse {
     pub fn refined(&self) -> Result<RefinedWorkerResponse, String> {
         RefinedWorkerResponse::from_worker_response(self)
     }
-
 }
 
 #[derive(Clone, Debug)]

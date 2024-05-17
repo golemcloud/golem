@@ -5,8 +5,8 @@ use serde_json::Value;
 use golem_common::model::{ComponentId, IdempotencyKey};
 
 mod content_type_mapper;
-pub mod to_response;
 mod refined_worker_response;
+pub mod to_response;
 mod worker_request_executor;
 
 use crate::merge::Merge;

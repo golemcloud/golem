@@ -51,7 +51,7 @@ pub struct TypedHttRequestDetails {
 impl TypedHttRequestDetails {
     pub fn get_accept_content_type_header(&self) -> Result<Option<ContentType>, String> {
         let primitive = self
-            .typed_query_values
+            .typed_header_values
             .0
             .fields
             .iter()

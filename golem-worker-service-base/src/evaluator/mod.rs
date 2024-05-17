@@ -886,8 +886,6 @@ mod tests {
         ))
         .unwrap();
 
-        dbg!(worker_response.clone());
-
         let expr = expression::from_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
         )

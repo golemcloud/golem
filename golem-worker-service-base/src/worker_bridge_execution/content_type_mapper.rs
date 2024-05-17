@@ -118,7 +118,7 @@ mod internal {
             // Confirm this behaviour, given there is no specific content type
             TypeAnnotatedValue::Option { value, .. } => match value {
                 Some(value) => get_response_body(value),
-                None => get_null(),
+                None => get_json_null(),
             },
             // Can be considered as a record
             TypeAnnotatedValue::Result { .. } => get_json(type_annotated_value),
@@ -211,7 +211,7 @@ mod internal {
         }
     }
 
-    fn get_null() -> Result<WithContentType<Body>, ContentTypeMapError> {
+    fn get_json_null() -> Result<WithContentType<Body>, ContentTypeMapError> {
         Body::from_json(serde_json::Value::Null)
             .map(|body| body.with_content_type(ContentType::json().to_string()))
             .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))
@@ -221,3 +221,76 @@ mod internal {
         Body::from_string(value.to_string()).with_content_type(ContentType::text().to_string())
     }
 }
+//
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use golem_wasm_rpc::json::get_json_from_typed_value;
+//     use golem_wasm_rpc::TypeAnnotatedValue;
+//     use poem::IntoResponse;
+//     use poem::web::headers::ContentType;
+//
+//     #[test]
+//     fn test_get_response_body() {
+//         let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+//         let response_body = internal::get_response_body(&type_annotated_value).unwrap();
+//         assert_eq!(response_body.content_type(), ContentType::text().to_string());
+//
+//         let type_annotated_value = TypeAnnotatedValue::U8(10);
+//         let response_body = internal::get_response_body(&type_annotated_value).unwrap();
+//         assert_eq!(response_body.content_type(), ContentType::text().to_string());
+//
+//         let type_annotated_value = TypeAnnotatedValue::List {
+//             values: vec![TypeAnnotatedValue::U8(10)],
+//             typ: AnalysedType::U8,
+//         };
+//         let response_body = internal::get_response_body(&type_annotated_value).unwrap();
+//         assert_eq!(response_body.content_type(), ContentType::octet_stream().to_string());
+//
+//         let type_annotated_value = TypeAnnotatedValue::List {
+//             values: vec![TypeAnnotatedValue::U8(10)],
+//             typ: AnalysedType::U16,
+//         };
+//         let response_body = internal::get_response_body(&type_annotated_value).unwrap();
+//         assert_eq!(response_body.content_type(), ContentType::text().to_string());
+//
+//         let type_annotated_value = TypeAnnotatedValue::Record {
+//             typ: vec![("name".to_string(), AnalysedType::Str)],
+//             value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
+//         };
+//         let response_body = internal::get_response_body(&type_annotated_value).unwrap();
+//         assert_eq!(response_body.content_type(), ContentType::json().to_string());
+//     }
+//
+//     #[test]
+//     fn test_get_response_body_from_content_type() {
+//         let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+//         let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+//         assert_eq!(response_body.content_type(), ContentType::json().to_string());
+//
+//         let type_annotated_value = TypeAnnotatedValue::U8(10);
+//         let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+//         assert_eq!(response_body.into_response().content_type(), Some(ContentType::json().to_string()));
+//
+//         let type_annotated_value = TypeAnnotatedValue::List {
+//             values: vec![TypeAnnotatedValue::U8(10)],
+//             typ: AnalysedType::U8,
+//         };
+//         let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+//         assert_eq!(response_body.content_type(), ContentType::octet_stream().to_string());
+//
+//         let type_annotated_value = TypeAnnotatedValue::List {
+//             values: vec![TypeAnnotatedValue::U8(10)],
+//             typ: AnalysedType::U16,
+//         };
+//         let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+//         assert_eq!(response_body.content_type(), ContentType::json().to_string());
+//
+//         let type_annotated_value = TypeAnnotatedValue::Record {
+//             typ: vec![("name".to_string(), AnalysedType::Str)],
+//             value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
+//         };
+//         let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+//         assert_eq!(response_body.content_type(), ContentType::json().to_string());
+//     }
+// }

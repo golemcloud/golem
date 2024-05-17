@@ -1,7 +1,5 @@
 use crate::worker_binding::{RequestDetails, ResponseMapping};
-use crate::worker_bridge_execution::{
-    WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
-};
+use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutorError, WorkerResponse};
 use http::StatusCode;
 use poem::Body;
 
