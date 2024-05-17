@@ -21,9 +21,7 @@ impl ToResponse<poem::Response> for WorkerResponse {
         response_mapping: &Option<ResponseMapping>,
         request_details: &RequestDetails,
     ) -> poem::Response {
-        let refined_worker_response = RefinedWorkerResponse::from_worker_response(self);
-
-        match refined_worker_response {
+        match self.refined() {
             Ok(refined) => {
                 match internal::IntermediateHttpResponse::from(
                     &refined,
@@ -74,7 +72,7 @@ mod internal {
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::{RequestDetails, ResponseMapping};
     use crate::worker_bridge_execution::content_type_mapper::HttpContentTypeResponseMapper;
-    use crate::worker_bridge_execution::worker_bridge_response::RefinedWorkerResponse;
+    use crate::worker_bridge_execution::refined_worker_response::RefinedWorkerResponse;
     use crate::worker_bridge_execution::WorkerRequest;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use http::{HeaderMap, StatusCode};

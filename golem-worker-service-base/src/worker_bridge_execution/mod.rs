@@ -6,11 +6,11 @@ use golem_common::model::{ComponentId, IdempotencyKey};
 
 mod content_type_mapper;
 pub mod to_response;
-mod worker_bridge_response;
+mod refined_worker_response;
 mod worker_request_executor;
 
 use crate::merge::Merge;
-pub use worker_bridge_response::*;
+pub use refined_worker_response::*;
 pub use worker_request_executor::*;
 
 // Every input request can be resolved to a worker request,
