@@ -80,7 +80,7 @@ mod internal {
     use http::{HeaderMap, StatusCode};
     use std::str::FromStr;
 
-    use poem::{Body, ResponseParts};
+    use poem::{Body, IntoResponse, ResponseParts};
     use std::collections::HashMap;
     use poem::web::headers::ContentType;
 
@@ -140,24 +140,36 @@ mod internal {
                     let content_type_opt =
                         get_content_type_from_response_headers(&response_headers);
 
-                    let parts = ResponseParts {
-                        status: *status,
-                        version: Default::default(),
-                        headers: response_headers,
-                        extensions: Default::default(),
-                    };
 
                     match eval_result {
 
                         EvaluationResult::Value(type_annotated_value) => {
+                            let body_with_content_type =
+                                type_annotated_value.to_response_body(&content_type_opt);
+
+
                             match type_annotated_value.to_response_body(&content_type_opt) {
-                                Ok(body) => poem::Response::from_parts(parts, body),
+                                Ok(body) => {
+                                    let mut response = body.into_response();
+                                    response.set_status(*status);
+                                    response.headers().extend(response_headers);
+                                    response
+                                }
                                 Err(content_map_error) => poem::Response::builder()
                                     .status(StatusCode::BAD_REQUEST)
                                     .body(Body::from_string(content_map_error.to_string())),
                             }
                         }
-                        EvaluationResult::Unit => poem::Response::from_parts(parts, Body::empty()),
+                        EvaluationResult::Unit => {
+                            let parts = ResponseParts {
+                                status: *status,
+                                version: Default::default(),
+                                headers: response_headers,
+                                extensions: Default::default(),
+                            };
+
+                            poem::Response::from_parts(parts, Body::empty())
+                        },
                     }
                 }
                 Err(err) => poem::Response::builder()
