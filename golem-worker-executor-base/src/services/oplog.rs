@@ -49,7 +49,7 @@ pub trait OplogService {
         worker_id: &WorkerId,
     ) -> Arc<dyn Oplog + Send + Sync>;
 
-    async fn get_size(&self, worker_id: &WorkerId) -> u64;
+    async fn get_last_index(&self, worker_id: &WorkerId) -> u64;
 
     async fn delete(&self, worker_id: &WorkerId);
 
@@ -269,16 +269,8 @@ impl OplogService for DefaultOplogService {
         worker_id: &WorkerId,
     ) -> Arc<dyn Oplog + Send + Sync> {
         let key = Self::oplog_key(worker_id);
-        let oplog_size: u64 = self
-            .indexed_storage
-            .with("oplog", "open")
-            .length(IndexedStorageNamespace::OpLog, &key)
-            .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to get oplog size for worker {worker_id} from indexed storage: {err}"
-                )
-            });
+        let last_oplog_index: u64 = self.get_last_index(worker_id).await;
+
         Arc::new(DefaultOplog::new(
             self.indexed_storage.clone(),
             self.blob_storage.clone(),
@@ -286,24 +278,25 @@ impl OplogService for DefaultOplogService {
             self.max_operations_before_commit,
             self.max_payload_size,
             key,
-            oplog_size,
+            last_oplog_index,
             worker_id.clone(),
             account_id.clone(),
         ))
     }
 
-    async fn get_size(&self, worker_id: &WorkerId) -> u64 {
+    async fn get_last_index(&self, worker_id: &WorkerId) -> u64 {
         record_oplog_call("get_size");
 
         self.indexed_storage
-            .with("oplog", "get_size")
-            .length(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
+            .with_entity("oplog", "get_size", "entry")
+            .last_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
             .await
             .unwrap_or_else(|err| {
                 panic!(
                     "failed to get oplog size for worker {worker_id} from indexed storage: {err}"
                 )
             })
+            .unwrap_or_default()
     }
 
     async fn delete(&self, worker_id: &WorkerId) {
@@ -349,7 +342,7 @@ impl DefaultOplog {
         max_operations_before_commit: u64,
         max_payload_size: usize,
         key: String,
-        oplog_size: u64,
+        last_oplog_idx: u64,
         worker_id: WorkerId,
         account_id: AccountId,
     ) -> Self {
@@ -362,8 +355,8 @@ impl DefaultOplog {
                 max_payload_size,
                 key: key.clone(),
                 buffer: VecDeque::new(),
-                last_committed_idx: oplog_size,
-                last_oplog_idx: oplog_size,
+                last_committed_idx: last_oplog_idx,
+                last_oplog_idx,
                 worker_id,
                 account_id,
             })),
@@ -605,7 +598,7 @@ impl OplogService for OplogServiceMock {
         unimplemented!()
     }
 
-    async fn get_size(&self, _worker_id: &WorkerId) -> u64 {
+    async fn get_last_index(&self, _worker_id: &WorkerId) -> u64 {
         unimplemented!()
     }
 

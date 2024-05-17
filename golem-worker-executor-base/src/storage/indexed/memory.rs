@@ -175,4 +175,40 @@ impl IndexedStorage for InMemoryIndexedStorage {
 
         Ok(result)
     }
+
+    async fn first(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String> {
+        let composite_key = Self::composite_key(namespace, key);
+        let entry = self
+            .data
+            .get(&composite_key)
+            .ok_or_else(|| "Key not found".to_string())?;
+
+        let first = entry.first_key_value();
+        Ok(first.map(|(id, value)| (*id, Bytes::from(value.clone()))))
+    }
+
+    async fn last(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String> {
+        let composite_key = Self::composite_key(namespace, key);
+        let entry = self
+            .data
+            .get(&composite_key)
+            .ok_or_else(|| "Key not found".to_string())?;
+
+        let last = entry.last_key_value();
+        Ok(last.map(|(id, value)| (*id, Bytes::from(value.clone()))))
+    }
 }

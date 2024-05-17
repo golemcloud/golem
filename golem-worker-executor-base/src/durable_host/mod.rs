@@ -1041,7 +1041,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
     this: &T,
     worker_id: &WorkerId,
 ) -> Option<LastError> {
-    let mut idx = this.oplog_service().get_size(worker_id).await;
+    let mut idx = this.oplog_service().get_last_index(worker_id).await;
     let mut retry_count = 0;
     if idx == 0 {
         None

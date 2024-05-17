@@ -97,6 +97,24 @@ pub trait IndexedStorage: Debug {
         start_id: u64,
         end_id: u64,
     ) -> Result<Vec<Bytes>, String>;
+
+    async fn first(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String>;
+
+    async fn last(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String>;
 }
 
 pub trait IndexedStorageLabelledApi<T: IndexedStorage + ?Sized> {
@@ -307,6 +325,98 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 count,
             )
             .await
+    }
+
+    pub async fn first_raw(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String> {
+        self.storage
+            .first(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+            )
+            .await
+    }
+
+    pub async fn first<V: Decode>(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, V)>, String> {
+        if let Some((id, bytes)) = self
+            .storage
+            .first(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+            )
+            .await?
+        {
+            Ok(Some((id, deserialize::<V>(&bytes)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn first_id(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, String> {
+        self.first_raw(namespace, key).await.map(|r| r.map(|p| p.0))
+    }
+
+    pub async fn last_raw(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String> {
+        self.storage
+            .last(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+            )
+            .await
+    }
+
+    pub async fn last<V: Decode>(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, V)>, String> {
+        if let Some((id, bytes)) = self
+            .storage
+            .last(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+            )
+            .await?
+        {
+            Ok(Some((id, deserialize::<V>(&bytes)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn last_id(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, String> {
+        self.last_raw(namespace, key).await.map(|r| r.map(|p| p.0))
     }
 }
 

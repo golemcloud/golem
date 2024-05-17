@@ -871,7 +871,7 @@ where
         .map(|metadata| metadata.last_known_status.clone())
         .unwrap_or_default();
 
-    let last_oplog_index = this.oplog_service().get_size(worker_id).await;
+    let last_oplog_index = this.oplog_service().get_last_index(worker_id).await;
     if last_known.oplog_idx == last_oplog_index {
         Ok(last_known)
     } else {

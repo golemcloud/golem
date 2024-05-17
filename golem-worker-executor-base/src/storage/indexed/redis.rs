@@ -38,6 +38,16 @@ impl RedisIndexedStorage {
     }
 
     const KEY: &'static str = "key";
+
+    fn parse_entry_id(id: &str) -> Result<u64, String> {
+        if let Some((id, _)) = id.split_once('-') {
+            id.parse::<u64>()
+                .map_err(|e| format!("Failed to parse {id} as u64: {e}"))
+        } else {
+            id.parse::<u64>()
+                .map_err(|e| format!("Failed to parse {id} as u64: {e}"))
+        }
+    }
 }
 
 #[async_trait]
@@ -186,5 +196,65 @@ impl IndexedStorage for RedisIndexedStorage {
             }
         }
         Ok(result)
+    }
+
+    async fn first(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String> {
+        let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
+            .redis
+            .with(svc_name, api_name)
+            .xrange(Self::composite_key(namespace, key), "-", "+", Some(1))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut result = Vec::new();
+        for item in items {
+            for (id, value) in item {
+                let id: u64 = Self::parse_entry_id(&id)?;
+                for (key, value) in value {
+                    if key == Self::KEY {
+                        record_redis_deserialized_size(svc_name, entity_name, value.len());
+                        result.push((id, value));
+                    }
+                }
+            }
+        }
+        Ok(result.into_iter().next())
+    }
+
+    async fn last(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String> {
+        let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
+            .redis
+            .with(svc_name, api_name)
+            .xrevrange(Self::composite_key(namespace, key), "+", "-", Some(1))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut result = Vec::new();
+        for item in items {
+            for (id, value) in item {
+                let id: u64 = Self::parse_entry_id(&id)?;
+                for (key, value) in value {
+                    if key == Self::KEY {
+                        record_redis_deserialized_size(svc_name, entity_name, value.len());
+                        result.push((id, value));
+                    }
+                }
+            }
+        }
+        Ok(result.into_iter().next())
     }
 }
