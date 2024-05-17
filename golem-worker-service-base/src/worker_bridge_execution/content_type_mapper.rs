@@ -12,19 +12,49 @@ pub trait HttpContentTypeResponseMapper {
     ) -> Result<WithContentType<Body>, ContentTypeMapError>;
 }
 
-enum ContentTypeHeaders {
+pub enum ContentTypeHeaders {
     Accept(Vec<ContentType>),
     Response(ContentType),
-    Empty
+    Empty,
+}
+
+impl ContentTypeHeaders {
+
+    pub fn from(response_content_type: Option<ContentType>, accepted_content_types: Vec<ContentType>) -> Self {
+      if let Some(response_content_type) = response_content_type {
+            ContentTypeHeaders::Response(response_content_type)
+        } else if !accepted_content_types.is_empty() {
+            ContentTypeHeaders::Accept(accepted_content_types)
+        } else {
+            ContentTypeHeaders::Empty
+      }
+    }
+
+    pub fn from_accept(accept_content_headers: Vec<ContentType>) -> Self {
+        ContentTypeHeaders::Accept(accept_content_headers)
+    }
+
+    pub fn from_response(response_content_type: ContentType) -> Self {
+        ContentTypeHeaders::Response(response_content_type)
+    }
+
+    pub fn empty() -> Self {
+        ContentTypeHeaders::Empty
+    }
 }
 
 impl HttpContentTypeResponseMapper for TypeAnnotatedValue {
     fn to_response_body(
         &self,
-        content_type_headers: ContentTypeHeaders
+        content_type_headers: ContentTypeHeaders,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match content_type_headers {
-            ContentTypeHeaders::Response(content_type) => internal::get_body_from_response_content_type(self, &content_type),
+            ContentTypeHeaders::Response(content_type) => {
+                internal::get_body_from_response_content_type(self, &content_type)
+            }
+            ContentTypeHeaders::Accept(accept_content_headers) => {
+                internal::get_response_body_from_accept_content_headers(self, &accept_content_headers)
+            }
             ContentTypeHeaders::Empty => internal::get_response_body(self),
         }
     }
@@ -49,10 +79,13 @@ impl ContentTypeMapError {
         ContentTypeMapError::InternalError(msg.to_string())
     }
 
-    fn illegal_mapping(input_type: &AnalysedType, expected_content_types: &Vec<ContentType>) -> ContentTypeMapError {
+    fn illegal_mapping(
+        input_type: &AnalysedType,
+        expected_content_types: &Vec<ContentType>,
+    ) -> ContentTypeMapError {
         ContentTypeMapError::IllegalMapping {
             input_type: input_type.clone(),
-            expected_content_types: expected_content_types.clone()
+            expected_content_types: expected_content_types.clone(),
         }
     }
 
@@ -83,11 +116,22 @@ impl Display for ContentTypeMapError {
             ContentTypeMapError::InternalError(message) => {
                 write!(f, "{}", message)
             }
+            ContentTypeMapError::IllegalMapping {
+                input_type,
+                expected_content_types,
+            } => {
+                write!(
+                    f,
+                    "Failed to map input type {:?} to any of the expected content types: {:?}",
+                    input_type, expected_content_types
+                )
+            }
         }
     }
 }
 
 mod internal {
+    use crate::primitive::GetPrimitive;
     use crate::worker_bridge_execution::content_type_mapper::ContentTypeMapError;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_json_from_typed_value;
@@ -96,6 +140,7 @@ mod internal {
     use poem::web::WithContentType;
     use poem::{Body, IntoResponse};
     use std::fmt::Display;
+    use openapiv3::Content;
 
     const CONTENT_HEADERS_IN_PRIORITY: Vec<ContentType> = vec![
         ContentType::json(),
@@ -115,49 +160,136 @@ mod internal {
         accept_content_headers: &Vec<ContentType>,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
-            TypeAnnotatedValue::Record { .. } => handle_record_with_accepted_headers(type_annotated_value, accept_content_headers),
-            TypeAnnotatedValue::List { .. } => handle_list_with_accepted_headers(type_annotated_value, accept_content_headers),
-            TypeAnnotatedValue::Bool(bool) => Ok(get_text_body(bool)),
-            TypeAnnotatedValue::S8(s8) => Ok(get_text_body(s8.to_string())),
-            TypeAnnotatedValue::U8(u8) => Ok(get_text_body(u8.to_string())),
-            TypeAnnotatedValue::S16(s16) => Ok(get_text_body(s16.to_string())),
-            TypeAnnotatedValue::U16(u16) => Ok(get_text_body(u16.to_string())),
-            TypeAnnotatedValue::S32(s32) => Ok(get_text_body(s32.to_string())),
-            TypeAnnotatedValue::U32(u32) => Ok(get_text_body(u32.to_string())),
-            TypeAnnotatedValue::S64(s64) => Ok(get_text_body(s64.to_string())),
-            TypeAnnotatedValue::U64(u64) => Ok(get_text_body(u64.to_string())),
-            TypeAnnotatedValue::F32(f32) => Ok(get_text_body(f32.to_string())),
-            TypeAnnotatedValue::F64(f64) => Ok(get_text_body(f64.to_string())),
-            TypeAnnotatedValue::Chr(char) => Ok(get_text_body(char.to_string())),
-            TypeAnnotatedValue::Str(string) => Ok(get_text_body(string.to_string())),
-            TypeAnnotatedValue::Tuple { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::Flags { .. } => get_json(type_annotated_value),
-            // Variant is considered as a record of 1 element with type name and details
-            // Confirm this behaviour
-            TypeAnnotatedValue::Variant { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::Enum { value, .. } => Ok(get_text_body(value.to_string())),
+            TypeAnnotatedValue::Record { .. } => {
+                handle_record_with_accepted_headers(type_annotated_value, accept_content_headers)
+            }
+            TypeAnnotatedValue::List { .. } => {
+                handle_list_with_accepted_headers(type_annotated_value, accept_content_headers)
+            }
+            TypeAnnotatedValue::Bool(bool) => {
+                handle_primitive(bool, &AnalysedType::Bool, accept_content_headers)
+            }
+            TypeAnnotatedValue::S8(s8) => {
+                handle_primitive(s8, &AnalysedType::S8, accept_content_headers)
+            }
+            TypeAnnotatedValue::U8(u8) => {
+                handle_primitive(u8, &AnalysedType::U8, accept_content_headers)
+            }
+            TypeAnnotatedValue::S16(s16) => {
+                handle_primitive(s16, &AnalysedType::S16, accept_content_headers)
+            }
+            TypeAnnotatedValue::U16(u16) => {
+                handle_primitive(u16, &AnalysedType::U16, accept_content_headers)
+            }
+            TypeAnnotatedValue::S32(s32) => {
+                handle_primitive(s32, &AnalysedType::S32, accept_content_headers)
+            }
+            TypeAnnotatedValue::U32(u32) => {
+                handle_primitive(u32, &AnalysedType::U32, accept_content_headers)
+            }
+            TypeAnnotatedValue::S64(s64) => {
+                handle_primitive(s64, &AnalysedType::S64, accept_content_headers)
+            }
+            TypeAnnotatedValue::U64(u64) => {
+                handle_primitive(u64, &AnalysedType::U64, accept_content_headers)
+            }
+            TypeAnnotatedValue::F32(f32) => {
+                handle_primitive(f32, &AnalysedType::F32, accept_content_headers)
+            }
+            TypeAnnotatedValue::F64(f64) => {
+                handle_primitive(f64, &AnalysedType::F64, accept_content_headers)
+            }
+            TypeAnnotatedValue::Chr(char) => {
+                handle_primitive(char, &AnalysedType::Chr, accept_content_headers)
+            }
+            TypeAnnotatedValue::Str(string) => {
+                handle_string(string, accept_content_headers)
+            }
+            TypeAnnotatedValue::Tuple { .. } => handle_complex(
+                type_annotated_value,
+                accept_content_headers,
+            ),
+            TypeAnnotatedValue::Flags { .. } => handle_complex(
+                type_annotated_value,
+                accept_content_headers,
+            ),
+            TypeAnnotatedValue::Variant { .. } => handle_record_with_accepted_headers(
+                type_annotated_value,
+                accept_content_headers,
+            ),
+            TypeAnnotatedValue::Enum { value, .. } =>
+                handle_string(value, accept_content_headers),
             // Confirm this behaviour, given there is no specific content type
             TypeAnnotatedValue::Option { value, .. } => match value {
-                Some(value) => crate::worker_bridge_execution::content_type_mapper::internal::get_response_body(value),
-                None => get_json_null(),
+                Some(value) => {
+                    get_response_body_from_accept_content_headers(
+                        value,
+                        accept_content_headers,
+                    )
+                }
+                None => if accept_content_headers.contains(&ContentType::json()) {
+                    get_json_null()
+                } else {
+                    Err(ContentTypeMapError::illegal_mapping(
+                        &AnalysedType::from(type_annotated_value),
+                        accept_content_headers,
+                    ))
+                },
             },
             // Can be considered as a record
-            TypeAnnotatedValue::Result { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::Handle { .. } => get_json(type_annotated_value),
+            TypeAnnotatedValue::Result { .. } => handle_complex(type_annotated_value, accept_content_headers),
+            TypeAnnotatedValue::Handle { .. } => handle_complex(type_annotated_value, accept_content_headers),
         }
     }
 
-    fn handle_record_with_accepted_headers(record: &TypeAnnotatedValue, accepted_headers: &Vec<ContentType>) -> Result<WithContentType<Body>, ContentTypeMapError> {
-       // if record, we prioritise JSON
+    fn handle_complex(
+        complex: &TypeAnnotatedValue,
+        accepted_headers: &Vec<ContentType>
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
+        if accepted_headers.contains(&ContentType::json()) {
+            get_json(complex)
+        } else {
+            Err(ContentTypeMapError::illegal_mapping(
+                &AnalysedType::from(complex),
+                accepted_headers,
+            ))
+        }
+    }
+
+    fn handle_string(
+        string: &str,
+        accepted_headers: &Vec<ContentType>,
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
+        if accepted_headers.contains(&ContentType::json()) {
+            Ok(Body::from_string(string.to_string())
+                .with_content_type(ContentType::json().to_string()))
+        } else {
+            let non_json_content_type = pick_highest_priority_content_type(accepted_headers)?;
+            Ok(Body::from_bytes(bytes::Bytes::from(string.to_string()))
+                .with_content_type(non_json_content_type.to_string()))
+        }
+    }
+
+    fn handle_record_with_accepted_headers(
+        record: &TypeAnnotatedValue,
+        accepted_headers: &Vec<ContentType>,
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
+        // if record, we prioritise JSON
         if accepted_headers.contains(&ContentType::json()) {
             get_json(record)
         } else {
             // There is no way a Record can be properly serialised into any other formats to satisfy any other headers, therefore fail
-            Err(ContentTypeMapError::illegal_mapping(&AnalysedType::from(record), accepted_headers))
+            Err(ContentTypeMapError::illegal_mapping(
+                &AnalysedType::from(record),
+                accepted_headers,
+            ))
         }
     }
 
-    fn handle_list_with_accepted_headers(list: &TypeAnnotatedValue, accepted_headers: &Vec<ContentType>) -> Result<WithContentType<Body>, ContentTypeMapError> {
+    fn handle_list_with_accepted_headers(
+        list: &TypeAnnotatedValue,
+        accepted_headers: &Vec<ContentType>,
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match list {
             TypeAnnotatedValue::List { values, typ } => {
                 match typ {
@@ -165,7 +297,8 @@ mod internal {
                     AnalysedType::U8 => {
                         let byte_stream = get_byte_stream(values)?;
                         let body = Body::from_bytes(bytes::Bytes::from(byte_stream));
-                        let content_type_header = pick_highest_priority_content_type(accepted_headers)?;
+                        let content_type_header =
+                            pick_highest_priority_content_type(accepted_headers)?;
                         Ok(body.with_content_type(content_type_header.to_string()))
                     }
                     _ => {
@@ -174,37 +307,57 @@ mod internal {
                             get_json(list)
                         } else {
                             // There is no way a List can be properly serialised into any other formats to satisfy any other headers, therefore fail
-                            Err(ContentTypeMapError::illegal_mapping(&AnalysedType::from(list), accepted_headers))
+                            Err(ContentTypeMapError::illegal_mapping(
+                                &AnalysedType::from(list),
+                                accepted_headers,
+                            ))
                         }
                     }
                 }
             }
-            _ => Err(ContentTypeMapError::illegal_mapping(&AnalysedType::from(list), accepted_headers))
+            _ => Err(ContentTypeMapError::illegal_mapping(
+                &AnalysedType::from(list),
+                accepted_headers,
+            )),
         }
     }
 
-    fn handle_primitive(input: &TypeAnnotatedValue) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        
+    fn handle_primitive<A: Display>(
+        input: &A,
+        primitive_type: &AnalysedType,
+        accepted_content_type: &Vec<ContentType>,
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
+        if accepted_content_type.contains(&ContentType::text()) {
+            Ok(get_text_body(input))
+        } else if accepted_content_type.contains(&ContentType::json()) {
+            get_json(input)
+        } else {
+            Err(ContentTypeMapError::illegal_mapping(
+                primitive_type,
+                accepted_content_type,
+            ))
+        }
     }
 
-
-    fn pick_highest_priority_content_type(input_content_types: &[ContentType]) -> Result<ContentType, ContentTypeMapError> {
+    fn pick_highest_priority_content_type(
+        input_content_types: &[ContentType],
+    ) -> Result<ContentType, ContentTypeMapError> {
         let mut prioritised_content_type = None;
         for content_type in &CONTENT_HEADERS_IN_PRIORITY {
             if input_content_types.contains(content_type) {
                 prioritised_content_type = Some(content_type.clone());
-                break
+                break;
             }
         }
 
         if let Some(prioritised) = prioritised_content_type {
             Ok(prioritised)
         } else {
-            Err(ContentTypeMapError::internal("Failed to pick a content type to set in response headers"))
+            Err(ContentTypeMapError::internal(
+                "Failed to pick a content type to set in response headers",
+            ))
         }
-
     }
-
 
     // Neither Accept headers, nor the response type is set
     // In this case, we set the content header based on the type of TypeAnnotatedValue
@@ -340,7 +493,8 @@ mod internal {
                 }),
                 _ => get_json(type_annotated_value),
             },
-            TypeAnnotatedValue::Str(str) => Ok(Body::from_string(str.to_string()).with_content_type(ContentType::json().to_string())),
+            TypeAnnotatedValue::Str(str) => Ok(Body::from_string(str.to_string())
+                .with_content_type(ContentType::json().to_string())),
             _ => get_json(type_annotated_value),
         }
     }
@@ -360,8 +514,8 @@ mod internal {
 mod tests {
     use super::*;
     use golem_wasm_rpc::TypeAnnotatedValue;
-    use poem::IntoResponse;
     use poem::web::headers::ContentType;
+    use poem::IntoResponse;
 
     // #[tokio::test]
     // async fn test_get_response_body() {
@@ -404,42 +558,42 @@ mod tests {
 
     //#[tokio::test]
     //async fn test_get_response_body_from_content_type() {
-        // let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
-        // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-        // let response = response_body.into_response();
-        // let body = response.into_body().into_bytes().await.unwrap();
-        // let result = String::from_utf8_lossy(&body).to_string();
-        // // Had it serialised as Json, the result would have been: "\"Hello\""
-        // assert_eq!(result, "Hello".to_string());
-        //
-        // let type_annotated_value = TypeAnnotatedValue::U8(10);
-        // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-        // let response = response_body.into_response();
-        // let body = response.into_body().into_bytes().await.unwrap();
-        // let result = String::from_utf8_lossy(&body).to_string();
-        //
-        // assert_eq!(result, "10".to_string())
+    // let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+    // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+    // let response = response_body.into_response();
+    // let body = response.into_body().into_bytes().await.unwrap();
+    // let result = String::from_utf8_lossy(&body).to_string();
+    // // Had it serialised as Json, the result would have been: "\"Hello\""
+    // assert_eq!(result, "Hello".to_string());
+    //
+    // let type_annotated_value = TypeAnnotatedValue::U8(10);
+    // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+    // let response = response_body.into_response();
+    // let body = response.into_body().into_bytes().await.unwrap();
+    // let result = String::from_utf8_lossy(&body).to_string();
+    //
+    // assert_eq!(result, "10".to_string())
 
-        //
-        // let type_annotated_value = TypeAnnotatedValue::List {
-        //     values: vec![TypeAnnotatedValue::U8(10)],
-        //     typ: AnalysedType::U8,
-        // };
-        // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-        // assert_eq!(response_body.content_type(), ContentType::octet_stream().to_string());
-        //
-        // let type_annotated_value = TypeAnnotatedValue::List {
-        //     values: vec![TypeAnnotatedValue::U8(10)],
-        //     typ: AnalysedType::U16,
-        // };
-        // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-        // assert_eq!(response_body.content_type(), ContentType::json().to_string());
-        //
-        // let type_annotated_value = TypeAnnotatedValue::Record {
-        //     typ: vec![("name".to_string(), AnalysedType::Str)],
-        //     value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
-        // };
-        // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-        // assert_eq!(response_body.content_type(), ContentType::json().to_string());
+    //
+    // let type_annotated_value = TypeAnnotatedValue::List {
+    //     values: vec![TypeAnnotatedValue::U8(10)],
+    //     typ: AnalysedType::U8,
+    // };
+    // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+    // assert_eq!(response_body.content_type(), ContentType::octet_stream().to_string());
+    //
+    // let type_annotated_value = TypeAnnotatedValue::List {
+    //     values: vec![TypeAnnotatedValue::U8(10)],
+    //     typ: AnalysedType::U16,
+    // };
+    // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+    // assert_eq!(response_body.content_type(), ContentType::json().to_string());
+    //
+    // let type_annotated_value = TypeAnnotatedValue::Record {
+    //     typ: vec![("name".to_string(), AnalysedType::Str)],
+    //     value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
+    // };
+    // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+    // assert_eq!(response_body.content_type(), ContentType::json().to_string());
     //}
 }

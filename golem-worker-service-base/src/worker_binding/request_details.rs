@@ -1,18 +1,16 @@
 use crate::api_definition::http::{QueryInfo, VarInfo};
 use crate::merge::Merge;
 
+use crate::primitive::GetPrimitive;
 use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use http::HeaderMap;
+use poem::web::headers::ContentType;
 use serde_json::Value;
 use std::collections::HashMap;
-use poem::web::headers::ContentType;
-use crate::primitive::GetPrimitive;
 use std::str::FromStr;
-
-
 
 #[derive(Clone, Debug)]
 pub enum RequestDetails {
@@ -60,8 +58,12 @@ impl TypedHttRequestDetails {
             .find(|field| field.name == http::header::ACCEPT.to_string())
             .map(|field| {
                 // split comma
-                field.value.get_primitive().map(|x| x.as_string().split(',').collect::<Vec<&str>>())
-            }).flatten();
+                field
+                    .value
+                    .get_primitive()
+                    .map(|x| x.as_string().split(',').collect::<Vec<&str>>())
+            })
+            .flatten();
 
         // We ignore the content types that are not relevant to a server side application
         // and therefore ignore the ones that cannot be recognised. Example:
@@ -69,7 +71,6 @@ impl TypedHttRequestDetails {
         let mut content_types = vec![];
 
         if let Some(primitive) = primitive {
-
             for content_type in primitive {
                 if let Some(content_type) = ContentType::from_str(content_type).ok() {
                     content_types.push(content_type)

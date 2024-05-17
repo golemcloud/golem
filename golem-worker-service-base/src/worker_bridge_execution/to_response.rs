@@ -69,7 +69,7 @@ mod internal {
     use crate::expression::Expr;
     use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::{RequestDetails, ResponseMapping};
-    use crate::worker_bridge_execution::content_type_mapper::HttpContentTypeResponseMapper;
+    use crate::worker_bridge_execution::content_type_mapper::{ContentTypeHeaders, HttpContentTypeResponseMapper};
     use crate::worker_bridge_execution::refined_worker_response::RefinedWorkerResponse;
     use crate::worker_bridge_execution::WorkerRequest;
     use golem_wasm_rpc::json::get_json_from_typed_value;
@@ -124,7 +124,7 @@ mod internal {
                 })
             }
         }
-        pub(crate) fn to_http_response(&self, _request_details: &RequestDetails) -> poem::Response {
+        pub(crate) fn to_http_response(&self, request_details: &RequestDetails) -> poem::Response {
             let headers: Result<HeaderMap, String> = (&self.headers.headers)
                 .try_into()
                 .map_err(|e: hyper::http::Error| e.to_string());
@@ -134,11 +134,18 @@ mod internal {
 
             match headers {
                 Ok(response_headers) => {
-                    let content_type_opt = get_content_type_from_response_headers(&response_headers);
+                    let response_content_type =
+                        get_content_type_from_response_headers(&response_headers);
+
+                    let accepted_content_types = match request_details {
+                        RequestDetails::Http(http) => http.get_accept_content_type_header()
+                    };
+
+                    let content_type = ContentTypeHeaders::from(response_content_type, accepted_content_types);
 
                     match evaluation_result {
                         EvaluationResult::Value(type_annotated_value) => {
-                            match type_annotated_value.to_response_body(&content_type_opt) {
+                            match type_annotated_value.to_response_body(content_type) {
                                 Ok(body_with_header) => {
                                     let mut response = body_with_header.into_response();
                                     response.set_status(*status);
