@@ -8,7 +8,9 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
-
+use poem::web::headers::ContentType;
+use crate::primitive::GetPrimitive;
+use std::str::FromStr;
 
 
 
@@ -49,6 +51,35 @@ pub struct TypedHttRequestDetails {
 }
 
 impl TypedHttRequestDetails {
+    pub fn get_accept_content_type_header(&self) -> Vec<ContentType> {
+        let primitive = self
+            .typed_header_values
+            .0
+            .fields
+            .iter()
+            .find(|field| field.name == http::header::ACCEPT.to_string())
+            .map(|field| {
+                // split comma
+                field.value.get_primitive().map(|x| x.as_string().split(',').collect::<Vec<&str>>())
+            }).flatten();
+
+        // We ignore the content types that are not relevant to a server side application
+        // and therefore ignore the ones that cannot be recognised. Example:
+        // SXG  primarily used for content distribution and caching
+        let mut content_types = vec![];
+
+        if let Some(primitive) = primitive {
+
+            for content_type in primitive {
+                if let Some(content_type) = ContentType::from_str(content_type).ok() {
+                    content_types.push(content_type)
+                }
+            }
+        }
+
+        content_types
+    }
+
     fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
         let mut typed_path_values: TypeAnnotatedValue = self.typed_path_key_values.clone().0.into();
         let typed_query_values: TypeAnnotatedValue = self.typed_query_values.clone().0.into();

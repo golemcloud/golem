@@ -8,13 +8,15 @@ use std::fmt::{Display, Formatter};
 pub trait HttpContentTypeResponseMapper {
     fn to_response_body(
         &self,
-        content_type_opt: &Option<ContentType>,
+        accept_content_headers: &Vec<ContentType>,
+        response_content_type: &Option<ContentType>,
     ) -> Result<WithContentType<Body>, ContentTypeMapError>;
 }
 
 impl HttpContentTypeResponseMapper for TypeAnnotatedValue {
     fn to_response_body(
         &self,
+        accept_content_headers: &Vec<ContentType>,
         response_content_type: &Option<ContentType>,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match response_content_type {
@@ -80,9 +82,10 @@ mod internal {
     use poem::{Body, IntoResponse};
     use std::fmt::Display;
 
-    // Convert a type annotated value to Body, given no specific content type
-    pub(crate) fn get_response_body(
+    // Accept headers are provided, but the response type header is not set
+    pub(crate) fn get_response_body_from_accept_content_headers(
         type_annotated_value: &TypeAnnotatedValue,
+        accept_content_headers: &Vec<ContentType>,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
             // If record, we must jsonify it given the user hasn't provided any other content type
@@ -117,6 +120,53 @@ mod internal {
             TypeAnnotatedValue::Enum { value, .. } => Ok(get_text_body(value.to_string())),
             // Confirm this behaviour, given there is no specific content type
             TypeAnnotatedValue::Option { value, .. } => match value {
+                Some(value) => crate::worker_bridge_execution::content_type_mapper::internal::get_response_body(value),
+                None => get_json_null(),
+            },
+            // Can be considered as a record
+            TypeAnnotatedValue::Result { .. } => get_json(type_annotated_value),
+            TypeAnnotatedValue::Handle { .. } => get_json(type_annotated_value),
+        }
+    }
+
+    // Neither Accept headers, nor the response type is set
+    // In this case, we set the content header based on the type of TypeAnnotatedValue
+    // If binary stream we set the content header to octet stream,
+    // If text, we set it to content header to text/plain
+    // For valid jsons (record, list), we set the content header to application/json
+    pub(crate) fn get_response_body(
+        type_annotated_value: &TypeAnnotatedValue,
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
+        match type_annotated_value {
+            // If record, we must jsonify it given the user hasn't provided any other content type
+            TypeAnnotatedValue::Record { .. } => get_json(type_annotated_value),
+            // Given no content type, we must jsonify it if it's not a byte stream
+            TypeAnnotatedValue::List { values, typ } => {
+                match typ {
+                    // If the elements are u8, we consider it as a byte stream
+                    AnalysedType::U8 => get_byte_stream_body(values),
+                    _ => get_json(type_annotated_value),
+                }
+            }
+
+            TypeAnnotatedValue::Bool(bool) => Ok(get_text_body(bool)),
+            TypeAnnotatedValue::S8(s8) => Ok(get_text_body(s8.to_string())),
+            TypeAnnotatedValue::U8(u8) => Ok(get_text_body(u8.to_string())),
+            TypeAnnotatedValue::S16(s16) => Ok(get_text_body(s16.to_string())),
+            TypeAnnotatedValue::U16(u16) => Ok(get_text_body(u16.to_string())),
+            TypeAnnotatedValue::S32(s32) => Ok(get_text_body(s32.to_string())),
+            TypeAnnotatedValue::U32(u32) => Ok(get_text_body(u32.to_string())),
+            TypeAnnotatedValue::S64(s64) => Ok(get_text_body(s64.to_string())),
+            TypeAnnotatedValue::U64(u64) => Ok(get_text_body(u64.to_string())),
+            TypeAnnotatedValue::F32(f32) => Ok(get_text_body(f32.to_string())),
+            TypeAnnotatedValue::F64(f64) => Ok(get_text_body(f64.to_string())),
+            TypeAnnotatedValue::Chr(char) => Ok(get_text_body(char.to_string())),
+            TypeAnnotatedValue::Str(string) => Ok(get_text_body(string.to_string())),
+            TypeAnnotatedValue::Tuple { .. } => get_json(type_annotated_value),
+            TypeAnnotatedValue::Flags { .. } => get_json(type_annotated_value),
+            TypeAnnotatedValue::Variant { .. } => get_json(type_annotated_value),
+            TypeAnnotatedValue::Enum { value, .. } => Ok(get_text_body(value.to_string())),
+            TypeAnnotatedValue::Option { value, .. } => match value {
                 Some(value) => get_response_body(value),
                 None => get_json_null(),
             },
@@ -128,12 +178,20 @@ mod internal {
 
     pub(crate) fn get_response_body_from_content_type(
         type_annotated_value: &TypeAnnotatedValue,
-        content_type: &ContentType,
+        response_content_type: &ContentType,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        if content_type == &ContentType::json() {
+        if response_content_type == &ContentType::json() {
+            // If the request Content-Type is application/json,
+            // then we can allow ANY component model type of value as the response.
+            // However, only Rib return values which are not equivalent to a binary stream are automatically converted into JSON (jsonification).
+            // We set the response content type to JSON
             get_json_or_binary_stream(type_annotated_value)
         } else {
-            convert_only_if_binary_stream(type_annotated_value, content_type)
+            // If the request Content-Type is application/json,
+            // but the Rib return value is equivalent to a binary stream,
+            // then we assume the user has already rendered the data into JSON,
+            // and we simply stream those bytes as the response, ensuring the content-type header is set appropriately.
+            convert_only_if_binary_stream(type_annotated_value, response_content_type)
         }
     }
 
@@ -143,7 +201,6 @@ mod internal {
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
             TypeAnnotatedValue::List { typ, values } => match typ {
-                // It is already a binary stream and we keep it as is
                 AnalysedType::U8 => get_byte_stream(values).map(|bytes| {
                     Body::from_bytes(bytes::Bytes::from(bytes))
                         .with_content_type(non_json_content_type.to_string())
@@ -200,13 +257,13 @@ mod internal {
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
             TypeAnnotatedValue::List { typ, values } => match typ {
-                // It is already a binary stream and we keep it as is
-                AnalysedType::U8 => get_byte_stream_body(values),
-                // Convert to Json otherwise
+                AnalysedType::U8 => get_byte_stream(values).map(|bytes| {
+                    Body::from_bytes(bytes::Bytes::from(bytes))
+                        .with_content_type(ContentType::json().to_string())
+                }),
                 _ => get_json(type_annotated_value),
             },
-            // A string is considered as a binary stream
-            TypeAnnotatedValue::Str(str) => Ok(get_text_body(str)),
+            TypeAnnotatedValue::Str(str) => Ok(Body::from_string(str.to_string()).with_content_type(ContentType::json().to_string())),
             _ => get_json(type_annotated_value),
         }
     }
@@ -221,76 +278,91 @@ mod internal {
         Body::from_string(value.to_string()).with_content_type(ContentType::text().to_string())
     }
 }
-//
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use golem_wasm_rpc::json::get_json_from_typed_value;
-//     use golem_wasm_rpc::TypeAnnotatedValue;
-//     use poem::IntoResponse;
-//     use poem::web::headers::ContentType;
-//
-//     #[test]
-//     fn test_get_response_body() {
-//         let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
-//         let response_body = internal::get_response_body(&type_annotated_value).unwrap();
-//         assert_eq!(response_body.content_type(), ContentType::text().to_string());
-//
-//         let type_annotated_value = TypeAnnotatedValue::U8(10);
-//         let response_body = internal::get_response_body(&type_annotated_value).unwrap();
-//         assert_eq!(response_body.content_type(), ContentType::text().to_string());
-//
-//         let type_annotated_value = TypeAnnotatedValue::List {
-//             values: vec![TypeAnnotatedValue::U8(10)],
-//             typ: AnalysedType::U8,
-//         };
-//         let response_body = internal::get_response_body(&type_annotated_value).unwrap();
-//         assert_eq!(response_body.content_type(), ContentType::octet_stream().to_string());
-//
-//         let type_annotated_value = TypeAnnotatedValue::List {
-//             values: vec![TypeAnnotatedValue::U8(10)],
-//             typ: AnalysedType::U16,
-//         };
-//         let response_body = internal::get_response_body(&type_annotated_value).unwrap();
-//         assert_eq!(response_body.content_type(), ContentType::text().to_string());
-//
-//         let type_annotated_value = TypeAnnotatedValue::Record {
-//             typ: vec![("name".to_string(), AnalysedType::Str)],
-//             value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
-//         };
-//         let response_body = internal::get_response_body(&type_annotated_value).unwrap();
-//         assert_eq!(response_body.content_type(), ContentType::json().to_string());
-//     }
-//
-//     #[test]
-//     fn test_get_response_body_from_content_type() {
-//         let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
-//         let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-//         assert_eq!(response_body.content_type(), ContentType::json().to_string());
-//
-//         let type_annotated_value = TypeAnnotatedValue::U8(10);
-//         let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-//         assert_eq!(response_body.into_response().content_type(), Some(ContentType::json().to_string()));
-//
-//         let type_annotated_value = TypeAnnotatedValue::List {
-//             values: vec![TypeAnnotatedValue::U8(10)],
-//             typ: AnalysedType::U8,
-//         };
-//         let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-//         assert_eq!(response_body.content_type(), ContentType::octet_stream().to_string());
-//
-//         let type_annotated_value = TypeAnnotatedValue::List {
-//             values: vec![TypeAnnotatedValue::U8(10)],
-//             typ: AnalysedType::U16,
-//         };
-//         let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-//         assert_eq!(response_body.content_type(), ContentType::json().to_string());
-//
-//         let type_annotated_value = TypeAnnotatedValue::Record {
-//             typ: vec![("name".to_string(), AnalysedType::Str)],
-//             value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
-//         };
-//         let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-//         assert_eq!(response_body.content_type(), ContentType::json().to_string());
-//     }
-// }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_wasm_rpc::TypeAnnotatedValue;
+    use poem::IntoResponse;
+    use poem::web::headers::ContentType;
+
+    // #[tokio::test]
+    // async fn test_get_response_body() {
+    //     let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+    //     let response_body = internal::get_response_body(&type_annotated_value).unwrap();
+    //     let response = response_body.into_response();
+    //     let bytes = response.into_body().into_bytes().await.unwrap();
+    //     let result = String::from_utf8_lossy(&bytes).to_string();
+    //     let content_type = response.content_type();
+    //
+    //     // Had it serialised as json, it would have been "\"Hello\""
+    //     assert_eq!((result, content_type), ("Hello".to_string(), Some("text/plain")));
+    //
+    //     let type_annotated_value = TypeAnnotatedValue::U8(10);
+    //     let response_body = internal::get_response_body(&type_annotated_value).unwrap();
+    //     assert_eq!(response_body.into_response().content_type(),  Some("text/plain"));
+    //
+    //     let type_annotated_value = TypeAnnotatedValue::List {
+    //         values: vec![TypeAnnotatedValue::U8(10)],
+    //         typ: AnalysedType::U8,
+    //     };
+    //     let response_body = internal::get_response_body(&type_annotated_value).unwrap();
+    //     assert_eq!(response_body.into_response().content_type(), Some("application/octet-stream"));
+    //
+    //     let type_annotated_value = TypeAnnotatedValue::List {
+    //         values: vec![TypeAnnotatedValue::U8(10)],
+    //         typ: AnalysedType::U16,
+    //     };
+    //     let response_body = internal::get_response_body(&type_annotated_value).unwrap();
+    //     assert_eq!(response_body.into_response().content_type(), Some("application/json"));
+    //
+    //
+    //     let type_annotated_value = TypeAnnotatedValue::Record {
+    //         typ: vec![("name".to_string(), AnalysedType::Str)],
+    //         value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
+    //     };
+    //     let response_body = internal::get_response_body(&type_annotated_value).unwrap();
+    //     assert_eq!(response_body.into_response().content_type(), Some("application/json"));
+    // }
+
+    //#[tokio::test]
+    //async fn test_get_response_body_from_content_type() {
+        // let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+        // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+        // let response = response_body.into_response();
+        // let body = response.into_body().into_bytes().await.unwrap();
+        // let result = String::from_utf8_lossy(&body).to_string();
+        // // Had it serialised as Json, the result would have been: "\"Hello\""
+        // assert_eq!(result, "Hello".to_string());
+        //
+        // let type_annotated_value = TypeAnnotatedValue::U8(10);
+        // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+        // let response = response_body.into_response();
+        // let body = response.into_body().into_bytes().await.unwrap();
+        // let result = String::from_utf8_lossy(&body).to_string();
+        //
+        // assert_eq!(result, "10".to_string())
+
+        //
+        // let type_annotated_value = TypeAnnotatedValue::List {
+        //     values: vec![TypeAnnotatedValue::U8(10)],
+        //     typ: AnalysedType::U8,
+        // };
+        // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+        // assert_eq!(response_body.content_type(), ContentType::octet_stream().to_string());
+        //
+        // let type_annotated_value = TypeAnnotatedValue::List {
+        //     values: vec![TypeAnnotatedValue::U8(10)],
+        //     typ: AnalysedType::U16,
+        // };
+        // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+        // assert_eq!(response_body.content_type(), ContentType::json().to_string());
+        //
+        // let type_annotated_value = TypeAnnotatedValue::Record {
+        //     typ: vec![("name".to_string(), AnalysedType::Str)],
+        //     value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
+        // };
+        // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
+        // assert_eq!(response_body.content_type(), ContentType::json().to_string());
+    //}
+}
