@@ -56,17 +56,14 @@ impl TypedHttRequestDetails {
             .fields
             .iter()
             .find(|field| field.name == http::header::ACCEPT.to_string())
-            .map(|field| {
-                // split comma
+            .and_then(|field| {
                 field.value.get_primitive().map(|x| {
                     x.as_string()
                         .split(',')
-                        .into_iter()
                         .map(|v| v.to_string())
                         .collect::<Vec<String>>()
                 })
-            })
-            .flatten();
+            });
 
         // We ignore the content types that are not relevant to a server side application
         // and therefore ignore the ones that cannot be recognised. Example:
@@ -75,7 +72,7 @@ impl TypedHttRequestDetails {
 
         if let Some(primitive) = primitive {
             for content_type in primitive {
-                if let Some(content_type) = ContentType::from_str(content_type.as_str()).ok() {
+                if let Ok(content_type) = ContentType::from_str(content_type.as_str()) {
                     content_types.push(content_type)
                 }
             }

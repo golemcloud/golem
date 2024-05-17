@@ -31,18 +31,6 @@ impl ContentTypeHeaders {
             ContentTypeHeaders::Empty
         }
     }
-
-    pub fn from_accept(accept_content_headers: Vec<ContentType>) -> Self {
-        ContentTypeHeaders::Accept(accept_content_headers)
-    }
-
-    pub fn from_response(response_content_type: ContentType) -> Self {
-        ContentTypeHeaders::Response(response_content_type)
-    }
-
-    pub fn empty() -> Self {
-        ContentTypeHeaders::Empty
-    }
 }
 
 impl HttpContentTypeResponseMapper for TypeAnnotatedValue {
@@ -86,11 +74,11 @@ impl ContentTypeMapError {
 
     fn illegal_mapping(
         input_type: &AnalysedType,
-        expected_content_types: &Vec<ContentType>,
+        expected_content_types: &[ContentType],
     ) -> ContentTypeMapError {
         ContentTypeMapError::IllegalMapping {
             input_type: input_type.clone(),
-            expected_content_types: expected_content_types.clone(),
+            expected_content_types: expected_content_types.to_vec(),
         }
     }
 
@@ -230,142 +218,6 @@ mod internal {
         }
     }
 
-    fn handle_complex(
-        complex: &TypeAnnotatedValue,
-        accepted_headers: &Vec<ContentType>,
-    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        if accepted_headers.contains(&ContentType::json()) {
-            get_json(complex)
-        } else {
-            Err(ContentTypeMapError::illegal_mapping(
-                &AnalysedType::from(complex),
-                accepted_headers,
-            ))
-        }
-    }
-
-    fn handle_string(
-        string: &str,
-        accepted_headers: &Vec<ContentType>,
-    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        if accepted_headers.contains(&ContentType::json()) {
-            Ok(Body::from_string(string.to_string())
-                .with_content_type(ContentType::json().to_string()))
-        } else {
-            let non_json_content_type = pick_highest_priority_content_type(accepted_headers)?;
-            Ok(Body::from_bytes(bytes::Bytes::from(string.to_string()))
-                .with_content_type(non_json_content_type.to_string()))
-        }
-    }
-
-    fn handle_record_with_accepted_headers(
-        record: &TypeAnnotatedValue,
-        accepted_headers: &Vec<ContentType>,
-    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        // if record, we prioritise JSON
-        if accepted_headers.contains(&ContentType::json()) {
-            get_json(record)
-        } else {
-            // There is no way a Record can be properly serialised into any other formats to satisfy any other headers, therefore fail
-            Err(ContentTypeMapError::illegal_mapping(
-                &AnalysedType::from(record),
-                accepted_headers,
-            ))
-        }
-    }
-
-    fn handle_list_with_accepted_headers(
-        list: &TypeAnnotatedValue,
-        accepted_headers: &Vec<ContentType>,
-    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        match list {
-            TypeAnnotatedValue::List { values, typ } => {
-                match typ {
-                    // If the elements are u8, we consider it as a byte stream
-                    AnalysedType::U8 => {
-                        let byte_stream = get_byte_stream(values)?;
-                        let body = Body::from_bytes(bytes::Bytes::from(byte_stream));
-                        let content_type_header =
-                            pick_highest_priority_content_type(accepted_headers)?;
-                        Ok(body.with_content_type(content_type_header.to_string()))
-                    }
-                    _ => {
-                        // If the accepted headers contain JSON, we prioritise that and set ther response type header to json
-                        if accepted_headers.contains(&ContentType::json()) {
-                            get_json(list)
-                        } else {
-                            // There is no way a List can be properly serialised into any other formats to satisfy any other headers, therefore fail
-                            Err(ContentTypeMapError::illegal_mapping(
-                                &AnalysedType::from(list),
-                                accepted_headers,
-                            ))
-                        }
-                    }
-                }
-            }
-            _ => Err(ContentTypeMapError::illegal_mapping(
-                &AnalysedType::from(list),
-                accepted_headers,
-            )),
-        }
-    }
-
-    fn handle_primitive<A: Display + serde::Serialize>(
-        input: &A,
-        primitive_type: &AnalysedType,
-        accepted_content_type: &Vec<ContentType>,
-    ) -> Result<WithContentType<Body>, ContentTypeMapError> where {
-        if accepted_content_type.contains(&ContentType::text()) {
-            Ok(get_text_body(input))
-        } else if accepted_content_type.contains(&ContentType::json()) {
-            let json = serde_json::to_value(input)
-                .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))?;
-
-            let body = Body::from_json(json).map_err(|_| {
-                ContentTypeMapError::internal(format!("Failed to convert {} to json body", input))
-            })?;
-
-            Ok(body.with_content_type(ContentType::json().to_string()))
-        } else {
-            Err(ContentTypeMapError::illegal_mapping(
-                primitive_type,
-                accepted_content_type,
-            ))
-        }
-    }
-
-    fn pick_highest_priority_content_type(
-        input_content_types: &[ContentType],
-    ) -> Result<ContentType, ContentTypeMapError> {
-        let content_headers_in_priority: Vec<ContentType> = vec![
-            ContentType::json(),
-            ContentType::text(),
-            ContentType::text_utf8(),
-            ContentType::html(),
-            ContentType::xml(),
-            ContentType::form_url_encoded(),
-            ContentType::jpeg(),
-            ContentType::png(),
-            ContentType::octet_stream(),
-        ];
-
-        let mut prioritised_content_type = None;
-        for content_type in &content_headers_in_priority {
-            if input_content_types.contains(content_type) {
-                prioritised_content_type = Some(content_type.clone());
-                break;
-            }
-        }
-
-        if let Some(prioritised) = prioritised_content_type {
-            Ok(prioritised)
-        } else {
-            Err(ContentTypeMapError::internal(
-                "Failed to pick a content type to set in response headers",
-            ))
-        }
-    }
-
     // Neither Accept headers, nor the response type is set
     // In this case, we set the content header based on the type of TypeAnnotatedValue
     // If binary stream we set the content header to octet stream,
@@ -456,9 +308,9 @@ mod internal {
         }
     }
 
-    fn get_byte_stream(values: &Vec<TypeAnnotatedValue>) -> Result<Vec<u8>, ContentTypeMapError> {
+    fn get_byte_stream(values: &[TypeAnnotatedValue]) -> Result<Vec<u8>, ContentTypeMapError> {
         let bytes = values
-            .into_iter()
+            .iter()
             .map(|v| match v {
                 TypeAnnotatedValue::U8(u8) => Ok(*u8),
                 _ => Err(ContentTypeMapError::internal(
@@ -471,7 +323,7 @@ mod internal {
     }
 
     fn get_byte_stream_body(
-        values: &Vec<TypeAnnotatedValue>,
+        values: &[TypeAnnotatedValue],
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         let bytes = get_byte_stream(values)?;
         Ok(Body::from_bytes(bytes::Bytes::from(bytes))
@@ -493,13 +345,13 @@ mod internal {
         type_annotated_value: &TypeAnnotatedValue,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
-            TypeAnnotatedValue::List { typ, values } => match typ {
-                AnalysedType::U8 => get_byte_stream(values).map(|bytes| {
-                    Body::from_bytes(bytes::Bytes::from(bytes))
-                        .with_content_type(ContentType::json().to_string())
-                }),
-                _ => get_json(type_annotated_value),
-            },
+            TypeAnnotatedValue::List {
+                typ: AnalysedType::U8,
+                values,
+            } => get_byte_stream(values).map(|bytes| {
+                Body::from_bytes(bytes::Bytes::from(bytes))
+                    .with_content_type(ContentType::json().to_string())
+            }),
             TypeAnnotatedValue::Str(str) => Ok(Body::from_string(str.to_string())
                 .with_content_type(ContentType::json().to_string())),
             _ => get_json(type_annotated_value),
@@ -514,6 +366,142 @@ mod internal {
 
     fn get_text_body(value: impl Display) -> WithContentType<Body> {
         Body::from_string(value.to_string()).with_content_type(ContentType::text().to_string())
+    }
+
+    fn handle_complex(
+        complex: &TypeAnnotatedValue,
+        accepted_headers: &[ContentType],
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
+        if accepted_headers.contains(&ContentType::json()) {
+            get_json(complex)
+        } else {
+            Err(ContentTypeMapError::illegal_mapping(
+                &AnalysedType::from(complex),
+                accepted_headers,
+            ))
+        }
+    }
+
+    fn handle_list_with_accepted_headers(
+        list: &TypeAnnotatedValue,
+        accepted_headers: &[ContentType],
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
+        match list {
+            TypeAnnotatedValue::List { values, typ } => {
+                match typ {
+                    // If the elements are u8, we consider it as a byte stream
+                    AnalysedType::U8 => {
+                        let byte_stream = get_byte_stream(values)?;
+                        let body = Body::from_bytes(bytes::Bytes::from(byte_stream));
+                        let content_type_header =
+                            pick_highest_priority_content_type(accepted_headers)?;
+                        Ok(body.with_content_type(content_type_header.to_string()))
+                    }
+                    _ => {
+                        // If the accepted headers contain JSON, we prioritise that and set ther response type header to json
+                        if accepted_headers.contains(&ContentType::json()) {
+                            get_json(list)
+                        } else {
+                            // There is no way a List can be properly serialised into any other formats to satisfy any other headers, therefore fail
+                            Err(ContentTypeMapError::illegal_mapping(
+                                &AnalysedType::from(list),
+                                accepted_headers,
+                            ))
+                        }
+                    }
+                }
+            }
+            _ => Err(ContentTypeMapError::illegal_mapping(
+                &AnalysedType::from(list),
+                accepted_headers,
+            )),
+        }
+    }
+
+    fn handle_primitive<A: Display + serde::Serialize>(
+        input: &A,
+        primitive_type: &AnalysedType,
+        accepted_content_type: &[ContentType],
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> where {
+        if accepted_content_type.contains(&ContentType::text()) {
+            Ok(get_text_body(input))
+        } else if accepted_content_type.contains(&ContentType::json()) {
+            let json = serde_json::to_value(input)
+                .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))?;
+
+            let body = Body::from_json(json).map_err(|_| {
+                ContentTypeMapError::internal(format!("Failed to convert {} to json body", input))
+            })?;
+
+            Ok(body.with_content_type(ContentType::json().to_string()))
+        } else {
+            Err(ContentTypeMapError::illegal_mapping(
+                primitive_type,
+                accepted_content_type,
+            ))
+        }
+    }
+
+    fn handle_record_with_accepted_headers(
+        record: &TypeAnnotatedValue,
+        accepted_headers: &[ContentType],
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
+        // if record, we prioritise JSON
+        if accepted_headers.contains(&ContentType::json()) {
+            get_json(record)
+        } else {
+            // There is no way a Record can be properly serialised into any other formats to satisfy any other headers, therefore fail
+            Err(ContentTypeMapError::illegal_mapping(
+                &AnalysedType::from(record),
+                accepted_headers,
+            ))
+        }
+    }
+
+    fn handle_string(
+        string: &str,
+        accepted_headers: &[ContentType],
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
+        if accepted_headers.contains(&ContentType::json()) {
+            Ok(Body::from_string(string.to_string())
+                .with_content_type(ContentType::json().to_string()))
+        } else {
+            let non_json_content_type = pick_highest_priority_content_type(accepted_headers)?;
+            Ok(Body::from_bytes(bytes::Bytes::from(string.to_string()))
+                .with_content_type(non_json_content_type.to_string()))
+        }
+    }
+
+    fn pick_highest_priority_content_type(
+        input_content_types: &[ContentType],
+    ) -> Result<ContentType, ContentTypeMapError> {
+        let content_headers_in_priority: Vec<ContentType> = vec![
+            ContentType::json(),
+            ContentType::text(),
+            ContentType::text_utf8(),
+            ContentType::html(),
+            ContentType::xml(),
+            ContentType::form_url_encoded(),
+            ContentType::jpeg(),
+            ContentType::png(),
+            ContentType::octet_stream(),
+        ];
+
+        let mut prioritised_content_type = None;
+        for content_type in &content_headers_in_priority {
+            if input_content_types.contains(content_type) {
+                prioritised_content_type = Some(content_type.clone());
+                break;
+            }
+        }
+
+        if let Some(prioritised) = prioritised_content_type {
+            Ok(prioritised)
+        } else {
+            Err(ContentTypeMapError::internal(
+                "Failed to pick a content type to set in response headers",
+            ))
+        }
     }
 }
 
