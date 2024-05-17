@@ -135,7 +135,7 @@ mod internal {
             match headers {
                 Ok(response_headers) => {
                     let content_type_opt =
-                        match get_content_header(request_details, &response_headers) {
+                        match get_content_headers(request_details, &response_headers) {
                             Ok(optional_header) => optional_header,
                             Err(invalid_header) => {
                                 return poem::Response::builder()
@@ -180,17 +180,25 @@ mod internal {
         }
     }
 
-    fn get_content_header(
+    fn get_content_headers(
         request_details: &RequestDetails,
         response: &HeaderMap,
-    ) -> Result<Option<ContentType>, String> {
+    ) -> Result<Vec<ContentType>, String> {
         let request_accept = get_accept_content_type_from_request_details(request_details)?;
-        Ok(request_accept.or_else(|| get_content_type_from_response_headers(&response)))
+        if request_accept.is_empty() {
+            if let Some(content_type) = get_content_type_from_response_headers(&response) {
+                Ok(vec![content_type])
+            } else {
+                Ok(vec![])
+            }
+        } else{
+            Ok(request_accept)
+        }
     }
 
     fn get_accept_content_type_from_request_details(
         request_details: &RequestDetails,
-    ) -> Result<Option<ContentType>, String> {
+    ) -> Result<Vec<ContentType>, String> {
         match request_details {
             RequestDetails::Http(req) => req.get_accept_content_type_header(),
         }

@@ -49,22 +49,27 @@ pub struct TypedHttRequestDetails {
 }
 
 impl TypedHttRequestDetails {
-    pub fn get_accept_content_type_header(&self) -> Result<Option<ContentType>, String> {
+    pub fn get_accept_content_type_header(&self) -> Result<Vec<ContentType>, String> {
         let primitive = self
             .typed_header_values
             .0
             .fields
             .iter()
             .find(|field| field.name == http::header::ACCEPT.to_string())
-            .map(|field| field.value.get_primitive())
-            .flatten();
+            .map(|field| {
+                // split comma
+                field.value.get_primitive().map(|x| x.as_string().split(',').collect::<Vec<&str>>())
+            }).flatten();
 
         if let Some(primitive) = primitive {
-            ContentType::from_str(primitive.as_string().as_str())
-                .map_err(|err| err.to_string())
-                .map(Some)
+            let mut content_types = vec![];
+            for content_type in primitive {
+                let content_type = ContentType::from_str(content_type).map_err(|err| err.to_string())?;
+                content_types.push(content_type);
+            }
+            Ok(content_types)
         } else {
-            Ok(None)
+            Ok(vec![])
         }
     }
 
