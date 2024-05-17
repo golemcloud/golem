@@ -524,7 +524,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_response_body_with_no_content_type() {
-
         // string
         let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
         let (content_type,  body) = get_content_type_and_body(&type_annotated_value);
@@ -567,8 +566,11 @@ mod tests {
             value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
         };
 
-        let response_body = internal::get_response_body(&type_annotated_value).unwrap();
-        assert_eq!(response_body.into_response().content_type(), Some("application/json"));
+        let (content_type,  body) = get_content_type_and_body(&type_annotated_value);
+        let data_as_str = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+        let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
+        let expected_json = serde_json::json!({"name": "Hello"});
+        assert_eq!((result_json, content_type), (expected_json, Some("application/json".to_string())));
     }
 
     //#[tokio::test]
