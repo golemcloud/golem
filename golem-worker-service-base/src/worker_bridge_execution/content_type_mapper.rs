@@ -189,7 +189,7 @@ mod internal {
     }
 
     fn get_null() -> Result<WithContentType<Body>, ContentTypeMapError> {
-        Body::from_json(serde_json::Value::Null).map(|body| body.with_content_type(ContentType::json().to_string())).map_err(|err| ContentTypeMapError::internal("Failed to convert to json body"))
+        Body::from_json(serde_json::Value::Null).map(|body| body.with_content_type(ContentType::json().to_string())).map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))
     }
 
     fn get_text_body(value: impl Display) -> WithContentType<Body> {

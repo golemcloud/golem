@@ -82,6 +82,7 @@ mod internal {
 
     use poem::{Body, IntoResponse, ResponseParts};
     use std::collections::HashMap;
+    use http_02::HeaderName;
     use poem::web::headers::ContentType;
 
     pub(crate) struct IntermediateHttpResponse {
@@ -133,26 +134,27 @@ mod internal {
                 .map_err(|e: hyper::http::Error| e.to_string());
 
             let status = &self.status;
-            let eval_result = &self.body;
+            let evaluation_result = &self.body;
 
             match headers {
                 Ok(response_headers) => {
                     let content_type_opt =
-                        get_content_type_from_response_headers(&response_headers);
+                       match get_content_header(request_details, &response_headers) {
+                           Ok(optional_header) => optional_header,
+                           Err(invalid_header) => {
+                               return poem::Response::builder()
+                                   .status(StatusCode::BAD_REQUEST)
+                                   .body(Body::from_string(invalid_header))
+                           }
+                       };
 
-
-                    match eval_result {
-
+                    match evaluation_result {
                         EvaluationResult::Value(type_annotated_value) => {
-                            let body_with_content_type =
-                                type_annotated_value.to_response_body(&content_type_opt);
-
-
                             match type_annotated_value.to_response_body(&content_type_opt) {
-                                Ok(body) => {
-                                    let mut response = body.into_response();
+                                Ok(body_with_header) => {
+                                    let mut response = body_with_header.into_response();
                                     response.set_status(*status);
-                                    response.headers().extend(response_headers);
+                                    response.headers_mut().extend(response_headers);
                                     response
                                 }
                                 Err(content_map_error) => poem::Response::builder()
@@ -182,11 +184,27 @@ mod internal {
         }
     }
 
+    fn get_content_header(
+        request_details: &RequestDetails,
+        response: &HeaderMap
+    ) -> Result<Option<ContentType>, String> {
+        let request_accept = get_accept_content_type_from_request_details(request_details)?;
+        Ok(request_accept.or_else(|| get_content_type_from_response_headers(&response)))
+    }
+
+    fn get_accept_content_type_from_request_details(
+        request_details: &RequestDetails,
+    ) -> Result<Option<ContentType>, String> {
+         match request_details {
+             RequestDetails::Http(req) => req.get_accept_content_type_header()
+         }
+    }
+
     fn get_content_type_from_response_headers(
         response_headers: &HeaderMap,
     ) -> Option<ContentType> {
         response_headers
-            .get("content-type")
+            .get(http::header::CONTENT_TYPE.to_string())
             .and_then(|header_value| {
                 header_value
                     .to_str()

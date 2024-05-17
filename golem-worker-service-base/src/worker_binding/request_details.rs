@@ -5,10 +5,12 @@ use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::TypeAnnotatedValue;
-use http::HeaderMap;
+use http::{HeaderMap, HeaderValue};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
+use http_02::HeaderName;
+use poem::web::headers::ContentType;
 
 #[derive(Clone, Debug)]
 pub enum RequestDetails {
@@ -47,6 +49,19 @@ pub struct TypedHttRequestDetails {
 }
 
 impl TypedHttRequestDetails {
+    pub fn get_accept_content_type_header(&self) -> Result<Option<ContentType>, String> {
+       let primitive =
+           self.typed_query_values.0.fields.iter().find(|field|
+               field.name == http::header::ACCEPT.to_string()).map(|field| field.value.get_primitive()).flatten();
+
+        if let Some(primitive) = primitive {
+            ContentType::from_str(primitive.as_string().as_str()).map_err(|err| err.to_string()).map(Some)
+        } else {
+            Ok(None)
+        }
+
+
+    }
 
     fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
         let mut typed_path_values: TypeAnnotatedValue = self.typed_path_key_values.clone().0.into();
