@@ -82,7 +82,7 @@ mod internal {
 
     use poem::{Body, IntoResponse, ResponseParts};
     use std::collections::HashMap;
-    
+
     use poem::web::headers::ContentType;
 
     pub(crate) struct IntermediateHttpResponse {
@@ -102,8 +102,8 @@ mod internal {
                 EvaluationContext::from(worker_request, worker_response, request_details);
 
             if let Some(res_map) = response_mapping {
-                let http_response_mapping = HttpResponseMapping::try_from(res_map)
-                    .map_err(EvaluationError::Message)?;
+                let http_response_mapping =
+                    HttpResponseMapping::try_from(res_map).map_err(EvaluationError::Message)?;
 
                 let status_code =
                     get_status_code(&http_response_mapping.status, &evaluation_context)?;
@@ -139,14 +139,14 @@ mod internal {
             match headers {
                 Ok(response_headers) => {
                     let content_type_opt =
-                       match get_content_header(request_details, &response_headers) {
-                           Ok(optional_header) => optional_header,
-                           Err(invalid_header) => {
-                               return poem::Response::builder()
-                                   .status(StatusCode::BAD_REQUEST)
-                                   .body(Body::from_string(invalid_header))
-                           }
-                       };
+                        match get_content_header(request_details, &response_headers) {
+                            Ok(optional_header) => optional_header,
+                            Err(invalid_header) => {
+                                return poem::Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .body(Body::from_string(invalid_header))
+                            }
+                        };
 
                     match evaluation_result {
                         EvaluationResult::Value(type_annotated_value) => {
@@ -171,7 +171,7 @@ mod internal {
                             };
 
                             poem::Response::from_parts(parts, Body::empty())
-                        },
+                        }
                     }
                 }
                 Err(err) => poem::Response::builder()
@@ -186,7 +186,7 @@ mod internal {
 
     fn get_content_header(
         request_details: &RequestDetails,
-        response: &HeaderMap
+        response: &HeaderMap,
     ) -> Result<Option<ContentType>, String> {
         let request_accept = get_accept_content_type_from_request_details(request_details)?;
         Ok(request_accept.or_else(|| get_content_type_from_response_headers(&response)))
@@ -195,14 +195,12 @@ mod internal {
     fn get_accept_content_type_from_request_details(
         request_details: &RequestDetails,
     ) -> Result<Option<ContentType>, String> {
-         match request_details {
-             RequestDetails::Http(req) => req.get_accept_content_type_header()
-         }
+        match request_details {
+            RequestDetails::Http(req) => req.get_accept_content_type_header(),
+        }
     }
 
-    fn get_content_type_from_response_headers(
-        response_headers: &HeaderMap,
-    ) -> Option<ContentType> {
+    fn get_content_type_from_response_headers(response_headers: &HeaderMap) -> Option<ContentType> {
         response_headers
             .get(http::header::CONTENT_TYPE.to_string())
             .and_then(|header_value| {
