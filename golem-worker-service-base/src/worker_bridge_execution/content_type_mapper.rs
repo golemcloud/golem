@@ -145,7 +145,6 @@ mod internal {
     use poem::{Body, IntoResponse};
     use std::fmt::Display;
 
-
     // Accept headers are provided, but the response type header is not set
     pub(crate) fn get_response_body_from_accept_content_headers(
         type_annotated_value: &TypeAnnotatedValue,
@@ -322,10 +321,11 @@ mod internal {
             let json = serde_json::to_value(input)
                 .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))?;
 
-            let body = Body::from_json(json).map_err(|_| ContentTypeMapError::internal(format!("Failed to convert {} to json body", input)))?;
+            let body = Body::from_json(json).map_err(|_| {
+                ContentTypeMapError::internal(format!("Failed to convert {} to json body", input))
+            })?;
 
             Ok(body.with_content_type(ContentType::json().to_string()))
-
         } else {
             Err(ContentTypeMapError::illegal_mapping(
                 primitive_type,

@@ -58,10 +58,13 @@ impl TypedHttRequestDetails {
             .find(|field| field.name == http::header::ACCEPT.to_string())
             .map(|field| {
                 // split comma
-                field
-                    .value
-                    .get_primitive()
-                    .map(|x| x.as_string().split(',').collect::<Vec<&str>>())
+                field.value.get_primitive().map(|x| {
+                    x.as_string()
+                        .split(',')
+                        .into_iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<String>>()
+                })
             })
             .flatten();
 
@@ -72,7 +75,7 @@ impl TypedHttRequestDetails {
 
         if let Some(primitive) = primitive {
             for content_type in primitive {
-                if let Some(content_type) = ContentType::from_str(content_type).ok() {
+                if let Some(content_type) = ContentType::from_str(content_type.as_str()).ok() {
                     content_types.push(content_type)
                 }
             }
