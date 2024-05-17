@@ -8,16 +8,16 @@ use std::fmt::{Display, Formatter};
 pub trait HttpContentTypeResponseMapper {
     fn to_response_body(
         &self,
-        content_type_opt: &Vec<ContentType>,
+        content_type_opt: &Option<ContentType>,
     ) -> Result<WithContentType<Body>, ContentTypeMapError>;
 }
 
 impl HttpContentTypeResponseMapper for TypeAnnotatedValue {
     fn to_response_body(
         &self,
-        content_type: &Vec<ContentType>,
+        response_content_type: &Option<ContentType>,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        match content_type {
+        match response_content_type {
             Some(content_type) => internal::get_response_body_from_content_type(self, content_type),
             None => internal::get_response_body(self),
         }
@@ -128,9 +128,9 @@ mod internal {
 
     pub(crate) fn get_response_body_from_content_type(
         type_annotated_value: &TypeAnnotatedValue,
-        content_type: &Vec<ContentType>,
+        content_type: &ContentType,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        if content_type.contains(&ContentType::json()) {
+        if content_type == &ContentType::json() {
             get_json_or_binary_stream(type_annotated_value)
         } else {
             convert_only_if_binary_stream(type_annotated_value, content_type)
@@ -139,14 +139,14 @@ mod internal {
 
     fn convert_only_if_binary_stream(
         type_annotated_value: &TypeAnnotatedValue,
-        non_json_content_type: &Vec<ContentType>,
+        non_json_content_type: &ContentType,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
             TypeAnnotatedValue::List { typ, values } => match typ {
                 // It is already a binary stream and we keep it as is
                 AnalysedType::U8 => get_byte_stream(values).map(|bytes| {
                     Body::from_bytes(bytes::Bytes::from(bytes))
-                        .with_content_type(non_json_content_type.join(","))
+                        .with_content_type(non_json_content_type.to_string())
                 }),
                 // Fail if it is not a binary stream
                 other => Err(ContentTypeMapError::expect_only_binary_stream(other)),

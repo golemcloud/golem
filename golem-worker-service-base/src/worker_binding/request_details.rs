@@ -49,30 +49,6 @@ pub struct TypedHttRequestDetails {
 }
 
 impl TypedHttRequestDetails {
-    pub fn get_accept_content_type_header(&self) -> Result<Vec<ContentType>, String> {
-        let primitive = self
-            .typed_header_values
-            .0
-            .fields
-            .iter()
-            .find(|field| field.name == http::header::ACCEPT.to_string())
-            .map(|field| {
-                // split comma
-                field.value.get_primitive().map(|x| x.as_string().split(',').collect::<Vec<&str>>())
-            }).flatten();
-
-        if let Some(primitive) = primitive {
-            let mut content_types = vec![];
-            for content_type in primitive {
-                let content_type = ContentType::from_str(content_type).map_err(|err| err.to_string())?;
-                content_types.push(content_type);
-            }
-            Ok(content_types)
-        } else {
-            Ok(vec![])
-        }
-    }
-
     fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
         let mut typed_path_values: TypeAnnotatedValue = self.typed_path_key_values.clone().0.into();
         let typed_query_values: TypeAnnotatedValue = self.typed_query_values.clone().0.into();

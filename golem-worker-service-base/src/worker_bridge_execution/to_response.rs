@@ -134,15 +134,7 @@ mod internal {
 
             match headers {
                 Ok(response_headers) => {
-                    let content_type_opt =
-                        match get_content_headers(request_details, &response_headers) {
-                            Ok(optional_header) => optional_header,
-                            Err(invalid_header) => {
-                                return poem::Response::builder()
-                                    .status(StatusCode::BAD_REQUEST)
-                                    .body(Body::from_string(invalid_header))
-                            }
-                        };
+                    let content_type_opt = get_content_type_from_response_headers(&response_headers);
 
                     match evaluation_result {
                         EvaluationResult::Value(type_annotated_value) => {
@@ -177,30 +169,6 @@ mod internal {
                         err
                     ))),
             }
-        }
-    }
-
-    fn get_content_headers(
-        request_details: &RequestDetails,
-        response: &HeaderMap,
-    ) -> Result<Vec<ContentType>, String> {
-        let request_accept = get_accept_content_type_from_request_details(request_details)?;
-        if request_accept.is_empty() {
-            if let Some(content_type) = get_content_type_from_response_headers(&response) {
-                Ok(vec![content_type])
-            } else {
-                Ok(vec![])
-            }
-        } else{
-            Ok(request_accept)
-        }
-    }
-
-    fn get_accept_content_type_from_request_details(
-        request_details: &RequestDetails,
-    ) -> Result<Vec<ContentType>, String> {
-        match request_details {
-            RequestDetails::Http(req) => req.get_accept_content_type_header(),
         }
     }
 
