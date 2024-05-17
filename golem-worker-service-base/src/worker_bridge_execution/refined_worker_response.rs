@@ -2,9 +2,10 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 
 use crate::worker_bridge_execution::WorkerResponse;
+
 // Refined Worker response is different from WorkerResponse, because,
 // it ensures that we are not returning a vector of result if they are not named results
-// or uni
+// or unit
 #[derive(Debug, Clone)]
 pub enum RefinedWorkerResponse {
     Unit,
