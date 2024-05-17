@@ -508,109 +508,180 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_wasm_rpc::TypeAnnotatedValue;
     use poem::web::headers::ContentType;
     use poem::IntoResponse;
     use serde_json::Value;
 
-    fn get_content_type_and_body(input: &TypeAnnotatedValue) -> (Option<String>, Body) {
-        let response_body = internal::get_response_body(&input).unwrap();
-        let response = response_body.into_response();
-        let (parts, body) = response.into_parts();
-        let content_type = parts.headers.get("content-type").map(|v| v.to_str().unwrap().to_string());
-        (content_type, body)
+    #[cfg(test)]
+    mod no_content_type_header {
+        use super::*;
+
+        fn get_content_type_and_body(input: &TypeAnnotatedValue) -> (Option<String>, Body) {
+            let response_body = internal::get_response_body(&input).unwrap();
+            let response = response_body.into_response();
+            let (parts, body) = response.into_parts();
+            let content_type = parts.headers.get("content-type").map(|v| v.to_str().unwrap().to_string());
+            (content_type, body)
+        }
+
+        #[tokio::test]
+        async fn test_string_type() {
+            // string
+            let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value);
+            let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+            // Had it serialized as json, it would have been "\"Hello\""
+            assert_eq!((result, content_type), ("Hello".to_string(), Some("text/plain".to_string())));
+        }
+
+        #[tokio::test]
+        async fn test_singleton_u8_type() {
+            // Singleton u8
+            let type_annotated_value = TypeAnnotatedValue::U8(10);
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value);
+            let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+            assert_eq!((result, content_type), ("10".to_string(), Some("text/plain".to_string())));
+        }
+
+        #[tokio::test]
+        async fn test_list_u8_type() {
+            // List of u8
+            let type_annotated_value = TypeAnnotatedValue::List {
+                values: vec![TypeAnnotatedValue::U8(10)],
+                typ: AnalysedType::U8,
+            };
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value);
+            let result = body.into_bytes().await.unwrap();
+
+            assert_eq!((result, content_type), (bytes::Bytes::from(vec![10]), Some("application/octet-stream".to_string())));
+        }
+
+        #[tokio::test]
+        async fn test_list_non_u8_type() {
+            // List of non u8
+            let type_annotated_value = TypeAnnotatedValue::List {
+                values: vec![TypeAnnotatedValue::U16(10)],
+                typ: AnalysedType::U16,
+            };
+
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value);
+            let data_as_str = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+            let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
+            let expected_json = serde_json::Value::Array(vec![serde_json::Value::Number(serde_json::Number::from(10))]);
+            assert_eq!((result_json, content_type), (expected_json, Some("application/json".to_string())));
+        }
+
+        #[tokio::test]
+        async fn test_record_type() {
+            // Record
+            let type_annotated_value = TypeAnnotatedValue::Record {
+                typ: vec![("name".to_string(), AnalysedType::Str)],
+                value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
+            };
+
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value);
+            let data_as_str = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+            let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
+            let expected_json = serde_json::json!({"name": "Hello"});
+            assert_eq!((result_json, content_type), (expected_json, Some("application/json".to_string())));
+        }
     }
 
 
-    #[tokio::test]
-    async fn test_get_response_body_with_no_content_type() {
-        // string
-        let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
-        let (content_type,  body) = get_content_type_and_body(&type_annotated_value);
-        let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-        // Had it serialised as json, it would have been "\"Hello\""
-        assert_eq!((result, content_type), ("Hello".to_string(), Some("text/plain".to_string())));
+    #[cfg(test)]
+    mod with_response_type_header {
+        use super::*;
 
-        // Singleton u8
-        let type_annotated_value = TypeAnnotatedValue::U8(10);
-        let (content_type,  body) = get_content_type_and_body(&type_annotated_value);
-        let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-        assert_eq!((result, content_type), ("10".to_string(), Some("text/plain".to_string())));
+        fn get_content_type_and_body(input: &TypeAnnotatedValue, header: &ContentType) -> (Option<String>, Body) {
+            let response_body = internal::get_body_from_response_content_type(&input, header).unwrap();
+            let response = response_body.into_response();
+            let (parts, body) = response.into_parts();
+            let content_type = parts.headers.get("content-type").map(|v| v.to_str().unwrap().to_string());
+            (content_type, body)
+        }
 
-        // List of u8
-        let type_annotated_value = TypeAnnotatedValue::List {
-            values: vec![TypeAnnotatedValue::U8(10)],
-            typ: AnalysedType::U8,
-        };
-        let (content_type,  body) = get_content_type_and_body(&type_annotated_value);
-        let result = body.into_bytes().await.unwrap();
+        #[tokio::test]
+        async fn test_string_type_as_text() {
+            let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value, &ContentType::text());
+            let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+            // Had it serialized as json, it would have been "\"Hello\""
+            assert_eq!((result, content_type), ("Hello".to_string(), Some("text/plain".to_string())));
+        }
 
-        assert_eq!((result, content_type), (bytes::Bytes::from(vec![10]), Some("application/octet-stream".to_string())));
+        #[tokio::test]
+        async fn test_string_type_as_json() {
+            let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value, &ContentType::json());
+            let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+            // Had it serialized as json, it would have been "\"Hello\""
+            assert_eq!((result, content_type), ("Hello".to_string(), Some("application/json".to_string())));
+        }
 
-        // List of non u8
-        let type_annotated_value = TypeAnnotatedValue::List {
-            values: vec![TypeAnnotatedValue::U16(10)],
-            typ: AnalysedType::U16,
-        };
+        #[tokio::test]
+        async fn test_json_string_type_as_json() {
+            let type_annotated_value = TypeAnnotatedValue::Str("\"Hello\"".to_string());
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value, &ContentType::json());
+            let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+            assert_eq!((result, content_type), ("\"Hello\"".to_string(), Some("application/json".to_string())));
+        }
 
-        let (content_type,  body) = get_content_type_and_body(&type_annotated_value);
-        let data_as_str = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-        let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
-        let expected_json = serde_json::Value::Array(vec![serde_json::Value::Number(serde_json::Number::from(10))]);
-        assert_eq!((result_json, content_type), (expected_json, Some("application/json".to_string())));
+        #[tokio::test]
+        async fn test_singleton_u8_type() {
+            // Singleton u8
+            let type_annotated_value = TypeAnnotatedValue::U8(10);
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value, &ContentType::json());
+            let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+            assert_eq!((result, content_type), ("10".to_string(), Some("application/json".to_string())));
+        }
 
+        #[tokio::test]
+        async fn test_list_u8_type() {
+            // List of u8
+            let type_annotated_value = TypeAnnotatedValue::List {
+                values: vec![TypeAnnotatedValue::U8(10)],
+                typ: AnalysedType::U8,
+            };
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value, &ContentType::json());
+            let result = &body.into_bytes().await.unwrap();
+            let data_as_str = String::from_utf8_lossy(result).to_string();
+            let result_json: Result<Value, _> = serde_json::from_str(data_as_str.as_str());
 
-        // Record
-        let type_annotated_value = TypeAnnotatedValue::Record {
-            typ: vec![("name".to_string(), AnalysedType::Str)],
-            value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
-        };
+            assert_eq!((result, content_type), (&bytes::Bytes::from(vec![10]), Some("application/json".to_string())));
+            assert!(result_json.is_err()); // That we haven't jsonified this case explicitly
+        }
 
-        let (content_type,  body) = get_content_type_and_body(&type_annotated_value);
-        let data_as_str = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
-        let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
-        let expected_json = serde_json::json!({"name": "Hello"});
-        assert_eq!((result_json, content_type), (expected_json, Some("application/json".to_string())));
+        #[tokio::test]
+        async fn test_list_non_u8_type() {
+            // List of non u8
+            let type_annotated_value = TypeAnnotatedValue::List {
+                values: vec![TypeAnnotatedValue::U16(10)],
+                typ: AnalysedType::U16,
+            };
+
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value, &ContentType::json());
+            let data_as_str = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+            let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
+            let expected_json = Value::Array(vec![serde_json::Value::Number(serde_json::Number::from(10))]);
+            // That we jsonify any list other than u8, and can be retrieveed as a valid JSON
+            assert_eq!((result_json, content_type), (expected_json, Some("application/json".to_string())));
+        }
+
+        #[tokio::test]
+        async fn test_record_type() {
+            // Record
+            let type_annotated_value = TypeAnnotatedValue::Record {
+                typ: vec![("name".to_string(), AnalysedType::Str)],
+                value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
+            };
+
+            let (content_type, body) = get_content_type_and_body(&type_annotated_value, &ContentType::json());
+            let data_as_str = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+            let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
+            let expected_json = serde_json::json!({"name": "Hello"});
+            assert_eq!((result_json, content_type), (expected_json, Some("application/json".to_string())));
+        }
     }
 
-    //#[tokio::test]
-    //async fn test_get_response_body_from_content_type() {
-    // let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
-    // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-    // let response = response_body.into_response();
-    // let body = response.into_body().into_bytes().await.unwrap();
-    // let result = String::from_utf8_lossy(&body).to_string();
-    // // Had it serialised as Json, the result would have been: "\"Hello\""
-    // assert_eq!(result, "Hello".to_string());
-    //
-    // let type_annotated_value = TypeAnnotatedValue::U8(10);
-    // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-    // let response = response_body.into_response();
-    // let body = response.into_body().into_bytes().await.unwrap();
-    // let result = String::from_utf8_lossy(&body).to_string();
-    //
-    // assert_eq!(result, "10".to_string())
 
-    //
-    // let type_annotated_value = TypeAnnotatedValue::List {
-    //     values: vec![TypeAnnotatedValue::U8(10)],
-    //     typ: AnalysedType::U8,
-    // };
-    // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-    // assert_eq!(response_body.content_type(), ContentType::octet_stream().to_string());
-    //
-    // let type_annotated_value = TypeAnnotatedValue::List {
-    //     values: vec![TypeAnnotatedValue::U8(10)],
-    //     typ: AnalysedType::U16,
-    // };
-    // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-    // assert_eq!(response_body.content_type(), ContentType::json().to_string());
-    //
-    // let type_annotated_value = TypeAnnotatedValue::Record {
-    //     typ: vec![("name".to_string(), AnalysedType::Str)],
-    //     value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
-    // };
-    // let response_body = internal::get_response_body_from_content_type(&type_annotated_value, &ContentType::json()).unwrap();
-    // assert_eq!(response_body.content_type(), ContentType::json().to_string());
-    //}
 }
