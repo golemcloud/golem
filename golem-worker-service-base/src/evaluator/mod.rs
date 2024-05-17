@@ -1,24 +1,59 @@
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::get_json_from_typed_value;
-use golem_wasm_rpc::TypeAnnotatedValue;
-
-use crate::primitive::GetPrimitive;
-use getter::GetError;
-use getter::Getter;
-use path::Path;
-
-use crate::expression::{Expr, InnerNumber};
-use crate::merge::Merge;
-
-use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
-
+pub use evaluator_context::*;
+mod evaluator_context;
 mod getter;
 mod math_op_evaluator;
 mod path;
 mod pattern_match_evaluator;
 
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::json::get_json_from_typed_value;
+use golem_wasm_rpc::TypeAnnotatedValue;
+
+use crate::expression;
+use crate::primitive::{GetPrimitive, Primitive};
+use getter::GetError;
+use getter::Getter;
+use path::Path;
+
+use crate::expression::{Expr, InnerNumber};
+
 pub trait Evaluator {
-    fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError>;
+    fn evaluate(
+        &self,
+        evaluation_context: &EvaluationContext,
+    ) -> Result<EvaluationResult, EvaluationError>;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvaluationResult {
+    Value(TypeAnnotatedValue),
+    Unit,
+}
+
+impl EvaluationResult {
+    pub fn get_primitive(&self) -> Option<Primitive> {
+        match self {
+            EvaluationResult::Value(value) => value.get_primitive(),
+            EvaluationResult::Unit => None,
+        }
+    }
+
+    pub fn is_unit(&self) -> bool {
+        matches!(self, EvaluationResult::Unit)
+    }
+
+    pub fn get_value(&self) -> Option<TypeAnnotatedValue> {
+        match self {
+            EvaluationResult::Value(value) => Some(value.clone()),
+            EvaluationResult::Unit => None,
+        }
+    }
+}
+
+impl From<TypeAnnotatedValue> for EvaluationResult {
+    fn from(value: TypeAnnotatedValue) -> Self {
+        EvaluationResult::Value(value)
+    }
 }
 
 #[derive(Debug, PartialEq, thiserror::Error)]
@@ -29,86 +64,66 @@ pub enum EvaluationError {
     Message(String),
 }
 
-pub struct RawString<'t> {
-    pub input: &'t str,
-}
-
-// When we expect only primitives within a string, and uses ${} not as an expr,
-// but as a mere place holder. This type disallows complex structures to end up
-// in values such as function-name.
-impl<'t> RawString<'t> {
-    pub fn new(str: &'t str) -> RawString<'t> {
-        RawString { input: str }
-    }
-}
-
-// Foo/{user-id}
-impl<'t> Evaluator for RawString<'t> {
-    fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
-        let mut combined_string = String::new();
-        let mut tokenizer: Tokenizer = Tokenizer::new(self.input);
-
-        while let Some(token) = tokenizer.next_token() {
-            match token {
-                Token::MultiChar(MultiCharTokens::InterpolationStart) => {
-                    let place_holder_name = tokenizer.capture_string_until(&Token::RParen);
-
-                    if let Some(place_holder_name) = place_holder_name {
-                        let type_annotated_value =
-                            input.get(&Path::from_key(place_holder_name.as_str()))?;
-
-                        match type_annotated_value.get_primitive() {
-                            Some(primitive) => {
-                                combined_string.push_str(primitive.to_string().as_str())
-                            }
-
-                            None => {
-                                return Err(EvaluationError::Message(format!(
-                                    "Unsupported json type to be replaced in place holder. Make sure the values are primitive {}",
-                                    place_holder_name,
-                                )));
-                            }
-                        }
-                    }
-                }
-                token => combined_string.push_str(token.to_string().as_str()),
-            }
-        }
-
-        Ok(TypeAnnotatedValue::Str(combined_string))
+impl<T: AsRef<str>> From<T> for EvaluationError {
+    fn from(value: T) -> Self {
+        EvaluationError::Message(value.as_ref().to_string())
     }
 }
 
 impl Evaluator for Expr {
-    fn evaluate(&self, input: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
+    fn evaluate(&self, input: &EvaluationContext) -> Result<EvaluationResult, EvaluationError> {
         let expr: &Expr = self;
 
         // An expression evaluation needs to be careful with string values
         // and therefore returns ValueTyped
         fn go(
             expr: &Expr,
-            input: &mut TypeAnnotatedValue,
-        ) -> Result<TypeAnnotatedValue, EvaluationError> {
+            input: &mut EvaluationContext,
+        ) -> Result<EvaluationResult, EvaluationError> {
             match expr {
-                Expr::Request() => input
-                    .get(&Path::from_key(Token::request().to_string().as_str()))
-                    .map_err(|err| err.into()),
-                Expr::Worker() => input
-                    .get(&Path::from_key(Token::worker().to_string().as_str()))
-                    .map_err(|err| err.into()),
+                Expr::Request() => match &input.request_data {
+                    Some(request_data) => Ok(request_data.clone().to_type_annotated_value().into()),
+                    None => Err(EvaluationError::Message(
+                        "Request data is not available".to_string(),
+                    )),
+                },
+
+                Expr::Worker() => {
+                    let worker_data = internal::MergedWorkerData::new(
+                        input.worker_request.clone(),
+                        input.worker_response.clone(),
+                    );
+                    let evaluation_result = worker_data.get_evaluation_result();
+                    evaluation_result.ok_or(EvaluationError::Message(
+                        "Worker data is not available".to_string(),
+                    ))
+                }
 
                 Expr::SelectIndex(expr, index) => {
                     let evaluation_result = go(expr, input)?;
                     evaluation_result
+                        .get_value()
+                        .ok_or(EvaluationError::Message(format!(
+                            "The expression is evaluated to unit and doesn't have an index {}",
+                            index
+                        )))?
                         .get(&Path::from_index(*index))
+                        .map(|r| r.into())
                         .map_err(|err| err.into())
                 }
 
                 Expr::SelectField(expr, field_name) => {
-                    let evaluation_result = go(expr, input)?;
+                    let evaluation_result =
+                        go(expr, input)?
+                            .get_value()
+                            .ok_or(EvaluationError::Message(format!(
+                                "The expression is evaluated to unit and doesn't have an field {}",
+                                field_name
+                            )))?;
 
                     evaluation_result
                         .get(&Path::from_key(field_name.as_str()))
+                        .map(|r| r.into())
                         .map_err(|err| err.into())
                 }
 
@@ -116,40 +131,51 @@ impl Evaluator for Expr {
                     let left = go(left, input)?;
                     let right = go(right, input)?;
 
-                    math_op_evaluator::evaluate_math_op(&left, &right, |left, right| left == right)
+                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
+                        left == right
+                    })
                 }
                 Expr::GreaterThan(left, right) => {
                     let left = go(left, input)?;
                     let right = go(right, input)?;
-                    math_op_evaluator::evaluate_math_op(&left, &right, |left, right| left > right)
+
+                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
+                        left > right
+                    })
                 }
                 Expr::GreaterThanOrEqualTo(left, right) => {
                     let left = go(left, input)?;
                     let right = go(right, input)?;
 
-                    math_op_evaluator::evaluate_math_op(&left, &right, |left, right| left >= right)
+                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
+                        left >= right
+                    })
                 }
                 Expr::LessThan(left, right) => {
                     let left = go(left, input)?;
                     let right = go(right, input)?;
 
-                    math_op_evaluator::evaluate_math_op(&left, &right, |left, right| left < right)
+                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
+                        left < right
+                    })
                 }
                 Expr::LessThanOrEqualTo(left, right) => {
                     let left = go(left, input)?;
                     let right = go(right, input)?;
 
-                    math_op_evaluator::evaluate_math_op(&left, &right, |left, right| left <= right)
+                    math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
+                        left <= right
+                    })
                 }
 
                 Expr::Not(expr) => {
                     let evaluated_expr = expr.evaluate(input)?;
 
                     match evaluated_expr {
-                        TypeAnnotatedValue::Bool(value) => Ok(TypeAnnotatedValue::Bool(!value)),
+                        EvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => Ok(EvaluationResult::Value(TypeAnnotatedValue::Bool(!value))),
                         _ => Err(EvaluationError::Message(format!(
                             "The expression is evaluated to {} but it is not a boolean value to apply not (!) operator on",
-                            get_json_from_typed_value(&evaluated_expr)
+                           &evaluated_expr.get_value().map_or("unit".to_string(), |eval_result| get_json_from_typed_value(&eval_result).to_string())
                         ))),
                     }
                 }
@@ -160,7 +186,7 @@ impl Evaluator for Expr {
                     let right = go(right, input)?;
 
                     match pred {
-                        TypeAnnotatedValue::Bool(value) => {
+                        EvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => {
                             if value {
                                 Ok(left)
                             } else {
@@ -169,40 +195,48 @@ impl Evaluator for Expr {
                         }
                         _ => Err(EvaluationError::Message(format!(
                             "The predicate expression is evaluated to {} but it is not a boolean value",
-                            get_json_from_typed_value(&pred)
+                            &pred.get_value().map_or("unit".to_string(), |eval_result| get_json_from_typed_value(&eval_result).to_string())
                         ))),
                     }
                 }
 
                 Expr::Let(str, expr) => {
-                    let value = go(expr, input)?;
-                    let typ = AnalysedType::from(&value);
+                    let eval_result = go(expr, input)?;
 
-                    let result = TypeAnnotatedValue::Record {
-                        value: vec![(str.to_string(), value)],
-                        typ: vec![(str.to_string(), typ)],
-                    };
+                    eval_result
+                        .get_value()
+                        .map_or(Ok(EvaluationResult::Unit), |value| {
+                            let typ = AnalysedType::from(&value);
 
-                    input.merge(&result);
+                            let result = TypeAnnotatedValue::Record {
+                                value: vec![(str.to_string(), value)],
+                                typ: vec![(str.to_string(), typ)],
+                            };
 
-                    Ok(result)
+                            input.merge_variables(&result);
+
+                            Ok(EvaluationResult::Unit) // Result of a let binding is Unit
+                        })
                 }
 
-                // TODO;
                 Expr::Multiple(multiple) => {
-                    let mut result: Vec<TypeAnnotatedValue> = vec![];
+                    let mut result: Vec<EvaluationResult> = vec![];
 
                     for expr in multiple {
                         match go(expr, input) {
-                            Ok(value) => {
-                                input.merge(&value);
-                                result.push(value);
+                            Ok(expr_result) => {
+                                if let Some(value) = expr_result.get_value() {
+                                    input.merge_variables(&value);
+                                }
+                                result.push(expr_result);
                             }
                             Err(result) => return Err(result),
                         }
                     }
 
-                    Ok(result.last().unwrap().clone())
+                    Ok(result
+                        .last()
+                        .map_or(EvaluationResult::Unit, |last| last.clone()))
                 }
 
                 Expr::Sequence(exprs) => {
@@ -210,20 +244,29 @@ impl Evaluator for Expr {
 
                     for expr in exprs {
                         match go(expr, input) {
-                            Ok(value) => result.push(value),
+                            Ok(eval_result) => {
+                                if let Some(value) = eval_result.get_value() {
+                                    result.push(value);
+                                } else {
+                                    return Err(format!("The expression {} is evaluated to unit and cannot be part of a record", expression::to_string(expr).unwrap()).into());
+                                }
+                            }
                             Err(result) => return Err(result),
                         }
                     }
-                    match result.first() {
-                        Some(value) => Ok(TypeAnnotatedValue::List {
+
+                    let sequence = match result.first() {
+                        Some(value) => TypeAnnotatedValue::List {
                             values: result.clone(),
                             typ: AnalysedType::from(value),
-                        }),
-                        None => Ok(TypeAnnotatedValue::List {
+                        },
+                        None => TypeAnnotatedValue::List {
                             values: result.clone(),
                             typ: AnalysedType::Tuple(vec![]),
-                        }), // Support optional type in List
-                    }
+                        }, // Support optional type in List
+                    };
+
+                    Ok(sequence.into())
                 }
 
                 Expr::Record(tuples) => {
@@ -231,8 +274,12 @@ impl Evaluator for Expr {
 
                     for (key, expr) in tuples {
                         match go(expr, input) {
-                            Ok(value) => {
-                                values.push((key.to_string(), value));
+                            Ok(expr_result) => {
+                                if let Some(value) = expr_result.get_value() {
+                                    values.push((key.to_string(), value));
+                                } else {
+                                    return Err(format!("The expression for key {} is evaluated to unit and cannot be part of a record", key).into());
+                                }
                             }
 
                             Err(result) => return Err(result),
@@ -247,7 +294,8 @@ impl Evaluator for Expr {
                     Ok(TypeAnnotatedValue::Record {
                         value: values,
                         typ: types,
-                    })
+                    }
+                    .into())
                 }
 
                 Expr::Concat(exprs) => {
@@ -259,7 +307,7 @@ impl Evaluator for Expr {
                                 if let Some(primitive) = value.get_primitive() {
                                     result.push_str(primitive.to_string().as_str())
                                 } else {
-                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} to form strings. Please check the expression", get_json_from_typed_value(&value))));
+                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} or unit to form text", &value.get_value().map_or("unit".to_string(),  |v|  get_json_from_typed_value(&v).to_string()))));
                                 }
                             }
 
@@ -267,61 +315,80 @@ impl Evaluator for Expr {
                         }
                     }
 
-                    Ok(TypeAnnotatedValue::Str(result))
+                    Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(result)))
                 }
 
-                Expr::Literal(literal) => Ok(TypeAnnotatedValue::Str(literal.clone())),
+                Expr::Literal(literal) => Ok(TypeAnnotatedValue::Str(literal.clone()).into()),
 
                 Expr::Number(number) => match number {
-                    InnerNumber::UnsignedInteger(u64) => Ok(TypeAnnotatedValue::U64(*u64)),
-                    InnerNumber::Integer(i64) => Ok(TypeAnnotatedValue::S64(*i64)),
-                    InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(*f64)),
+                    InnerNumber::UnsignedInteger(u64) => Ok(TypeAnnotatedValue::U64(*u64).into()),
+                    InnerNumber::Integer(i64) => Ok(TypeAnnotatedValue::S64(*i64).into()),
+                    InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(*f64).into()),
                 },
 
                 Expr::Variable(variable) => input
-                    .get(&Path::from_key(variable.as_str()))
+                    .get_variable_value(variable.as_str())
+                    .map(|v| v.into())
                     .map_err(|err| err.into()),
 
-                Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(*bool)),
+                Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(*bool).into()),
                 Expr::PatternMatch(match_expression, arms) => {
                     pattern_match_evaluator::evaluate_pattern_match(match_expression, arms, input)
                 }
 
                 Expr::Option(option_expr) => match option_expr {
                     Some(expr) => {
-                        let value = go(expr, input)?;
-                        let analysed_type = AnalysedType::from(&value);
-                        Ok(TypeAnnotatedValue::Option {
-                            value: Some(Box::new(value)),
-                            typ: analysed_type,
-                        })
+                        let expr_result = go(expr, input)?;
+
+                        if let Some(value) = expr_result.get_value() {
+                            let analysed_type = AnalysedType::from(&value);
+                            Ok(TypeAnnotatedValue::Option {
+                                value: Some(Box::new(value)),
+                                typ: analysed_type,
+                            }
+                            .into())
+                        } else {
+                            Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a option", expression::to_string(expr).unwrap())))
+                        }
                     }
-                    None => Ok(TypeAnnotatedValue::Option {
+                    None => Ok(EvaluationResult::Value(TypeAnnotatedValue::Option {
                         value: None,
                         typ: AnalysedType::Str,
-                    }),
+                    })),
                 },
 
                 Expr::Result(result_expr) => match result_expr {
                     Ok(expr) => {
-                        let value = go(expr, input)?;
-                        let analysed_type = AnalysedType::from(&value);
+                        let expr_result = go(expr, input)?;
 
-                        Ok(TypeAnnotatedValue::Result {
-                            value: Ok(Some(Box::new(value))),
-                            ok: Some(Box::new(analysed_type)),
-                            error: None,
-                        })
+                        if let Some(value) = expr_result.get_value() {
+                            let analysed_type = AnalysedType::from(&value);
+
+                            Ok(TypeAnnotatedValue::Result {
+                                value: Ok(Some(Box::new(value))),
+                                ok: Some(Box::new(analysed_type)),
+                                error: None,
+                            }
+                            .into())
+                        } else {
+                            Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a result", expression::to_string(expr).unwrap())))
+                        }
                     }
                     Err(expr) => {
-                        let value = go(expr, input)?;
-                        let analysed_type = AnalysedType::from(&value);
+                        let eval_result = go(expr, input)?;
 
-                        Ok(TypeAnnotatedValue::Result {
-                            value: Err(Some(Box::new(value))),
-                            ok: None,
-                            error: Some(Box::new(analysed_type)),
-                        })
+                        if let Some(value) = eval_result.get_value() {
+                            let analysed_type = AnalysedType::from(&value);
+
+                            Ok(TypeAnnotatedValue::Result {
+                                value: Err(Some(Box::new(value))),
+                                ok: None,
+                                error: Some(Box::new(analysed_type)),
+                            }
+                            .into())
+                        } else {
+                            Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a result", expression::to_string(expr).unwrap())))
+                        }
                     }
                 },
 
@@ -329,8 +396,13 @@ impl Evaluator for Expr {
                     let mut result: Vec<TypeAnnotatedValue> = vec![];
 
                     for expr in tuple_exprs {
-                        let type_annotated_value = go(expr, input)?;
-                        result.push(type_annotated_value);
+                        let eval_result = go(expr, input)?;
+
+                        if let Some(value) = eval_result.get_value() {
+                            result.push(value);
+                        } else {
+                            return Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a tuple", expression::to_string(expr).unwrap())));
+                        }
                     }
 
                     let typ: &Vec<AnalysedType> = &result.iter().map(AnalysedType::from).collect();
@@ -338,13 +410,14 @@ impl Evaluator for Expr {
                     Ok(TypeAnnotatedValue::Tuple {
                         value: result,
                         typ: typ.clone(),
-                    })
+                    }
+                    .into())
                 }
 
-                Expr::Flags(flags) => Ok(TypeAnnotatedValue::Flags {
+                Expr::Flags(flags) => Ok(EvaluationResult::Value(TypeAnnotatedValue::Flags {
                     values: flags.clone(),
                     typ: flags.clone(),
-                }),
+                })),
             }
         }
 
@@ -353,10 +426,69 @@ impl Evaluator for Expr {
     }
 }
 
+mod internal {
+    use crate::evaluator::EvaluationResult;
+    use crate::merge::Merge;
+    use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
+    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::TypeAnnotatedValue;
+
+    pub(crate) struct MergedWorkerData {
+        worker_request: Option<WorkerRequest>,
+        worker_response: Option<RefinedWorkerResponse>,
+    }
+
+    impl MergedWorkerData {
+        pub fn new(
+            worker_request: Option<WorkerRequest>,
+            worker_response: Option<RefinedWorkerResponse>,
+        ) -> Self {
+            MergedWorkerData {
+                worker_request,
+                worker_response,
+            }
+        }
+
+        pub fn get_evaluation_result(self) -> Option<EvaluationResult> {
+            match (&self.worker_response, &self.worker_request) {
+                (Some(res), Some(req)) => {
+                    let mut typed_worker_data = req.clone().to_type_annotated_value();
+
+                    if let Some(typed_res) = res.to_type_annotated_value() {
+                        typed_worker_data.merge(&with_response_key(typed_res));
+                    }
+
+                    Some(EvaluationResult::Value(typed_worker_data))
+                }
+
+                (None, Some(req)) => Some(req.clone().to_type_annotated_value().into()),
+                (Some(res), None) => match res {
+                    RefinedWorkerResponse::Unit => Some(EvaluationResult::Unit),
+                    RefinedWorkerResponse::SingleResult(typed_value) => {
+                        Some(with_response_key(typed_value.clone()).into())
+                    }
+                    RefinedWorkerResponse::MultipleResults(typed_value) => {
+                        Some(with_response_key(typed_value.clone()).into())
+                    }
+                },
+                (None, None) => None,
+            }
+        }
+    }
+
+    fn with_response_key(typed_res: TypeAnnotatedValue) -> TypeAnnotatedValue {
+        TypeAnnotatedValue::Record {
+            typ: vec![("response".to_string(), AnalysedType::from(&typed_res))],
+            value: vec![("response".to_string(), typed_res)],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
+    use golem_service_base::model::FunctionResult;
     use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
@@ -365,12 +497,84 @@ mod tests {
     use serde_json::{json, Value};
 
     use crate::api_definition::http::AllPathPatterns;
+    use crate::evaluator::evaluator_context::EvaluationContext;
     use crate::evaluator::getter::GetError;
-    use crate::evaluator::{EvaluationError, Evaluator};
+    use crate::evaluator::{EvaluationError, EvaluationResult, Evaluator};
     use crate::expression;
-    use crate::merge::Merge;
-    use crate::worker_bridge_execution::WorkerResponse;
+    use crate::worker_binding::RequestDetails;
+    use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerResponse};
     use test_utils::*;
+
+    trait EvaluatorTestExt {
+        fn evaluate_with_request_details(
+            &self,
+            input: &RequestDetails,
+        ) -> Result<TypeAnnotatedValue, EvaluationError>;
+        fn evaluate_with_worker_response(
+            &self,
+            worker_bridge_response: &RefinedWorkerResponse,
+        ) -> Result<TypeAnnotatedValue, EvaluationError>;
+
+        fn evaluate_with(
+            &self,
+            input: &RequestDetails,
+            worker_response: &RefinedWorkerResponse,
+        ) -> Result<EvaluationResult, EvaluationError>;
+    }
+
+    impl<T: Evaluator> EvaluatorTestExt for T {
+        fn evaluate_with_request_details(
+            &self,
+            input: &RequestDetails,
+        ) -> Result<TypeAnnotatedValue, EvaluationError> {
+            let eval_result = self.evaluate(&EvaluationContext::from_request_data(input))?;
+            Ok(eval_result
+                .get_value()
+                .ok_or("The expression is evaluated to unit and doesn't have a value")?)
+        }
+
+        fn evaluate_with_worker_response(
+            &self,
+            worker_bridge_response: &RefinedWorkerResponse,
+        ) -> Result<TypeAnnotatedValue, EvaluationError> {
+            let eval_result = self.evaluate(&EvaluationContext {
+                worker_request: None,
+                worker_response: Some(worker_bridge_response.clone()),
+                variables: None,
+                request_data: None,
+            })?;
+
+            Ok(eval_result
+                .get_value()
+                .ok_or("The expression is evaluated to unit and doesn't have a value")?)
+        }
+
+        fn evaluate_with(
+            &self,
+            input: &RequestDetails,
+            worker_response: &RefinedWorkerResponse,
+        ) -> Result<EvaluationResult, EvaluationError> {
+            let evaluation_context = EvaluationContext {
+                worker_request: None,
+                worker_response: Some(worker_response.clone()),
+                variables: None,
+                request_data: Some(input.clone()),
+            };
+
+            let eval_result = self.evaluate(&evaluation_context)?;
+            Ok(eval_result)
+        }
+    }
+
+    trait WorkerBridgeExt {
+        fn to_test_worker_bridge_response(&self) -> RefinedWorkerResponse;
+    }
+
+    impl WorkerBridgeExt for WorkerResponse {
+        fn to_test_worker_bridge_response(&self) -> RefinedWorkerResponse {
+            RefinedWorkerResponse::SingleResult(self.result.result.clone())
+        }
+    }
 
     #[test]
     fn test_evaluation_with_request_path() {
@@ -378,11 +582,11 @@ mod tests {
 
         let path_pattern = AllPathPatterns::from_str("/{id}/items").unwrap();
 
-        let resolved_variables = resolved_variables_from_request_path(uri, path_pattern);
+        let resolved_variables = request_details_from_request_path_variables(uri, path_pattern);
 
         let expr = expression::from_string("${request.path.id}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("pId".to_string());
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate_with_request_details(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
 
@@ -408,7 +612,7 @@ mod tests {
 
         let expr = expression::from_string("${request.body.id}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("bId".to_string());
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate_with_request_details(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
 
@@ -429,7 +633,7 @@ mod tests {
 
         let expr = expression::from_string("${request.body.titles[0]}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("bTitle1".to_string());
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate_with_request_details(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
 
@@ -452,7 +656,7 @@ mod tests {
             expression::from_string("${request.body.address.street} ${request.body.address.city}")
                 .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet bCity".to_string());
-        let result = expr.evaluate(&resolved_request);
+        let result = expr.evaluate_with_request_details(&resolved_request);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
 
@@ -470,11 +674,11 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${if request.header.authorisation == 'admin' then 200 else 401}",
+            "${if request.headers.authorisation == 'admin' then 200 else 401}",
         )
         .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::U64("200".parse().unwrap());
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate_with_request_details(&resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
 
@@ -502,7 +706,7 @@ mod tests {
         let expected_evaluated_result =
             EvaluationError::InvalidReference(GetError::KeyNotFound("street2".to_string()));
 
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate_with_request_details(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
 
@@ -527,7 +731,7 @@ mod tests {
         let expected_evaluated_result =
             EvaluationError::InvalidReference(GetError::IndexNotFound(4));
 
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate_with_request_details(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
 
@@ -557,7 +761,7 @@ mod tests {
             .to_string(),
         });
 
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate_with_request_details(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
 
@@ -580,14 +784,14 @@ mod tests {
             &header_map,
         );
 
-        let expr = expression::from_string("${if request.header.authorisation then 200 else 401}")
+        let expr = expression::from_string("${if request.headers.authorisation then 200 else 401}")
             .unwrap();
 
         let expected_evaluated_result = EvaluationError::Message(format!(
             "The predicate expression is evaluated to {} but it is not a boolean value",
             json!("admin")
         ));
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate_with_request_details(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
 
@@ -618,7 +822,7 @@ mod tests {
             found: json!("bStreet").to_string(),
         });
 
-        let result = expr.evaluate(&resolved_variables);
+        let result = expr.evaluate_with_request_details(&resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
 
@@ -635,10 +839,8 @@ mod tests {
         );
 
         let expr = expression::from_string("${worker.response.address.street}").unwrap();
-        let expected_evaluated_result =
-            EvaluationError::InvalidReference(GetError::KeyNotFound("worker".to_string()));
-        let result = expr.evaluate(&resolved_variables);
-        assert_eq!(result, Err(expected_evaluated_result));
+        let result = expr.evaluate_with_request_details(&resolved_variables);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -657,15 +859,25 @@ mod tests {
         let result_as_typed_value =
             get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type)))
                 .unwrap();
-        let worker_response = WorkerResponse {
-            result: result_as_typed_value,
-        };
+        let worker_response = RefinedWorkerResponse::from_worker_response(&WorkerResponse::new(
+            TypeAnnotatedValue::Tuple {
+                typ: vec![AnalysedType::from(&result_as_typed_value)],
+                value: vec![result_as_typed_value],
+            },
+            vec![FunctionResult {
+                name: None,
+                typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]).into(),
+            }],
+        ))
+        .unwrap();
+
+        dbg!(worker_response.clone());
 
         let expr = expression::from_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result = expr.evaluate_with_worker_response(&worker_response);
         assert_eq!(
             result,
             Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
@@ -675,14 +887,14 @@ mod tests {
     #[test]
     fn test_evaluation_with_pattern_match_none() {
         let worker_response =
-            get_worker_response(Value::Null.to_string().as_str()).result_with_worker_response_key();
+            get_worker_response(Value::Null.to_string().as_str()).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
         )
         .unwrap();
 
-        let result = expr.evaluate(&worker_response);
+        let result = expr.evaluate_with_worker_response(&worker_response);
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("not found".to_string())));
     }
 
@@ -695,35 +907,32 @@ mod tests {
 
         let path_pattern = AllPathPatterns::from_str("/shopping-cart/{id}").unwrap();
 
-        let mut resolved_variables_path =
-            resolved_variables_from_request_path(uri.clone(), path_pattern.clone());
+        let resolved_variables_path =
+            request_details_from_request_path_variables(uri.clone(), path_pattern.clone());
 
-        let success_response_with_input_variables = resolved_variables_path.merge(
-            &get_worker_response(
-                r#"
+        let worker_bridge_response = &get_worker_response(
+            r#"
                     {
                         "ok": {
                            "id": "baz"
                         }
                     }"#,
-            )
-            .result_with_worker_response_key(),
-        );
+        )
+        .to_test_worker_bridge_response();
 
         let expr1 = expression::from_string(
             "${if request.path.id == 'foo' then 'bar' else match worker.response { ok(value) => value.id, err(msg) => 'empty' }}",
         )
             .unwrap();
 
-        let result1 = expr1.evaluate(success_response_with_input_variables);
+        let result1 = expr1.evaluate_with(&resolved_variables_path, worker_bridge_response);
 
-        // Intentionally bringing an curly brace
         let expr2 = expression::from_string(
             "${if request.path.id == 'bar' then 'foo' else match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }}",
 
         ).unwrap();
 
-        let result2 = expr2.evaluate(success_response_with_input_variables);
+        let result2 = expr2.evaluate_with(&resolved_variables_path, worker_bridge_response);
 
         let error_worker_response = get_worker_response(
             r#"
@@ -734,25 +943,34 @@ mod tests {
                     }"#,
         );
 
-        let mut new_resolved_variables_from_request_path =
-            resolved_variables_from_request_path(uri, path_pattern);
+        let new_resolved_variables_from_request_path =
+            request_details_from_request_path_variables(uri, path_pattern);
 
-        let error_response_with_request_variables = new_resolved_variables_from_request_path
-            .merge(&error_worker_response.result_with_worker_response_key());
+        let error_response_with_request_variables = new_resolved_variables_from_request_path;
+        let error_worker_response = error_worker_response.to_test_worker_bridge_response();
 
         let expr3 = expression::from_string(
             "${if request.path.id == 'bar' then 'foo' else match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }}",
 
         ).unwrap();
 
-        let result3 = expr3.evaluate(error_response_with_request_variables);
+        let result3 = expr3.evaluate_with(
+            &error_response_with_request_variables,
+            &error_worker_response,
+        );
 
         assert_eq!(
             (result1, result2, result3),
             (
-                Ok(TypeAnnotatedValue::Str("bar".to_string())),
-                Ok(TypeAnnotatedValue::Str("baz".to_string())),
-                Ok(TypeAnnotatedValue::Str("empty".to_string()))
+                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(
+                    "bar".to_string()
+                ))),
+                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(
+                    "baz".to_string()
+                ))),
+                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(
+                    "empty".to_string()
+                )))
             )
         );
     }
@@ -766,13 +984,15 @@ mod tests {
                            "id": "pId"
                         }
                     }"#,
-        );
+        )
+        .to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { ok(value) => 'personal-id', err(msg) => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+
+        let result = expr.evaluate_with_worker_response(&worker_response);
         assert_eq!(
             result,
             Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
@@ -788,13 +1008,14 @@ mod tests {
                            "id": "pId"
                         }
                     }"#,
-        );
+        )
+        .to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { ok(value) => value, err(msg) => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result = expr.evaluate_with_worker_response(&worker_response);
 
         let expected_result = TypeAnnotatedValue::Record {
             value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
@@ -819,7 +1040,8 @@ mod tests {
             "${match worker.response { ok(value) => value.id, err(msg) => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result =
+            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("pId".to_string())));
     }
 
@@ -838,7 +1060,8 @@ mod tests {
             "${match worker.response { ok(value) => value.ids[0], err(msg) => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result =
+            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("id1".to_string())));
     }
 
@@ -857,7 +1080,8 @@ mod tests {
             "${match worker.response { ok(value) => some(value.ids[0]), err(msg) => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result =
+            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
         let expected = TypeAnnotatedValue::Option {
             value: Some(Box::new(TypeAnnotatedValue::Str("id1".to_string()))),
             typ: AnalysedType::Str,
@@ -880,7 +1104,8 @@ mod tests {
             "${match worker.response { ok(value) => none, none => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result =
+            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
         let expected = TypeAnnotatedValue::Option {
             value: None,
             typ: AnalysedType::Str,
@@ -903,7 +1128,8 @@ mod tests {
             "${match worker.response { ok(value) => some(none), none => none }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result =
+            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
         let expected = TypeAnnotatedValue::Option {
             value: Some(Box::new(TypeAnnotatedValue::Option {
                 typ: AnalysedType::Str,
@@ -929,7 +1155,8 @@ mod tests {
             "${match worker.response { ok(value) => ok(1), none => err(2) }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result =
+            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
         let expected = TypeAnnotatedValue::Result {
             value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
             ok: Some(Box::new(AnalysedType::U64)),
@@ -953,7 +1180,8 @@ mod tests {
             "${match worker.response { ok(value) => ok(1), err(msg) => err(2) }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result =
+            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
 
         let expected = TypeAnnotatedValue::Result {
             value: Err(Some(Box::new(TypeAnnotatedValue::U64(2)))),
@@ -978,7 +1206,8 @@ mod tests {
             "${match worker.response { ok(_) => ok(1), err(_) => err(2) }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result =
+            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
 
         let expected = TypeAnnotatedValue::Result {
             value: Err(Some(Box::new(TypeAnnotatedValue::U64(2)))),
@@ -1006,7 +1235,7 @@ mod tests {
         )
             .unwrap();
         let result = expr
-            .evaluate(&worker_response.result_with_worker_response_key())
+            .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())
             .unwrap();
 
         let output_json = golem_wasm_rpc::json::get_json_from_typed_value(&result);
@@ -1031,8 +1260,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_variant_positive() {
-        let worker_response = WorkerResponse {
-            result: TypeAnnotatedValue::Variant {
+        let worker_response = WorkerResponse::new(
+            TypeAnnotatedValue::Variant {
                 case_name: "Foo".to_string(),
                 case_value: Some(Box::new(TypeAnnotatedValue::Record {
                     typ: vec![("id".to_string(), AnalysedType::Str)],
@@ -1046,12 +1275,14 @@ mod tests {
                     )])),
                 )],
             },
-        };
+            vec![],
+        );
 
         let expr =
             expression::from_string("${match worker.response { Foo(value) => ok(value.id) }}")
                 .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result =
+            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
 
         let expected = TypeAnnotatedValue::Result {
             value: Ok(Some(Box::new(TypeAnnotatedValue::Str("pId".to_string())))),
@@ -1088,13 +1319,15 @@ mod tests {
             ],
         };
 
-        let worker_response = WorkerResponse { result: output };
+        let worker_bridge_response =
+            WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { Foo(some(value)) => value.id, err(msg) => 'not found' }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+
+        let result = expr.evaluate_with_worker_response(&worker_bridge_response);
 
         let expected = TypeAnnotatedValue::Str("pId".to_string());
 
@@ -1105,13 +1338,14 @@ mod tests {
     fn test_evaluation_with_pattern_match_variant_nested_with_some_result() {
         let output = get_complex_variant_typed_value();
 
-        let worker_response = WorkerResponse { result: output };
+        let worker_bridge_response =
+            WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => 'not found' }}",
         )
             .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result = expr.evaluate_with_worker_response(&worker_bridge_response);
 
         let expected = TypeAnnotatedValue::Str("pId".to_string());
 
@@ -1122,13 +1356,14 @@ mod tests {
     fn test_evaluation_with_pattern_match_variant_nested_type_mismatch() {
         let output = get_complex_variant_typed_value();
 
-        let worker_response = WorkerResponse { result: output };
+        let worker_bridge_response =
+            WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { Foo(ok(some(value))) => value.id, err(msg) => 'not found' }}",
         )
             .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result = expr.evaluate_with_worker_response(&worker_bridge_response);
 
         assert!(result
             .err()
@@ -1161,13 +1396,13 @@ mod tests {
             ],
         };
 
-        let worker_response = WorkerResponse { result: output };
+        let worker_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
             "${match worker.response { Foo(none) => 'not found',  Foo(some(value)) => value.id }}",
         )
         .unwrap();
-        let result = expr.evaluate(&worker_response.result_with_worker_response_key());
+        let result = expr.evaluate_with_worker_response(&worker_response);
 
         let expected = TypeAnnotatedValue::Str("not found".to_string());
 
@@ -1178,12 +1413,9 @@ mod tests {
     fn test_evaluation_with_wave_like_syntax_ok_record() {
         let expr = expression::from_string("${{a : ok(1)}}").unwrap();
 
-        let result = expr.evaluate(&TypeAnnotatedValue::Record {
-            value: vec![],
-            typ: vec![],
-        });
+        let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::Record {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Record {
             typ: vec![(
                 "a".to_string(),
                 AnalysedType::Result {
@@ -1199,7 +1431,7 @@ mod tests {
                     value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
                 },
             )],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
@@ -1208,12 +1440,9 @@ mod tests {
     fn test_evaluation_with_wave_like_syntax_err_record() {
         let expr = expression::from_string("${{a : err(1)}}").unwrap();
 
-        let result = expr.evaluate(&TypeAnnotatedValue::Record {
-            value: vec![],
-            typ: vec![],
-        });
+        let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::Record {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Record {
             typ: vec![(
                 "a".to_string(),
                 AnalysedType::Result {
@@ -1229,7 +1458,7 @@ mod tests {
                     value: Err(Some(Box::new(TypeAnnotatedValue::U64(1)))),
                 },
             )],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
@@ -1238,19 +1467,16 @@ mod tests {
     fn test_evaluation_with_wave_like_syntax_simple_list() {
         let expr = expression::from_string("${[1,2,3]}").unwrap();
 
-        let result = expr.evaluate(&TypeAnnotatedValue::Record {
-            value: vec![],
-            typ: vec![],
-        });
+        let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::List {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::List {
             typ: AnalysedType::U64,
             values: vec![
                 TypeAnnotatedValue::U64(1),
                 TypeAnnotatedValue::U64(2),
                 TypeAnnotatedValue::U64(3),
             ],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
@@ -1259,12 +1485,9 @@ mod tests {
     fn test_evaluation_with_wave_like_syntax_simple_tuple() {
         let expr = expression::from_string("${(some(1),2,3)}").unwrap();
 
-        let result = expr.evaluate(&TypeAnnotatedValue::Record {
-            value: vec![],
-            typ: vec![],
-        });
+        let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::Tuple {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Tuple {
             typ: vec![
                 AnalysedType::Option(Box::new(AnalysedType::U64)),
                 AnalysedType::U64,
@@ -1278,7 +1501,7 @@ mod tests {
                 TypeAnnotatedValue::U64(2),
                 TypeAnnotatedValue::U64(3),
             ],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
@@ -1287,15 +1510,12 @@ mod tests {
     fn test_evaluation_wave_like_syntax_flag() {
         let expr = expression::from_string("${{A, B, C}}").unwrap();
 
-        let result = expr.evaluate(&TypeAnnotatedValue::Record {
-            value: vec![],
-            typ: vec![],
-        });
+        let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::Flags {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Flags {
             typ: vec!["A".to_string(), "B".to_string(), "C".to_string()],
             values: vec!["A".to_string(), "B".to_string(), "C".to_string()],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
@@ -1304,12 +1524,9 @@ mod tests {
     fn test_evaluation_with_wave_like_syntax_result_list() {
         let expr = expression::from_string("${[ok(1),ok(2)]}").unwrap();
 
-        let result = expr.evaluate(&TypeAnnotatedValue::Record {
-            value: vec![],
-            typ: vec![],
-        });
+        let result = expr.evaluate(&EvaluationContext::empty());
 
-        let expected = Ok(TypeAnnotatedValue::List {
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::List {
             typ: AnalysedType::Result {
                 ok: Some(Box::new(AnalysedType::U64)),
                 error: None,
@@ -1326,7 +1543,7 @@ mod tests {
                     value: Ok(Some(Box::new(TypeAnnotatedValue::U64(2)))),
                 },
             ],
-        });
+        }));
 
         assert_eq!(result, expected);
     }
@@ -1342,31 +1559,25 @@ mod tests {
 
         let expr = expression::from_string(format!("${{{}}}", program)).unwrap();
 
-        // We don't need any information any request to evaluate the above program
-        let empty_input = &TypeAnnotatedValue::Record {
-            value: vec![],
-            typ: vec![],
-        };
+        let result = expr.evaluate(&EvaluationContext::empty());
 
-        let result = expr.evaluate(empty_input);
-
-        let expected = Ok(TypeAnnotatedValue::Bool(false));
+        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Bool(false)));
 
         assert_eq!(result, expected);
     }
 
     mod test_utils {
-        use crate::api_definition::http::{AllPathPatterns, PathPattern};
-        use crate::evaluator::Evaluator;
+        use crate::api_definition::http::{AllPathPatterns, PathPattern, VarInfo};
+        use crate::evaluator::tests::{EvaluatorTestExt, WorkerBridgeExt};
         use crate::expression;
         use crate::http::router::RouterPattern;
-        use crate::http::{ApiInputPath, InputHttpRequest};
+        use crate::worker_binding::RequestDetails;
         use crate::worker_bridge_execution::WorkerResponse;
         use golem_service_base::type_inference::infer_analysed_type;
         use golem_wasm_ast::analysis::AnalysedType;
         use golem_wasm_rpc::json::get_typed_value_from_json;
         use golem_wasm_rpc::TypeAnnotatedValue;
-        use http::{HeaderMap, Method, Uri};
+        use http::{HeaderMap, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;
 
@@ -1434,9 +1645,7 @@ mod tests {
             )
             .unwrap();
 
-            WorkerResponse {
-                result: worker_response_value,
-            }
+            WorkerResponse::new(worker_response_value, vec![])
         }
 
         pub(crate) fn get_worker_response(input: &str) -> WorkerResponse {
@@ -1444,46 +1653,29 @@ mod tests {
 
             let expected_type = infer_analysed_type(&value);
             let result_as_typed_value = get_typed_value_from_json(&value, &expected_type).unwrap();
-            WorkerResponse {
-                result: result_as_typed_value,
-            }
+            WorkerResponse::new(result_as_typed_value, vec![])
         }
 
         pub(crate) fn resolved_variables_from_request_body(
             input: &str,
             header_map: &HeaderMap,
-        ) -> TypeAnnotatedValue {
+        ) -> RequestDetails {
             let request_body: Value = serde_json::from_str(input).expect("Failed to parse json");
 
-            let input_http_request = InputHttpRequest {
-                req_body: request_body.clone(),
-                headers: header_map.clone(),
-                req_method: Method::GET,
-                input_path: ApiInputPath {
-                    base_path: "/api".to_string(),
-                    query_path: None,
-                },
-            };
-
-            input_http_request
-                .get_type_annotated_value(HashMap::new(), &[])
-                .unwrap()
+            RequestDetails::from(
+                &HashMap::new(),
+                &HashMap::new(),
+                &[],
+                &request_body,
+                header_map,
+            )
+            .unwrap()
         }
 
-        pub(crate) fn resolved_variables_from_request_path(
+        pub(crate) fn request_details_from_request_path_variables(
             uri: Uri,
             path_pattern: AllPathPatterns,
-        ) -> TypeAnnotatedValue {
-            let input_http_request = InputHttpRequest {
-                req_body: serde_json::Value::Null,
-                headers: HeaderMap::new(),
-                req_method: Method::GET,
-                input_path: ApiInputPath {
-                    base_path: uri.path().to_string(),
-                    query_path: uri.query().map(|x| x.to_string()),
-                },
-            };
-
+        ) -> RequestDetails {
             let base_path: Vec<&str> = RouterPattern::split(uri.path()).collect();
 
             let path_params = path_pattern
@@ -1494,11 +1686,16 @@ mod tests {
                     PathPattern::Literal(_) => None,
                     PathPattern::Var(var) => Some((var, base_path[index])),
                 })
-                .collect();
+                .collect::<HashMap<VarInfo, &str>>();
 
-            input_http_request
-                .get_type_annotated_value(path_params, &path_pattern.query_params)
-                .unwrap()
+            RequestDetails::from(
+                &path_params,
+                &HashMap::new(),
+                &path_pattern.query_params,
+                &Value::Null,
+                &HeaderMap::new(),
+            )
+            .unwrap()
         }
 
         #[test]
@@ -1508,13 +1705,13 @@ mod tests {
             let expr1_string = "${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
             let expr1 = expression::from_string(expr1_string).unwrap();
             let value1 = expr1
-                .evaluate(&worker_response.result_with_worker_response_key())
+                .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())
                 .unwrap();
 
             let expr2_string = expr1.to_string();
             let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
             let value2 = expr2
-                .evaluate(&worker_response.result_with_worker_response_key())
+                .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())
                 .unwrap();
 
             let expected = TypeAnnotatedValue::Str("error".to_string());
@@ -1523,19 +1720,19 @@ mod tests {
 
         #[test]
         fn expr_to_string_round_trip_match_expr_append() {
-            let worker_response = get_err_worker_response();
+            let worker_response = get_err_worker_response().to_test_worker_bridge_response();
 
             let expr1_string =
                 "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
             let expr1 = expression::from_string(expr1_string).unwrap();
             let value1 = expr1
-                .evaluate(&worker_response.result_with_worker_response_key())
+                .evaluate_with_worker_response(&worker_response)
                 .unwrap();
 
             let expr2_string = expr1.to_string();
             let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
             let value2 = expr2
-                .evaluate(&worker_response.result_with_worker_response_key())
+                .evaluate_with_worker_response(&worker_response)
                 .unwrap();
 
             let expected = TypeAnnotatedValue::Str("append-error".to_string());
@@ -1550,13 +1747,13 @@ mod tests {
                 "prefix-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
             let expr1 = expression::from_string(expr1_string).unwrap();
             let value1 = expr1
-                .evaluate(&worker_response.result_with_worker_response_key())
+                .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())
                 .unwrap();
 
             let expr2_string = expr1.to_string();
             let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
             let value2 = expr2
-                .evaluate(&worker_response.result_with_worker_response_key())
+                .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())
                 .unwrap();
 
             let expected = TypeAnnotatedValue::Str("prefix-error-suffix".to_string());

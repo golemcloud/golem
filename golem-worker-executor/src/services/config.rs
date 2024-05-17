@@ -21,30 +21,22 @@ mod tests {
     #[test]
     pub fn config_is_loadable() {
         // The following settings are always coming through environment variables:
-        std::env::set_var("GOLEM__REDIS__HOST", "localhost");
-        std::env::set_var("GOLEM__REDIS__PORT", "1234");
-        std::env::set_var("GOLEM__REDIS__DATABASE", "1");
+        std::env::set_var("GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST", "localhost");
+        std::env::set_var("GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT", "1234");
+        std::env::set_var("GOLEM__KEY_VALUE_STORAGE__CONFIG__DATABASE", "1");
         std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__HOST", "localhost");
         std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__PORT", "1234");
         std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN", "token");
+        std::env::set_var("GOLEM__BLOB_STORAGE__CONFIG__REGION", "us-east-1");
         std::env::set_var(
-            "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__REGION",
-            "us-east-1",
-        );
-        std::env::set_var(
-            "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__BUCKET",
+            "GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET",
             "golem-compiled-components",
         );
         std::env::set_var(
-            "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__OBJECT_PREFIX",
-            "",
+            "GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET",
+            "golem-custom-data",
         );
-        std::env::set_var("GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION", "us-east-1");
-        std::env::set_var(
-            "GOLEM__BLOB_STORE_SERVICE__BUCKET",
-            "golem-compiled-components",
-        );
-        std::env::set_var("GOLEM__BLOB_STORE_SERVICE__CONFIG__OBJECT_PREFIX", "");
+        std::env::set_var("GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX", "");
         std::env::set_var("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST", "localhost");
         std::env::set_var("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT", "4567");
         std::env::set_var("GOLEM__PUBLIC_WORKER_API__HOST", "localhost");

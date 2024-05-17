@@ -47,8 +47,7 @@ impl K8sComponentService {
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         verbosity: Level,
-        component_compilation_service_host: &str,
-        component_compilation_service_port: u16,
+        component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
@@ -58,8 +57,7 @@ impl K8sComponentService {
         let env_vars = env_vars(
             Self::HTTP_PORT,
             Self::GRPC_PORT,
-            component_compilation_service_host,
-            component_compilation_service_port,
+            component_compilation_service,
             rdb,
             verbosity,
         );

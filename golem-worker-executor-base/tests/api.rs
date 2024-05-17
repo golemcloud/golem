@@ -1217,7 +1217,9 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     debug!("Current directory: {cwd:?}");
     let target_dir = cwd.join(Path::new("data/components"));
     let component_path = target_dir.join(Path::new(&format!("{component_id}-0.wasm")));
-    let compiled_component_path = target_dir.join(Path::new(&format!("{component_id}-0.cwasm")));
+    let compiled_component_path = cwd.join(Path::new(&format!(
+        "data/compilation_cache/{component_id}/0.cwasm"
+    )));
 
     {
         debug!("Corrupting {:?}", component_path);

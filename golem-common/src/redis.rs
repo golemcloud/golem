@@ -153,6 +153,22 @@ impl<'a> RedisLabelledApi<'a> {
         self.record(start, "DEL", self.pool.del(self.prefixed_key(key)).await)
     }
 
+    pub async fn del_many<R, K>(&self, key: Vec<K>) -> RedisResult<R>
+    where
+        R: FromRedis,
+        K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(
+            start,
+            "DEL",
+            self.pool
+                .del(key.iter().map(|k| self.prefixed_key(k)).collect::<Vec<_>>())
+                .await,
+        )
+    }
+
     pub async fn get<R, K>(&self, key: K) -> RedisResult<R>
     where
         R: FromRedis,
@@ -184,7 +200,19 @@ impl<'a> RedisLabelledApi<'a> {
     {
         self.ensure_connected().await?;
         let start = Instant::now();
-        self.record(start, "MGET", self.pool.mget(keys).await)
+        let keys = keys.into();
+        self.record(
+            start,
+            "MGET",
+            self.pool
+                .mget(
+                    keys.inner()
+                        .iter()
+                        .map(|k| self.prefixed_key(k.as_str().expect("key must be a string")))
+                        .collect::<Vec<_>>(),
+                )
+                .await,
+        )
     }
 
     pub async fn hdel<R, K, F>(&self, key: K, fields: F) -> RedisResult<R>
@@ -261,6 +289,28 @@ impl<'a> RedisLabelledApi<'a> {
         )
     }
 
+    pub async fn mset<K, V>(&self, key_values: HashMap<K, V>) -> RedisResult<()>
+    where
+        K: AsRef<str>,
+        V: TryInto<RedisValue> + Send,
+        V::Error: Into<RedisError> + Send,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(
+            start,
+            "MSET",
+            self.pool
+                .mset(
+                    key_values
+                        .into_iter()
+                        .map(|(k, v)| (self.prefixed_key(k), v))
+                        .collect::<Vec<_>>(),
+                )
+                .await,
+        )
+    }
+
     pub async fn hmset<R, K, V>(&self, key: K, values: V) -> RedisResult<R>
     where
         R: FromRedis,
@@ -290,6 +340,23 @@ impl<'a> RedisLabelledApi<'a> {
             start,
             "HSET",
             self.pool.hset(self.prefixed_key(key), values).await,
+        )
+    }
+
+    pub async fn hsetnx<R, K, F, V>(&self, key: K, field: F, value: V) -> RedisResult<R>
+    where
+        R: FromRedis,
+        K: AsRef<str>,
+        F: Into<RedisKey> + Send,
+        V: TryInto<RedisValue> + Send,
+        V::Error: Into<RedisError> + Send,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(
+            start,
+            "HSETNX",
+            self.pool.hsetnx(self.prefixed_key(key), field, value).await,
         )
     }
 

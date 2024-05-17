@@ -6,11 +6,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = { workspace = true } 
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-service-base = { path = "../golem-service-base" }
 golem-wasm-ast = { workspace = true }
+
+async-trait = { workspace = true }
 http_02 = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
