@@ -18,11 +18,12 @@ pub mod s3;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::{AccountId, Timestamp};
+use golem_common::model::{AccountId, Timestamp, WorkerId};
+use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 
 #[async_trait]
-pub trait BlobStorage {
+pub trait BlobStorage: Debug {
     async fn get(
         &self,
         target_label: &'static str,
@@ -146,10 +147,14 @@ pub trait BlobStorage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BlobStorageNamespace {
     CompilationCache,
     CustomStorage(AccountId),
+    OplogPayload {
+        account_id: AccountId,
+        worker_id: WorkerId,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]

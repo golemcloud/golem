@@ -218,8 +218,7 @@ pub struct SchedulerConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct OplogConfig {
     pub max_operations_before_commit: u64,
-    pub operations_to_load: u64,
-    pub debug_enabled: bool,
+    pub max_payload_size: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -253,6 +252,7 @@ pub struct S3BlobStorageConfig {
     pub aws_endpoint_url: Option<String>,
     pub compilation_cache_bucket: String,
     pub custom_data_bucket: String,
+    pub oplog_payload_bucket: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -342,6 +342,7 @@ impl Default for S3BlobStorageConfig {
             region: "us-east-1".to_string(),
             compilation_cache_bucket: "golem-compiled-components".to_string(),
             custom_data_bucket: "custom-data".to_string(),
+            oplog_payload_bucket: "oplog-payload".to_string(),
             object_prefix: "".to_string(),
             aws_endpoint_url: None,
         }
@@ -367,9 +368,8 @@ impl Default for ShardManagerServiceGrpcConfig {
 impl Default for OplogConfig {
     fn default() -> Self {
         Self {
-            debug_enabled: false,
-            operations_to_load: 128,
             max_operations_before_commit: 128,
+            max_payload_size: 64 * 1024,
         }
     }
 }

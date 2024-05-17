@@ -340,11 +340,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_version,
             worker_args.clone(),
             worker_env.clone(),
-            account_id,
+            account_id.clone(),
         )
         .await?;
 
-        let oplog = this.oplog_service().open(worker_id).await;
+        let oplog = this.oplog_service().open(&account_id, worker_id).await;
         let initial_pending_invocations = worker_metadata
             .last_known_status
             .pending_invocations
@@ -423,11 +423,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_version,
             worker_args.clone(),
             worker_env.clone(),
-            account_id,
+            account_id.clone(),
         )
         .await?;
 
-        let oplog = this.oplog_service().open(worker_id).await;
+        let oplog = this.oplog_service().open(&account_id, worker_id).await;
         let initial_pending_invocations = worker_metadata
             .last_known_status
             .pending_invocations
@@ -506,11 +506,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_version,
             worker_args.clone(),
             worker_env.clone(),
-            account_id,
+            account_id.clone(),
         )
         .await?;
 
-        let oplog = this.oplog_service().open(worker_id).await;
+        let oplog = this.oplog_service().open(&account_id, worker_id).await;
         let initial_pending_invocations = worker_metadata
             .last_known_status
             .pending_invocations

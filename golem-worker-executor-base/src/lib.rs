@@ -225,7 +225,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let oplog_service = Arc::new(
             DefaultOplogService::new(
                 indexed_storage.clone(),
+                blob_storage.clone(),
                 golem_config.oplog.max_operations_before_commit,
+                golem_config.oplog.max_payload_size,
             )
             .await,
         );
