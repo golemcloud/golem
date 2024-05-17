@@ -5,14 +5,14 @@ use poem::web::WithContentType;
 use poem::Body;
 use std::fmt::{Display, Formatter};
 
-pub trait GetHttpResponseBody {
+pub trait HttpContentTypeResponseMapper {
     fn to_response_body(
         &self,
         content_type_opt: &Option<ContentType>,
     ) -> Result<WithContentType<Body>, ContentTypeMapError>;
 }
 
-impl GetHttpResponseBody for TypeAnnotatedValue {
+impl HttpContentTypeResponseMapper for TypeAnnotatedValue {
     fn to_response_body(
         &self,
         content_type: &Option<ContentType>,
