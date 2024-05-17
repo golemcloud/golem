@@ -1,6 +1,6 @@
 use crate::api_definition::http::{QueryInfo, VarInfo};
 use crate::merge::Merge;
-use crate::primitive::GetPrimitive;
+
 use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
@@ -8,9 +8,9 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::str::FromStr;
 
-use poem::web::headers::ContentType;
+
+
 
 #[derive(Clone, Debug)]
 pub enum RequestDetails {

@@ -124,7 +124,7 @@ mod internal {
                 })
             }
         }
-        pub(crate) fn to_http_response(&self, request_details: &RequestDetails) -> poem::Response {
+        pub(crate) fn to_http_response(&self, _request_details: &RequestDetails) -> poem::Response {
             let headers: Result<HeaderMap, String> = (&self.headers.headers)
                 .try_into()
                 .map_err(|e: hyper::http::Error| e.to_string());
