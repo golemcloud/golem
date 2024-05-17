@@ -511,6 +511,7 @@ mod tests {
     use golem_wasm_rpc::TypeAnnotatedValue;
     use poem::web::headers::ContentType;
     use poem::IntoResponse;
+    use serde_json::Value;
 
     fn get_content_type_and_body(input: &TypeAnnotatedValue) -> (Option<String>, Body) {
         let response_body = internal::get_response_body(&input).unwrap();
@@ -523,36 +524,49 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_response_body_with_no_content_type() {
+
+        // string
         let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
         let (content_type,  body) = get_content_type_and_body(&type_annotated_value);
         let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
         // Had it serialised as json, it would have been "\"Hello\""
         assert_eq!((result, content_type), ("Hello".to_string(), Some("text/plain".to_string())));
 
+        // Singleton u8
         let type_annotated_value = TypeAnnotatedValue::U8(10);
         let (content_type,  body) = get_content_type_and_body(&type_annotated_value);
         let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
         assert_eq!((result, content_type), ("10".to_string(), Some("text/plain".to_string())));
-        
+
+        // List of u8
         let type_annotated_value = TypeAnnotatedValue::List {
             values: vec![TypeAnnotatedValue::U8(10)],
             typ: AnalysedType::U8,
         };
-        let response_body = internal::get_response_body(&type_annotated_value).unwrap();
-        assert_eq!(response_body.into_response().content_type(), Some("application/octet-stream"));
+        let (content_type,  body) = get_content_type_and_body(&type_annotated_value);
+        let result = body.into_bytes().await.unwrap();
 
+        assert_eq!((result, content_type), (bytes::Bytes::from(vec![10]), Some("application/octet-stream".to_string())));
+
+        // List of non u8
         let type_annotated_value = TypeAnnotatedValue::List {
-            values: vec![TypeAnnotatedValue::U8(10)],
+            values: vec![TypeAnnotatedValue::U16(10)],
             typ: AnalysedType::U16,
         };
-        let response_body = internal::get_response_body(&type_annotated_value).unwrap();
-        assert_eq!(response_body.into_response().content_type(), Some("application/json"));
+
+        let (content_type,  body) = get_content_type_and_body(&type_annotated_value);
+        let data_as_str = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
+        let result_json: Value = serde_json::from_str(data_as_str.as_str()).unwrap();
+        let expected_json = serde_json::Value::Array(vec![serde_json::Value::Number(serde_json::Number::from(10))]);
+        assert_eq!((result_json, content_type), (expected_json, Some("application/json".to_string())));
 
 
+        // Record
         let type_annotated_value = TypeAnnotatedValue::Record {
             typ: vec![("name".to_string(), AnalysedType::Str)],
             value: vec![("name".to_string(), TypeAnnotatedValue::Str("Hello".to_string()))],
         };
+
         let response_body = internal::get_response_body(&type_annotated_value).unwrap();
         assert_eq!(response_body.into_response().content_type(), Some("application/json"));
     }
