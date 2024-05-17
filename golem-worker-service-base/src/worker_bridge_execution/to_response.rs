@@ -82,7 +82,7 @@ mod internal {
 
     use poem::{Body, IntoResponse, ResponseParts};
     use std::collections::HashMap;
-    use http_02::HeaderName;
+    
     use poem::web::headers::ContentType;
 
     pub(crate) struct IntermediateHttpResponse {
