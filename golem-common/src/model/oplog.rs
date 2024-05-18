@@ -1,7 +1,12 @@
 use std::fmt::{Display, Formatter};
 
-use bincode::{Decode, Encode};
-use bytes::Bytes;
+use bincode::de::read::Reader;
+use bincode::de::{BorrowDecoder, Decoder};
+use bincode::enc::write::Writer;
+use bincode::enc::Encoder;
+use bincode::error::{DecodeError, EncodeError};
+use bincode::{BorrowDecode, Decode, Encode};
+use uuid::Uuid;
 
 use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
@@ -9,9 +14,51 @@ use crate::model::{
     AccountId, CallingConvention, ComponentVersion, IdempotencyKey, Timestamp, WorkerId,
     WorkerInvocation,
 };
-use crate::serialization::{serialize, try_deserialize};
 
 pub type OplogIndex = u64;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PayloadId(pub Uuid);
+
+impl Default for PayloadId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PayloadId {
+    pub fn new() -> PayloadId {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Display for PayloadId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Encode for PayloadId {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        encoder.writer().write(self.0.as_bytes())
+    }
+}
+
+impl Decode for PayloadId {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let mut bytes = [0u8; 16];
+        decoder.reader().read(&mut bytes)?;
+        Ok(Self(Uuid::from_bytes(bytes)))
+    }
+}
+
+impl<'de> BorrowDecode<'de> for PayloadId {
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let mut bytes = [0u8; 16];
+        decoder.reader().read(&mut bytes)?;
+        Ok(Self(Uuid::from_bytes(bytes)))
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
@@ -27,21 +74,21 @@ pub enum OplogEntry {
     ImportedFunctionInvoked {
         timestamp: Timestamp,
         function_name: String,
-        response: Vec<u8>,
+        response: OplogPayload,
         wrapped_function_type: WrappedFunctionType,
     },
     /// The worker has been invoked
     ExportedFunctionInvoked {
         timestamp: Timestamp,
         function_name: String,
-        request: Vec<u8>,
+        request: OplogPayload,
         idempotency_key: IdempotencyKey,
         calling_convention: Option<CallingConvention>,
     },
     /// The worker has completed an invocation
     ExportedFunctionCompleted {
         timestamp: Timestamp,
-        response: Vec<u8>,
+        response: OplogPayload,
         consumed_fuel: i64,
     },
     /// Worker suspended
@@ -130,49 +177,6 @@ impl OplogEntry {
             env,
             account_id,
         }
-    }
-
-    pub fn imported_function_invoked<R: Encode>(
-        function_name: String,
-        response: &R,
-        wrapped_function_type: WrappedFunctionType,
-    ) -> Result<OplogEntry, String> {
-        let serialized_response = serialize(response)?.to_vec();
-
-        Ok(OplogEntry::ImportedFunctionInvoked {
-            timestamp: Timestamp::now_utc(),
-            function_name,
-            response: serialized_response,
-            wrapped_function_type,
-        })
-    }
-
-    pub fn exported_function_invoked<R: Encode>(
-        function_name: String,
-        request: &R,
-        idempotency_key: IdempotencyKey,
-        calling_convention: Option<CallingConvention>,
-    ) -> Result<OplogEntry, String> {
-        let serialized_request = serialize(request)?.to_vec();
-        Ok(OplogEntry::ExportedFunctionInvoked {
-            timestamp: Timestamp::now_utc(),
-            function_name,
-            request: serialized_request,
-            idempotency_key,
-            calling_convention,
-        })
-    }
-
-    pub fn exported_function_completed<R: Encode>(
-        response: &R,
-        consumed_fuel: i64,
-    ) -> Result<OplogEntry, String> {
-        let serialized_response = serialize(response)?.to_vec();
-        Ok(OplogEntry::ExportedFunctionCompleted {
-            timestamp: Timestamp::now_utc(),
-            response: serialized_response,
-            consumed_fuel,
-        })
     }
 
     pub fn jump(jump: OplogRegion) -> OplogEntry {
@@ -298,24 +302,6 @@ impl OplogEntry {
         )
     }
 
-    pub fn payload<T: Decode>(&self) -> Result<Option<T>, String> {
-        match &self {
-            OplogEntry::ImportedFunctionInvoked { response, .. } => {
-                let response_bytes: Bytes = Bytes::copy_from_slice(response);
-                try_deserialize(&response_bytes)
-            }
-            OplogEntry::ExportedFunctionInvoked { request, .. } => {
-                let response_bytes: Bytes = Bytes::copy_from_slice(request);
-                try_deserialize(&response_bytes)
-            }
-            OplogEntry::ExportedFunctionCompleted { response, .. } => {
-                let response_bytes: Bytes = Bytes::copy_from_slice(response);
-                try_deserialize(&response_bytes)
-            }
-            _ => Ok(None),
-        }
-    }
-
     pub fn timestamp(&self) -> Timestamp {
         match self {
             OplogEntry::Create { timestamp, .. }
@@ -350,7 +336,7 @@ pub enum UpdateDescription {
     /// Custom update by loading a given snapshot on the new version
     SnapshotBased {
         target_version: ComponentVersion,
-        source: SnapshotSource,
+        payload: OplogPayload,
     },
 }
 
@@ -371,15 +357,14 @@ pub struct TimestampedUpdateDescription {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum SnapshotSource {
-    /// Load the snapshot from the given byte array
+pub enum OplogPayload {
+    /// Load the payload from the given byte array
     Inline(Vec<u8>),
 
-    /// Load the snapshot from the blob store
-    BlobStore {
-        account_id: AccountId,
-        container: String,
-        object: String,
+    /// Load the payload from the blob storage
+    External {
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
     },
 }
 
@@ -404,96 +389,5 @@ impl Display for WorkerError {
             WorkerError::Unknown(message) => write!(f, "{}", message),
             WorkerError::StackOverflow => write!(f, "Stack overflow"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use golem_wasm_rpc::protobuf::{val, Val, ValResult};
-
-    use crate::model::{CallingConvention, IdempotencyKey};
-
-    use super::{OplogEntry, WrappedFunctionType};
-
-    #[test]
-    fn oplog_entry_imported_function_invoked_payload_roundtrip() {
-        let entry = OplogEntry::imported_function_invoked(
-            "function_name".to_string(),
-            &("example payload".to_string()),
-            WrappedFunctionType::ReadLocal,
-        )
-        .unwrap();
-
-        if let OplogEntry::ImportedFunctionInvoked { response, .. } = &entry {
-            assert_eq!(response.len(), 17);
-        } else {
-            unreachable!()
-        }
-
-        let response = entry.payload::<String>().unwrap().unwrap();
-
-        assert_eq!(response, "example payload");
-    }
-
-    #[test]
-    fn oplog_entry_exported_function_invoked_payload_roundtrip() {
-        let val1 = Val {
-            val: Some(val::Val::Result(Box::new(ValResult {
-                discriminant: 0,
-                value: Some(Box::new(Val {
-                    val: Some(val::Val::U64(10)),
-                })),
-            }))),
-        };
-        let entry = OplogEntry::exported_function_invoked(
-            "function_name".to_string(),
-            &vec![val1.clone()],
-            IdempotencyKey {
-                value: "idempotency-key".to_string(),
-            },
-            Some(CallingConvention::Stdio),
-        )
-        .unwrap();
-
-        if let OplogEntry::ExportedFunctionInvoked { request, .. } = &entry {
-            assert_eq!(request.len(), 9);
-        } else {
-            unreachable!()
-        }
-
-        let request: Vec<Val> = entry.payload().unwrap().unwrap();
-
-        assert_eq!(request, vec![val1]);
-    }
-
-    #[test]
-    fn oplog_entry_exported_function_completed_roundtrip() {
-        let val1 = Val {
-            val: Some(val::Val::Result(Box::new(ValResult {
-                discriminant: 0,
-                value: Some(Box::new(Val {
-                    val: Some(val::Val::U64(10)),
-                })),
-            }))),
-        };
-        let val2 = Val {
-            val: Some(val::Val::String("something".to_string())),
-        };
-
-        let entry = OplogEntry::exported_function_completed(
-            &vec![val1.clone(), val2.clone()],
-            1_000_000_000,
-        )
-        .unwrap();
-
-        if let OplogEntry::ExportedFunctionCompleted { response, .. } = &entry {
-            assert_eq!(response.len(), 21);
-        } else {
-            unreachable!()
-        }
-
-        let response: Vec<Val> = entry.payload().unwrap().unwrap();
-
-        assert_eq!(response, vec![val1, val2]);
     }
 }

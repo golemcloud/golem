@@ -108,8 +108,9 @@ fn env_vars(
     let vars: &[(&str, &str)] = &[
         ("RUST_LOG", &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
         ("RUST_BACKTRACE", "1"),
-        ("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Local"),
-        ("GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__ROOT", "/tmp/ittest-local-object-store/golem"),
+        ("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled"),
+        ("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem"),
+        ("GOLEM__BLOB_STORAGE__CONFIG__ROOT", "/tmp/ittest-local-object-store/golem"),
         ("GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN", "2A354594-7A63-4091-A46B-CC58D379F677"),
         ("GOLEM__COMPONENT_SERVICE__HOST", &component_service.private_host()),
         ("GOLEM__COMPONENT_SERVICE__PORT", &component_service.private_grpc_port().to_string()),
