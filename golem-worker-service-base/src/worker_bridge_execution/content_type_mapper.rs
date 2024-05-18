@@ -106,11 +106,6 @@ impl HttpContentTypeResponseMapper for TypeAnnotatedValue {
 
 #[derive(PartialEq, Debug)]
 pub enum ContentTypeMapError {
-    UnsupportedWorkerFunctionResult {
-        expected: Vec<AnalysedType>,
-        actual: AnalysedType,
-    },
-
     IllegalMapping {
         input_type: AnalysedType,
         expected_content_types: String,
@@ -132,31 +127,11 @@ impl ContentTypeMapError {
             expected_content_types: expected_content_types.to_string(),
         }
     }
-
-    fn expect_only_binary_stream(actual: &AnalysedType) -> ContentTypeMapError {
-        ContentTypeMapError::UnsupportedWorkerFunctionResult {
-            expected: vec![
-                AnalysedType::List(Box::new(AnalysedType::U8)),
-                AnalysedType::Str,
-            ],
-            actual: actual.clone(),
-        }
-    }
 }
 
 impl Display for ContentTypeMapError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ContentTypeMapError::UnsupportedWorkerFunctionResult {
-                expected,
-                actual: obtained,
-            } => {
-                write!(
-                    f,
-                    "Failed to map to required content type. Expected: {:?}, Obtained: {:?}",
-                    expected, obtained
-                )
-            }
             ContentTypeMapError::InternalError(message) => {
                 write!(f, "{}", message)
             }
@@ -186,7 +161,7 @@ mod internal {
     use poem::{Body, IntoResponse};
     use std::fmt::Display;
 
-    pub(crate) fn get_response_body_based_on_content_type<A: ContentTypeHeaderExt>(
+    pub(crate) fn get_response_body_based_on_content_type<A: ContentTypeHeaderExt + Display>(
         type_annotated_value: &TypeAnnotatedValue,
         content_header: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
@@ -194,21 +169,14 @@ mod internal {
             TypeAnnotatedValue::Record { .. } => {
                 handle_record(type_annotated_value, content_header)
             }
-            TypeAnnotatedValue::List { values, typ } => handle_list(
-                type_annotated_value,
-                values,
-                typ,
-                content_header,
-            ),
+            TypeAnnotatedValue::List { values, typ } => {
+                handle_list(type_annotated_value, values, typ, content_header)
+            }
             TypeAnnotatedValue::Bool(bool) => {
                 handle_primitive(bool, &AnalysedType::Bool, content_header)
             }
-            TypeAnnotatedValue::S8(s8) => {
-                handle_primitive(s8, &AnalysedType::S8, content_header)
-            }
-            TypeAnnotatedValue::U8(u8) => {
-                handle_primitive(u8, &AnalysedType::U8, content_header)
-            }
+            TypeAnnotatedValue::S8(s8) => handle_primitive(s8, &AnalysedType::S8, content_header),
+            TypeAnnotatedValue::U8(u8) => handle_primitive(u8, &AnalysedType::U8, content_header),
             TypeAnnotatedValue::S16(s16) => {
                 handle_primitive(s16, &AnalysedType::S16, content_header)
             }
@@ -249,11 +217,9 @@ mod internal {
             TypeAnnotatedValue::Enum { value, .. } => handle_string(value, content_header),
             // Confirm this behaviour, given there is no specific content type
             TypeAnnotatedValue::Option { value, .. } => match value {
-                Some(value) => {
-                    get_response_body_based_on_content_type(value, content_header)
-                }
+                Some(value) => get_response_body_based_on_content_type(value, content_header),
                 None => {
-                    if content_header.contains(&ContentType::json()) {
+                    if content_header.has_application_json() {
                         get_json_null()
                     } else {
                         Err(ContentTypeMapError::illegal_mapping(
@@ -397,14 +363,14 @@ mod internal {
 
     fn handle_complex<A: ContentTypeHeaderExt + Display>(
         complex: &TypeAnnotatedValue,
-        accepted_headers: &A,
+        content_header: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        if accepted_headers.has_application_json() {
+        if content_header.has_application_json() {
             get_json(complex)
         } else {
             Err(ContentTypeMapError::illegal_mapping(
                 &AnalysedType::from(complex),
-                accepted_headers,
+                content_header,
             ))
         }
     }
@@ -423,7 +389,7 @@ mod internal {
                 Ok(body.with_content_type(content_type_header.to_string()))
             }
             _ => {
-                if content_header.contains(&ContentType::json()) {
+                if content_header.has_application_json() {
                     get_json(original)
                 } else {
                     Err(ContentTypeMapError::illegal_mapping(
@@ -457,7 +423,7 @@ mod internal {
         }
     }
 
-    fn handle_record<A: ContentTypeHeaderExt +Display>(
+    fn handle_record<A: ContentTypeHeaderExt + Display>(
         record: &TypeAnnotatedValue,
         content_header: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
@@ -475,9 +441,9 @@ mod internal {
 
     fn handle_string<A: ContentTypeHeaderExt + Display>(
         string: &str,
-        accepted_headers: &A,
+        content_type: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        let non_json_content_type = accepted_headers.response_content_type()?;
+        let non_json_content_type = content_type.response_content_type()?;
         Ok(Body::from_bytes(bytes::Bytes::from(string.to_string()))
             .with_content_type(non_json_content_type.to_string()))
     }
