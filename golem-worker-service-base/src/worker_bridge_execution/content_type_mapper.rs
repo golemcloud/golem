@@ -188,87 +188,87 @@ mod internal {
 
     pub(crate) fn get_response_body_based_on_content_type<A: ContentTypeHeaderExt>(
         type_annotated_value: &TypeAnnotatedValue,
-        accept_content_headers: &A,
+        content_header: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
             TypeAnnotatedValue::Record { .. } => {
-                handle_record_with_accepted_headers(type_annotated_value, accept_content_headers)
+                handle_record(type_annotated_value, content_header)
             }
-            TypeAnnotatedValue::List { values, typ } => handle_list_with_accepted_headers(
+            TypeAnnotatedValue::List { values, typ } => handle_list(
                 type_annotated_value,
                 values,
                 typ,
-                accept_content_headers,
+                content_header,
             ),
             TypeAnnotatedValue::Bool(bool) => {
-                handle_primitive(bool, &AnalysedType::Bool, accept_content_headers)
+                handle_primitive(bool, &AnalysedType::Bool, content_header)
             }
             TypeAnnotatedValue::S8(s8) => {
-                handle_primitive(s8, &AnalysedType::S8, accept_content_headers)
+                handle_primitive(s8, &AnalysedType::S8, content_header)
             }
             TypeAnnotatedValue::U8(u8) => {
-                handle_primitive(u8, &AnalysedType::U8, accept_content_headers)
+                handle_primitive(u8, &AnalysedType::U8, content_header)
             }
             TypeAnnotatedValue::S16(s16) => {
-                handle_primitive(s16, &AnalysedType::S16, accept_content_headers)
+                handle_primitive(s16, &AnalysedType::S16, content_header)
             }
             TypeAnnotatedValue::U16(u16) => {
-                handle_primitive(u16, &AnalysedType::U16, accept_content_headers)
+                handle_primitive(u16, &AnalysedType::U16, content_header)
             }
             TypeAnnotatedValue::S32(s32) => {
-                handle_primitive(s32, &AnalysedType::S32, accept_content_headers)
+                handle_primitive(s32, &AnalysedType::S32, content_header)
             }
             TypeAnnotatedValue::U32(u32) => {
-                handle_primitive(u32, &AnalysedType::U32, accept_content_headers)
+                handle_primitive(u32, &AnalysedType::U32, content_header)
             }
             TypeAnnotatedValue::S64(s64) => {
-                handle_primitive(s64, &AnalysedType::S64, accept_content_headers)
+                handle_primitive(s64, &AnalysedType::S64, content_header)
             }
             TypeAnnotatedValue::U64(u64) => {
-                handle_primitive(u64, &AnalysedType::U64, accept_content_headers)
+                handle_primitive(u64, &AnalysedType::U64, content_header)
             }
             TypeAnnotatedValue::F32(f32) => {
-                handle_primitive(f32, &AnalysedType::F32, accept_content_headers)
+                handle_primitive(f32, &AnalysedType::F32, content_header)
             }
             TypeAnnotatedValue::F64(f64) => {
-                handle_primitive(f64, &AnalysedType::F64, accept_content_headers)
+                handle_primitive(f64, &AnalysedType::F64, content_header)
             }
             TypeAnnotatedValue::Chr(char) => {
-                handle_primitive(char, &AnalysedType::Chr, accept_content_headers)
+                handle_primitive(char, &AnalysedType::Chr, content_header)
             }
-            TypeAnnotatedValue::Str(string) => handle_string(string, accept_content_headers),
+            TypeAnnotatedValue::Str(string) => handle_string(string, content_header),
             TypeAnnotatedValue::Tuple { .. } => {
-                handle_complex(type_annotated_value, accept_content_headers)
+                handle_complex(type_annotated_value, content_header)
             }
             TypeAnnotatedValue::Flags { .. } => {
-                handle_complex(type_annotated_value, accept_content_headers)
+                handle_complex(type_annotated_value, content_header)
             }
             TypeAnnotatedValue::Variant { .. } => {
-                handle_record_with_accepted_headers(type_annotated_value, accept_content_headers)
+                handle_record(type_annotated_value, content_header)
             }
-            TypeAnnotatedValue::Enum { value, .. } => handle_string(value, accept_content_headers),
+            TypeAnnotatedValue::Enum { value, .. } => handle_string(value, content_header),
             // Confirm this behaviour, given there is no specific content type
             TypeAnnotatedValue::Option { value, .. } => match value {
                 Some(value) => {
-                    get_response_body_based_on_content_type(value, accept_content_headers)
+                    get_response_body_based_on_content_type(value, content_header)
                 }
                 None => {
-                    if accept_content_headers.contains(&ContentType::json()) {
+                    if content_header.contains(&ContentType::json()) {
                         get_json_null()
                     } else {
                         Err(ContentTypeMapError::illegal_mapping(
                             &AnalysedType::from(type_annotated_value),
-                            accept_content_headers,
+                            content_header,
                         ))
                     }
                 }
             },
             // Can be considered as a record
             TypeAnnotatedValue::Result { .. } => {
-                handle_complex(type_annotated_value, accept_content_headers)
+                handle_complex(type_annotated_value, content_header)
             }
             TypeAnnotatedValue::Handle { .. } => {
-                handle_complex(type_annotated_value, accept_content_headers)
+                handle_complex(type_annotated_value, content_header)
             }
         }
     }
@@ -389,30 +389,13 @@ mod internal {
         Ok(body.with_content_type(ContentType::json().to_string()))
     }
 
-    fn get_json_or_binary_stream(
-        type_annotated_value: &TypeAnnotatedValue,
-    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        match type_annotated_value {
-            TypeAnnotatedValue::List {
-                typ: AnalysedType::U8,
-                values,
-            } => get_byte_stream(values).map(|bytes| {
-                Body::from_bytes(bytes::Bytes::from(bytes))
-                    .with_content_type(ContentType::json().to_string())
-            }),
-            TypeAnnotatedValue::Str(str) => Ok(Body::from_string(str.to_string())
-                .with_content_type(ContentType::json().to_string())),
-            _ => get_json(type_annotated_value),
-        }
-    }
-
     fn get_json_null() -> Result<WithContentType<Body>, ContentTypeMapError> {
         Body::from_json(serde_json::Value::Null)
             .map(|body| body.with_content_type(ContentType::json().to_string()))
             .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))
     }
 
-    fn handle_complex<A: ContentTypeHeaderExt>(
+    fn handle_complex<A: ContentTypeHeaderExt + Display>(
         complex: &TypeAnnotatedValue,
         accepted_headers: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
@@ -426,38 +409,38 @@ mod internal {
         }
     }
 
-    fn handle_list_with_accepted_headers<A: ContentTypeHeaderExt>(
+    fn handle_list<A: ContentTypeHeaderExt + Display>(
         original: &TypeAnnotatedValue,
         inner_values: &[TypeAnnotatedValue],
         list_type: &AnalysedType,
-        accepted_headers: &A,
+        content_header: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match list_type {
             AnalysedType::U8 => {
                 let byte_stream = get_byte_stream(inner_values)?;
                 let body = Body::from_bytes(bytes::Bytes::from(byte_stream));
-                let content_type_header = accepted_headers.response_content_type()?;
+                let content_type_header = content_header.response_content_type()?;
                 Ok(body.with_content_type(content_type_header.to_string()))
             }
             _ => {
-                if accepted_headers.contains(&ContentType::json()) {
+                if content_header.contains(&ContentType::json()) {
                     get_json(original)
                 } else {
                     Err(ContentTypeMapError::illegal_mapping(
                         list_type,
-                        accepted_headers,
+                        content_header,
                     ))
                 }
             }
         }
     }
 
-    fn handle_primitive<A: Display + serde::Serialize, B: ContentTypeHeaderExt>(
+    fn handle_primitive<A: Display + serde::Serialize, B: ContentTypeHeaderExt + Display>(
         input: &A,
         primitive_type: &AnalysedType,
-        accepted_content_type: &B,
+        content_header: &B,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> where {
-        if accepted_content_type.has_application_json() {
+        if content_header.has_application_json() {
             let json = serde_json::to_value(input)
                 .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))?;
 
@@ -469,28 +452,28 @@ mod internal {
         } else {
             Err(ContentTypeMapError::illegal_mapping(
                 primitive_type,
-                accepted_content_type,
+                content_header,
             ))
         }
     }
 
-    fn handle_record_with_accepted_headers<A: ContentTypeHeaderExt>(
+    fn handle_record<A: ContentTypeHeaderExt +Display>(
         record: &TypeAnnotatedValue,
-        accepted_headers: &A,
+        content_header: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         // if record, we prioritise JSON
-        if accepted_headers.has_application_json() {
+        if content_header.has_application_json() {
             get_json(record)
         } else {
             // There is no way a Record can be properly serialised into any other formats to satisfy any other headers, therefore fail
             Err(ContentTypeMapError::illegal_mapping(
                 &AnalysedType::from(record),
-                accepted_headers,
+                content_header,
             ))
         }
     }
 
-    fn handle_string<A: ContentTypeHeaderExt>(
+    fn handle_string<A: ContentTypeHeaderExt + Display>(
         string: &str,
         accepted_headers: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
