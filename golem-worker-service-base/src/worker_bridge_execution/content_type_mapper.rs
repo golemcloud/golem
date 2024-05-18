@@ -26,7 +26,7 @@ impl AcceptHeaders {
         let headers = input
             .as_ref()
             .split(',')
-            .map(|v| v.to_string().trim())
+            .map(|v| v.trim().to_string())
             .collect::<Vec<String>>();
 
         AcceptHeaders(headers)
@@ -37,8 +37,7 @@ impl AcceptHeaders {
     fn contains(&self, content_type: &ContentType) -> bool {
         self.0
             .iter()
-            .find(|accept_header| accept_header.contains(content_type.to_string().as_str()))
-            .is_some()
+            .any(|accept_header| accept_header.contains(content_type.to_string().as_str()))
     }
 }
 
@@ -249,31 +248,32 @@ mod internal {
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
             TypeAnnotatedValue::Record { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::List { values, typ } => {
-                match typ {
-                    // If the elements are u8, we consider it as a byte stream
-                    AnalysedType::U8 => get_byte_stream_body(values),
-                    _ => get_json(type_annotated_value),
-                }
-            }
+            TypeAnnotatedValue::List { values, typ } => match typ {
+                AnalysedType::U8 => get_byte_stream_body(values),
+                _ => get_json(type_annotated_value),
+            },
 
-            TypeAnnotatedValue::Bool(bool) => Ok(get_text_body(bool)),
-            TypeAnnotatedValue::S8(s8) => Ok(get_text_body(s8.to_string())),
-            TypeAnnotatedValue::U8(u8) => Ok(get_text_body(u8.to_string())),
-            TypeAnnotatedValue::S16(s16) => Ok(get_text_body(s16.to_string())),
-            TypeAnnotatedValue::U16(u16) => Ok(get_text_body(u16.to_string())),
-            TypeAnnotatedValue::S32(s32) => Ok(get_text_body(s32.to_string())),
-            TypeAnnotatedValue::U32(u32) => Ok(get_text_body(u32.to_string())),
-            TypeAnnotatedValue::S64(s64) => Ok(get_text_body(s64.to_string())),
-            TypeAnnotatedValue::U64(u64) => Ok(get_text_body(u64.to_string())),
-            TypeAnnotatedValue::F32(f32) => Ok(get_text_body(f32.to_string())),
-            TypeAnnotatedValue::F64(f64) => Ok(get_text_body(f64.to_string())),
-            TypeAnnotatedValue::Chr(char) => Ok(get_text_body(char.to_string())),
-            TypeAnnotatedValue::Str(string) => Ok(get_text_body(string.to_string())),
+            TypeAnnotatedValue::Str(string) => Ok(Body::from_string(string.to_string())
+                .with_content_type(ContentType::json().to_string())),
+
+            TypeAnnotatedValue::Enum { value, .. } => Ok(Body::from_string(value.to_string())
+                .with_content_type(ContentType::json().to_string())),
+
+            TypeAnnotatedValue::Bool(bool) => get_json_of(bool),
+            TypeAnnotatedValue::S8(s8) => get_json_of(s8),
+            TypeAnnotatedValue::U8(u8) => get_json_of(u8),
+            TypeAnnotatedValue::S16(s16) => get_json_of(s16),
+            TypeAnnotatedValue::U16(u16) => get_json_of(u16),
+            TypeAnnotatedValue::S32(s32) => get_json_of(s32),
+            TypeAnnotatedValue::U32(u32) => get_json_of(u32),
+            TypeAnnotatedValue::S64(s64) => get_json_of(s64),
+            TypeAnnotatedValue::U64(u64) => get_json_of(u64),
+            TypeAnnotatedValue::F32(f32) => get_json_of(f32),
+            TypeAnnotatedValue::F64(f64) => get_json_of(f64),
+            TypeAnnotatedValue::Chr(char) => get_json_of(char),
             TypeAnnotatedValue::Tuple { .. } => get_json(type_annotated_value),
             TypeAnnotatedValue::Flags { .. } => get_json(type_annotated_value),
             TypeAnnotatedValue::Variant { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::Enum { value, .. } => Ok(get_text_body(value.to_string())),
             TypeAnnotatedValue::Option { value, .. } => match value {
                 Some(value) => get_response_body(value),
                 None => get_json_null(),
@@ -356,6 +356,18 @@ mod internal {
             .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))
     }
 
+    fn get_json_of<A: serde::Serialize + Display>(
+        a: A,
+    ) -> Result<WithContentType<Body>, ContentTypeMapError> {
+        let json = serde_json::to_value(&a).map_err(|_| {
+            ContentTypeMapError::internal(format!("Failed to serialise {} to json", a))
+        })?;
+        let body = Body::from_json(json)
+            .map_err(|_| ContentTypeMapError::internal("Failed to create body from JSON"))?;
+
+        Ok(body.with_content_type(ContentType::json().to_string()))
+    }
+
     fn get_json_or_binary_stream(
         type_annotated_value: &TypeAnnotatedValue,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
@@ -379,10 +391,6 @@ mod internal {
             .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))
     }
 
-    fn get_text_body(value: impl Display) -> WithContentType<Body> {
-        Body::from_string(value.to_string()).with_content_type(ContentType::text().to_string())
-    }
-
     fn handle_complex(
         complex: &TypeAnnotatedValue,
         accepted_headers: &AcceptHeaders,
@@ -399,7 +407,7 @@ mod internal {
 
     fn handle_list_with_accepted_headers(
         original: &TypeAnnotatedValue,
-        inner_values: &Vec<TypeAnnotatedValue>,
+        inner_values: &[TypeAnnotatedValue],
         list_type: &AnalysedType,
         accepted_headers: &AcceptHeaders,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
@@ -415,7 +423,7 @@ mod internal {
                     get_json(original)
                 } else {
                     Err(ContentTypeMapError::illegal_mapping(
-                        &list_type,
+                        list_type,
                         accepted_headers,
                     ))
                 }
