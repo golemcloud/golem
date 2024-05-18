@@ -515,7 +515,7 @@ mod tests {
         use super::*;
 
         fn get_content_type_and_body(input: &TypeAnnotatedValue) -> (Option<String>, Body) {
-            let response_body = internal::get_response_body(&input).unwrap();
+            let response_body = internal::get_response_body(input).unwrap();
             let response = response_body.into_response();
             let (parts, body) = response.into_parts();
             let content_type = parts
@@ -617,7 +617,7 @@ mod tests {
             header: &ContentType,
         ) -> (Option<String>, Body) {
             let response_body =
-                internal::get_body_from_response_content_type(&input, header).unwrap();
+                internal::get_body_from_response_content_type(input, header).unwrap();
             let response = response_body.into_response();
             let (parts, body) = response.into_parts();
             let content_type = parts
@@ -750,7 +750,7 @@ mod tests {
             headers: &Vec<ContentType>,
         ) -> (Option<String>, Body) {
             let response_body =
-                internal::get_response_body_from_accept_content_headers(&input, headers).unwrap();
+                internal::get_response_body_from_accept_content_headers(input, headers).unwrap();
             let response = response_body.into_response();
             let (parts, body) = response.into_parts();
             let content_type = parts
