@@ -450,14 +450,9 @@ mod internal {
         string: &str,
         accepted_headers: &[ContentType],
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        if accepted_headers.contains(&ContentType::json()) {
-            Ok(Body::from_string(string.to_string())
-                .with_content_type(ContentType::json().to_string()))
-        } else {
-            let non_json_content_type = pick_highest_priority_content_type(accepted_headers)?;
-            Ok(Body::from_bytes(bytes::Bytes::from(string.to_string()))
-                .with_content_type(non_json_content_type.to_string()))
-        }
+        let non_json_content_type = pick_highest_priority_content_type(accepted_headers)?;
+        Ok(Body::from_bytes(bytes::Bytes::from(string.to_string()))
+            .with_content_type(non_json_content_type.to_string()))
     }
 
     fn pick_highest_priority_content_type(
