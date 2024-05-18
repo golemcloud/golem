@@ -13,20 +13,44 @@ pub trait HttpContentTypeResponseMapper {
 }
 
 pub enum ContentTypeHeaders {
-    FromClientAccept(Vec<ContentType>),
+    FromClientAccept(AcceptHeaders),
     FromUserDefinedResponseMapping(ContentType),
     Empty,
+}
+
+#[derive(Clone)]
+pub struct AcceptHeaders(Vec<String>);
+
+impl AcceptHeaders {
+    fn from_str<A: AsRef<str>>(input: A) -> AcceptHeaders {
+        let headers = input
+            .as_ref()
+            .split(',')
+            .map(|v| v.to_string().trim())
+            .collect::<Vec<String>>();
+
+        AcceptHeaders(headers)
+    }
+}
+
+impl AcceptHeaders {
+    fn contains(&self, content_type: &ContentType) -> bool {
+        self.0
+            .iter()
+            .find(|accept_header| accept_header.contains(content_type.to_string().as_str()))
+            .is_some()
+    }
 }
 
 impl ContentTypeHeaders {
     pub fn from(
         response_content_type: Option<ContentType>,
-        accepted_content_types: Vec<ContentType>,
+        accepted_content_types: Option<String>,
     ) -> Self {
         if let Some(response_content_type) = response_content_type {
             ContentTypeHeaders::FromUserDefinedResponseMapping(response_content_type)
-        } else if !accepted_content_types.is_empty() {
-            ContentTypeHeaders::FromClientAccept(accepted_content_types)
+        } else if let Some(accept_header_string) = accepted_content_types {
+            ContentTypeHeaders::FromClientAccept(AcceptHeaders::from_str(accept_header_string))
         } else {
             ContentTypeHeaders::Empty
         }
@@ -62,7 +86,7 @@ pub enum ContentTypeMapError {
 
     IllegalMapping {
         input_type: AnalysedType,
-        expected_content_types: Vec<ContentType>,
+        expected_content_types: Vec<String>,
     },
     InternalError(String),
 }
@@ -74,11 +98,11 @@ impl ContentTypeMapError {
 
     fn illegal_mapping(
         input_type: &AnalysedType,
-        expected_content_types: &[ContentType],
+        expected_content_types: &AcceptHeaders,
     ) -> ContentTypeMapError {
         ContentTypeMapError::IllegalMapping {
             input_type: input_type.clone(),
-            expected_content_types: expected_content_types.to_vec(),
+            expected_content_types: expected_content_types.0.to_vec(),
         }
     }
 
@@ -124,7 +148,7 @@ impl Display for ContentTypeMapError {
 }
 
 mod internal {
-    use crate::worker_bridge_execution::content_type_mapper::ContentTypeMapError;
+    use crate::worker_bridge_execution::content_type_mapper::{AcceptHeaders, ContentTypeMapError};
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
@@ -135,15 +159,18 @@ mod internal {
 
     pub(crate) fn get_response_body_from_accept_content_headers(
         type_annotated_value: &TypeAnnotatedValue,
-        accept_content_headers: &Vec<ContentType>,
+        accept_content_headers: &AcceptHeaders,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
             TypeAnnotatedValue::Record { .. } => {
                 handle_record_with_accepted_headers(type_annotated_value, accept_content_headers)
             }
-            TypeAnnotatedValue::List { .. } => {
-                handle_list_with_accepted_headers(type_annotated_value, accept_content_headers)
-            }
+            TypeAnnotatedValue::List { values, typ } => handle_list_with_accepted_headers(
+                type_annotated_value,
+                values,
+                typ,
+                accept_content_headers,
+            ),
             TypeAnnotatedValue::Bool(bool) => {
                 handle_primitive(bool, &AnalysedType::Bool, accept_content_headers)
             }
@@ -358,7 +385,7 @@ mod internal {
 
     fn handle_complex(
         complex: &TypeAnnotatedValue,
-        accepted_headers: &[ContentType],
+        accepted_headers: &AcceptHeaders,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         if accepted_headers.contains(&ContentType::json()) {
             get_json(complex)
@@ -371,49 +398,37 @@ mod internal {
     }
 
     fn handle_list_with_accepted_headers(
-        list: &TypeAnnotatedValue,
-        accepted_headers: &[ContentType],
+        original: &TypeAnnotatedValue,
+        inner_values: &Vec<TypeAnnotatedValue>,
+        list_type: &AnalysedType,
+        accepted_headers: &AcceptHeaders,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        match list {
-            TypeAnnotatedValue::List { values, typ } => {
-                match typ {
-                    // If the elements are u8, we consider it as a byte stream
-                    AnalysedType::U8 => {
-                        let byte_stream = get_byte_stream(values)?;
-                        let body = Body::from_bytes(bytes::Bytes::from(byte_stream));
-                        let content_type_header =
-                            pick_highest_priority_content_type(accepted_headers)?;
-                        Ok(body.with_content_type(content_type_header.to_string()))
-                    }
-                    _ => {
-                        // If the accepted headers contain JSON, we prioritise that and set ther response type header to json
-                        if accepted_headers.contains(&ContentType::json()) {
-                            get_json(list)
-                        } else {
-                            // There is no way a List can be properly serialised into any other formats to satisfy any other headers, therefore fail
-                            Err(ContentTypeMapError::illegal_mapping(
-                                &AnalysedType::from(list),
-                                accepted_headers,
-                            ))
-                        }
-                    }
+        match list_type {
+            AnalysedType::U8 => {
+                let byte_stream = get_byte_stream(inner_values)?;
+                let body = Body::from_bytes(bytes::Bytes::from(byte_stream));
+                let content_type_header = pick_highest_priority_content_type(accepted_headers)?;
+                Ok(body.with_content_type(content_type_header.to_string()))
+            }
+            _ => {
+                if accepted_headers.contains(&ContentType::json()) {
+                    get_json(original)
+                } else {
+                    Err(ContentTypeMapError::illegal_mapping(
+                        &list_type,
+                        accepted_headers,
+                    ))
                 }
             }
-            _ => Err(ContentTypeMapError::illegal_mapping(
-                &AnalysedType::from(list),
-                accepted_headers,
-            )),
         }
     }
 
     fn handle_primitive<A: Display + serde::Serialize>(
         input: &A,
         primitive_type: &AnalysedType,
-        accepted_content_type: &[ContentType],
+        accepted_content_type: &AcceptHeaders,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> where {
-        if accepted_content_type.contains(&ContentType::text()) {
-            Ok(get_text_body(input))
-        } else if accepted_content_type.contains(&ContentType::json()) {
+        if accepted_content_type.contains(&ContentType::json()) {
             let json = serde_json::to_value(input)
                 .map_err(|_| ContentTypeMapError::internal("Failed to convert to json body"))?;
 
@@ -432,7 +447,7 @@ mod internal {
 
     fn handle_record_with_accepted_headers(
         record: &TypeAnnotatedValue,
-        accepted_headers: &[ContentType],
+        accepted_headers: &AcceptHeaders,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         // if record, we prioritise JSON
         if accepted_headers.contains(&ContentType::json()) {
@@ -448,16 +463,18 @@ mod internal {
 
     fn handle_string(
         string: &str,
-        accepted_headers: &[ContentType],
+        accepted_headers: &AcceptHeaders,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         let non_json_content_type = pick_highest_priority_content_type(accepted_headers)?;
         Ok(Body::from_bytes(bytes::Bytes::from(string.to_string()))
             .with_content_type(non_json_content_type.to_string()))
     }
 
+    //
     fn pick_highest_priority_content_type(
-        input_content_types: &[ContentType],
+        input_content_types: &AcceptHeaders,
     ) -> Result<ContentType, ContentTypeMapError> {
+        // TODO; This should be based on quality params in accept headers
         let content_headers_in_priority: Vec<ContentType> = vec![
             ContentType::json(),
             ContentType::text(),
@@ -742,7 +759,7 @@ mod tests {
 
         fn get_content_type_and_body(
             input: &TypeAnnotatedValue,
-            headers: &Vec<ContentType>,
+            headers: &AcceptHeaders,
         ) -> (Option<String>, Body) {
             let response_body =
                 internal::get_response_body_from_accept_content_headers(input, headers).unwrap();
@@ -760,7 +777,7 @@ mod tests {
             let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
-                &vec![ContentType::json(), ContentType::text()],
+                &AcceptHeaders::from_str("text/html;q=0.8, application/json;q=0.5"),
             );
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
@@ -774,7 +791,7 @@ mod tests {
             let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
-                &vec![ContentType::text(), ContentType::html()],
+                &AcceptHeaders::from_str("text/html;q=0.8, application/json;q=0.5"),
             );
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
@@ -786,8 +803,10 @@ mod tests {
         #[tokio::test]
         async fn test_string_type_with_html() {
             let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
-            let (content_type, body) =
-                get_content_type_and_body(&type_annotated_value, &vec![ContentType::html()]);
+            let (content_type, body) = get_content_type_and_body(
+                &type_annotated_value,
+                &AcceptHeaders::from_str("text/html"),
+            );
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
                 (result, content_type),
@@ -798,8 +817,10 @@ mod tests {
         #[tokio::test]
         async fn test_singleton_u8_type_text() {
             let type_annotated_value = TypeAnnotatedValue::U8(10);
-            let (content_type, body) =
-                get_content_type_and_body(&type_annotated_value, &vec![ContentType::text()]);
+            let (content_type, body) = get_content_type_and_body(
+                &type_annotated_value,
+                &AcceptHeaders::from_str("application/json"),
+            );
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
                 (result, content_type),
@@ -810,8 +831,10 @@ mod tests {
         #[tokio::test]
         async fn test_singleton_u8_type_json() {
             let type_annotated_value = TypeAnnotatedValue::U8(10);
-            let (content_type, body) =
-                get_content_type_and_body(&type_annotated_value, &vec![ContentType::json()]);
+            let (content_type, body) = get_content_type_and_body(
+                &type_annotated_value,
+                &AcceptHeaders::from_str("application/json"),
+            );
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
                 (result, content_type),
@@ -824,7 +847,7 @@ mod tests {
             let type_annotated_value = TypeAnnotatedValue::U8(10);
             let result = internal::get_response_body_from_accept_content_headers(
                 &type_annotated_value,
-                &vec![ContentType::html()],
+                &AcceptHeaders::from_str("text/html"),
             );
 
             assert!(matches!(
@@ -841,7 +864,7 @@ mod tests {
             };
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
-                &vec![ContentType::json(), ContentType::html()],
+                &AcceptHeaders::from_str("text/html;q=0.8, application/json;q=0.50"),
             );
             let result = &body.into_bytes().await.unwrap();
             let data_as_str = String::from_utf8_lossy(result).to_string();
@@ -866,7 +889,7 @@ mod tests {
 
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
-                &vec![ContentType::json(), ContentType::html()],
+                &AcceptHeaders::from_str("text/html;q=0.8, application/json;q=0.5"),
             );
             let data_as_str =
                 String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
@@ -889,7 +912,7 @@ mod tests {
 
             let result = internal::get_response_body_from_accept_content_headers(
                 &type_annotated_value,
-                &vec![ContentType::html()],
+                &AcceptHeaders::from_str("text/html"),
             );
 
             assert!(matches!(
@@ -903,7 +926,7 @@ mod tests {
             let type_annotated_value = sample_record();
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
-                &vec![ContentType::json(), ContentType::html()],
+                &AcceptHeaders::from_str("text/html;q=0.8, application/json;q=0.5"),
             );
             let data_as_str =
                 String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
@@ -921,7 +944,7 @@ mod tests {
 
             let result = internal::get_response_body_from_accept_content_headers(
                 &type_annotated_value,
-                &vec![ContentType::html()],
+                &AcceptHeaders::from_str("text/html"),
             );
 
             assert!(matches!(

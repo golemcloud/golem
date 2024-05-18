@@ -6,6 +6,7 @@ use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::TypeAnnotatedValue;
+use http::header::ACCEPT;
 use http::HeaderMap;
 use poem::web::headers::ContentType;
 use serde_json::Value;
@@ -49,35 +50,13 @@ pub struct TypedHttRequestDetails {
 }
 
 impl TypedHttRequestDetails {
-    pub fn get_accept_content_type_header(&self) -> Vec<ContentType> {
-        let primitive = self
-            .typed_header_values
+    pub fn get_accept_content_type_header(&self) -> Option<String> {
+        self.typed_header_values
             .0
             .fields
             .iter()
             .find(|field| field.name == http::header::ACCEPT.to_string())
-            .and_then(|field| {
-                field.value.get_primitive().map(|x| {
-                    x.as_string()
-                        .split(',')
-                        .map(|v| v.to_string())
-                        .collect::<Vec<String>>()
-                })
-            });
-
-        let mut content_types = vec![];
-
-        if let Some(primitive) = primitive {
-            for content_type in primitive {
-                // We ignore the unrecognised content types such as
-                // SXG primarily used for content distribution and caching.
-                if let Ok(content_type) = ContentType::from_str(content_type.as_str()) {
-                    content_types.push(content_type)
-                }
-            }
-        }
-
-        content_types
+            .and_then(|field| field.value.get_primitive().map(|x| x.as_string()));
     }
 
     fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
