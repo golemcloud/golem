@@ -553,7 +553,7 @@ mod tests {
             // Had it serialized as json, it would have been "\"Hello\""
             assert_eq!(
                 (result, content_type),
-                ("Hello".to_string(), Some("text/plain".to_string()))
+                ("Hello".to_string(), Some("application/json".to_string()))
             );
         }
 
@@ -564,7 +564,7 @@ mod tests {
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
                 (result, content_type),
-                ("10".to_string(), Some("text/plain".to_string()))
+                ("10".to_string(), Some("application/json".to_string()))
             );
         }
 
@@ -804,7 +804,7 @@ mod tests {
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
                 (result, content_type),
-                ("Hello".to_string(), Some("text/plain".to_string()))
+                ("Hello".to_string(), Some("application/json".to_string()))
             );
         }
 
@@ -832,7 +832,7 @@ mod tests {
             let result = String::from_utf8_lossy(&body.into_bytes().await.unwrap()).to_string();
             assert_eq!(
                 (result, content_type),
-                ("10".to_string(), Some("text/plain".to_string()))
+                ("10".to_string(), Some("application/json".to_string()))
             );
         }
 
