@@ -148,7 +148,7 @@ mod internal {
 
                     match evaluation_result {
                         EvaluationResult::Value(type_annotated_value) => {
-                            match type_annotated_value.to_response_body(content_type) {
+                            match type_annotated_value.to_http_response_body(content_type) {
                                 Ok(body_with_header) => {
                                     let mut response = body_with_header.into_response();
                                     response.set_status(*status);
