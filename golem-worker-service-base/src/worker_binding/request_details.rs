@@ -65,13 +65,12 @@ impl TypedHttRequestDetails {
                 })
             });
 
-        // We ignore the content types that are not relevant to a server side application
-        // and therefore ignore the ones that cannot be recognised. Example:
-        // SXG  primarily used for content distribution and caching
         let mut content_types = vec![];
 
         if let Some(primitive) = primitive {
             for content_type in primitive {
+                // We ignore the unrecognised content types such as
+                // SXG primarily used for content distribution and caching.
                 if let Ok(content_type) = ContentType::from_str(content_type.as_str()) {
                     content_types.push(content_type)
                 }
