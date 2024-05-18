@@ -13,8 +13,8 @@ pub trait HttpContentTypeResponseMapper {
 }
 
 pub enum ContentTypeHeaders {
-    ClientAccept(Vec<ContentType>),
-    UserDefinedResponse(ContentType),
+    FromClientAccept(Vec<ContentType>),
+    FromUserDefinedResponseMapping(ContentType),
     Empty,
 }
 
@@ -24,9 +24,9 @@ impl ContentTypeHeaders {
         accepted_content_types: Vec<ContentType>,
     ) -> Self {
         if let Some(response_content_type) = response_content_type {
-            ContentTypeHeaders::UserDefinedResponse(response_content_type)
+            ContentTypeHeaders::FromUserDefinedResponseMapping(response_content_type)
         } else if !accepted_content_types.is_empty() {
-            ContentTypeHeaders::ClientAccept(accepted_content_types)
+            ContentTypeHeaders::FromClientAccept(accepted_content_types)
         } else {
             ContentTypeHeaders::Empty
         }
@@ -39,10 +39,10 @@ impl HttpContentTypeResponseMapper for TypeAnnotatedValue {
         content_type_headers: ContentTypeHeaders,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match content_type_headers {
-            ContentTypeHeaders::UserDefinedResponse(content_type) => {
+            ContentTypeHeaders::FromUserDefinedResponseMapping(content_type) => {
                 internal::get_body_from_response_content_type(self, &content_type)
             }
-            ContentTypeHeaders::ClientAccept(accept_content_headers) => {
+            ContentTypeHeaders::FromClientAccept(accept_content_headers) => {
                 internal::get_response_body_from_accept_content_headers(
                     self,
                     &accept_content_headers,
