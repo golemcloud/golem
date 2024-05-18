@@ -16,17 +16,21 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
-use golem_common::config::RetryConfig;
-use golem_worker_executor_base::services::golem_config::CompiledComponentServiceConfig;
 use http::Uri;
 use serde::Deserialize;
 use uuid::Uuid;
+
+use golem_common::config::RetryConfig;
+use golem_worker_executor_base::services::golem_config::{
+    BlobStorageConfig, CompiledComponentServiceConfig,
+};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ServerConfig {
     // Services.
     pub component_service: ComponentServiceConfig,
     pub compiled_component_service: CompiledComponentServiceConfig,
+    pub blob_storage: BlobStorageConfig,
 
     // Workers.
     pub upload_worker: UploadWorkerConfig,
@@ -104,18 +108,16 @@ fn config_load() {
         "6778f06f-43ac-4e45-b501-6adb3253edf2",
     );
 
+    std::env::set_var("GOLEM__BLOB_STORAGE__CONFIG__REGION", "us-east-1");
     std::env::set_var(
-        "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__REGION",
-        "us-east-1",
-    );
-    std::env::set_var(
-        "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__BUCKET",
+        "GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET",
         "golem-compiled-components",
     );
     std::env::set_var(
-        "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__OBJECT_PREFIX",
-        "",
+        "GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET",
+        "golem-custom-data",
     );
+    std::env::set_var("GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX", "");
 
     let _ = ServerConfig::new();
 }

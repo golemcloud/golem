@@ -131,6 +131,13 @@ pub mod redis {
             crate::metrics::DEFAULT_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
+        static ref REDIS_DESERIALIZED_SIZE_BYTES: HistogramVec = register_histogram_vec!(
+            "redis_deserialized_size_bytes",
+            "Size of deserialized Redis entities",
+            &["svc", "entity"],
+            crate::metrics::DEFAULT_SIZE_BUCKETS.to_vec()
+        )
+        .unwrap();
     }
 
     pub fn record_redis_success(
@@ -160,6 +167,16 @@ pub mod redis {
         size: usize,
     ) {
         REDIS_SERIALIZED_SIZE_BYTES
+            .with_label_values(&[svc_name, entity_name])
+            .observe(size as f64);
+    }
+
+    pub fn record_redis_deserialized_size(
+        svc_name: &'static str,
+        entity_name: &'static str,
+        size: usize,
+    ) {
+        REDIS_DESERIALIZED_SIZE_BYTES
             .with_label_values(&[svc_name, entity_name])
             .observe(size as f64);
     }

@@ -21,10 +21,10 @@ use golem_common::model::{
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
-    BlobStoreServiceConfig, BlobStoreServiceInMemoryConfig, CompiledComponentServiceConfig,
-    CompiledComponentServiceLocalConfig, ComponentServiceConfig, ComponentServiceLocalConfig,
-    GolemConfig, KeyValueServiceConfig, PromisesConfig, ShardManagerServiceConfig,
-    WorkerServiceGrpcConfig, WorkersServiceConfig,
+    BlobStorageConfig, CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
+    ComponentServiceConfig, ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
+    KeyValueStorageConfig, LocalFileSystemBlobStorageConfig, ShardManagerServiceConfig,
+    WorkerServiceGrpcConfig,
 };
 
 use golem_worker_executor_base::durable_host::{
@@ -275,26 +275,24 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
 
     let prometheus = golem_worker_executor_base::metrics::register_all();
     let config = GolemConfig {
+        key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
+            port: redis.public_port(),
+            key_prefix: context.redis_prefix(),
+            ..Default::default()
+        }),
+        indexed_storage: IndexedStorageConfig::KVStoreRedis,
+        blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
+            root: Path::new("data").to_path_buf(),
+        }),
         port: context.grpc_port(),
         http_port: context.http_port(),
         component_service: ComponentServiceConfig::Local(ComponentServiceLocalConfig {
             root: Path::new("data/components").to_path_buf(),
         }),
-        compiled_component_service: CompiledComponentServiceConfig::Local(
-            CompiledComponentServiceLocalConfig {
-                root: Path::new("data/components").to_path_buf(),
-            },
+        compiled_component_service: CompiledComponentServiceConfig::Enabled(
+            CompiledComponentServiceEnabledConfig {},
         ),
-        blob_store_service: BlobStoreServiceConfig::InMemory(BlobStoreServiceInMemoryConfig {}),
-        key_value_service: KeyValueServiceConfig::Redis,
         shard_manager_service: ShardManagerServiceConfig::SingleShard,
-        promises: PromisesConfig::Redis,
-        workers: WorkersServiceConfig::Redis,
-        redis: RedisConfig {
-            port: redis.public_port(),
-            key_prefix: context.redis_prefix(),
-            ..Default::default()
-        },
         public_worker_api: WorkerServiceGrpcConfig {
             host: "localhost".to_string(),
             port: context.grpc_port(),

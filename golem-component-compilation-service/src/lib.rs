@@ -24,7 +24,12 @@ use tracing::info;
 use crate::service::compile_service::ComponentCompilationServiceImpl;
 use config::ServerConfig;
 use golem_api_grpc::proto::golem::componentcompilation::component_compilation_service_server::ComponentCompilationServiceServer;
-use golem_worker_executor_base::{http_server::HttpServerImpl, services::compiled_component};
+use golem_worker_executor_base::services::golem_config::BlobStorageConfig;
+use golem_worker_executor_base::storage::blob::s3::S3BlobStorage;
+use golem_worker_executor_base::storage::blob::BlobStorage;
+use golem_worker_executor_base::{
+    http_server::HttpServerImpl, services::compiled_component, storage,
+};
 use tracing_subscriber::EnvFilter;
 
 mod config;
@@ -35,7 +40,7 @@ mod service;
 
 pub fn server_main() -> Result<(), Box<dyn std::error::Error>> {
     let prometheus = metrics::register_all();
-    let config = crate::config::ServerConfig::new();
+    let config = ServerConfig::new();
 
     if config.enable_tracing_console {
         // NOTE: also requires RUSTFLAGS="--cfg tokio_unstable" cargo build
@@ -62,8 +67,29 @@ pub fn server_main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn std::error::Error>> {
+    let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &config.blob_storage {
+        BlobStorageConfig::S3(config) => {
+            info!("Using S3 for blob storage");
+            Arc::new(S3BlobStorage::new(config.clone()).await)
+        }
+        BlobStorageConfig::LocalFileSystem(config) => {
+            info!(
+                "Using local file system for blob storage at {:?}",
+                config.root
+            );
+            Arc::new(
+                storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                    .await
+                    .expect("Failed to create file system blob storage"),
+            )
+        }
+        BlobStorageConfig::InMemory => {
+            info!("Using in-memory blob storage");
+            Arc::new(storage::blob::memory::InMemoryBlobStorage::new())
+        }
+    };
     let compiled_component =
-        compiled_component::configured(&config.compiled_component_service).await;
+        compiled_component::configured(&config.compiled_component_service, blob_storage.clone());
     let engine = wasmtime::Engine::new(&create_wasmtime_config()).expect("Failed to create engine");
 
     // Start metrics and healthcheck server.
