@@ -41,7 +41,7 @@ impl RefinedWorkerResponse {
                         Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple with 1 element if results are unnamed. Obtained {:?}", AnalysedType::from(result)))
                     }
                 }
-                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple if results ae unnamed. Obtained {:?}", AnalysedType::from(ty))),
+                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple if results are unnamed. Obtained {:?}", AnalysedType::from(ty))),
             }
         } else {
             match &worker_response.result.result {
