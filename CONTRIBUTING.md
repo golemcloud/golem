@@ -7,31 +7,46 @@ cargo install --force cargo-make
 ```
 
 runs all unit tests, worker executor tests and integration tests
+
 ```shell
 cargo make test
 ```
 
 runs unit tests only
+
 ```shell
 cargo make unit-tests
 ```
 
 runs worker executor tests only
+
 ```shell
 cargo make integration-tests
 ```
 
 runs CLI tests only
+
 ```shell
 cargo make cli-tests
 ```
 
 runs sharding integration tests only
+
 ```shell
 cargo make sharding-tests
 ```
 
-## Local Testing
+## Starting all services locally
+
+There is a simple `cargo make run` task that starts all the debug executables of the services locally, using the default configuration. The prerequisites are:
+
+- `nginx` installed (on OSX can be installed with `brew install nginx`)
+- `redis` installed (on OSX can be installed with `brew install redis`)
+- `lnav` installed (on OSX can be installed with `brew install lnav`)
+
+The `cargo make run` command will start all the services and show a unified view of the logs using `lnav`. Quitting `lnav` kills the spawned processes.
+
+## Local Testing using Docker containers
 
 To spin up services using the latest code
 
@@ -45,6 +60,7 @@ cargo build --release --target x86_64-unknown-linux-gnu
 
 docker-compose -f docker-compose-sqlite.yaml up --build
 ```
+
 To start the service without a rebuild
 
 ```bash
@@ -90,6 +106,7 @@ Make sure to do `docker-compose pull` next time to make sure you are pulling the
 ### Cargo Build
 
 ### MAC
+
 If you are running ` cargo build --target ARCH-unknown-linux-gnu` (cross compiling to Linux) from MAC, you may encounter
 some missing dependencies. If interested, refer, https://github.com/messense/homebrew-macos-cross-toolchains
 
@@ -101,7 +118,7 @@ Typically, the following should allow you to run it successfully.
 brew tap messense/macos-cross-toolchains
 brew install messense/macos-cross-toolchains/x86_64-unknown-linux-gnu
 # If openssl is not in system
-# brew install openssl 
+# brew install openssl
 export OPENSSL_DIR=$(brew --prefix openssl)
 export CC_X86_64_UNKNOWN_LINUX_GNU=x86_64-unknown-linux-gnu-gcc
 export CXX_X86_64_UNKNOWN_LINUX_GNU=x86_64-unknown-linux-gnu-g++
@@ -128,7 +145,7 @@ Typically, the following should allow you to run it successfully.
 brew tap messense/macos-cross-toolchains
 brew install aarch64-unknown-linux-gnu
 # If openssl is not in system
-# brew install openssl 
+# brew install openssl
 export OPENSSL_DIR=$(brew --prefix openssl)
 export CC_AARCH64_UNKNOWN_LINUX_GNU=aarch64-unknown-linux-gnu-gcc
 export CXX_AARCH64_UNKNOWN_LINUX_GNU=aarch64-unknown-linux-gnu-g++
