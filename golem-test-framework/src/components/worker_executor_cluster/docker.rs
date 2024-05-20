@@ -30,7 +30,27 @@ pub struct DockerWorkerExecutorCluster {
 }
 
 impl DockerWorkerExecutorCluster {
-    pub fn new(
+    async fn make_worker_executor(
+        http_port: u16,
+        grpc_port: u16,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> Arc<dyn WorkerExecutor + Send + Sync + 'static> {
+        Arc::new(DockerWorkerExecutor::new(
+            http_port,
+            grpc_port,
+            redis,
+            component_service,
+            shard_manager,
+            worker_service,
+            verbosity,
+        ))
+    }
+
+    pub async fn new(
         size: usize,
         base_http_port: u16,
         base_grpc_port: u16,
@@ -41,24 +61,29 @@ impl DockerWorkerExecutorCluster {
         verbosity: Level,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
-        let mut worker_executors = Vec::new();
+        let mut worker_executors_joins = Vec::new();
 
         for i in 0..size {
             let http_port = base_http_port + i as u16;
             let grpc_port = base_grpc_port + i as u16;
 
-            let worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static> =
-                Arc::new(DockerWorkerExecutor::new(
-                    http_port,
-                    grpc_port,
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    verbosity,
-                ));
+            let worker_executor_join = tokio::spawn(Self::make_worker_executor(
+                http_port,
+                grpc_port,
+                redis.clone(),
+                component_service.clone(),
+                shard_manager.clone(),
+                worker_service.clone(),
+                verbosity,
+            ));
 
-            worker_executors.push(worker_executor);
+            worker_executors_joins.push(worker_executor_join);
+        }
+
+        let mut worker_executors = Vec::new();
+
+        for join in worker_executors_joins {
+            worker_executors.push(join.await.expect("Failed to join"));
         }
 
         Self {
