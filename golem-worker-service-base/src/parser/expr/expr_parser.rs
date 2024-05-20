@@ -53,12 +53,13 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
 
     while let Some(token) = tokenizer.next_non_empty_token() {
         match token {
-            Token::MultiChar(MultiCharTokens::Other(raw_string)) => {
+            Token::MultiChar(MultiCharTokens::Identifier(var)) => previous_expression.build(Expr::Variable(var)),
+            Token::MultiChar(MultiCharTokens::StringLiteral(raw_string)) => {
                 let new_expr = get_expr_from_custom_string(&mut tokenizer, raw_string.as_str())?;
                 previous_expression.build(new_expr);
             }
 
-            Token::MultiChar(MultiCharTokens::Number(number)) => {
+            Token::MultiChar(MultiCharTokens::NumberLiteral(number)) => {
                 let new_expr = util::get_primitive_expr(number.as_str());
                 previous_expression.build(new_expr);
             }

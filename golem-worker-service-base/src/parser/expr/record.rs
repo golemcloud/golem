@@ -15,7 +15,7 @@ pub(crate) fn create_record(tokenizer: &mut Tokenizer) -> Result<Expr, ParseErro
 
     fn go(tokenizer: &mut Tokenizer, record: &mut Vec<(String, Expr)>) -> Result<(), ParseError> {
         match tokenizer.next_non_empty_token() {
-            Some(Token::MultiChar(MultiCharTokens::Other(key))) => {
+            Some(Token::MultiChar(MultiCharTokens::StringLiteral(key))) => {
                 if tokenizer.next_non_empty_token_is(&Token::Colon) {
                     if util::is_next_token_complex_type(tokenizer) {
                         let complex_value_start_token =

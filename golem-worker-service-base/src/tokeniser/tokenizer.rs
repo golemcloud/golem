@@ -29,6 +29,7 @@ pub enum Token {
 pub enum MultiCharTokens {
     Worker,
     Request,
+    Identifier(String),
     Ok,
     Err,
     Some,
@@ -43,13 +44,13 @@ pub enum MultiCharTokens {
     Else,
     Arrow,
     Let,
-    Number(String),
-    Other(String),
+    NumberLiteral(String),
+    StringLiteral(String),
 }
 
 impl Token {
     pub fn raw_string(string: &str) -> Token {
-        Token::MultiChar(MultiCharTokens::Other(string.to_string()))
+        Token::MultiChar(MultiCharTokens::StringLiteral(string.to_string()))
     }
 
     pub fn interpolation_start() -> Token {
@@ -113,7 +114,7 @@ impl Token {
     }
 
     pub fn number(number: &str) -> Token {
-        Token::MultiChar(MultiCharTokens::Number(number.to_string()))
+        Token::MultiChar(MultiCharTokens::NumberLiteral(number.to_string()))
     }
 
     pub fn let_equal() -> Token {
@@ -125,7 +126,7 @@ impl Token {
         match self {
             Token::MultiChar(MultiCharTokens::InterpolationStart) => self.clone(), /* We disallow any normalisation to string if the token is interpolation! */
             Token::RCurly => self.clone(),
-            token => Token::MultiChar(MultiCharTokens::Other(token.to_string())),
+            token => Token::MultiChar(MultiCharTokens::StringLiteral(token.to_string())),
         }
     }
 
@@ -174,9 +175,10 @@ impl Display for Token {
                     MultiCharTokens::None => "none",
                     MultiCharTokens::Match => "match",
                     MultiCharTokens::Arrow => "=>",
-                    MultiCharTokens::Other(string) => string.as_str(),
-                    MultiCharTokens::Number(number) => number.as_str(),
+                    MultiCharTokens::StringLiteral(string) => string.as_str(),
+                    MultiCharTokens::NumberLiteral(number) => number.as_str(),
                     MultiCharTokens::Let => "let",
+                    MultiCharTokens::Identifier(identifier) => identifier.as_str(),
                 },
             }
         )
@@ -190,7 +192,7 @@ impl Token {
 
     pub fn is_empty(&self) -> bool {
         match self {
-            Self::MultiChar(MultiCharTokens::Other(string)) => string.is_empty(),
+            Self::MultiChar(MultiCharTokens::StringLiteral(string)) => string.is_empty(),
             Self::Space => true,
             _ => false,
         }
@@ -492,6 +494,7 @@ impl<'t> Tokenizer<'t> {
             ':' => Some(Token::Colon),
             ';' => Some(Token::SemiColon),
             '@' => Some(Token::At),
+            '"' => self.capture_string_until(&Token::Quote).map_or(Some(Token::Quote), |result| Some(Token::MultiChar(MultiCharTokens::StringLiteral(result)))),
             '=' => self
                 .rest()
                 .chars()
@@ -527,13 +530,13 @@ impl<'t> Tokenizer<'t> {
                     "then" => Some(Token::MultiChar(MultiCharTokens::Then)),
                     "else" => Some(Token::MultiChar(MultiCharTokens::Else)),
                     "let" => Some(Token::MultiChar(MultiCharTokens::Let)),
-                    random => Some(Token::MultiChar(MultiCharTokens::Other(random.to_string()))),
+                    identifier => Some(Token::MultiChar(MultiCharTokens::Identifier(identifier.to_string()))),
                 }
             }
             '0'..='9' => {
                 let str =
                     self.eat_while(|ch| matches!(ch, '0'..='9' | '-' | '.' | 'e' | 'E' | '+'))?;
-                Some(Token::MultiChar(MultiCharTokens::Number(str.to_string())))
+                Some(Token::MultiChar(MultiCharTokens::NumberLiteral(str.to_string())))
             }
             _ => self
                 .find_double_char_token()
@@ -544,7 +547,7 @@ impl<'t> Tokenizer<'t> {
     fn find_next_char(&mut self) -> Option<Token> {
         let final_char = self.peek_next_char()?;
         self.progress_by(&final_char);
-        Some(Token::MultiChar(MultiCharTokens::Other(
+        Some(Token::MultiChar(MultiCharTokens::StringLiteral(
             final_char.to_string(),
         )))
     }
@@ -1153,5 +1156,15 @@ else${z}
         let mut tokeniser = Tokenizer::new(tokens);
         let result = tokeniser.capture_string_until_and_skip_end(&Token::Quote);
         assert_eq!(result, Some("foo".to_string()))
+    }
+
+    #[test]
+    fn test_capture_string_between_quotes1() {
+        let tokens = "let x = \"jon\"";
+
+        let result: Vec<Token> = Tokenizer::new(tokens).collect();
+
+
+        assert_eq!(result, vec![])
     }
 }

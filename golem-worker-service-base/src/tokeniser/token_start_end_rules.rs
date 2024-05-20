@@ -89,8 +89,9 @@ impl Rules {
                     MultiCharTokens::Else => vec![TokenStartEnd::of_then()],
                     MultiCharTokens::Arrow => vec![], // hardly act as an end token
                     MultiCharTokens::Let => vec![],   // hardly act as an end token
-                    MultiCharTokens::Number(_) => vec![], // hardly act as an end token
-                    MultiCharTokens::Other(_) => vec![], // hardly act as an end token
+                    MultiCharTokens::NumberLiteral(_) => vec![], // hardly act as an end token
+                    MultiCharTokens::StringLiteral(_) => vec![], // hardly act as an end token
+                    MultiCharTokens::Identifier(_) => vec![]
                 }
             }
             Token::LCurly => vec![],
