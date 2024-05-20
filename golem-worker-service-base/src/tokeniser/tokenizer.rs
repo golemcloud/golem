@@ -951,11 +951,11 @@ else${z}
             tokens,
             vec![
                 Token::interpolation_start(),
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::RCurly,
-                Token::raw_string("-raw_"),
+                Token::identifier("-raw_"),
                 Token::interpolation_start(),
-                Token::raw_string("bar"),
+                Token::identifier("bar"),
                 Token::RCurly,
             ]
         );
@@ -968,11 +968,11 @@ else${z}
             tokens,
             vec![
                 Token::interpolation_start(),
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::RCurly,
-                Token::raw_string("-"),
+                Token::identifier("-"),
                 Token::raw_string("^"),
-                Token::raw_string("raw"),
+                Token::identifier("raw"),
             ]
         );
     }
@@ -983,10 +983,10 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("raw"),
+                Token::identifier("raw"),
                 Token::Space,
                 Token::interpolation_start(),
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::RCurly,
             ]
         );
@@ -998,19 +998,19 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::Space,
                 Token::interpolation_start(),
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::RCurly,
                 Token::Space,
-                Token::raw_string("raw"),
+                Token::identifier("raw"),
                 Token::Space,
                 Token::interpolation_start(),
-                Token::raw_string("bar"),
+                Token::identifier("bar"),
                 Token::RCurly,
                 Token::Space,
-                Token::raw_string("bar")
+                Token::identifier("bar")
             ]
         );
     }
