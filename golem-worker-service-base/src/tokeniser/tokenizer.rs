@@ -53,6 +53,10 @@ impl Token {
         Token::MultiChar(MultiCharTokens::StringLiteral(string.to_string()))
     }
 
+    pub fn identifier(identifier: &str) -> Token {
+        Token::MultiChar(MultiCharTokens::Identifier(identifier.to_string()))
+    }
+
     pub fn interpolation_start() -> Token {
         Token::MultiChar(MultiCharTokens::InterpolationStart)
     }
@@ -167,8 +171,8 @@ impl Display for Token {
                     MultiCharTokens::LessThanOrEqualTo => "<=",
                     MultiCharTokens::If => "if",
                     MultiCharTokens::Then => "then",
-                    MultiCharTokens::Worker => "worker",
-                    MultiCharTokens::Request => "request",
+                    MultiCharTokens::Worker => "bla",
+                    MultiCharTokens::Request => "bla1",
                     MultiCharTokens::Ok => "ok",
                     MultiCharTokens::Err => "err",
                     MultiCharTokens::Some => "some",
@@ -528,8 +532,8 @@ impl<'t> Tokenizer<'t> {
                 let str =
                     self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')?;
                 match str {
-                    "worker" => Some(Token::MultiChar(MultiCharTokens::Worker)),
-                    "request" => Some(Token::MultiChar(MultiCharTokens::Request)),
+                    "bla1" => Some(Token::MultiChar(MultiCharTokens::Worker)),
+                    "bla2" => Some(Token::MultiChar(MultiCharTokens::Request)),
                     "ok" => Some(Token::MultiChar(MultiCharTokens::Ok)),
                     "err" => Some(Token::MultiChar(MultiCharTokens::Err)),
                     "some" => Some(Token::MultiChar(MultiCharTokens::Some)),
@@ -616,9 +620,9 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::Space,
-                Token::raw_string("bar")
+                Token::identifier("bar")
             ]
         );
     }
@@ -630,9 +634,9 @@ mod tests {
             tokens,
             vec![
                 Token::LParen,
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::Space,
-                Token::raw_string("bar"),
+                Token::identifier("bar"),
                 Token::RParen
             ]
         );
@@ -644,11 +648,11 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::Space,
                 Token::Dot,
                 Token::Space,
-                Token::raw_string("bar"),
+                Token::identifier("bar"),
             ]
         );
     }
@@ -656,13 +660,13 @@ mod tests {
     #[test]
     fn test_request() {
         let tokens: Vec<Token> = Tokenizer::new("request .").collect();
-        assert_eq!(tokens, vec![Token::request(), Token::Space, Token::Dot,]);
+        assert_eq!(tokens, vec![Token::identifier("request"), Token::Space, Token::Dot,]);
     }
 
     #[test]
     fn test_worker_response() {
         let tokens: Vec<Token> = Tokenizer::new("worker.").collect();
-        assert_eq!(tokens, vec![Token::worker(), Token::Dot]);
+        assert_eq!(tokens, vec![Token::identifier("worker"), Token::Dot]);
     }
 
     #[test]
@@ -672,9 +676,9 @@ mod tests {
             tokens,
             vec![
                 Token::LSquare,
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::Space,
-                Token::raw_string("bar"),
+                Token::identifier("bar"),
                 Token::RSquare
             ]
         );
@@ -686,7 +690,7 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec![Token::if_token(), Token::Space, Token::raw_string("x"),]
+            vec![Token::if_token(), Token::Space, Token::identifier("x"),]
         );
     }
 
@@ -697,9 +701,9 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("asif"),
+                Token::identifier("asif"),
                 Token::Space,
-                Token::raw_string("x")
+                Token::identifier("x")
             ]
         );
     }
@@ -711,9 +715,9 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("ifis"),
+                Token::identifier("ifis"),
                 Token::Space,
-                Token::raw_string("x")
+                Token::identifier("x")
             ]
         );
     }
@@ -728,7 +732,7 @@ mod tests {
                 Token::if_token(),
                 Token::Space,
                 Token::interpolation_start(),
-                Token::raw_string("x"),
+                Token::identifier("x"),
                 Token::Space,
                 Token::GreaterThan,
                 Token::Space,
@@ -762,18 +766,18 @@ else${z}
                 Token::if_token(),
                 Token::Space,
                 Token::interpolation_start(),
-                Token::raw_string("x"),
+                Token::identifier("x"),
                 Token::RCurly,
                 Token::Space,
                 Token::then(),
                 Token::Space,
                 Token::interpolation_start(),
-                Token::raw_string("y"),
+                Token::identifier("y"),
                 Token::RCurly,
                 Token::NewLine,
                 Token::else_token(),
                 Token::interpolation_start(),
-                Token::raw_string("z"),
+                Token::identifier("z"),
                 Token::RCurly,
                 Token::NewLine,
             ]
@@ -784,7 +788,7 @@ else${z}
     fn test_if_then_else_false_expr() {
         let tokens: Vec<Token> = Tokenizer::new("ifxthenyelsez").collect();
 
-        assert_eq!(tokens, vec![Token::raw_string("ifxthenyelsez"),]);
+        assert_eq!(tokens, vec![Token::identifier("ifxthenyelsez"),]);
     }
 
     #[test]
@@ -793,7 +797,7 @@ else${z}
 
         assert_eq!(
             tokens,
-            vec![Token::raw_string("f"), Token::Space, Token::GreaterThan,]
+            vec![Token::identifier("f"), Token::Space, Token::GreaterThan,]
         );
     }
 
@@ -804,12 +808,12 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("f"),
+                Token::identifier("f"),
                 Token::Space,
                 Token::Space,
                 Token::GreaterThan,
                 Token::Space,
-                Token::raw_string("g")
+                Token::identifier("g")
             ]
         );
     }
@@ -824,11 +828,11 @@ else${z}
             tokens,
             vec![
                 Token::interpolation_start(),
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::RCurly,
                 Token::GreaterThan,
                 Token::interpolation_start(),
-                Token::raw_string("bar"),
+                Token::identifier("bar"),
                 Token::RCurly,
             ]
         );
@@ -840,7 +844,7 @@ else${z}
 
         assert_eq!(
             tokens,
-            vec![Token::raw_string("f"), Token::Space, Token::LessThan,]
+            vec![Token::identifier("f"), Token::Space, Token::LessThan,]
         );
     }
 
@@ -851,11 +855,11 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("f"),
+                Token::identifier("f"),
                 Token::Space,
                 Token::LessThan,
                 Token::Space,
-                Token::raw_string("g")
+                Token::identifier("g")
             ]
         );
     }
@@ -867,9 +871,9 @@ else${z}
         assert_eq!(
             tokens,
             vec![
-                Token::raw_string("f"),
+                Token::identifier("f"),
                 Token::LessThan,
-                Token::raw_string("g")
+                Token::identifier("g")
             ]
         );
     }
@@ -884,13 +888,13 @@ else${z}
             tokens,
             vec![
                 Token::interpolation_start(),
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::RCurly,
                 Token::Space,
                 Token::GreaterThan,
                 Token::Space,
                 Token::interpolation_start(),
-                Token::raw_string("bar"),
+                Token::identifier("bar"),
                 Token::RCurly,
             ]
         );
@@ -906,13 +910,13 @@ else${z}
             tokens,
             vec![
                 Token::interpolation_start(),
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::RCurly,
                 Token::Space,
                 Token::LessThan,
                 Token::Space,
                 Token::interpolation_start(),
-                Token::raw_string("bar"),
+                Token::identifier("bar"),
                 Token::RCurly,
             ]
         );
@@ -928,13 +932,13 @@ else${z}
             tokens,
             vec![
                 Token::interpolation_start(),
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::RCurly,
                 Token::Space,
                 Token::equal_to(),
                 Token::Space,
                 Token::interpolation_start(),
-                Token::raw_string("bar"),
+                Token::identifier("bar"),
                 Token::RCurly,
             ]
         );
@@ -1018,15 +1022,15 @@ else${z}
             tokens,
             vec![
                 Token::interpolation_start(),
-                Token::raw_string("foo"),
+                Token::identifier("foo"),
                 Token::RCurly,
                 Token::Space,
-                Token::raw_string("raw"),
+                Token::identifier("raw"),
                 Token::interpolation_start(),
-                Token::raw_string("hi"),
+                Token::identifier("hi"),
                 Token::RCurly,
                 Token::Space,
-                Token::raw_string("bar"),
+                Token::identifier("bar"),
             ]
         );
     }
@@ -1034,7 +1038,7 @@ else${z}
     #[test]
     fn test_token_processing_with_match_expr() {
         let tokens: Vec<Token> = Tokenizer::new(
-            "${match worker.response { some(value) => worker.response, none => 'some_value' } }",
+            "${match worker.response { some(value) => worker.response, none => \"some_value\" } }",
         )
         .collect();
 
@@ -1044,31 +1048,29 @@ else${z}
                 Token::interpolation_start(),
                 Token::match_token(),
                 Token::Space,
-                Token::worker(),
+                Token::identifier("worker"),
                 Token::Dot,
-                Token::raw_string("response"),
+                Token::identifier("response"),
                 Token::Space,
                 Token::LCurly,
                 Token::Space,
                 Token::some(),
                 Token::LParen,
-                Token::raw_string("value"),
+                Token::identifier("value"),
                 Token::RParen,
                 Token::Space,
                 Token::arrow(),
                 Token::Space,
-                Token::worker(),
+                Token::identifier("worker"),
                 Token::Dot,
-                Token::raw_string("response"),
+                Token::identifier("response"),
                 Token::Comma,
                 Token::Space,
                 Token::none(),
                 Token::Space,
                 Token::arrow(),
                 Token::Space,
-                Token::Quote,
                 Token::raw_string("some_value"),
-                Token::Quote,
                 Token::Space,
                 Token::RCurly,
                 Token::Space,
@@ -1146,7 +1148,7 @@ else${z}
 
     #[test]
     fn test_index_of_last_end_token_negative() {
-        let tokens = "'not found' }";
+        let tokens = "\"not found\" }";
 
         let mut tokeniser = Tokenizer::new(tokens);
         let result = tokeniser.index_of_end_token(&Token::Comma);
@@ -1154,13 +1156,13 @@ else${z}
 
         assert_eq!(
             (result, unchanged_current_toknen),
-            (None, Some(Token::Quote))
+            (None, Some(Token::raw_string("not found")))
         )
     }
 
     #[test]
     fn test_capture_string_between_quotes() {
-        let tokens = "foo' == 'bar'";
+        let tokens = "foo\" == 'bar'";
 
         let mut tokeniser = Tokenizer::new(tokens);
         let result = tokeniser.capture_string_until_and_skip_end(&Token::Quote);
