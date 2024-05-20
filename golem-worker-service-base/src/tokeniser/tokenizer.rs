@@ -152,7 +152,7 @@ impl Display for Token {
                 Token::Dot => ".",
                 Token::LCurly => "{",
                 Token::Comma => ",",
-                Token::Quote => "'",
+                Token::Quote => "\"",
                 Token::LessThan => "<",
                 Token::Colon => ":",
                 Token::LetEqual => "=",
@@ -250,6 +250,7 @@ impl<'t> Tokenizer<'t> {
     // Captures the string upto the end token, and advance the cursor further skipping the end token
     pub fn capture_string_until_and_skip_end(&mut self, end: &Token) -> Option<String> {
         let captured_string = self.capture_string_until(end);
+        dbg!(captured_string.clone());
         match captured_string {
             Some(captured_string) => {
                 self.next_non_empty_token();
@@ -485,7 +486,6 @@ impl<'t> Tokenizer<'t> {
             '[' => Some(Token::LSquare),
             ']' => Some(Token::RSquare),
             '.' => Some(Token::Dot),
-            '\'' => Some(Token::Quote),
             '\n' => Some(Token::NewLine),
             ' ' => Some(Token::Space),
             '>' => Some(Token::GreaterThan),
@@ -494,14 +494,23 @@ impl<'t> Tokenizer<'t> {
             ':' => Some(Token::Colon),
             ';' => Some(Token::SemiColon),
             '@' => Some(Token::At),
-            '"' => self.capture_string_until(&Token::Quote).map_or(Some(Token::Quote), |result| Some(Token::MultiChar(MultiCharTokens::StringLiteral(result)))),
+            '"' => {
+                dbg!(self.rest());
+                self.progress();
+                self.capture_string_until(&Token::Quote).map_or(Some(Token::Quote), |result| {
+                    dbg!(result.clone());
+                    Some(Token::MultiChar(MultiCharTokens::StringLiteral(result)))
+                })
+            },
             '=' => self
                 .rest()
                 .chars()
                 .nth(1)
                 .map_or(Some(Token::LetEqual), |c| match c {
                     '=' | '>' => None,
-                    _ => Some(Token::LetEqual),
+                    _ => {
+                        Some(Token::LetEqual)
+                    },
                 }),
             _ => None,
         } {
@@ -597,7 +606,7 @@ impl<'a> Iterator for Tokenizer<'a> {
 mod tests {
     use alloc::vec::Vec;
 
-    use super::{Token, Tokenizer};
+    use super::{MultiCharTokens, Token, Tokenizer};
 
     extern crate alloc;
 
@@ -1160,11 +1169,23 @@ else${z}
 
     #[test]
     fn test_capture_string_between_quotes1() {
-        let tokens = "let x = \"jon\"";
+        let tokens = "let x = \"jon\";";
 
         let result: Vec<Token> = Tokenizer::new(tokens).collect();
 
 
-        assert_eq!(result, vec![])
+        assert_eq!(
+            result,
+            vec![
+                Token::MultiChar(MultiCharTokens::Let),
+                Token::Space,
+                Token::MultiChar(MultiCharTokens::Identifier("x".to_string())),
+                Token::Space,
+                Token::LetEqual,
+                Token::Space,
+                Token::MultiChar(MultiCharTokens::StringLiteral("jon".to_string())),
+                Token::SemiColon
+            ]
+        )
     }
 }
