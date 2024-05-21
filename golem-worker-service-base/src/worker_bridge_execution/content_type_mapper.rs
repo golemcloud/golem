@@ -204,7 +204,9 @@ mod internal {
             TypeAnnotatedValue::Chr(char) => {
                 handle_primitive(char, &AnalysedType::Chr, content_header)
             }
-            TypeAnnotatedValue::Str(string) => handle_string(string, content_header),
+            TypeAnnotatedValue::Str(string) =>
+                handle_string(string, content_header),
+
             TypeAnnotatedValue::Tuple { .. } => {
                 handle_complex(type_annotated_value, content_header)
             }
@@ -214,8 +216,9 @@ mod internal {
             TypeAnnotatedValue::Variant { .. } => {
                 handle_record(type_annotated_value, content_header)
             }
-            TypeAnnotatedValue::Enum { value, .. } => handle_string(value, content_header),
-            // Confirm this behaviour, given there is no specific content type
+            TypeAnnotatedValue::Enum { value, .. } =>
+                handle_string(value, content_header),
+
             TypeAnnotatedValue::Option { value, .. } => match value {
                 Some(value) => get_response_body_based_on_content_type(value, content_header),
                 None => {
@@ -443,9 +446,9 @@ mod internal {
         string: &str,
         content_type: &A,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
-        let non_json_content_type = content_type.response_content_type()?;
+        let response_content_type = content_type.response_content_type()?;
         Ok(Body::from_bytes(bytes::Bytes::from(string.to_string()))
-            .with_content_type(non_json_content_type.to_string()))
+            .with_content_type(response_content_type.to_string()))
     }
 }
 
