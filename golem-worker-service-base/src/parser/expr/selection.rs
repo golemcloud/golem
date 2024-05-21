@@ -9,7 +9,7 @@ pub fn get_select_index(
     match selection_on {
         Expr::Sequence(_)
         | Expr::Record(_)
-        | Expr::Variable(_)
+        | Expr::Identifier(_)
         | Expr::SelectField(_, _)
         | Expr::Request()
         | Expr::Worker() => {

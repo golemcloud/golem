@@ -125,7 +125,7 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_display(Token::RCurly)
             }
-            Expr::Variable(variable) => {
+            Expr::Identifier(variable) => {
                 // self.write_display(Token::MultiChar(MultiCharTokens::InterpolationStart))?;
                 self.write_str(variable)
                 // self.write_display(Token::RCurly)
@@ -307,7 +307,7 @@ mod internal {
                 writer.write_str(")")
             }
             ArmPattern::Literal(expr) => match *expr.clone() {
-                Expr::Variable(s) => writer.write_str(s),
+                Expr::Identifier(s) => writer.write_str(s),
                 any_expr => writer.write_expr(&any_expr),
             },
         }

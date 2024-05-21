@@ -103,6 +103,8 @@ impl Evaluator for Expr {
                     )),
                 },
 
+                Expr::Call(name, params) => todo!("Call expression evaluation"),
+
                 Expr::Worker() => {
                     let worker_data = internal::MergedWorkerData::new(
                         input.worker_request.clone(),
@@ -341,7 +343,7 @@ impl Evaluator for Expr {
                     InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(*f64).into()),
                 },
 
-                Expr::Variable(variable) => input
+                Expr::Identifier(variable) => input
                     .get_variable_value(variable.as_str())
                     .map(|v| v.into())
                     .map_err(|err| err.into()),

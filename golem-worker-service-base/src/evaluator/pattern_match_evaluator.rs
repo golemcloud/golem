@@ -134,7 +134,7 @@ fn evaluate_arm_pattern(
             ),
         },
         ArmPattern::Literal(expr) => match expr.deref() {
-            Expr::Variable(variable) => Ok(ArmPatternOutput::Matched(MatchResult {
+            Expr::Identifier(variable) => Ok(ArmPatternOutput::Matched(MatchResult {
                 binding_variable: Some(BindingVariable(variable.clone())),
                 result: match_expr_result.clone(),
             })),

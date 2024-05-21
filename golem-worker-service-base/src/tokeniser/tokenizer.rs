@@ -431,6 +431,14 @@ impl<'t> Tokenizer<'t> {
         &self.text[self.state.pos..]
     }
 
+    pub fn rest_opt(&self) -> Option<&str> {
+        if self.state.pos < self.text.len() {
+            Some(&self.text[self.state.pos..])
+        } else {
+            None
+        }
+    }
+
     pub fn rest_at(&self, index: usize) -> &str {
         &self.text[self.state.pos + index..]
     }

@@ -65,7 +65,7 @@ pub(crate) fn create_tuple(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError
 // allow grouping of expressions
 fn is_valid_tuple_element(expr: &Expr) -> bool {
     match expr {
-        Expr::Variable(_) => true,
+        Expr::Identifier(_) => true,
         Expr::Number(_) => true,
         Expr::Boolean(_) => true,
         Expr::Flags(_) => true,

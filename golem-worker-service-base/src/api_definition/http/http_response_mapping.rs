@@ -102,7 +102,7 @@ mod tests {
             vec![
                 (
                     "body".to_string(),
-                    Box::new(Expr::Variable("function.return".to_string())),
+                    Box::new(Expr::Identifier("function.return".to_string())),
                 ),
                 (
                     "status".to_string(),
@@ -124,7 +124,7 @@ mod tests {
 
         assert_eq!(
             http_response_mapping.body,
-            Expr::Variable("function.return".to_string())
+            Expr::Identifier("function.return".to_string())
         );
         assert_eq!(
             http_response_mapping.status,
@@ -171,7 +171,7 @@ mod tests {
             vec![
                 (
                     "body".to_string(),
-                    Box::new(Expr::Variable("function.return".to_string())),
+                    Box::new(Expr::Identifier("function.return".to_string())),
                 ),
                 (
                     "headers".to_string(),
@@ -199,7 +199,7 @@ mod tests {
             vec![
                 (
                     "body".to_string(),
-                    Box::new(Expr::Variable("worker.response".to_string())),
+                    Box::new(Expr::Identifier("worker.response".to_string())),
                 ),
                 (
                     "status".to_string(),

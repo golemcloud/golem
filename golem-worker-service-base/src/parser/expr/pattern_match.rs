@@ -19,26 +19,26 @@ pub(crate) fn create_pattern_match_expr(tokenizer: &mut Tokenizer) -> Result<Exp
 pub(crate) fn accumulate_match_arms(
     tokenizer: &mut Tokenizer,
 ) -> Result<Vec<MatchArm>, ParseError> {
-    let mut constructor_patterns = Vec::new();
+    let mut match_arms = Vec::new();
 
     loop {
         let arm_pattern = get_arm_pattern(tokenizer)?;
         let ArmBody { cursor, arm_body } = ArmBody::from_tokenizer(tokenizer)?;
         let complete_arm = MatchArm((arm_pattern, arm_body));
-        constructor_patterns.push(complete_arm);
+        match_arms.push(complete_arm);
 
         if cursor == Cursor::Break {
             break;
         }
     }
 
-    if constructor_patterns.is_empty() {
+    if match_arms.is_empty() {
         return Err(ParseError::Message(
-            "Expecting a constructor pattern, but found nothing".to_string(),
+            format!("Expecting a constructor pattern, but found nothing at {}", tokenizer.pos())
         ));
     }
 
-    Ok(constructor_patterns)
+    Ok(match_arms)
 }
 
 pub(crate) fn get_arm_pattern(tokenizer: &mut Tokenizer) -> Result<ArmPattern, ParseError> {

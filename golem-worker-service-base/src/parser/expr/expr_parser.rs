@@ -1,12 +1,11 @@
+use std::thread::scope;
 use crate::expression::Expr;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use crate::parser::expr::{
-    code_block, constructor, flags, if_condition, let_statement, math_op, pattern_match, quoted,
-    record, selection, sequence, tuple, util,
-};
+use crate::parser::expr::{code_block, constructor, flags, if_condition, let_statement, math_op, params, pattern_match, quoted, record, selection, sequence, tuple, util};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
+use crate::parser::expr::params::get_params;
 
 #[derive(Clone, Debug)]
 pub struct ExprParser {}
@@ -46,17 +45,36 @@ pub(crate) fn parse_text(input: &str) -> Result<Expr, ParseError> {
     }
 }
 
+enum Scope {
+    Identifier,
+    Let,
+    If,
+    Else,
+    Then,
+    MatchPredicate,
+    MatchArm,
+    MatchArmPattern,
+    MatchArmResolution,
+    Empty,
+}
+
+
 pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
     let mut multi_line_expressions: MultiLineExpressions = MultiLineExpressions::default();
     let mut previous_expression: ConcatenatedExpressions = ConcatenatedExpressions::default();
     let mut tokenizer: Tokenizer = Tokenizer::new(input.as_ref());
+    let mut scope = Scope::Empty;
 
     while let Some(token) = tokenizer.next_non_empty_token() {
         match token {
-            Token::MultiChar(MultiCharTokens::Identifier(var)) => previous_expression.build(Expr::Variable(var)),
+            Token::MultiChar(MultiCharTokens::Identifier(var)) =>
+                previous_expression.build(Expr::Identifier(var)),
+
             Token::MultiChar(MultiCharTokens::StringLiteral(raw_string)) => {
-                let new_expr = get_expr_from_custom_string(&mut tokenizer, raw_string.as_str())?;
-                previous_expression.build(new_expr);
+                // we are parsing text (in turn calls parse code) with mutual recursion to handle
+                // string interpolations
+                let text = parse_text(raw_string.as_str())?;
+                previous_expression.build(text);
             }
 
             Token::MultiChar(MultiCharTokens::NumberLiteral(number)) => {
@@ -90,8 +108,19 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::LParen => {
-                let tuple_expr = tuple::create_tuple(&mut tokenizer)?;
-                previous_expression.build(tuple_expr);
+                match previous_expression.get_and_reset() {
+                    Some(Expr::Identifier(name)) => {
+                        tokenizer.skip_next_non_empty_token();
+                        if let Some(param_str) = tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
+                            let params = params::get_params(param_str.as_str())?;
+                            ConcatenatedExpressions::default().build(Expr::Call(name, params));
+                        } else {
+                            ConcatenatedExpressions::default().build(Expr::Call(name, vec![]));
+                        }
+                    }
+                    _ =>  previous_expression.build(tuple::create_tuple(&mut tokenizer)?)
+                }
+
             }
 
             Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo) => {
@@ -514,9 +543,9 @@ mod tests {
         let result = expression_parser.parse("${if hello then foo else bar}");
 
         let expected = Expr::Cond(
-            Box::new(Expr::Variable("hello".to_string())),
-            Box::new(Expr::Variable("foo".to_string())),
-            Box::new(Expr::Variable("bar".to_string())),
+            Box::new(Expr::Identifier("hello".to_string())),
+            Box::new(Expr::Identifier("foo".to_string())),
+            Box::new(Expr::Identifier("bar".to_string())),
         );
 
         assert_eq!(result.unwrap(), expected)
@@ -541,10 +570,10 @@ mod tests {
 
         // cond(path, 1, cond(2, 2, 0))
         let expected = Expr::Cond(
-            Box::new(Expr::Variable("foo".to_string())),
+            Box::new(Expr::Identifier("foo".to_string())),
             Box::new(Expr::unsigned_integer(1)),
             Box::new(Expr::Cond(
-                Box::new(Expr::Variable("bar".to_string())),
+                Box::new(Expr::Identifier("bar".to_string())),
                 Box::new(Expr::unsigned_integer(2)),
                 Box::new(Expr::unsigned_integer(0)),
             )),
@@ -880,16 +909,16 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "some",
-                        vec![ArmPattern::Literal(Box::new(Expr::Variable(
+                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                             "foo".to_string(),
                         )))],
                     )
                     .unwrap(),
-                    Box::new(Expr::Variable("foo".to_string())),
+                    Box::new(Expr::Identifier("foo".to_string())),
                 )),
                 MatchArm((
                     ArmPattern::from("none", vec![]).unwrap(),
-                    Box::new(Expr::Variable("result2".to_string())),
+                    Box::new(Expr::Identifier("result2".to_string())),
                 )),
             ],
         );
@@ -914,22 +943,22 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "ok",
-                        vec![ArmPattern::Literal(Box::new(Expr::Variable(
+                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                             "foo".to_string(),
                         )))],
                     )
                     .unwrap(),
-                    Box::new(Expr::Variable("foo".to_string())),
+                    Box::new(Expr::Identifier("foo".to_string())),
                 )),
                 MatchArm((
                     ArmPattern::from(
                         "err",
-                        vec![ArmPattern::Literal(Box::new(Expr::Variable(
+                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                             "bar".to_string(),
                         )))],
                     )
                     .unwrap(),
-                    Box::new(Expr::Variable("result2".to_string())),
+                    Box::new(Expr::Identifier("result2".to_string())),
                 )),
             ],
         );
@@ -954,7 +983,7 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "some",
-                        vec![ArmPattern::Literal(Box::new(Expr::Variable(
+                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                             "foo".to_string(),
                         )))],
                     )
@@ -993,7 +1022,7 @@ mod tests {
                         "some",
                         vec![ArmPattern::from(
                             "some",
-                            vec![ArmPattern::Literal(Box::new(Expr::Variable(
+                            vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                                 "foo".to_string(),
                             )))],
                         )
@@ -1031,7 +1060,7 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "some",
-                        vec![ArmPattern::Literal(Box::new(Expr::Variable(
+                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                             "foo".to_string(),
                         )))],
                     )
@@ -1071,17 +1100,17 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "some",
-                        vec![ArmPattern::Literal(Box::new(Expr::Variable(
+                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                             "foo".to_string(),
                         )))],
                     )
                     .unwrap(),
                     Box::new(Expr::Cond(
                         Box::new(Expr::GreaterThan(
-                            Box::new(Expr::Variable("foo".to_string())),
+                            Box::new(Expr::Identifier("foo".to_string())),
                             Box::new(Expr::unsigned_integer(1)),
                         )),
-                        Box::new(Expr::Variable("foo".to_string())),
+                        Box::new(Expr::Identifier("foo".to_string())),
                         Box::new(Expr::unsigned_integer(0)),
                     )),
                 )),
@@ -1112,14 +1141,14 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "some",
-                        vec![ArmPattern::Literal(Box::new(Expr::Variable(
+                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                             "foo".to_string(),
                         )))],
                     )
                     .unwrap(),
                     Box::new(Expr::Cond(
                         Box::new(Expr::GreaterThan(
-                            Box::new(Expr::Variable("foo".to_string())),
+                            Box::new(Expr::Identifier("foo".to_string())),
                             Box::new(Expr::unsigned_integer(1)),
                         )),
                         Box::new(Expr::Record(vec![(
@@ -1173,18 +1202,18 @@ mod tests {
             Expr::Let(
                 "y".to_string(),
                 Box::new(Expr::GreaterThan(
-                    Box::new(Expr::Variable("x".to_string())),
+                    Box::new(Expr::Identifier("x".to_string())),
                     Box::new(Expr::unsigned_integer(1)),
                 )),
             ),
             Expr::Let(
                 "z".to_string(),
                 Box::new(Expr::LessThan(
-                    Box::new(Expr::Variable("y".to_string())),
-                    Box::new(Expr::Variable("x".to_string())),
+                    Box::new(Expr::Identifier("y".to_string())),
+                    Box::new(Expr::Identifier("x".to_string())),
                 )),
             ),
-            Expr::Variable("x".to_string()),
+            Expr::Identifier("x".to_string()),
         ]);
 
         assert_eq!(result, expected);

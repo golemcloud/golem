@@ -17,7 +17,7 @@ pub(crate) fn create_let_statement(tokenizer: &mut Tokenizer) -> Result<Expr, Pa
 
     let expr = parse_code(let_variable_str.as_str())?;
     match expr {
-        Expr::Variable(variable_name) => {
+        Expr::Identifier(variable_name) => {
             // Parse the expression after the variable name
             let captured_string = tokenizer.capture_string_until_and_skip_end(&Token::SemiColon);
             match captured_string {

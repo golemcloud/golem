@@ -22,7 +22,7 @@ pub enum Expr {
     Literal(String),
     Number(InnerNumber),
     Flags(Vec<String>),
-    Variable(String),
+    Identifier(String),
     Boolean(bool),
     Concat(Vec<Expr>),
     Multiple(Vec<Expr>),
@@ -36,6 +36,7 @@ pub enum Expr {
     PatternMatch(Box<Expr>, Vec<MatchArm>),
     Option(Option<Box<Expr>>),
     Result(Result<Box<Expr>, Box<Expr>>),
+    Call(String, Vec<Expr>), // Upto the evaluator to find from the context what String represents
 }
 
 impl Expr {

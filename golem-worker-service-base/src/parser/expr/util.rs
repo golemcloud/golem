@@ -30,6 +30,6 @@ pub(crate) fn get_primitive_expr(primitive: &str) -> Expr {
     } else if let Ok(boolean) = primitive.parse::<bool>() {
         Expr::Boolean(boolean)
     } else {
-        Expr::Variable(primitive.to_string())
+        Expr::Identifier(primitive.to_string())
     }
 }
