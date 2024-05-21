@@ -218,6 +218,19 @@ impl<W: Write> Writer<W> {
                     self.write_str(")")
                 }
             },
+
+            Expr::Call(string, params) => {
+                self.write_str(string)?;
+                self.write_display(Token::LParen)?;
+                for (idx, param) in params.iter().enumerate() {
+                    if idx != 0 {
+                        self.write_display(Token::Comma)?;
+                        self.write_display(Token::Space)?;
+                    }
+                    self.write_expr(param)?;
+                }
+                self.write_display(Token::RParen)
+            }
         }
     }
 

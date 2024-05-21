@@ -66,6 +66,7 @@ pub(crate) fn create_tuple(tokenizer: &mut Tokenizer) -> Result<Expr, ParseError
 fn is_valid_tuple_element(expr: &Expr) -> bool {
     match expr {
         Expr::Identifier(_) => true,
+        Expr::Call(_, _) => false,
         Expr::Number(_) => true,
         Expr::Boolean(_) => true,
         Expr::Flags(_) => true,

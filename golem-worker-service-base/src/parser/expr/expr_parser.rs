@@ -1,11 +1,9 @@
-use std::thread::scope;
 use crate::expression::Expr;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
 use crate::parser::expr::{code_block, constructor, flags, if_condition, let_statement, math_op, params, pattern_match, quoted, record, selection, sequence, tuple, util};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
-use crate::parser::expr::params::get_params;
 
 #[derive(Clone, Debug)]
 pub struct ExprParser {}
@@ -45,25 +43,10 @@ pub(crate) fn parse_text(input: &str) -> Result<Expr, ParseError> {
     }
 }
 
-enum Scope {
-    Identifier,
-    Let,
-    If,
-    Else,
-    Then,
-    MatchPredicate,
-    MatchArm,
-    MatchArmPattern,
-    MatchArmResolution,
-    Empty,
-}
-
-
 pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
     let mut multi_line_expressions: MultiLineExpressions = MultiLineExpressions::default();
     let mut previous_expression: ConcatenatedExpressions = ConcatenatedExpressions::default();
     let mut tokenizer: Tokenizer = Tokenizer::new(input.as_ref());
-    let mut scope = Scope::Empty;
 
     while let Some(token) = tokenizer.next_non_empty_token() {
         match token {
