@@ -50,7 +50,7 @@ use crate::services::golem_config::{
     BlobStorageConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
-use crate::services::oplog::{DefaultOplogService, OplogService};
+use crate::services::oplog::{PrimaryOplogService, OplogService};
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
@@ -223,7 +223,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
 
         let oplog_service = Arc::new(
-            DefaultOplogService::new(
+            PrimaryOplogService::new(
                 indexed_storage.clone(),
                 blob_storage.clone(),
                 golem_config.oplog.max_operations_before_commit,

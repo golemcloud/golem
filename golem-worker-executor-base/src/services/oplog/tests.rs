@@ -1,0 +1,515 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::*;
+use crate::services::oplog::multilayer::OplogLayer;
+use crate::storage::blob::memory::InMemoryBlobStorage;
+use crate::storage::indexed::memory::InMemoryIndexedStorage;
+use crate::storage::indexed::redis::RedisIndexedStorage;
+use assert2::check;
+use golem_common::config::RedisConfig;
+use golem_common::model::regions::OplogRegion;
+use golem_common::model::ComponentId;
+use golem_common::redis::RedisPool;
+use log::info;
+use nonempty_collections::nev;
+use tracing::debug;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
+use uuid::Uuid;
+
+fn rounded_ts(ts: Timestamp) -> Timestamp {
+    Timestamp::from(ts.to_millis())
+}
+
+fn rounded(entry: OplogEntry) -> OplogEntry {
+    match entry {
+        OplogEntry::Create {
+            timestamp,
+            worker_id,
+            component_version,
+            args,
+            env,
+            account_id,
+        } => OplogEntry::Create {
+            timestamp: rounded_ts(timestamp),
+            worker_id,
+            component_version,
+            args,
+            env,
+            account_id,
+        },
+        OplogEntry::ImportedFunctionInvoked {
+            timestamp,
+            function_name,
+            response,
+            wrapped_function_type,
+        } => OplogEntry::ImportedFunctionInvoked {
+            timestamp: rounded_ts(timestamp),
+            function_name,
+            response,
+            wrapped_function_type,
+        },
+        OplogEntry::ExportedFunctionInvoked {
+            timestamp,
+            function_name,
+            request,
+            idempotency_key,
+            calling_convention,
+        } => OplogEntry::ExportedFunctionInvoked {
+            timestamp: rounded_ts(timestamp),
+            function_name,
+            request,
+            idempotency_key,
+            calling_convention,
+        },
+        OplogEntry::ExportedFunctionCompleted {
+            timestamp,
+            response,
+            consumed_fuel,
+        } => OplogEntry::ExportedFunctionCompleted {
+            timestamp: rounded_ts(timestamp),
+            response,
+            consumed_fuel,
+        },
+        OplogEntry::Suspend { timestamp } => OplogEntry::Suspend {
+            timestamp: rounded_ts(timestamp),
+        },
+        OplogEntry::NoOp { timestamp } => OplogEntry::NoOp {
+            timestamp: rounded_ts(timestamp),
+        },
+        OplogEntry::Jump { timestamp, jump } => OplogEntry::Jump {
+            timestamp: rounded_ts(timestamp),
+            jump,
+        },
+        OplogEntry::Interrupted { timestamp } => OplogEntry::Interrupted {
+            timestamp: rounded_ts(timestamp),
+        },
+        OplogEntry::Exited { timestamp } => OplogEntry::Exited {
+            timestamp: rounded_ts(timestamp),
+        },
+        OplogEntry::ChangeRetryPolicy {
+            timestamp,
+            new_policy,
+        } => OplogEntry::ChangeRetryPolicy {
+            timestamp: rounded_ts(timestamp),
+            new_policy,
+        },
+        OplogEntry::BeginAtomicRegion { timestamp } => OplogEntry::BeginAtomicRegion {
+            timestamp: rounded_ts(timestamp),
+        },
+        OplogEntry::EndAtomicRegion {
+            timestamp,
+            begin_index,
+        } => OplogEntry::EndAtomicRegion {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
+        OplogEntry::BeginRemoteWrite { timestamp } => OplogEntry::BeginRemoteWrite {
+            timestamp: rounded_ts(timestamp),
+        },
+        OplogEntry::EndRemoteWrite {
+            timestamp,
+            begin_index,
+        } => OplogEntry::EndRemoteWrite {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
+        OplogEntry::PendingUpdate {
+            timestamp,
+            description,
+        } => OplogEntry::PendingUpdate {
+            timestamp: rounded_ts(timestamp),
+            description,
+        },
+        OplogEntry::SuccessfulUpdate {
+            timestamp,
+            target_version,
+        } => OplogEntry::SuccessfulUpdate {
+            timestamp: rounded_ts(timestamp),
+            target_version,
+        },
+        OplogEntry::FailedUpdate {
+            timestamp,
+            target_version,
+            details,
+        } => OplogEntry::FailedUpdate {
+            timestamp: rounded_ts(timestamp),
+            target_version,
+            details,
+        },
+        OplogEntry::Error { timestamp, error } => OplogEntry::Error {
+            timestamp: rounded_ts(timestamp),
+            error,
+        },
+        OplogEntry::PendingWorkerInvocation {
+            timestamp,
+            invocation,
+        } => OplogEntry::PendingWorkerInvocation {
+            timestamp: rounded_ts(timestamp),
+            invocation,
+        },
+    }
+}
+
+#[tokio::test]
+async fn open_add_and_read_back() {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 100).await;
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let worker_id = WorkerId {
+        component_id: ComponentId(Uuid::new_v4()),
+        worker_name: "test".to_string(),
+    };
+    let oplog = oplog_service.open(&account_id, &worker_id).await;
+
+    let entry1 = rounded(OplogEntry::jump(OplogRegion { start: 5, end: 12 }));
+    let entry2 = rounded(OplogEntry::suspend());
+    let entry3 = rounded(OplogEntry::exited());
+
+    let start_idx = oplog.current_oplog_index().await;
+    oplog.add(entry1.clone()).await;
+    oplog.add(entry2.clone()).await;
+    oplog.add(entry3.clone()).await;
+    oplog.commit().await;
+
+    let r1 = oplog.read(start_idx).await;
+    let r2 = oplog.read(start_idx + 1).await;
+    let r3 = oplog.read(start_idx + 2).await;
+
+    assert_eq!(r1, entry1);
+    assert_eq!(r2, entry2);
+    assert_eq!(r3, entry3);
+
+    let entries = oplog_service.read(&worker_id, start_idx, 3).await;
+    assert_eq!(
+        entries.into_values().into_iter().collect::<Vec<_>>(),
+        vec![entry1, entry2, entry3]
+    );
+}
+
+#[tokio::test]
+async fn entries_with_small_payload() {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 100).await;
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let worker_id = WorkerId {
+        component_id: ComponentId(Uuid::new_v4()),
+        worker_name: "test".to_string(),
+    };
+    let oplog = oplog_service.open(&account_id, &worker_id).await;
+
+    let start_idx = oplog.current_oplog_index().await;
+    let entry1 = rounded(
+        oplog
+            .add_imported_function_invoked(
+                "f1".to_string(),
+                &"response".to_string(),
+                WrappedFunctionType::ReadRemote,
+            )
+            .await
+            .unwrap(),
+    );
+    let entry2 = rounded(
+        oplog
+            .add_exported_function_invoked(
+                "f2".to_string(),
+                &"request".to_string(),
+                IdempotencyKey::fresh(),
+                None,
+            )
+            .await
+            .unwrap(),
+    );
+    let entry3 = rounded(
+        oplog
+            .add_exported_function_completed(&"response".to_string(), 42)
+            .await
+            .unwrap(),
+    );
+
+    let desc = oplog
+        .create_snapshot_based_update_description(11, &[1, 2, 3])
+        .await
+        .unwrap();
+    let entry4 = rounded(OplogEntry::PendingUpdate {
+        timestamp: Timestamp::now_utc(),
+        description: desc.clone(),
+    });
+    oplog.add(entry4.clone()).await;
+
+    oplog.commit().await;
+
+    let r1 = oplog.read(start_idx).await;
+    let r2 = oplog.read(start_idx + 1).await;
+    let r3 = oplog.read(start_idx + 2).await;
+    let r4 = oplog.read(start_idx + 3).await;
+
+    assert_eq!(r1, entry1);
+    assert_eq!(r2, entry2);
+    assert_eq!(r3, entry3);
+    assert_eq!(r4, entry4);
+
+    let entries = oplog_service.read(&worker_id, start_idx, 4).await;
+    assert_eq!(
+        entries.into_values().into_iter().collect::<Vec<_>>(),
+        vec![
+            entry1.clone(),
+            entry2.clone(),
+            entry3.clone(),
+            entry4.clone()
+        ]
+    );
+
+    let p1 = oplog
+        .get_payload_of_entry::<String>(&entry1)
+        .await
+        .unwrap()
+        .unwrap();
+    let p2 = oplog
+        .get_payload_of_entry::<String>(&entry2)
+        .await
+        .unwrap()
+        .unwrap();
+    let p3 = oplog
+        .get_payload_of_entry::<String>(&entry3)
+        .await
+        .unwrap()
+        .unwrap();
+    let p4 = oplog
+        .get_upload_description_payload(&desc)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(p1, "response");
+    assert_eq!(p2, "request");
+    assert_eq!(p3, "response");
+    assert_eq!(p4, vec![1, 2, 3]);
+}
+
+#[tokio::test]
+async fn entries_with_large_payload() {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 100).await;
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let worker_id = WorkerId {
+        component_id: ComponentId(Uuid::new_v4()),
+        worker_name: "test".to_string(),
+    };
+    let oplog = oplog_service.open(&account_id, &worker_id).await;
+
+    let large_payload1 = vec![0u8; 1024 * 1024];
+    let large_payload2 = vec![1u8; 1024 * 1024];
+    let large_payload3 = vec![2u8; 1024 * 1024];
+    let large_payload4 = vec![3u8; 1024 * 1024];
+
+    let start_idx = oplog.current_oplog_index().await;
+    let entry1 = rounded(
+        oplog
+            .add_imported_function_invoked(
+                "f1".to_string(),
+                &large_payload1,
+                WrappedFunctionType::ReadRemote,
+            )
+            .await
+            .unwrap(),
+    );
+    let entry2 = rounded(
+        oplog
+            .add_exported_function_invoked(
+                "f2".to_string(),
+                &large_payload2,
+                IdempotencyKey::fresh(),
+                None,
+            )
+            .await
+            .unwrap(),
+    );
+    let entry3 = rounded(
+        oplog
+            .add_exported_function_completed(&large_payload3, 42)
+            .await
+            .unwrap(),
+    );
+
+    let desc = oplog
+        .create_snapshot_based_update_description(11, &large_payload4)
+        .await
+        .unwrap();
+    let entry4 = rounded(OplogEntry::PendingUpdate {
+        timestamp: Timestamp::now_utc(),
+        description: desc.clone(),
+    });
+    oplog.add(entry4.clone()).await;
+
+    oplog.commit().await;
+
+    let r1 = oplog.read(start_idx).await;
+    let r2 = oplog.read(start_idx + 1).await;
+    let r3 = oplog.read(start_idx + 2).await;
+    let r4 = oplog.read(start_idx + 3).await;
+
+    assert_eq!(r1, entry1);
+    assert_eq!(r2, entry2);
+    assert_eq!(r3, entry3);
+    assert_eq!(r4, entry4);
+
+    let entries = oplog_service.read(&worker_id, start_idx, 4).await;
+    assert_eq!(
+        entries.into_values().into_iter().collect::<Vec<_>>(),
+        vec![
+            entry1.clone(),
+            entry2.clone(),
+            entry3.clone(),
+            entry4.clone()
+        ]
+    );
+
+    let p1 = oplog
+        .get_payload_of_entry::<Vec<u8>>(&entry1)
+        .await
+        .unwrap()
+        .unwrap();
+    let p2 = oplog
+        .get_payload_of_entry::<Vec<u8>>(&entry2)
+        .await
+        .unwrap()
+        .unwrap();
+    let p3 = oplog
+        .get_payload_of_entry::<Vec<u8>>(&entry3)
+        .await
+        .unwrap()
+        .unwrap();
+    let p4 = oplog
+        .get_upload_description_payload(&desc)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(p1, large_payload1);
+    assert_eq!(p2, large_payload2);
+    assert_eq!(p3, large_payload3);
+    assert_eq!(p4, large_payload4);
+}
+
+#[tokio::test]
+async fn multilayer_transfers_entries_after_limit_reached_1() {
+    multilayer_transfers_entries_after_limit_reached(315, 5, 1, 3).await;
+}
+
+#[tokio::test]
+async fn multilayer_transfers_entries_after_limit_reached_2() {
+    multilayer_transfers_entries_after_limit_reached(12, 2, 1, 0).await;
+}
+
+#[tokio::test]
+async fn multilayer_transfers_entries_after_limit_reached_3() {
+    multilayer_transfers_entries_after_limit_reached(10000, 0, 0, 100).await;
+}
+
+async fn multilayer_transfers_entries_after_limit_reached(
+    n: u64,
+    expected_1: u64,
+    expected_2: u64,
+    expected_3: u64,
+) {
+    let ansi_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(true)
+        .with_filter(
+            EnvFilter::builder()
+                .with_default_directive("debug".parse().unwrap())
+                .from_env_lossy(),
+        );
+    tracing_subscriber::registry().with(ansi_layer).init();
+
+    // let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let pool = RedisPool::configured(&RedisConfig::default())
+        .await
+        .unwrap();
+    let indexed_storage = Arc::new(RedisIndexedStorage::new(pool));
+
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service =
+        Arc::new(PrimaryOplogService::new(indexed_storage.clone(), blob_storage, 1, 100).await);
+    let secondary_layer: Arc<dyn OplogLayer + Send + Sync> =
+        Arc::new(CompressedOplogLayer::new(indexed_storage.clone(), 1));
+    let tertiary_layer: Arc<dyn OplogLayer + Send + Sync> =
+        Arc::new(CompressedOplogLayer::new(indexed_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+    ));
+
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let worker_id = WorkerId {
+        component_id: ComponentId(Uuid::new_v4()),
+        worker_name: "test".to_string(),
+    };
+
+    let oplog = oplog_service.open(&account_id, &worker_id).await;
+    let mut entries = Vec::new();
+
+    for i in 0..n {
+        let entry = rounded(
+            oplog
+                .add_imported_function_invoked(
+                    "test-function".to_string(),
+                    &i,
+                    WrappedFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap(),
+        );
+        oplog.commit().await;
+        entries.push(entry);
+    }
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    debug!("Fetching information to evaluate the test");
+
+    let primary_length = primary_oplog_service
+        .open(&account_id, &worker_id)
+        .await
+        .length()
+        .await;
+    let secondary_length = secondary_layer.length(&worker_id).await;
+    let tertiary_length = tertiary_layer.length(&worker_id).await;
+
+    let all_entries = oplog_service.read(&worker_id, 0, n + 100).await;
+
+    assert_eq!(all_entries.len(), entries.len());
+    assert_eq!(primary_length, expected_1);
+    assert_eq!(secondary_length, expected_2);
+    assert_eq!(tertiary_length, expected_3);
+    assert_eq!(
+        all_entries.keys().cloned().collect::<Vec<_>>(),
+        (1..=n).collect::<Vec<_>>()
+    );
+    check!(all_entries.values().cloned().collect::<Vec<_>>() == entries);
+}

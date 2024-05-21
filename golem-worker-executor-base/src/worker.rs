@@ -875,14 +875,16 @@ where
     if last_known.oplog_idx == last_oplog_index {
         Ok(last_known)
     } else {
-        let new_entries = this
+        let new_entries: Vec<OplogEntry> = this
             .oplog_service()
             .read(
                 worker_id,
-                last_known.oplog_idx,
+                last_known.oplog_idx + 1,
                 last_oplog_index - last_known.oplog_idx,
             )
-            .await;
+            .await
+            .into_values()
+            .collect();
 
         let overridden_retry_config = calculate_overridden_retry_policy(
             last_known.overridden_retry_config.clone(),

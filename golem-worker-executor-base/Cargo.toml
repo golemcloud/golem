@@ -36,6 +36,7 @@ cap-std = { workspace = true }
 cap-time-ext = "2.0.0"                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
+evicting_cache_map = "0.4.0"
 figment = { workspace = true }
 flume = "0.11.0"
 fred = { workspace = true }
@@ -55,6 +56,7 @@ lazy_static = { workspace = true }
 log = "0.4.20"
 md5 = "0.7.0"
 metrohash = "1.0.6"
+nonempty-collections = "0.2.5"
 prometheus = { workspace = true }
 prost = { workspace = true }
 ringbuf = "0.3.3"
@@ -78,6 +80,7 @@ wasmtime-runtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 windows-sys = "0.52.0"
+zstd = "0.13"
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }

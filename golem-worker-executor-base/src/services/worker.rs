@@ -144,27 +144,31 @@ impl WorkerService for DefaultWorkerService {
         Ok(())
     }
 
+    // TODO: needs to support multi-layer oplogs
     async fn get(&self, worker_id: &WorkerId) -> Option<WorkerMetadata> {
         record_worker_call("get");
 
         let wid = worker_id;
         let initial_oplog_entry = self
             .oplog_service
-            .read(worker_id, 0, 1)
+            .read(worker_id, 1, 1)
             .await
             .into_iter()
             .next();
 
         match initial_oplog_entry {
             None => None,
-            Some(OplogEntry::Create {
-                worker_id,
-                component_version,
-                args,
-                env,
-                account_id,
-                timestamp,
-            }) => {
+            Some((
+                _,
+                OplogEntry::Create {
+                    worker_id,
+                    component_version,
+                    args,
+                    env,
+                    account_id,
+                    timestamp,
+                },
+            )) => {
                 let mut details = WorkerMetadata {
                     worker_id,
                     args,
@@ -192,7 +196,7 @@ impl WorkerService for DefaultWorkerService {
 
                 Some(details)
             }
-            Some(entry) => {
+            Some((_, entry)) => {
                 panic!("Unexpected initial oplog entry for worker {worker_id}: {entry:?}")
             }
         }

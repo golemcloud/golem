@@ -15,11 +15,12 @@
 use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
 use async_trait::async_trait;
 use bytes::Bytes;
-use fred::types::{RedisKey, RedisValue};
+use fred::types::{RedisKey, RedisValue, XCapKind};
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
 use golem_common::redis::RedisPool;
 use std::collections::HashMap;
 use std::time::Duration;
+use tracing::debug;
 
 #[derive(Debug)]
 pub struct RedisIndexedStorage {
@@ -33,7 +34,10 @@ impl RedisIndexedStorage {
 
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
-            IndexedStorageNamespace::OpLog => key.to_string(),
+            IndexedStorageNamespace::OpLog => format!("worker:oplog:{key}"),
+            IndexedStorageNamespace::CompressedOpLog { level } => {
+                format!("worker:c{level}-oplog:{key}")
+            }
         }
     }
 
@@ -176,7 +180,7 @@ impl IndexedStorage for RedisIndexedStorage {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<Bytes>, String> {
+    ) -> Result<Vec<(u64, Bytes)>, String> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)
@@ -186,11 +190,12 @@ impl IndexedStorage for RedisIndexedStorage {
 
         let mut result = Vec::new();
         for item in items {
-            for (_, value) in item {
+            for (id, value) in item {
+                let id = Self::parse_entry_id(&id)?;
                 for (key, value) in value {
                     if key == Self::KEY {
                         record_redis_deserialized_size(svc_name, entity_name, value.len());
-                        result.push(value);
+                        result.push((id, value));
                     }
                 }
             }
@@ -256,5 +261,58 @@ impl IndexedStorage for RedisIndexedStorage {
             }
         }
         Ok(result.into_iter().next())
+    }
+
+    async fn closest(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        id: u64,
+    ) -> Result<Option<(u64, Bytes)>, String> {
+        let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
+            .redis
+            .with(svc_name, api_name)
+            .xrange(Self::composite_key(namespace, key), id, "+", Some(1))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        debug!("closest: {:?}", items);
+
+        let mut result = Vec::new();
+        for item in items {
+            for (id, value) in item {
+                let id = Self::parse_entry_id(&id)?;
+                for (key, value) in value {
+                    if key == Self::KEY {
+                        record_redis_deserialized_size(svc_name, entity_name, value.len());
+                        result.push((id, value));
+                    }
+                }
+            }
+        }
+        Ok(result.into_iter().next())
+    }
+
+    async fn drop_prefix(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        last_dropped_id: u64,
+    ) -> Result<(), String> {
+        let _: u64 = self
+            .redis
+            .with(svc_name, api_name)
+            .xtrim(
+                Self::composite_key(namespace, key),
+                (XCapKind::MinID, last_dropped_id + 1),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 }

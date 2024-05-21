@@ -207,7 +207,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         assume_idempotence: true,
                         open_function_table: HashMap::new(),
                         replay_idx: 1,
-                        replay_target: oplog_size,
+                        replay_target: oplog_size - 1,
                         snapshotting_mode: None,
                     },
                     temp_dir,
@@ -1048,10 +1048,10 @@ async fn last_error_and_retry_count<T: HasOplogService>(
     } else {
         let mut first_error = None;
         loop {
-            let oplog_entry = this.oplog_service().read(worker_id, idx - 1, 1).await;
-            match oplog_entry.first()
+            let oplog_entry = this.oplog_service().read(worker_id, idx, 1).await;
+            match oplog_entry.first_key_value()
                 .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", worker_id)) {
-                OplogEntry::Error { error, .. } => {
+                (_, OplogEntry::Error { error, .. } )=> {
                     retry_count += 1;
                     if first_error.is_none() {
                         first_error = Some(error.clone());
@@ -1177,8 +1177,13 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
-    pub async fn read_oplog(&self, idx: u64, n: u64) -> Vec<OplogEntry> {
-        self.oplog_service.read(&self.worker_id, idx, n).await
+    pub async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<OplogEntry> {
+        self.oplog_service
+            .read(&self.worker_id, idx, n)
+            .await
+            .into_iter()
+            .map(|(_, v)| v)
+            .collect()
     }
 
     /// Returns whether we are in live mode where we are executing new calls.
@@ -1244,9 +1249,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 .oplog_service
                 .read(&self.worker_id, start, CHUNK_SIZE)
                 .await;
-            for (n, entry) in entries.iter().enumerate() {
+            for (idx, entry) in &entries {
                 if check(entry, begin_idx) {
-                    return Some(start + n as u64);
+                    return Some(*idx);
                 }
             }
             start += entries.len() as u64;
