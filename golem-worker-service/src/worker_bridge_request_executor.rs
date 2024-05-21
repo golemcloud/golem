@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use golem_wasm_ast::analysis::AnalysedFunction;
+use golem_common::model::ComponentId;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::WorkerService;
 use golem_worker_service_base::worker_bridge_execution::{
@@ -20,6 +22,10 @@ impl UnauthorisedWorkerRequestExecutor {
 
 #[async_trait]
 impl WorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
+    async fn functions(&self, component_id: ComponentId, worker_name: String) -> Result<Vec<AnalysedFunction>, WorkerRequestExecutorError> {
+        Ok(vec![])
+    }
+
     async fn execute(
         &self,
         worker_request_params: WorkerRequest,

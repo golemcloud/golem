@@ -4,9 +4,16 @@ use async_trait::async_trait;
 use golem_service_base::model::FunctionResult;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
+use golem_wasm_ast::analysis::AnalysedFunction;
+use golem_common::model::ComponentId;
 
 #[async_trait]
 pub trait WorkerRequestExecutor {
+    async fn functions(
+        &self, component_id: ComponentId,
+        worker_name: String
+    ) -> Result<Vec<AnalysedFunction>, WorkerRequestExecutorError>;
+
     async fn execute(
         &self,
         resolved_worker_request: WorkerRequest,

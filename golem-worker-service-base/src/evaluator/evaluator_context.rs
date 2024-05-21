@@ -1,4 +1,4 @@
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::{AnalysedFunction, AnalysedType};
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
 use crate::evaluator::Getter;
@@ -10,12 +10,14 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 #[derive(Clone)]
 pub struct EvaluationContext {
     pub variables: Option<TypeAnnotatedValue>,
+    pub analysed_functions: Vec<AnalysedFunction>
 }
 
 impl EvaluationContext {
     pub fn empty() -> Self {
         EvaluationContext {
             variables: None,
+            analysed_functions: vec![]
         }
     }
 
@@ -51,6 +53,7 @@ impl EvaluationContext {
         };
         EvaluationContext {
             variables: Some(variables),
+            analysed_functions: vec![]
         }
     }
 
@@ -69,6 +72,7 @@ impl EvaluationContext {
 
         EvaluationContext {
             variables: Some(variables),
+            analysed_functions: vec![]
         }
     }
 }
