@@ -62,13 +62,15 @@ impl EvaluationContext {
         worker_response: &RefinedWorkerResponse,
         request: &RequestDetails,
     ) -> Self {
-        let inner =
+        let mut worker_data =
             internal::worker_type_annotated_value(worker_response, worker_request);
 
-        let variables = TypeAnnotatedValue::Record {
-            typ: vec![("worker".to_string(), AnalysedType::from(&inner))],
-            value: vec![("worker".to_string(), inner)].into_iter().collect(),
-        };
+        let request_data =
+            internal::request_type_annotated_value(request);
+
+        let variables =
+            worker_data.merge(&request_data).clone();
+
 
         EvaluationContext {
             variables: Some(variables),
@@ -82,21 +84,26 @@ mod internal {
     use golem_wasm_rpc::TypeAnnotatedValue;
     use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
     use crate::merge::Merge;
+    use crate::worker_binding::RequestDetails;
 
+    pub(crate) fn request_type_annotated_value(request_details: &RequestDetails) -> TypeAnnotatedValue {
+        let type_annoated_value = request_details.to_type_annotated_value();
+        create_record("request", type_annoated_value)
+    }
     pub(crate) fn worker_type_annotated_value(worker_response: &RefinedWorkerResponse, worker_request: &WorkerRequest) -> TypeAnnotatedValue {
         let mut typed_worker_data = worker_request.clone().to_type_annotated_value();
 
         if let Some(typed_res) = worker_response.to_type_annotated_value() {
-            typed_worker_data.merge(&with_response_key(typed_res));
+            typed_worker_data.merge(&create_record("response", typed_res));
         }
 
-        typed_worker_data
+        create_record("worker", typed_worker_data)
     }
-
-    fn with_response_key(typed_res: TypeAnnotatedValue) -> TypeAnnotatedValue {
+    
+    fn create_record(name: &str, value: TypeAnnotatedValue) -> TypeAnnotatedValue {
         TypeAnnotatedValue::Record {
-            typ: vec![("response".to_string(), AnalysedType::from(&typed_res))],
-            value: vec![("response".to_string(), typed_res)],
+            typ: vec![(name.to_string(), AnalysedType::from(&value))],
+            value: vec![(name.to_string(), value)].into_iter().collect(),
         }
     }
 }
