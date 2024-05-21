@@ -1,5 +1,5 @@
 use crate::service::worker::TypedResult;
-use crate::worker_bridge_execution::WorkerRequest;
+use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
 use async_trait::async_trait;
 use golem_service_base::model::FunctionResult;
 use golem_wasm_rpc::TypeAnnotatedValue;
@@ -27,6 +27,12 @@ impl WorkerResponse {
                 function_result_types,
             },
         }
+    }
+}
+
+impl WorkerResponse {
+    pub fn refined(&self) -> Result<RefinedWorkerResponse, String> {
+        RefinedWorkerResponse::from_worker_response(self)
     }
 }
 

@@ -16,6 +16,7 @@ use getter::Getter;
 use path::Path;
 
 use crate::expression::{Expr, InnerNumber};
+use crate::worker_bridge_execution::RefinedWorkerResponse;
 
 pub trait Evaluator {
     fn evaluate(
@@ -28,6 +29,20 @@ pub trait Evaluator {
 pub enum EvaluationResult {
     Value(TypeAnnotatedValue),
     Unit,
+}
+
+impl From<&RefinedWorkerResponse> for EvaluationResult {
+    fn from(value: &RefinedWorkerResponse) -> Self {
+        match value {
+            RefinedWorkerResponse::Unit => EvaluationResult::Unit,
+            RefinedWorkerResponse::SingleResult(typed_value) => {
+                EvaluationResult::Value(typed_value.clone())
+            }
+            RefinedWorkerResponse::MultipleResults(typed_value) => {
+                EvaluationResult::Value(typed_value.clone())
+            }
+        }
+    }
 }
 
 impl EvaluationResult {
@@ -870,8 +885,6 @@ mod tests {
             }],
         ))
         .unwrap();
-
-        dbg!(worker_response.clone());
 
         let expr = expression::from_string(
             "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
