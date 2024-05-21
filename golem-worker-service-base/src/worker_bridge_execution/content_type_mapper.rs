@@ -204,8 +204,7 @@ mod internal {
             TypeAnnotatedValue::Chr(char) => {
                 handle_primitive(char, &AnalysedType::Chr, content_header)
             }
-            TypeAnnotatedValue::Str(string) =>
-                handle_string(string, content_header),
+            TypeAnnotatedValue::Str(string) => handle_string(string, content_header),
 
             TypeAnnotatedValue::Tuple { .. } => {
                 handle_complex(type_annotated_value, content_header)
@@ -216,8 +215,7 @@ mod internal {
             TypeAnnotatedValue::Variant { .. } => {
                 handle_record(type_annotated_value, content_header)
             }
-            TypeAnnotatedValue::Enum { value, .. } =>
-                handle_string(value, content_header),
+            TypeAnnotatedValue::Enum { value, .. } => handle_string(value, content_header),
 
             TypeAnnotatedValue::Option { value, .. } => match value {
                 Some(value) => get_response_body_based_on_content_type(value, content_header),
