@@ -73,8 +73,6 @@ impl Rules {
             Token::At => vec![],
             Token::MultiChar(multi) => {
                 match multi {
-                    MultiCharTokens::Worker => vec![],  // hardly act as an end token
-                    MultiCharTokens::Request => vec![], // shardly act as an end token
                     MultiCharTokens::Ok => vec![],      // hardly act as an end token
                     MultiCharTokens::Err => vec![],     // hardly act as an end token
                     MultiCharTokens::Some => vec![],    // hardly act as an end token

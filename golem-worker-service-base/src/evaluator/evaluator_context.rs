@@ -1,3 +1,4 @@
+use golem_wasm_ast::analysis::AnalysedType;
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
 use crate::evaluator::Getter;
@@ -6,24 +7,21 @@ use crate::worker_binding::RequestDetails;
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
 use golem_wasm_rpc::TypeAnnotatedValue;
 
-// Evaluator of an expression doesn't necessarily need a context all the time, and can be empty.
-// or contain worker details, request details, worker_response or all of them.
-
 #[derive(Clone)]
 pub struct EvaluationContext {
-    pub worker_request: Option<WorkerRequest>,
-    pub worker_response: Option<RefinedWorkerResponse>,
     pub variables: Option<TypeAnnotatedValue>,
-    pub request_data: Option<RequestDetails>,
 }
 
 impl EvaluationContext {
     pub fn empty() -> Self {
         EvaluationContext {
-            worker_request: None,
-            worker_response: None,
             variables: None,
-            request_data: None,
+        }
+    }
+
+    pub fn merge(&mut self, that: EvaluationContext) {
+        if let Some(variables) = that.variables {
+            self.merge_variables(&variables);
         }
     }
 
@@ -46,11 +44,13 @@ impl EvaluationContext {
     }
 
     pub fn from_request_data(request: &RequestDetails) -> Self {
+        let type_annoated_value = request.to_type_annotated_value();
+        let variables = TypeAnnotatedValue::Record {
+            typ: vec![("request".to_string(), AnalysedType::from(&type_annoated_value))],
+            value: vec![("request".to_string(), type_annoated_value)].into_iter().collect(),
+        };
         EvaluationContext {
-            worker_request: None,
-            worker_response: None,
-            variables: None,
-            request_data: Some(request.clone()),
+            variables: Some(variables),
         }
     }
 
@@ -59,11 +59,40 @@ impl EvaluationContext {
         worker_response: &RefinedWorkerResponse,
         request: &RequestDetails,
     ) -> Self {
+        let inner =
+            internal::worker_type_annotated_value(worker_response, worker_request);
+
+        let variables = TypeAnnotatedValue::Record {
+            typ: vec![("worker".to_string(), AnalysedType::from(&inner))],
+            value: vec![("worker".to_string(), inner)].into_iter().collect(),
+        };
+
         EvaluationContext {
-            worker_request: Some(worker_request.clone()),
-            worker_response: Some(worker_response.clone()),
-            variables: None,
-            request_data: Some(request.clone()),
+            variables: Some(variables),
+        }
+    }
+}
+
+mod internal {
+    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::TypeAnnotatedValue;
+    use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
+    use crate::merge::Merge;
+
+    pub(crate) fn worker_type_annotated_value(worker_response: &RefinedWorkerResponse, worker_request: &WorkerRequest) -> TypeAnnotatedValue {
+        let mut typed_worker_data = worker_request.clone().to_type_annotated_value();
+
+        if let Some(typed_res) = worker_response.to_type_annotated_value() {
+            typed_worker_data.merge(&with_response_key(typed_res));
+        }
+
+        typed_worker_data
+    }
+
+    fn with_response_key(typed_res: TypeAnnotatedValue) -> TypeAnnotatedValue {
+        TypeAnnotatedValue::Record {
+            typ: vec![("response".to_string(), AnalysedType::from(&typed_res))],
+            value: vec![("response".to_string(), typed_res)],
         }
     }
 }

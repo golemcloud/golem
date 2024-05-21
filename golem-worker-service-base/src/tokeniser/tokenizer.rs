@@ -27,8 +27,6 @@ pub enum Token {
 
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub enum MultiCharTokens {
-    Worker,
-    Request,
     Identifier(String),
     Ok,
     Err,
@@ -59,14 +57,6 @@ impl Token {
 
     pub fn interpolation_start() -> Token {
         Token::MultiChar(MultiCharTokens::InterpolationStart)
-    }
-
-    pub fn worker() -> Token {
-        Token::MultiChar(MultiCharTokens::Worker)
-    }
-
-    pub fn request() -> Token {
-        Token::MultiChar(MultiCharTokens::Request)
     }
 
     pub fn if_token() -> Token {
@@ -171,8 +161,6 @@ impl Display for Token {
                     MultiCharTokens::LessThanOrEqualTo => "<=",
                     MultiCharTokens::If => "if",
                     MultiCharTokens::Then => "then",
-                    MultiCharTokens::Worker => "bla",
-                    MultiCharTokens::Request => "bla1",
                     MultiCharTokens::Ok => "ok",
                     MultiCharTokens::Err => "err",
                     MultiCharTokens::Some => "some",
@@ -540,8 +528,6 @@ impl<'t> Tokenizer<'t> {
                 let str =
                     self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')?;
                 match str {
-                    "bla1" => Some(Token::MultiChar(MultiCharTokens::Worker)),
-                    "bla2" => Some(Token::MultiChar(MultiCharTokens::Request)),
                     "ok" => Some(Token::MultiChar(MultiCharTokens::Ok)),
                     "err" => Some(Token::MultiChar(MultiCharTokens::Err)),
                     "some" => Some(Token::MultiChar(MultiCharTokens::Some)),

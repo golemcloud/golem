@@ -96,25 +96,12 @@ impl Evaluator for Expr {
             input: &mut EvaluationContext,
         ) -> Result<EvaluationResult, EvaluationError> {
             match expr {
-                Expr::Request() => match &input.request_data {
-                    Some(request_data) => Ok(request_data.clone().to_type_annotated_value().into()),
-                    None => Err(EvaluationError::Message(
-                        "Request data is not available".to_string(),
-                    )),
-                },
+                Expr::Identifier(variable) => input
+                    .get_variable_value(variable.as_str())
+                    .map(|v| v.into())
+                    .map_err(|err| err.into()),
 
                 Expr::Call(name, params) => todo!("Call expression evaluation"),
-
-                Expr::Worker() => {
-                    let worker_data = internal::MergedWorkerData::new(
-                        input.worker_request.clone(),
-                        input.worker_response.clone(),
-                    );
-                    let evaluation_result = worker_data.get_evaluation_result();
-                    evaluation_result.ok_or(EvaluationError::Message(
-                        "Worker data is not available".to_string(),
-                    ))
-                }
 
                 Expr::SelectIndex(expr, index) => {
                     let evaluation_result = go(expr, input)?;
@@ -343,11 +330,6 @@ impl Evaluator for Expr {
                     InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(*f64).into()),
                 },
 
-                Expr::Identifier(variable) => input
-                    .get_variable_value(variable.as_str())
-                    .map(|v| v.into())
-                    .map_err(|err| err.into()),
-
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(*bool).into()),
                 Expr::PatternMatch(match_expression, arms) => {
                     pattern_match_evaluator::evaluate_pattern_match(match_expression, arms, input)
@@ -440,64 +422,6 @@ impl Evaluator for Expr {
 
         let mut input = input.clone();
         go(expr, &mut input)
-    }
-}
-
-mod internal {
-    use crate::evaluator::EvaluationResult;
-    use crate::merge::Merge;
-    use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
-    use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::TypeAnnotatedValue;
-
-    pub(crate) struct MergedWorkerData {
-        worker_request: Option<WorkerRequest>,
-        worker_response: Option<RefinedWorkerResponse>,
-    }
-
-    impl MergedWorkerData {
-        pub fn new(
-            worker_request: Option<WorkerRequest>,
-            worker_response: Option<RefinedWorkerResponse>,
-        ) -> Self {
-            MergedWorkerData {
-                worker_request,
-                worker_response,
-            }
-        }
-
-        pub fn get_evaluation_result(self) -> Option<EvaluationResult> {
-            match (&self.worker_response, &self.worker_request) {
-                (Some(res), Some(req)) => {
-                    let mut typed_worker_data = req.clone().to_type_annotated_value();
-
-                    if let Some(typed_res) = res.to_type_annotated_value() {
-                        typed_worker_data.merge(&with_response_key(typed_res));
-                    }
-
-                    Some(EvaluationResult::Value(typed_worker_data))
-                }
-
-                (None, Some(req)) => Some(req.clone().to_type_annotated_value().into()),
-                (Some(res), None) => match res {
-                    RefinedWorkerResponse::Unit => Some(EvaluationResult::Unit),
-                    RefinedWorkerResponse::SingleResult(typed_value) => {
-                        Some(with_response_key(typed_value.clone()).into())
-                    }
-                    RefinedWorkerResponse::MultipleResults(typed_value) => {
-                        Some(with_response_key(typed_value.clone()).into())
-                    }
-                },
-                (None, None) => None,
-            }
-        }
-    }
-
-    fn with_response_key(typed_res: TypeAnnotatedValue) -> TypeAnnotatedValue {
-        TypeAnnotatedValue::Record {
-            typ: vec![("response".to_string(), AnalysedType::from(&typed_res))],
-            value: vec![("response".to_string(), typed_res)],
-        }
     }
 }
 

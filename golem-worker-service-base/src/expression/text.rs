@@ -28,7 +28,7 @@ mod record_tests {
 
     #[test]
     fn test_round_trip_simple_record_single() {
-        let input_expr = Expr::Record(vec![("field".to_string(), Box::new(Expr::Request()))]);
+        let input_expr = Expr::Record(vec![("field".to_string(), Box::new(Expr::Identifier("request".to_string())))]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: request}}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -38,8 +38,8 @@ mod record_tests {
     #[test]
     fn test_round_trip_read_write_record_multiple() {
         let input_expr = Expr::Record(vec![
-            ("field".to_string(), Box::new(Expr::Request())),
-            ("field".to_string(), Box::new(Expr::Request())),
+            ("field".to_string(), Box::new(Expr::Identifier("request".to_string()))),
+            ("field".to_string(), Box::new(Expr::Identifier("request".to_string()))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: request, field: request}}".to_string();
@@ -89,14 +89,14 @@ mod record_tests {
             (
                 "field".to_string(),
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "foo".to_string(),
                 )),
             ),
             (
                 "field".to_string(),
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "bar".to_string(),
                 )),
             ),
@@ -112,11 +112,11 @@ mod record_tests {
         let input_expr = Expr::Record(vec![
             (
                 "field".to_string(),
-                Box::new(Expr::SelectIndex(Box::new(Expr::Request()), 1)),
+                Box::new(Expr::SelectIndex(Box::new(Expr::Identifier("request".to_string())), 1)),
             ),
             (
                 "field".to_string(),
-                Box::new(Expr::SelectIndex(Box::new(Expr::Request()), 2)),
+                Box::new(Expr::SelectIndex(Box::new(Expr::Identifier("request".to_string())), 2)),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -130,11 +130,11 @@ mod record_tests {
         let input_expr = Expr::Record(vec![
             (
                 "field".to_string(),
-                Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+                Box::new(Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
             ),
             (
                 "field".to_string(),
-                Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+                Box::new(Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -149,15 +149,15 @@ mod record_tests {
             (
                 "a".to_string(),
                 Box::new(Expr::Record(vec![
-                    ("ab".to_string(), Box::new(Expr::Request())),
-                    ("ac".to_string(), Box::new(Expr::Request())),
+                    ("ab".to_string(), Box::new(Expr::Identifier("request".to_string()))),
+                    ("ac".to_string(), Box::new(Expr::Identifier("request".to_string()))),
                 ])),
             ),
             (
                 "b".to_string(),
                 Box::new(Expr::Sequence(vec![Expr::Record(vec![
-                    ("bc".to_string(), Box::new(Expr::Request())),
-                    ("bd".to_string(), Box::new(Expr::Request())),
+                    ("bc".to_string(), Box::new(Expr::Identifier("request".to_string()))),
+                    ("bd".to_string(), Box::new(Expr::Identifier("request".to_string()))),
                 ])])),
             ),
         ]);
@@ -174,11 +174,11 @@ mod record_tests {
         let input_expr = Expr::Record(vec![
             (
                 "a".to_string(),
-                Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Worker()])),
+                Box::new(Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("worker".to_string())])),
             ),
             (
                 "b".to_string(),
-                Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Worker()])),
+                Box::new(Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("worker".to_string())])),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -227,14 +227,14 @@ mod record_tests {
                 "a".to_string(),
                 Box::new(Expr::Concat(vec![
                     Expr::Literal("user-id-1-".to_string()),
-                    Expr::SelectField(Box::new(Expr::Request()), "user-id-1".to_string()),
+                    Expr::SelectField(Box::new(Expr::Identifier("request".to_string())), "user-id-1".to_string()),
                 ])),
             ),
             (
                 "b".to_string(),
                 Box::new(Expr::Concat(vec![
                     Expr::Literal("user-id-2-".to_string()),
-                    Expr::SelectField(Box::new(Expr::Request()), "user-id-2".to_string()),
+                    Expr::SelectField(Box::new(Expr::Identifier("request".to_string())), "user-id-2".to_string()),
                 ])),
             ),
         ]);
@@ -278,7 +278,7 @@ mod record_tests {
                 Box::new(Expr::Cond(
                     Box::new(Expr::EqualTo(
                         Box::new(Expr::SelectField(
-                            Box::new(Expr::Request()),
+                            Box::new(Expr::Identifier("request".to_string())),
                             "foo".to_string(),
                         )),
                         Box::new(Expr::Literal("bar".to_string())),
@@ -292,7 +292,7 @@ mod record_tests {
                 Box::new(Expr::Cond(
                     Box::new(Expr::EqualTo(
                         Box::new(Expr::SelectField(
-                            Box::new(Expr::Request()),
+                            Box::new(Expr::Identifier("request".to_string())),
                             "foo".to_string(),
                         )),
                         Box::new(Expr::Literal("bar".to_string())),
@@ -314,7 +314,7 @@ mod record_tests {
             (
                 "a".to_string(),
                 Box::new(Expr::PatternMatch(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     vec![
                         MatchArm((
                             ArmPattern::from(
@@ -342,7 +342,7 @@ mod record_tests {
             (
                 "b".to_string(),
                 Box::new(Expr::PatternMatch(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     vec![
                         MatchArm((
                             ArmPattern::from(
@@ -363,7 +363,7 @@ mod record_tests {
                             )
                             .unwrap(),
                             Box::new(Expr::PatternMatch(
-                                Box::new(Expr::Request()),
+                                Box::new(Expr::Identifier("request".to_string())),
                                 vec![
                                     MatchArm((
                                         ArmPattern::from(
@@ -439,14 +439,14 @@ mod sequence_tests {
         let output_expr = from_string(expr_string).unwrap();
         let expected_expr = Expr::Sequence(vec![Expr::Record(vec![(
             "bc".to_string(),
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
         )])]);
         assert_eq!(output_expr, expected_expr);
     }
 
     #[test]
     fn test_round_trip_read_write_sequence_of_request() {
-        let input_expr = Expr::Sequence(vec![Expr::Request(), Expr::Request()]);
+        let input_expr = Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[request, request]}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -468,8 +468,8 @@ mod sequence_tests {
     #[test]
     fn test_round_trip_read_write_sequence_of_select_field() {
         let input_expr = Expr::Sequence(vec![
-            Expr::SelectField(Box::new(Expr::Request()), "field".to_string()),
-            Expr::SelectField(Box::new(Expr::Request()), "field".to_string()),
+            Expr::SelectField(Box::new(Expr::Identifier("request".to_string())), "field".to_string()),
+            Expr::SelectField(Box::new(Expr::Identifier("request".to_string())), "field".to_string()),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[request.field, request.field]}".to_string();
@@ -480,8 +480,8 @@ mod sequence_tests {
     #[test]
     fn test_round_trip_read_write_sequence_of_select_index() {
         let input_expr = Expr::Sequence(vec![
-            Expr::SelectIndex(Box::new(Expr::Request()), 1),
-            Expr::SelectIndex(Box::new(Expr::Request()), 2),
+            Expr::SelectIndex(Box::new(Expr::Identifier("request".to_string())), 1),
+            Expr::SelectIndex(Box::new(Expr::Identifier("request".to_string())), 2),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[request[1], request[2]]}".to_string();
@@ -492,8 +492,8 @@ mod sequence_tests {
     #[test]
     fn test_round_trip_read_write_sequence_of_sequence() {
         let input_expr = Expr::Sequence(vec![
-            Expr::Sequence(vec![Expr::Request(), Expr::Request()]),
-            Expr::Sequence(vec![Expr::Request(), Expr::Request()]),
+            Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())]),
+            Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[[request, request], [request, request]]}".to_string();
@@ -504,8 +504,8 @@ mod sequence_tests {
     #[test]
     fn test_round_trip_read_write_sequence_of_tuple() {
         let input_expr = Expr::Sequence(vec![
-            Expr::Tuple(vec![Expr::Request(), Expr::Request()]),
-            Expr::Tuple(vec![Expr::Request(), Expr::Request()]),
+            Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())]),
+            Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[(request, request), (request, request)]}".to_string();
@@ -516,8 +516,8 @@ mod sequence_tests {
     #[test]
     fn test_round_trip_read_write_sequence_of_record() {
         let input_expr = Expr::Sequence(vec![
-            Expr::Record(vec![("field".to_string(), Box::new(Expr::Request()))]),
-            Expr::Record(vec![("field".to_string(), Box::new(Expr::Request()))]),
+            Expr::Record(vec![("field".to_string(), Box::new(Expr::Identifier("request".to_string())))]),
+            Expr::Record(vec![("field".to_string(), Box::new(Expr::Identifier("request".to_string())))]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[{field: request}, {field: request}]}".to_string();
@@ -542,11 +542,11 @@ mod sequence_tests {
         let input_expr = Expr::Sequence(vec![
             Expr::Concat(vec![
                 Expr::Literal("user-id-1-".to_string()),
-                Expr::SelectField(Box::new(Expr::Request()), "user-id-1".to_string()),
+                Expr::SelectField(Box::new(Expr::Identifier("request".to_string())), "user-id-1".to_string()),
             ]),
             Expr::Concat(vec![
                 Expr::Literal("user-id-2-".to_string()),
-                Expr::SelectField(Box::new(Expr::Request()), "user-id-2".to_string()),
+                Expr::SelectField(Box::new(Expr::Identifier("request".to_string())), "user-id-2".to_string()),
             ]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -580,7 +580,7 @@ mod sequence_tests {
             Expr::Cond(
                 Box::new(Expr::EqualTo(
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Request()),
+                        Box::new(Expr::Identifier("request".to_string())),
                         "foo".to_string(),
                     )),
                     Box::new(Expr::Literal("bar".to_string())),
@@ -591,7 +591,7 @@ mod sequence_tests {
             Expr::Cond(
                 Box::new(Expr::EqualTo(
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Request()),
+                        Box::new(Expr::Identifier("request".to_string())),
                         "foo".to_string(),
                     )),
                     Box::new(Expr::Literal("bar".to_string())),
@@ -610,7 +610,7 @@ mod sequence_tests {
     fn test_round_trip_read_write_sequence_of_pattern_match() {
         let input_expr = Expr::Sequence(vec![
             Expr::PatternMatch(
-                Box::new(Expr::Request()),
+                Box::new(Expr::Identifier("request".to_string())),
                 vec![
                     MatchArm((
                         ArmPattern::from(
@@ -635,7 +635,7 @@ mod sequence_tests {
                 ],
             ),
             Expr::PatternMatch(
-                Box::new(Expr::Request()),
+                Box::new(Expr::Identifier("request".to_string())),
                 vec![
                     MatchArm((
                         ArmPattern::from(
@@ -656,7 +656,7 @@ mod sequence_tests {
                         )
                         .unwrap(),
                         Box::new(Expr::PatternMatch(
-                            Box::new(Expr::Request()),
+                            Box::new(Expr::Identifier("request".to_string())),
                             vec![
                                 MatchArm((
                                     ArmPattern::from(
@@ -718,7 +718,7 @@ mod tuple_tests {
 
     #[test]
     fn test_round_trip_read_write_tuple_of_request() {
-        let input_expr = Expr::Tuple(vec![Expr::Request(), Expr::Request()]);
+        let input_expr = Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${(request, request)}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -740,8 +740,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_select_field() {
         let input_expr = Expr::Tuple(vec![
-            Expr::SelectField(Box::new(Expr::Request()), "field".to_string()),
-            Expr::SelectField(Box::new(Expr::Request()), "field".to_string()),
+            Expr::SelectField(Box::new(Expr::Identifier("request".to_string())), "field".to_string()),
+            Expr::SelectField(Box::new(Expr::Identifier("request".to_string())), "field".to_string()),
         ]);
         let _expr_str = to_string(&input_expr).unwrap();
         let _expected_str = "${(request.field, request.field)}".to_string();
@@ -750,8 +750,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_select_index() {
         let input_expr = Expr::Tuple(vec![
-            Expr::SelectIndex(Box::new(Expr::Request()), 1),
-            Expr::SelectIndex(Box::new(Expr::Request()), 2),
+            Expr::SelectIndex(Box::new(Expr::Identifier("request".to_string())), 1),
+            Expr::SelectIndex(Box::new(Expr::Identifier("request".to_string())), 2),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${(request[1], request[2])}".to_string();
@@ -762,8 +762,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_tuple() {
         let input_expr = Expr::Tuple(vec![
-            Expr::Tuple(vec![Expr::Request(), Expr::Request()]),
-            Expr::Tuple(vec![Expr::Request(), Expr::Request()]),
+            Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())]),
+            Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${((request, request), (request, request))}".to_string();
@@ -774,8 +774,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_sequence() {
         let input_expr = Expr::Tuple(vec![
-            Expr::Sequence(vec![Expr::Request(), Expr::Request()]),
-            Expr::Sequence(vec![Expr::Request(), Expr::Request()]),
+            Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())]),
+            Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${([request, request], [request, request])}".to_string();
@@ -786,8 +786,8 @@ mod tuple_tests {
     #[test]
     fn test_round_trip_read_write_tuple_of_record() {
         let input_expr = Expr::Tuple(vec![
-            Expr::Record(vec![("field".to_string(), Box::new(Expr::Request()))]),
-            Expr::Record(vec![("field".to_string(), Box::new(Expr::Request()))]),
+            Expr::Record(vec![("field".to_string(), Box::new(Expr::Identifier("request".to_string())))]),
+            Expr::Record(vec![("field".to_string(), Box::new(Expr::Identifier("request".to_string())))]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${({field: request}, {field: request})}".to_string();
@@ -812,11 +812,11 @@ mod tuple_tests {
         let input_expr = Expr::Tuple(vec![
             Expr::Concat(vec![
                 Expr::Literal("user-id-1-".to_string()),
-                Expr::SelectField(Box::new(Expr::Request()), "user-id-1".to_string()),
+                Expr::SelectField(Box::new(Expr::Identifier("request".to_string())), "user-id-1".to_string()),
             ]),
             Expr::Concat(vec![
                 Expr::Literal("user-id-2-".to_string()),
-                Expr::SelectField(Box::new(Expr::Request()), "user-id-2".to_string()),
+                Expr::SelectField(Box::new(Expr::Identifier("request".to_string())), "user-id-2".to_string()),
             ]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -872,7 +872,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_request() {
-        let input_expr = Expr::Request();
+        let input_expr = Expr::Identifier("request".to_string());
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${request}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -907,7 +907,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_worker() {
-        let input_expr = Expr::Worker();
+        let input_expr = Expr::Identifier("worker".to_string());
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${worker}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -956,7 +956,7 @@ mod selection_tests {
 
     #[test]
     fn test_round_trip_read_write_select_field_from_request() {
-        let input_expr = Expr::SelectField(Box::new(Expr::Request()), "field".to_string());
+        let input_expr = Expr::SelectField(Box::new(Expr::Identifier("request".to_string())), "field".to_string());
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${request.field}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -965,7 +965,7 @@ mod selection_tests {
 
     #[test]
     fn test_round_trip_read_write_select_index_from_request() {
-        let input_expr = Expr::SelectIndex(Box::new(Expr::Request()), 1);
+        let input_expr = Expr::SelectIndex(Box::new(Expr::Identifier("request".to_string())), 1);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${request[1]}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -977,7 +977,7 @@ mod selection_tests {
         let input_expr = Expr::SelectField(
             Box::new(Expr::Record(vec![(
                 "field".to_string(),
-                Box::new(Expr::Request()),
+                Box::new(Expr::Identifier("request".to_string())),
             )])),
             "field".to_string(),
         );
@@ -992,7 +992,7 @@ mod selection_tests {
         let input_expr = Expr::SelectIndex(
             Box::new(Expr::Record(vec![(
                 "field".to_string(),
-                Box::new(Expr::Request()),
+                Box::new(Expr::Identifier("request".to_string())),
             )])),
             1,
         );
@@ -1005,7 +1005,7 @@ mod selection_tests {
     #[test]
     fn test_round_trip_read_write_select_field_from_sequence() {
         let input_expr = Expr::SelectField(
-            Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+            Box::new(Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
             "field".to_string(),
         );
         let expr_str = to_string(&input_expr).unwrap();
@@ -1017,7 +1017,7 @@ mod selection_tests {
     #[test]
     fn test_round_trip_read_write_select_index_from_sequence() {
         let input_expr = Expr::SelectIndex(
-            Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+            Box::new(Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
             1,
         );
         let expr_str = to_string(&input_expr).unwrap();
@@ -1029,7 +1029,7 @@ mod selection_tests {
     #[test]
     fn test_round_trip_read_write_select_field_from_tuple() {
         let input_expr = Expr::SelectField(
-            Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Request()])),
+            Box::new(Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
             "field".to_string(),
         );
         let expr_str = to_string(&input_expr).unwrap();
@@ -1073,7 +1073,7 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1108,7 +1108,7 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_flags() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1143,7 +1143,7 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_tuple() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1153,7 +1153,7 @@ mod match_tests {
                         )))],
                     )
                     .unwrap(),
-                    Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Request()])),
+                    Box::new(Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
                 )),
                 MatchArm((
                     ArmPattern::from(
@@ -1179,7 +1179,7 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_sequence() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1189,7 +1189,7 @@ mod match_tests {
                         )))],
                     )
                     .unwrap(),
-                    Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+                    Box::new(Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
                 )),
                 MatchArm((
                     ArmPattern::from(
@@ -1215,7 +1215,7 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_record() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1227,7 +1227,7 @@ mod match_tests {
                     .unwrap(),
                     Box::new(Expr::Record(vec![(
                         "field".to_string(),
-                        Box::new(Expr::Request()),
+                        Box::new(Expr::Identifier("request".to_string())),
                     )])),
                 )),
                 MatchArm((
@@ -1253,7 +1253,7 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_math_op() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1293,7 +1293,7 @@ mod match_tests {
     #[test]
     fn test_round_trip_match_expr_of_if_condition() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1306,7 +1306,7 @@ mod match_tests {
                     Box::new(Expr::Cond(
                         Box::new(Expr::EqualTo(
                             Box::new(Expr::SelectField(
-                                Box::new(Expr::Request()),
+                                Box::new(Expr::Identifier("request".to_string())),
                                 "foo".to_string(),
                             )),
                             Box::new(Expr::Literal("bar".to_string())),
@@ -1338,7 +1338,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_multiple_constructor_variables() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1374,7 +1374,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_empty_constructor_variables() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from("foo", vec![]).unwrap(),
@@ -1403,7 +1403,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_empty_with_nested_constructor_patterns() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from(
@@ -1442,7 +1442,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_variants_in_arm_rhs() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from("foo1", vec![]).unwrap(),
@@ -1473,7 +1473,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_variants_in_wild_pattern() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::from("foo1", vec![ArmPattern::WildCard]).unwrap(),
@@ -1504,7 +1504,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_variants_with_alias() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::As(
@@ -1538,7 +1538,7 @@ mod match_tests {
     #[test]
     fn test_pattern_match_variants_with_nested_alias() {
         let input_expr = Expr::PatternMatch(
-            Box::new(Expr::Request()),
+            Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
                     ArmPattern::As(
@@ -1620,7 +1620,7 @@ mod if_cond_tests {
         let input_expr = Expr::Cond(
             Box::new(Expr::EqualTo(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "foo".to_string(),
                 )),
                 Box::new(Expr::Literal("bar".to_string())),
@@ -1640,7 +1640,7 @@ mod if_cond_tests {
         let input_expr = Expr::Cond(
             Box::new(Expr::EqualTo(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "foo".to_string(),
                 )),
                 Box::new(Expr::Literal("bar".to_string())),
@@ -1649,7 +1649,7 @@ mod if_cond_tests {
             Box::new(Expr::Cond(
                 Box::new(Expr::EqualTo(
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Request()),
+                        Box::new(Expr::Identifier("request".to_string())),
                         "foo".to_string(),
                     )),
                     Box::new(Expr::Literal("baz".to_string())),
@@ -1670,10 +1670,10 @@ mod if_cond_tests {
         let input_expr = Expr::Cond(
             Box::new(Expr::EqualTo(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Request()])),
+                    Box::new(Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
                     "foo".to_string(),
                 )),
-                Box::new(Expr::Tuple(vec![Expr::Request(), Expr::Request()])),
+                Box::new(Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
             )),
             Box::new(Expr::Literal("success".to_string())),
             Box::new(Expr::Literal("failed".to_string())),
@@ -1692,10 +1692,10 @@ mod if_cond_tests {
         let input_expr = Expr::Cond(
             Box::new(Expr::EqualTo(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+                    Box::new(Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
                     "foo".to_string(),
                 )),
-                Box::new(Expr::Sequence(vec![Expr::Request(), Expr::Request()])),
+                Box::new(Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
             )),
             Box::new(Expr::Literal("success".to_string())),
             Box::new(Expr::Literal("failed".to_string())),
@@ -1716,13 +1716,13 @@ mod if_cond_tests {
                 Box::new(Expr::SelectField(
                     Box::new(Expr::Record(vec![(
                         "field".to_string(),
-                        Box::new(Expr::Request()),
+                        Box::new(Expr::Identifier("request".to_string())),
                     )])),
                     "field".to_string(),
                 )),
                 Box::new(Expr::Record(vec![(
                     "field".to_string(),
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                 )])),
             )),
             Box::new(Expr::Literal("success".to_string())),
@@ -1742,7 +1742,7 @@ mod if_cond_tests {
         let input_expr = Expr::Cond(
             Box::new(Expr::EqualTo(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Worker()),
+                    Box::new(Expr::Identifier("worker".to_string())),
                     "response".to_string(),
                 )),
                 Box::new(Expr::Flags(vec!["flag1".to_string(), "flag2".to_string()])),

@@ -78,8 +78,6 @@ fn is_valid_tuple_element(expr: &Expr) -> bool {
         Expr::Tuple(_) => true,
         Expr::Literal(_) => true,
         Expr::Not(_) => false,
-        Expr::Request() => false,
-        Expr::Worker() => false,
         Expr::SelectField(_, _) => false,
         Expr::SelectIndex(_, _) => false,
         Expr::Cond(_, _, _) => false, // we disallow if statements within tuple

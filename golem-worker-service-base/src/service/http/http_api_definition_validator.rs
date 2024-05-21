@@ -158,7 +158,7 @@ fn test_unique_routes() {
             path: crate::api_definition::http::AllPathPatterns::parse(path).unwrap(),
             binding: crate::worker_binding::GolemWorkerBinding {
                 component_id: ComponentId::new_v4(),
-                worker_name: crate::expression::Expr::Request(),
+                worker_name: crate::expression::Expr::Identifier("request".to_string()),
                 function_name: "test".into(),
                 function_params: vec![],
                 idempotency_key: None,

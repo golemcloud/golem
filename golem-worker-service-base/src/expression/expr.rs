@@ -11,9 +11,7 @@ use crate::parser::{GolemParser, ParseError};
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
-    Request(),
     Let(String, Box<Expr>),
-    Worker(),
     SelectField(Box<Expr>, String),
     SelectIndex(Box<Expr>, usize),
     Sequence(Vec<Expr>),
@@ -22,7 +20,7 @@ pub enum Expr {
     Literal(String),
     Number(InnerNumber),
     Flags(Vec<String>),
-    Identifier(String),
+    Identifier(String), // Upto the evaluator to find from the context what String represents
     Boolean(bool),
     Concat(Vec<Expr>),
     Multiple(Vec<Expr>),

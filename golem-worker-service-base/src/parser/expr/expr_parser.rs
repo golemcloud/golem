@@ -65,9 +65,6 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                 previous_expression.build(new_expr);
             }
 
-            Token::MultiChar(MultiCharTokens::Request) => {
-                previous_expression.build(Expr::Request())
-            }
 
             token @ Token::MultiChar(MultiCharTokens::Some)
             | token @ Token::MultiChar(MultiCharTokens::None)
@@ -77,8 +74,6 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                     constructor::create_constructor(&mut tokenizer, token.to_string().as_str())?;
                 previous_expression.build(expr);
             }
-
-            Token::MultiChar(MultiCharTokens::Worker) => previous_expression.build(Expr::Worker()),
 
             Token::MultiChar(MultiCharTokens::InterpolationStart) => {
                 let code_block = code_block::create_code_block(&mut tokenizer)?;
@@ -347,7 +342,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser.parse("${request.body.input[0]}");
-        let request = Expr::Request();
+        let request = Expr::Identifier("request".to_string());
         let select_body = Expr::SelectField(Box::new(request), "body".to_string());
 
         let select_input = Expr::SelectField(Box::new(select_body), "input".to_string());
@@ -362,7 +357,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser.parse("${worker.response.input[0]}");
-        let worker = Expr::Worker();
+        let worker = Expr::Identifier("worker".to_string());
         let select_input = Expr::SelectField(
             Box::new(Expr::SelectField(Box::new(worker), "response".to_string())),
             "input".to_string(),
@@ -382,7 +377,7 @@ mod tests {
             Expr::Literal("foo-id-".to_string()),
             Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "user_id".to_string(),
@@ -415,14 +410,14 @@ mod tests {
         let expected = Expr::GreaterThan(
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "user-id".to_string(),
             )),
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "id".to_string(),
@@ -441,14 +436,14 @@ mod tests {
         let expected = Expr::GreaterThan(
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "user-id".to_string(),
             )),
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "id".to_string(),
@@ -467,7 +462,7 @@ mod tests {
         let expected = Expr::GreaterThan(
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "user-id".to_string(),
@@ -487,7 +482,7 @@ mod tests {
         let expected = Expr::Concat(vec![
             Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "user-id".to_string(),
@@ -509,7 +504,7 @@ mod tests {
 
         let expected = Expr::Cond(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Request()),
+                Box::new(Expr::Identifier("request".to_string())),
                 "path".to_string(),
             )),
             Box::new(Expr::unsigned_integer(1)),
@@ -604,7 +599,7 @@ mod tests {
             Box::new(Expr::EqualTo(
                 Box::new(Expr::SelectField(
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Request()),
+                        Box::new(Expr::Identifier("request".to_string())),
                         "path".to_string(),
                     )),
                     "user_id".to_string(),
@@ -616,7 +611,7 @@ mod tests {
                 Box::new(Expr::EqualTo(
                     Box::new(Expr::SelectField(
                         Box::new(Expr::SelectField(
-                            Box::new(Expr::Request()),
+                            Box::new(Expr::Identifier("request".to_string())),
                             "path".to_string(),
                         )),
                         "user_id".to_string(),
@@ -628,7 +623,7 @@ mod tests {
                     Box::new(Expr::EqualTo(
                         Box::new(Expr::SelectField(
                             Box::new(Expr::SelectField(
-                                Box::new(Expr::Request()),
+                                Box::new(Expr::Identifier("request".to_string())),
                                 "path".to_string(),
                             )),
                             "user_id".to_string(),
@@ -656,7 +651,7 @@ mod tests {
         let predicate_expressions = Expr::GreaterThan(
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "user_id".to_string(),
@@ -685,7 +680,7 @@ mod tests {
         let predicate_expressions = Expr::GreaterThan(
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "user_id".to_string(),
@@ -697,7 +692,7 @@ mod tests {
             Box::new(predicate_expressions),
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "user_id".to_string(),
@@ -720,7 +715,7 @@ mod tests {
         let predicate_expressions = Expr::GreaterThan(
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "user_id".to_string(),
@@ -732,14 +727,14 @@ mod tests {
             Box::new(predicate_expressions),
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "user_id".to_string(),
             )),
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "id".to_string(),
@@ -761,7 +756,7 @@ mod tests {
         let predicate_expressions = Expr::GreaterThan(
             Box::new(Expr::SelectField(
                 Box::new(Expr::SelectField(
-                    Box::new(Expr::Request()),
+                    Box::new(Expr::Identifier("request".to_string())),
                     "path".to_string(),
                 )),
                 "user_id".to_string(),
@@ -776,7 +771,7 @@ mod tests {
                 Box::new(Expr::EqualTo(
                     Box::new(Expr::SelectField(
                         Box::new(Expr::SelectField(
-                            Box::new(Expr::Request()),
+                            Box::new(Expr::Identifier("request".to_string())),
                             "path".to_string(),
                         )),
                         "user_id".to_string(),
@@ -804,7 +799,7 @@ mod tests {
             Box::new(Expr::Cond(
                 Box::new(Expr::SelectField(
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Request()),
+                        Box::new(Expr::Identifier("request".to_string())),
                         "path".to_string(),
                     )),
                     "hello".to_string(),
@@ -821,7 +816,7 @@ mod tests {
                 Box::new(predicate_expressions),
                 Box::new(Expr::SelectField(
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Request()),
+                        Box::new(Expr::Identifier("request".to_string())),
                         "path".to_string(),
                     )),
                     "user_id".to_string(),
@@ -846,7 +841,7 @@ mod tests {
             Box::new(Expr::Cond(
                 Box::new(Expr::SelectField(
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Request()),
+                        Box::new(Expr::Identifier("request".to_string())),
                         "path".to_string(),
                     )),
                     "hello".to_string(),
@@ -863,7 +858,7 @@ mod tests {
                 Box::new(predicate_expressions),
                 Box::new(Expr::SelectField(
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Request()),
+                        Box::new(Expr::Identifier("request".to_string())),
                         "path".to_string(),
                     )),
                     "user_id".to_string(),
@@ -885,7 +880,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::Identifier("worker".to_string())),
                 "response".to_string(),
             )),
             vec![
@@ -919,7 +914,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::Identifier("worker".to_string())),
                 "response".to_string(),
             )),
             vec![
@@ -959,7 +954,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::Identifier("worker".to_string())),
                 "response".to_string(),
             )),
             vec![
@@ -972,7 +967,7 @@ mod tests {
                     )
                     .unwrap(),
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Worker()),
+                        Box::new(Expr::Identifier("worker".to_string())),
                         "response".to_string(),
                     )),
                 )),
@@ -996,7 +991,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::Identifier("worker".to_string())),
                 "response".to_string(),
             )),
             vec![
@@ -1013,7 +1008,7 @@ mod tests {
                     )
                     .unwrap(),
                     Box::new(Expr::SelectField(
-                        Box::new(Expr::Worker()),
+                        Box::new(Expr::Identifier("worker".to_string())),
                         "response".to_string(),
                     )),
                 )),
@@ -1036,7 +1031,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::Identifier("worker".to_string())),
                 "response".to_string(),
             )),
             vec![
@@ -1076,7 +1071,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::Identifier("worker".to_string())),
                 "response".to_string(),
             )),
             vec![
@@ -1117,7 +1112,7 @@ mod tests {
 
         let expected = Expr::PatternMatch(
             Box::new(Expr::SelectField(
-                Box::new(Expr::Worker()),
+                Box::new(Expr::Identifier("worker".to_string())),
                 "response".to_string(),
             )),
             vec![

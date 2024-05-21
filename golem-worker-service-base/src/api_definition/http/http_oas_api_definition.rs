@@ -312,14 +312,14 @@ mod tests {
                         Expr::Literal("worker-".to_string()),
                         Expr::SelectField(
                             Box::new(Expr::SelectField(
-                                Box::new(Expr::Request()),
+                                Box::new(Expr::Identifier("request".to_string())),
                                 "body".to_string()
                             )),
                             "user".to_string()
                         )
                     ]),
                     function_name: "test".to_string(),
-                    function_params: vec![Expr::Request()],
+                    function_params: vec![Expr::Identifier("request".to_string())],
                     component_id: ComponentId(Uuid::nil()),
                     idempotency_key: Some(Expr::Literal("test-key".to_string())),
                     response: Some(ResponseMapping(Expr::Record(
@@ -340,7 +340,7 @@ mod tests {
                             (
                                 "body".to_string(),
                                 Box::new(Expr::SelectField(
-                                    Box::new(Expr::Worker()),
+                                    Box::new(Expr::Identifier("worker".to_string())),
                                     "response".to_string(),
                                 )),
                             ),

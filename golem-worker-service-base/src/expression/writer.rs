@@ -57,7 +57,9 @@ impl<W: Write> Writer<W> {
                 self.write_str(string)?;
                 self.write_display(Token::Quote)
             }
-            Expr::Request() => self.write_display(Token::MultiChar(MultiCharTokens::Request)),
+            Expr::Identifier(identifier) =>
+                self.write_str(identifier),
+
             Expr::Let(let_variable, expr) => {
                 self.write_str("let ")?;
                 self.write_str(let_variable)?;
@@ -65,7 +67,6 @@ impl<W: Write> Writer<W> {
                 self.write_expr(expr)?;
                 self.write_display(Token::SemiColon)
             }
-            Expr::Worker() => self.write_display(Token::MultiChar(MultiCharTokens::Worker)),
             Expr::SelectField(expr, field_name) => {
                 self.write_expr(expr)?;
                 self.write_str(".")?;
