@@ -315,6 +315,521 @@ impl CliTestDependencies {
         tracing_subscriber::registry().with(ansi_layer).init();
     }
 
+    async fn make_docker(
+        params: CliParams,
+        cluster_size: usize,
+        redis_prefix: &str,
+        worker_executor_base_http_port: u16,
+        worker_executor_base_grpc_port: u16,
+        component_compilation_disabled: bool,
+    ) -> Self {
+        let params_clone = params.clone();
+
+        let rdb_and_component_service_join = tokio::spawn(async move {
+            let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
+                Arc::new(DockerPostgresRdb::new(true).await);
+
+            let component_compilation_service = if !component_compilation_disabled {
+                Some((
+                    DockerComponentCompilationService::NAME,
+                    DockerComponentCompilationService::GRPC_PORT,
+                ))
+            } else {
+                None
+            };
+
+            let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
+                Arc::new(DockerComponentService::new(
+                    component_compilation_service,
+                    rdb.clone(),
+                    params_clone.service_verbosity(),
+                ));
+
+            let component_compilation_service: Arc<
+                dyn ComponentCompilationService + Send + Sync + 'static,
+            > = Arc::new(DockerComponentCompilationService::new(
+                component_service.clone(),
+                params_clone.service_verbosity(),
+            ));
+
+            (rdb, component_service, component_compilation_service)
+        });
+
+        let redis: Arc<dyn Redis + Send + Sync + 'static> =
+            Arc::new(DockerRedis::new(redis_prefix.to_string()));
+        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
+            SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
+        );
+        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
+            DockerShardManager::new(redis.clone(), params.service_verbosity()),
+        );
+
+        let (rdb, component_service, component_compilation_service) =
+            rdb_and_component_service_join
+                .await
+                .expect("Failed to join");
+
+        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
+            Arc::new(DockerWorkerService::new(
+                component_service.clone(),
+                shard_manager.clone(),
+                rdb.clone(),
+                redis.clone(),
+                params.service_verbosity(),
+            ));
+        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> =
+            Arc::new(
+                DockerWorkerExecutorCluster::new(
+                    cluster_size,
+                    worker_executor_base_http_port,
+                    worker_executor_base_grpc_port,
+                    redis.clone(),
+                    component_service.clone(),
+                    shard_manager.clone(),
+                    worker_service.clone(),
+                    params.service_verbosity(),
+                )
+                .await,
+            );
+
+        Self {
+            rdb,
+            redis,
+            redis_monitor,
+            shard_manager,
+            component_service,
+            component_compilation_service,
+            worker_service,
+            worker_executor_cluster,
+            component_directory: Path::new(&params.component_directory).to_path_buf(),
+        }
+    }
+
+    async fn make_spawned(
+        params: CliParams,
+        cluster_size: usize,
+        workspace_root: &str,
+        build_target: &str,
+        redis_port: u16,
+        redis_prefix: &str,
+        shard_manager_http_port: u16,
+        shard_manager_grpc_port: u16,
+        component_service_http_port: u16,
+        component_service_grpc_port: u16,
+        component_compilation_service_http_port: u16,
+        component_compilation_service_grpc_port: u16,
+        component_compilation_disabled: bool,
+        worker_service_http_port: u16,
+        worker_service_grpc_port: u16,
+        worker_service_custom_request_port: u16,
+        worker_executor_base_http_port: u16,
+        worker_executor_base_grpc_port: u16,
+        mute_child: bool,
+    ) -> Self {
+        let workspace_root = Path::new(workspace_root).canonicalize().unwrap();
+        let build_root = workspace_root.join(build_target);
+
+        let out_level = if mute_child {
+            Level::TRACE
+        } else {
+            Level::INFO
+        };
+
+        let rdb_and_component_service_join = {
+            let params = params.clone();
+            let workspace_root = workspace_root.clone();
+            let build_root = build_root.clone();
+
+            tokio::spawn(async move {
+                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
+                    Arc::new(DockerPostgresRdb::new(true).await);
+
+                let component_compilation_service_port = if !component_compilation_disabled {
+                    Some(component_compilation_service_grpc_port)
+                } else {
+                    None
+                };
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                    SpawnedComponentService::new(
+                        &build_root.join("golem-component-service"),
+                        &workspace_root.join("golem-component-service"),
+                        component_service_http_port,
+                        component_service_grpc_port,
+                        component_compilation_service_port,
+                        rdb.clone(),
+                        params.service_verbosity(),
+                        out_level,
+                        Level::ERROR,
+                    )
+                    .await,
+                );
+                let component_compilation_service: Arc<
+                    dyn ComponentCompilationService + Send + Sync + 'static,
+                > = Arc::new(
+                    SpawnedComponentCompilationService::new(
+                        &build_root.join("golem-component-compilation-service"),
+                        &workspace_root.join("golem-component-compilation-service"),
+                        component_compilation_service_http_port,
+                        component_compilation_service_grpc_port,
+                        component_service.clone(),
+                        params.service_verbosity(),
+                        out_level,
+                        Level::ERROR,
+                    )
+                    .await,
+                );
+
+                (rdb, component_service, component_compilation_service)
+            })
+        };
+
+        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
+            redis_port,
+            redis_prefix.to_string(),
+            out_level,
+            Level::ERROR,
+        ));
+        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
+            SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
+        );
+        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
+            SpawnedShardManager::new(
+                &build_root.join("golem-shard-manager"),
+                &workspace_root.join("golem-shard-manager"),
+                shard_manager_http_port,
+                shard_manager_grpc_port,
+                redis.clone(),
+                params.service_verbosity(),
+                out_level,
+                Level::ERROR,
+            )
+            .await,
+        );
+
+        let (rdb, component_service, component_compilation_service) =
+            rdb_and_component_service_join
+                .await
+                .expect("Failed to join.");
+
+        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+            SpawnedWorkerService::new(
+                &build_root.join("golem-worker-service"),
+                &workspace_root.join("golem-worker-service"),
+                worker_service_http_port,
+                worker_service_grpc_port,
+                worker_service_custom_request_port,
+                component_service.clone(),
+                shard_manager.clone(),
+                rdb.clone(),
+                redis.clone(),
+                params.service_verbosity(),
+                out_level,
+                Level::ERROR,
+            )
+            .await,
+        );
+        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> =
+            Arc::new(
+                SpawnedWorkerExecutorCluster::new(
+                    cluster_size,
+                    worker_executor_base_http_port,
+                    worker_executor_base_grpc_port,
+                    &build_root.join("worker-executor"),
+                    &workspace_root.join("golem-worker-executor"),
+                    redis.clone(),
+                    component_service.clone(),
+                    shard_manager.clone(),
+                    worker_service.clone(),
+                    params.service_verbosity(),
+                    out_level,
+                    Level::ERROR,
+                )
+                .await,
+            );
+
+        Self {
+            rdb,
+            redis,
+            redis_monitor,
+            shard_manager,
+            component_service,
+            component_compilation_service,
+            worker_service,
+            worker_executor_cluster,
+            component_directory: Path::new(&params.component_directory).to_path_buf(),
+        }
+    }
+
+    async fn make_minikube(
+        params: CliParams,
+        cluster_size: usize,
+        namespace: &str,
+        redis_prefix: &str,
+        component_compilation_disabled: bool,
+    ) -> Self {
+        let routing_type = K8sRoutingType::Minikube;
+        let namespace = K8sNamespace(namespace.to_string());
+        let timeout = Duration::from_secs(90);
+
+        let rdb_and_component_service_join = {
+            let namespace = namespace.clone();
+            let routing_type = routing_type.clone();
+            tokio::spawn(async move {
+                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
+                    Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
+
+                let component_compilation_service = if !component_compilation_disabled {
+                    Some((
+                        K8sComponentCompilationService::NAME,
+                        K8sComponentCompilationService::GRPC_PORT,
+                    ))
+                } else {
+                    None
+                };
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                    K8sComponentService::new(
+                        &namespace,
+                        &routing_type,
+                        Level::INFO,
+                        component_compilation_service,
+                        rdb.clone(),
+                        timeout,
+                        None,
+                    )
+                    .await,
+                );
+                let component_compilation_service: Arc<
+                    dyn ComponentCompilationService + Send + Sync + 'static,
+                > = Arc::new(
+                    K8sComponentCompilationService::new(
+                        &namespace,
+                        &routing_type,
+                        Level::INFO,
+                        component_service.clone(),
+                        timeout,
+                        None,
+                    )
+                    .await,
+                );
+
+                (rdb, component_service, component_compilation_service)
+            })
+        };
+
+        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
+            K8sRedis::new(
+                &namespace,
+                &routing_type,
+                redis_prefix.to_string(),
+                timeout,
+                None,
+            )
+            .await,
+        );
+        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
+            SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
+        );
+        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
+            K8sShardManager::new(
+                &namespace,
+                &routing_type,
+                Level::INFO,
+                redis.clone(),
+                timeout,
+                None,
+            )
+            .await,
+        );
+
+        let (rdb, component_service, component_compilation_service) =
+            rdb_and_component_service_join
+                .await
+                .expect("Failed to join.");
+
+        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+            K8sWorkerService::new(
+                &namespace,
+                &routing_type,
+                Level::INFO,
+                component_service.clone(),
+                shard_manager.clone(),
+                rdb.clone(),
+                redis.clone(),
+                timeout,
+                None,
+            )
+            .await,
+        );
+        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> =
+            Arc::new(
+                K8sWorkerExecutorCluster::new(
+                    cluster_size,
+                    &namespace,
+                    &routing_type,
+                    redis.clone(),
+                    component_service.clone(),
+                    shard_manager.clone(),
+                    worker_service.clone(),
+                    Level::INFO,
+                    timeout,
+                    None,
+                )
+                .await,
+            );
+
+        Self {
+            rdb,
+            redis,
+            redis_monitor,
+            shard_manager,
+            component_service,
+            component_compilation_service,
+            worker_service,
+            worker_executor_cluster,
+            component_directory: Path::new(&params.component_directory).to_path_buf(),
+        }
+    }
+
+    async fn make_aws(
+        params: CliParams,
+        cluster_size: usize,
+        namespace: &str,
+        redis_prefix: &str,
+        component_compilation_disabled: bool,
+    ) -> Self {
+        let routing_type = K8sRoutingType::Service;
+        let namespace = K8sNamespace(namespace.to_string());
+        let service_annotations = Some(aws_nlb_service_annotations());
+        let timeout = Duration::from_secs(900);
+
+        let rdb_and_component_service_join = {
+            let namespace = namespace.clone();
+            let routing_type = routing_type.clone();
+            let service_annotations = service_annotations.clone();
+
+            tokio::spawn(async move {
+                let rdb: Arc<dyn Rdb + Send + Sync + 'static> = Arc::new(
+                    K8sPostgresRdb::new(
+                        &namespace,
+                        &routing_type,
+                        timeout,
+                        service_annotations.clone(),
+                    )
+                    .await,
+                );
+
+                let component_compilation_service = if !component_compilation_disabled {
+                    Some((
+                        K8sComponentCompilationService::NAME,
+                        K8sComponentCompilationService::GRPC_PORT,
+                    ))
+                } else {
+                    None
+                };
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                    K8sComponentService::new(
+                        &namespace,
+                        &routing_type,
+                        Level::INFO,
+                        component_compilation_service,
+                        rdb.clone(),
+                        timeout,
+                        service_annotations.clone(),
+                    )
+                    .await,
+                );
+                let component_compilation_service: Arc<
+                    dyn ComponentCompilationService + Send + Sync + 'static,
+                > = Arc::new(
+                    K8sComponentCompilationService::new(
+                        &namespace,
+                        &routing_type,
+                        Level::INFO,
+                        component_service.clone(),
+                        timeout,
+                        service_annotations.clone(),
+                    )
+                    .await,
+                );
+
+                (rdb, component_service, component_compilation_service)
+            })
+        };
+
+        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
+            K8sRedis::new(
+                &namespace,
+                &routing_type,
+                redis_prefix.to_string(),
+                timeout,
+                service_annotations.clone(),
+            )
+            .await,
+        );
+        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
+            SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
+        );
+        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
+            K8sShardManager::new(
+                &namespace,
+                &routing_type,
+                Level::INFO,
+                redis.clone(),
+                timeout,
+                service_annotations.clone(),
+            )
+            .await,
+        );
+
+        let (rdb, component_service, component_compilation_service) =
+            rdb_and_component_service_join
+                .await
+                .expect("Failed to join.");
+
+        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+            K8sWorkerService::new(
+                &namespace,
+                &routing_type,
+                Level::INFO,
+                component_service.clone(),
+                shard_manager.clone(),
+                rdb.clone(),
+                redis.clone(),
+                timeout,
+                service_annotations.clone(),
+            )
+            .await,
+        );
+        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> =
+            Arc::new(
+                K8sWorkerExecutorCluster::new(
+                    cluster_size,
+                    &namespace,
+                    &routing_type,
+                    redis.clone(),
+                    component_service.clone(),
+                    shard_manager.clone(),
+                    worker_service.clone(),
+                    Level::INFO,
+                    timeout,
+                    service_annotations.clone(),
+                )
+                .await,
+            );
+
+        Self {
+            rdb,
+            redis,
+            redis_monitor,
+            shard_manager,
+            component_service,
+            component_compilation_service,
+            worker_service,
+            worker_executor_cluster,
+            component_directory: Path::new(&params.component_directory).to_path_buf(),
+        }
+    }
+
     pub async fn new(params: CliParams, cluster_size: usize) -> Self {
         match &params.mode {
             TestMode::Provided {
@@ -401,68 +916,15 @@ impl CliTestDependencies {
                 worker_executor_base_grpc_port,
                 component_compilation_disabled,
             } => {
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new(true).await);
-                let redis: Arc<dyn Redis + Send + Sync + 'static> =
-                    Arc::new(DockerRedis::new(redis_prefix.clone()));
-                let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-                    SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
-                );
-                let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
-                    DockerShardManager::new(redis.clone(), params.service_verbosity()),
-                );
-                let component_compilation_service = if !*component_compilation_disabled {
-                    Some((
-                        DockerComponentCompilationService::NAME,
-                        DockerComponentCompilationService::GRPC_PORT,
-                    ))
-                } else {
-                    None
-                };
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
-                    Arc::new(DockerComponentService::new(
-                        component_compilation_service,
-                        rdb.clone(),
-                        params.service_verbosity(),
-                    ));
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync + 'static,
-                > = Arc::new(DockerComponentCompilationService::new(
-                    component_service.clone(),
-                    params.service_verbosity(),
-                ));
-                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
-                    Arc::new(DockerWorkerService::new(
-                        component_service.clone(),
-                        shard_manager.clone(),
-                        rdb.clone(),
-                        redis.clone(),
-                        params.service_verbosity(),
-                    ));
-                let worker_executor_cluster: Arc<
-                    dyn WorkerExecutorCluster + Send + Sync + 'static,
-                > = Arc::new(DockerWorkerExecutorCluster::new(
+                Self::make_docker(
+                    params.clone(),
                     cluster_size,
+                    redis_prefix,
                     *worker_executor_base_http_port,
                     *worker_executor_base_grpc_port,
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    params.service_verbosity(),
-                ));
-
-                Self {
-                    rdb,
-                    redis,
-                    redis_monitor,
-                    shard_manager,
-                    component_service,
-                    component_compilation_service,
-                    worker_service,
-                    worker_executor_cluster,
-                    component_directory: Path::new(&params.component_directory).to_path_buf(),
-                }
+                    *component_compilation_disabled,
+                )
+                .await
             }
             TestMode::Spawned {
                 workspace_root,
@@ -483,353 +945,56 @@ impl CliTestDependencies {
                 worker_executor_base_grpc_port,
                 mute_child,
             } => {
-                let workspace_root = Path::new(workspace_root).canonicalize().unwrap();
-                let build_root = workspace_root.join(build_target);
-
-                let out_level = if *mute_child {
-                    Level::TRACE
-                } else {
-                    Level::INFO
-                };
-
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new(true).await);
-                let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
+                Self::make_spawned(
+                    params.clone(),
+                    cluster_size,
+                    workspace_root,
+                    build_target,
                     *redis_port,
-                    redis_prefix.clone(),
-                    out_level,
-                    Level::ERROR,
-                ));
-                let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-                    SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
-                );
-                let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
-                    SpawnedShardManager::new(
-                        &build_root.join("golem-shard-manager"),
-                        &workspace_root.join("golem-shard-manager"),
-                        *shard_manager_http_port,
-                        *shard_manager_grpc_port,
-                        redis.clone(),
-                        params.service_verbosity(),
-                        out_level,
-                        Level::ERROR,
-                    )
-                    .await,
-                );
-                let component_compilation_service_port = if !*component_compilation_disabled {
-                    Some(*component_compilation_service_grpc_port)
-                } else {
-                    None
-                };
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    SpawnedComponentService::new(
-                        &build_root.join("golem-component-service"),
-                        &workspace_root.join("golem-component-service"),
-                        *component_service_http_port,
-                        *component_service_grpc_port,
-                        component_compilation_service_port,
-                        rdb.clone(),
-                        params.service_verbosity(),
-                        out_level,
-                        Level::ERROR,
-                    )
-                    .await,
-                );
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync + 'static,
-                > = Arc::new(
-                    SpawnedComponentCompilationService::new(
-                        &build_root.join("golem-component-compilation-service"),
-                        &workspace_root.join("golem-component-compilation-service"),
-                        *component_compilation_service_http_port,
-                        *component_compilation_service_grpc_port,
-                        component_service.clone(),
-                        params.service_verbosity(),
-                        out_level,
-                        Level::ERROR,
-                    )
-                    .await,
-                );
-                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
-                    SpawnedWorkerService::new(
-                        &build_root.join("golem-worker-service"),
-                        &workspace_root.join("golem-worker-service"),
-                        *worker_service_http_port,
-                        *worker_service_grpc_port,
-                        *worker_service_custom_request_port,
-                        component_service.clone(),
-                        shard_manager.clone(),
-                        rdb.clone(),
-                        redis.clone(),
-                        params.service_verbosity(),
-                        out_level,
-                        Level::ERROR,
-                    )
-                    .await,
-                );
-                let worker_executor_cluster: Arc<
-                    dyn WorkerExecutorCluster + Send + Sync + 'static,
-                > = Arc::new(
-                    SpawnedWorkerExecutorCluster::new(
-                        cluster_size,
-                        *worker_executor_base_http_port,
-                        *worker_executor_base_grpc_port,
-                        &build_root.join("worker-executor"),
-                        &workspace_root.join("golem-worker-executor"),
-                        redis.clone(),
-                        component_service.clone(),
-                        shard_manager.clone(),
-                        worker_service.clone(),
-                        params.service_verbosity(),
-                        out_level,
-                        Level::ERROR,
-                    )
-                    .await,
-                );
-
-                Self {
-                    rdb,
-                    redis,
-                    redis_monitor,
-                    shard_manager,
-                    component_service,
-                    component_compilation_service,
-                    worker_service,
-                    worker_executor_cluster,
-                    component_directory: Path::new(&params.component_directory).to_path_buf(),
-                }
+                    redis_prefix,
+                    *shard_manager_http_port,
+                    *shard_manager_grpc_port,
+                    *component_service_http_port,
+                    *component_service_grpc_port,
+                    *component_compilation_service_http_port,
+                    *component_compilation_service_grpc_port,
+                    *component_compilation_disabled,
+                    *worker_service_http_port,
+                    *worker_service_grpc_port,
+                    *worker_service_custom_request_port,
+                    *worker_executor_base_http_port,
+                    *worker_executor_base_grpc_port,
+                    *mute_child,
+                )
+                .await
             }
             TestMode::Minikube {
                 namespace,
                 redis_prefix,
                 component_compilation_disabled,
             } => {
-                let routing_type = K8sRoutingType::Minikube;
-                let namespace = K8sNamespace(namespace.clone());
-                let timeout = Duration::from_secs(90);
-
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
-                let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
-                    K8sRedis::new(
-                        &namespace,
-                        &routing_type,
-                        redis_prefix.clone(),
-                        timeout,
-                        None,
-                    )
-                    .await,
-                );
-                let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-                    SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
-                );
-                let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
-                    K8sShardManager::new(
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        redis.clone(),
-                        timeout,
-                        None,
-                    )
-                    .await,
-                );
-                let component_compilation_service = if !*component_compilation_disabled {
-                    Some((
-                        K8sComponentCompilationService::NAME,
-                        K8sComponentCompilationService::GRPC_PORT,
-                    ))
-                } else {
-                    None
-                };
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    K8sComponentService::new(
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        component_compilation_service,
-                        rdb.clone(),
-                        timeout,
-                        None,
-                    )
-                    .await,
-                );
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync + 'static,
-                > = Arc::new(
-                    K8sComponentCompilationService::new(
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        component_service.clone(),
-                        timeout,
-                        None,
-                    )
-                    .await,
-                );
-                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
-                    K8sWorkerService::new(
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        component_service.clone(),
-                        shard_manager.clone(),
-                        rdb.clone(),
-                        redis.clone(),
-                        timeout,
-                        None,
-                    )
-                    .await,
-                );
-                let worker_executor_cluster: Arc<
-                    dyn WorkerExecutorCluster + Send + Sync + 'static,
-                > = Arc::new(
-                    K8sWorkerExecutorCluster::new(
-                        cluster_size,
-                        &namespace,
-                        &routing_type,
-                        redis.clone(),
-                        component_service.clone(),
-                        shard_manager.clone(),
-                        worker_service.clone(),
-                        Level::INFO,
-                        timeout,
-                        None,
-                    )
-                    .await,
-                );
-
-                Self {
-                    rdb,
-                    redis,
-                    redis_monitor,
-                    shard_manager,
-                    component_service,
-                    component_compilation_service,
-                    worker_service,
-                    worker_executor_cluster,
-                    component_directory: Path::new(&params.component_directory).to_path_buf(),
-                }
+                Self::make_minikube(
+                    params.clone(),
+                    cluster_size,
+                    namespace,
+                    redis_prefix,
+                    *component_compilation_disabled,
+                )
+                .await
             }
             TestMode::Aws {
                 namespace,
                 redis_prefix,
                 component_compilation_disabled,
             } => {
-                let routing_type = K8sRoutingType::Service;
-                let namespace = K8sNamespace(namespace.clone());
-                let service_annotations = Some(aws_nlb_service_annotations());
-                let timeout = Duration::from_secs(900);
-
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> = Arc::new(
-                    K8sPostgresRdb::new(
-                        &namespace,
-                        &routing_type,
-                        timeout,
-                        service_annotations.clone(),
-                    )
-                    .await,
-                );
-                let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
-                    K8sRedis::new(
-                        &namespace,
-                        &routing_type,
-                        redis_prefix.clone(),
-                        timeout,
-                        service_annotations.clone(),
-                    )
-                    .await,
-                );
-                let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-                    SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
-                );
-                let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
-                    K8sShardManager::new(
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        redis.clone(),
-                        timeout,
-                        service_annotations.clone(),
-                    )
-                    .await,
-                );
-                let component_compilation_service = if !*component_compilation_disabled {
-                    Some((
-                        K8sComponentCompilationService::NAME,
-                        K8sComponentCompilationService::GRPC_PORT,
-                    ))
-                } else {
-                    None
-                };
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
-                    K8sComponentService::new(
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        component_compilation_service,
-                        rdb.clone(),
-                        timeout,
-                        service_annotations.clone(),
-                    )
-                    .await,
-                );
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync + 'static,
-                > = Arc::new(
-                    K8sComponentCompilationService::new(
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        component_service.clone(),
-                        timeout,
-                        service_annotations.clone(),
-                    )
-                    .await,
-                );
-                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
-                    K8sWorkerService::new(
-                        &namespace,
-                        &routing_type,
-                        Level::INFO,
-                        component_service.clone(),
-                        shard_manager.clone(),
-                        rdb.clone(),
-                        redis.clone(),
-                        timeout,
-                        service_annotations.clone(),
-                    )
-                    .await,
-                );
-                let worker_executor_cluster: Arc<
-                    dyn WorkerExecutorCluster + Send + Sync + 'static,
-                > = Arc::new(
-                    K8sWorkerExecutorCluster::new(
-                        cluster_size,
-                        &namespace,
-                        &routing_type,
-                        redis.clone(),
-                        component_service.clone(),
-                        shard_manager.clone(),
-                        worker_service.clone(),
-                        Level::INFO,
-                        timeout,
-                        service_annotations.clone(),
-                    )
-                    .await,
-                );
-
-                Self {
-                    rdb,
-                    redis,
-                    redis_monitor,
-                    shard_manager,
-                    component_service,
-                    component_compilation_service,
-                    worker_service,
-                    worker_executor_cluster,
-                    component_directory: Path::new(&params.component_directory).to_path_buf(),
-                }
+                Self::make_aws(
+                    params.clone(),
+                    cluster_size,
+                    namespace,
+                    redis_prefix,
+                    *component_compilation_disabled,
+                )
+                .await
             }
         }
     }
