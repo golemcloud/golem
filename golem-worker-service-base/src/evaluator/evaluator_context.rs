@@ -76,19 +76,24 @@ impl EvaluationContext {
         worker_response: &RefinedWorkerResponse,
         request: &RequestDetails,
     ) -> Self {
-        let mut worker_data =
-            internal::worker_type_annotated_value(worker_response, worker_request);
+        let mut worker_request_data =
+            internal::worker_request_type_annotated_value(worker_request);
 
-        let request_data =
-            internal::request_type_annotated_value(request);
+        let worker_response_data =
+            internal::worker_response_type_annotated_value(worker_response);
 
-        let variables =
-            worker_data.merge(&request_data).clone();
+        if let Some(worker_response) = worker_response_data {
+            let worker_data = worker_request_data.merge(&worker_response);
+            let request_data = internal::request_type_annotated_value(request);
 
+            let variables = worker_data.merge(&request_data).clone();
 
-        EvaluationContext {
-            variables: Some(variables),
-            analysed_functions: vec![]
+            EvaluationContext {
+                variables: Some(variables),
+                analysed_functions: vec![]
+            }
+        } else {
+            EvaluationContext::from_request_data(request)
         }
     }
 }
@@ -105,15 +110,9 @@ mod internal {
         create_record("request", type_annoated_value)
     }
 
-    pub(crate) fn worker_type_annotated_value(worker_response: &RefinedWorkerResponse, worker_request: &WorkerRequest) -> TypeAnnotatedValue {
-        let mut typed_worker_data =
-            worker_request.clone().to_type_annotated_value();
-
-        if let Some(typed_res) = worker_response.to_type_annotated_value() {
-            typed_worker_data.merge(&create_record("response", typed_res));
-        }
-
-        create_record("worker", typed_worker_data)
+    pub(crate) fn worker_request_type_annotated_value(worker_request: &WorkerRequest) -> TypeAnnotatedValue {
+        let typed_value = worker_request.clone().to_type_annotated_value();
+        create_record("worker", typed_value)
     }
 
     pub(crate) fn worker_response_type_annotated_value(worker_response: &RefinedWorkerResponse) -> Option<TypeAnnotatedValue> {
