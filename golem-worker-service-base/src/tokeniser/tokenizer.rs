@@ -242,7 +242,6 @@ impl<'t> Tokenizer<'t> {
     // Captures the string upto the end token, and advance the cursor further skipping the end token
     pub fn capture_string_until_and_skip_end(&mut self, end: &Token) -> Option<String> {
         let captured_string = self.capture_string_until(end);
-        dbg!(captured_string.clone());
         match captured_string {
             Some(captured_string) => {
                 self.next_non_empty_token();
@@ -495,10 +494,8 @@ impl<'t> Tokenizer<'t> {
             ';' => Some(Token::SemiColon),
             '@' => Some(Token::At),
             '"' => {
-                dbg!(self.rest());
                 self.progress();
                 self.capture_string_until(&Token::Quote).map_or(Some(Token::Quote), |result| {
-                    dbg!(result.clone());
                     Some(Token::MultiChar(MultiCharTokens::StringLiteral(result)))
                 })
             },

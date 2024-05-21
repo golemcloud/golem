@@ -478,12 +478,8 @@ mod tests {
             &self,
             worker_bridge_response: &RefinedWorkerResponse,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
-            let eval_result = self.evaluate(&EvaluationContext {
-                worker_request: None,
-                worker_response: Some(worker_bridge_response.clone()),
-                variables: None,
-                request_data: None,
-            })?;
+            let eval_result =
+                self.evaluate(&EvaluationContext::from_refined_worker_response(worker_bridge_response))?;
 
             Ok(eval_result
                 .get_value()
@@ -495,12 +491,8 @@ mod tests {
             input: &RequestDetails,
             worker_response: &RefinedWorkerResponse,
         ) -> Result<EvaluationResult, EvaluationError> {
-            let evaluation_context = EvaluationContext {
-                worker_request: None,
-                worker_response: Some(worker_response.clone()),
-                variables: None,
-                request_data: Some(input.clone()),
-            };
+            let evaluation_context =
+                EvaluationContext::from_refined_worker_response(worker_response);
 
             let eval_result = self.evaluate(&evaluation_context)?;
             Ok(eval_result)
