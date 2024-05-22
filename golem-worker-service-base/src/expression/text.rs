@@ -60,7 +60,7 @@ mod record_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${{field: 'hello', field: 'world'}}".to_string();
+        let expected_str = r#"${{field: "hello", field: "world"}}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -241,7 +241,7 @@ mod record_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_record_str =
-            "${{a: 'user-id-1-${request.user-id-1}', b: 'user-id-2-${request.user-id-2}'}}"
+            r#"${{a: "user-id-1-${request.user-id-1}", b: "user-id-2-${request.user-id-2}"}}"#
                 .to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
@@ -320,9 +320,7 @@ mod record_tests {
                         MatchArm((
                             ArmPattern::from(
                                 "ok",
-                                vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                    "foo".to_string(),
-                                )))],
+                                vec![ArmPattern::from("foo", vec![]).unwrap()],
                             )
                             .unwrap(),
                             Box::new(Expr::Literal("success".to_string())),
@@ -330,9 +328,7 @@ mod record_tests {
                         MatchArm((
                             ArmPattern::from(
                                 "err",
-                                vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                    "msg".to_string(),
-                                )))],
+                                vec![ArmPattern::from("msg", vec![]).unwrap()],
                             )
                             .unwrap(),
                             Box::new(Expr::Literal("failure".to_string())),
@@ -348,9 +344,7 @@ mod record_tests {
                         MatchArm((
                             ArmPattern::from(
                                 "ok",
-                                vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                    "foo".to_string(),
-                                )))],
+                                vec![ArmPattern::from("foo", vec![]).unwrap()],
                             )
                             .unwrap(),
                             Box::new(Expr::Literal("success".to_string())),
@@ -358,9 +352,7 @@ mod record_tests {
                         MatchArm((
                             ArmPattern::from(
                                 "err",
-                                vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                    "msg".to_string(),
-                                )))],
+                                vec![ArmPattern::from("msg", vec![]).unwrap()],
                             )
                             .unwrap(),
                             Box::new(Expr::PatternMatch(
@@ -369,9 +361,7 @@ mod record_tests {
                                     MatchArm((
                                         ArmPattern::from(
                                             "ok",
-                                            vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                                "foo".to_string(),
-                                            )))],
+                                            vec![ArmPattern::from("foo", vec![]).unwrap()],
                                         )
                                         .unwrap(),
                                         Box::new(Expr::Literal("success".to_string())),
@@ -379,9 +369,7 @@ mod record_tests {
                                     MatchArm((
                                         ArmPattern::from(
                                             "err",
-                                            vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                                "msg".to_string(),
-                                            )))],
+                                            vec![ArmPattern::from("msg", vec![]).unwrap()],
                                         )
                                         .unwrap(),
                                         Box::new(Expr::Literal("failure".to_string())),
@@ -552,7 +540,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${['user-id-1-${request.user-id-1}', 'user-id-2-${request.user-id-2}']}".to_string();
+            r#"${["user-id-1-${request.user-id-1}", "user-id-2-${request.user-id-2}"]}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -616,9 +604,7 @@ mod sequence_tests {
                     MatchArm((
                         ArmPattern::from(
                             "ok",
-                            vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                "foo".to_string(),
-                            )))],
+                            vec![ArmPattern::from("foo", vec![]).unwrap()],
                         )
                         .unwrap(),
                         Box::new(Expr::Literal("success".to_string())),
@@ -626,9 +612,7 @@ mod sequence_tests {
                     MatchArm((
                         ArmPattern::from(
                             "err",
-                            vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                "msg".to_string(),
-                            )))],
+                            vec![ArmPattern::from("msg", vec![]).unwrap()],
                         )
                         .unwrap(),
                         Box::new(Expr::Literal("failure".to_string())),
@@ -641,9 +625,7 @@ mod sequence_tests {
                     MatchArm((
                         ArmPattern::from(
                             "ok",
-                            vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                "foo".to_string(),
-                            )))],
+                            vec![ArmPattern::from("foo", vec![]).unwrap()],
                         )
                         .unwrap(),
                         Box::new(Expr::Literal("success".to_string())),
@@ -651,9 +633,7 @@ mod sequence_tests {
                     MatchArm((
                         ArmPattern::from(
                             "err",
-                            vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                "msg".to_string(),
-                            )))],
+                            vec![ArmPattern::from("msg", vec![]).unwrap()],
                         )
                         .unwrap(),
                         Box::new(Expr::PatternMatch(
@@ -662,9 +642,7 @@ mod sequence_tests {
                                 MatchArm((
                                     ArmPattern::from(
                                         "ok",
-                                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                            "foo".to_string(),
-                                        )))],
+                                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                                     )
                                     .unwrap(),
                                     Box::new(Expr::Literal("success".to_string())),
@@ -672,9 +650,7 @@ mod sequence_tests {
                                 MatchArm((
                                     ArmPattern::from(
                                         "err",
-                                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                            "msg".to_string(),
-                                        )))],
+                                        vec![ArmPattern::from("msg", vec![]).unwrap()],
                                     )
                                     .unwrap(),
                                     Box::new(Expr::Literal("failure".to_string())),
@@ -1079,9 +1055,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "ok",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("success".to_string())),
@@ -1089,9 +1063,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "err",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "msg".to_string(),
-                        )))],
+                        vec![ArmPattern::from("msg", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
@@ -1114,9 +1086,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "ok",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Flags(vec!["flag1".to_string(), "flag2".to_string()])),
@@ -1124,9 +1094,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "err",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "msg".to_string(),
-                        )))],
+                        vec![ArmPattern::from("msg", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
@@ -1149,9 +1117,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "ok",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Tuple(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
@@ -1159,9 +1125,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "err",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "msg".to_string(),
-                        )))],
+                        vec![ArmPattern::from("msg", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
@@ -1185,9 +1149,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "ok",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Sequence(vec![Expr::Identifier("request".to_string()), Expr::Identifier("request".to_string())])),
@@ -1195,9 +1157,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "err",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "msg".to_string(),
-                        )))],
+                        vec![ArmPattern::from("msg", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
@@ -1221,9 +1181,8 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "ok",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
+
                     )
                     .unwrap(),
                     Box::new(Expr::Record(vec![(
@@ -1234,9 +1193,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "err",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "msg".to_string(),
-                        )))],
+                        vec![ArmPattern::from("msg", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
@@ -1259,9 +1216,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "ok",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::GreaterThan(
@@ -1272,9 +1227,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "err",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "msg".to_string(),
-                        )))],
+                        vec![ArmPattern::from("msg", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::LessThan(
@@ -1299,9 +1252,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "ok",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Cond(
@@ -1319,9 +1270,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "err",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "msg".to_string(),
-                        )))],
+                        vec![ArmPattern::from("msg", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
@@ -1505,9 +1454,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "bar",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "c".to_string(),
-                        )))],
+                        vec![ArmPattern::from("c", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Result(Err(Box::new(Expr::Literal(
@@ -1556,9 +1503,7 @@ mod match_tests {
                                     Box::new(
                                         ArmPattern::from(
                                             "baz",
-                                            vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                                "x".to_string(),
-                                            )))],
+                                            vec![ArmPattern::from("x", vec![]).unwrap()],
                                         )
                                         .unwrap(),
                                     ),

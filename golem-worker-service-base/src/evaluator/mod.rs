@@ -497,7 +497,7 @@ mod tests {
             let response_context =
                 EvaluationContext::from_refined_worker_response(worker_response);
 
-            let merged = if let Some(variables) = response_context.variables {
+             if let Some(variables) = response_context.variables {
                 evaluation_context.merge_variables(&variables);
                 evaluation_context.clone()
             } else {
