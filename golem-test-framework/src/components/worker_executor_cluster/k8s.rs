@@ -32,6 +32,35 @@ pub struct K8sWorkerExecutorCluster {
 }
 
 impl K8sWorkerExecutorCluster {
+    async fn make_worker_executor(
+        idx: usize,
+        namespace: K8sNamespace,
+        routing_type: K8sRoutingType,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        verbosity: Level,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
+    ) -> Arc<dyn WorkerExecutor + Send + Sync + 'static> {
+        Arc::new(
+            K8sWorkerExecutor::new(
+                &namespace,
+                &routing_type,
+                idx,
+                verbosity,
+                redis,
+                component_service,
+                shard_manager,
+                worker_service,
+                timeout,
+                service_annotations,
+            )
+            .await,
+        )
+    }
+
     pub async fn new(
         size: usize,
         namespace: &K8sNamespace,
@@ -45,26 +74,29 @@ impl K8sWorkerExecutorCluster {
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
-        let mut worker_executors = Vec::new();
+        let mut worker_executors_joins = Vec::new();
 
         for idx in 0..size {
-            let worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static> = Arc::new(
-                K8sWorkerExecutor::new(
-                    namespace,
-                    routing_type,
-                    idx,
-                    verbosity,
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    timeout,
-                    service_annotations.clone(),
-                )
-                .await,
-            );
+            let worker_executor_join = tokio::spawn(Self::make_worker_executor(
+                idx,
+                namespace.clone(),
+                routing_type.clone(),
+                redis.clone(),
+                component_service.clone(),
+                shard_manager.clone(),
+                worker_service.clone(),
+                verbosity,
+                timeout,
+                service_annotations.clone(),
+            ));
 
-            worker_executors.push(worker_executor);
+            worker_executors_joins.push(worker_executor_join);
+        }
+
+        let mut worker_executors = Vec::new();
+
+        for join in worker_executors_joins {
+            worker_executors.push(join.await.expect("Failed to join."));
         }
 
         Self {
