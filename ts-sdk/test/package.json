@@ -5,8 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "package": "esbuild index.js --bundle --outdir=out --platform=node --external:golem:api/host@0.2.0 --format=esm",
-    "build": "jco componentize -w wit -o out/component.wasm out/index.js"
+    "build": "esbuild index.js --bundle --outdir=out --platform=node --external:golem:api/host@0.2.0 --format=esm",
+    "package": "jco componentize -w wit -o out/component.wasm out/index.js"
   },
   "keywords": [],
   "author": "",
