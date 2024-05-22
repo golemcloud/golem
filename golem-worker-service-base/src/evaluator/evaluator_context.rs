@@ -54,16 +54,18 @@ impl EvaluationContext {
     ) -> Self {
         let type_annoated_value = worker_response.to_type_annotated_value();
 
+
         if let Some(typed_res) = type_annoated_value {
+            let response_data = internal::create_record("response", typed_res);
+            let worker_data = internal::create_record("worker", response_data);
+
             EvaluationContext {
-                variables: Some(internal::create_record("response", typed_res)),
+                variables: Some(worker_data),
                 analysed_functions: vec![]
             }
         } else {
             EvaluationContext::empty()
         }
-
-
     }
 
     pub fn from(

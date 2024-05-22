@@ -304,7 +304,7 @@ mod record_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_record_str = "${{a: if request.foo == 'bar' then 'success' else 'failed', b: if request.foo == 'bar' then 'success' else 'failed'}}".to_string();
+        let expected_record_str = r#"${{a: if request.foo == "bar" then "success" else "failed", b: if request.foo == "bar" then "success" else "failed"}}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
@@ -394,7 +394,7 @@ mod record_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_record_str = "${{a: match request {  ok(foo) => 'success', err(msg) => 'failure' } , b: match request {  ok(foo) => 'success', err(msg) => match request {  ok(foo) => 'success', err(msg) => 'failure' }  } }}".to_string();
+        let expected_record_str = r#"${{a: match request {  ok(foo) => "success", err(msg) => "failure" } , b: match request {  ok(foo) => "success", err(msg) => match request {  ok(foo) => "success", err(msg) => "failure" }  } }}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
@@ -414,7 +414,7 @@ mod record_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_record_str = "${{a: ok('foo'), b: err('msg')}}".to_string();
+        let expected_record_str = r#"${{a: ok("foo"), b: err("msg")}}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
@@ -461,7 +461,7 @@ mod sequence_tests {
             Expr::Literal("world".to_string()),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${['hello', 'world']}".to_string();
+        let expected_str = r#"${["hello", "world"]}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -602,7 +602,7 @@ mod sequence_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${[if request.foo == 'bar' then 'success' else 'failed', if request.foo == 'bar' then 'success' else 'failed']}".to_string();
+        let expected_str = r#"${[if request.foo == "bar" then "success" else "failed", if request.foo == "bar" then "success" else "failed"]}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -686,7 +686,7 @@ mod sequence_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${[match request {  ok(foo) => 'success', err(msg) => 'failure' } , match request {  ok(foo) => 'success', err(msg) => match request {  ok(foo) => 'success', err(msg) => 'failure' }  } ]}".to_string();
+        let expected_str = r#"${[match request {  ok(foo) => "success", err(msg) => "failure" } , match request {  ok(foo) => "success", err(msg) => match request {  ok(foo) => "success", err(msg) => "failure" }  } ]}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -852,7 +852,7 @@ mod tuple_tests {
             Expr::Result(Err(Box::new(Expr::Literal("msg".to_string())))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${(ok('foo'), err('msg'))}".to_string();
+        let expected_str = r#"${(ok("foo"), err("msg"))}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -945,7 +945,7 @@ mod let_tests {
             Box::new(Expr::Literal("hello".to_string())),
         );
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${let x = 'hello';}".to_string();
+        let expected_str = r#"${let x = "hello";}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1101,7 +1101,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  ok(foo) => 'success', err(msg) => 'failure' } }".to_string();
+            r#"${match request {  ok(foo) => "success", err(msg) => "failure" } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1136,7 +1136,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  ok(foo) => {flag1, flag2}, err(msg) => 'failure' } }".to_string();
+            r#"${match request {  ok(foo) => {flag1, flag2}, err(msg) => "failure" } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1171,7 +1171,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  ok(foo) => (request, request), err(msg) => 'failure' } }"
+            r#"${match request {  ok(foo) => (request, request), err(msg) => "failure" } }"#
                 .to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
@@ -1207,7 +1207,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  ok(foo) => [request, request], err(msg) => 'failure' } }"
+            r#"${match request {  ok(foo) => [request, request], err(msg) => "failure" } }"#
                 .to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
@@ -1246,7 +1246,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  ok(foo) => {field: request}, err(msg) => 'failure' } }".to_string();
+            r#"${match request {  ok(foo) => {field: request}, err(msg) => "failure" } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1331,7 +1331,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  ok(foo) => if request.foo == 'bar' then 'success' else 'failed', err(msg) => 'failure' } }".to_string();
+            r#"${match request {  ok(foo) => if request.foo == "bar" then "success" else "failed", err(msg) => "failure" } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1367,7 +1367,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  foo(a,b) => 'success', bar(c) => 'failure' } }".to_string();
+            r#"${match request {  foo(a,b) => "success", bar(c) => "failure" } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1396,7 +1396,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  foo() => 'success', bar(c) => 'failure' } }".to_string();
+            r#"${match request {  foo() => "success", bar(c) => "failure" } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1435,7 +1435,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  foo(bar(v1)) => 'success', bar(c) => 'failure' } }".to_string();
+            r#"${match request {  foo(bar(v1)) => "success", bar(c) => "failure" } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1466,7 +1466,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  foo1() => ok('foo'), bar(c) => err('bar') } }".to_string();
+            r#"${match request {  foo1() => ok("foo"), bar(c) => err("bar") } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1531,7 +1531,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  name @ foo1(_) => ok('foo'), bar(c) => err('bar') } }".to_string();
+            r#"${match request {  name @ foo1(_) => ok("foo"), bar(c) => err("bar") } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1588,7 +1588,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  a @ foo(b @ _) => ok('foo'), c @ bar(d @ baz(x)) => err('bar') } }"
+            r#"${match request {  a @ foo(b @ _) => ok("foo"), c @ bar(d @ baz(x)) => err("bar") } }"#
                 .to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
@@ -1611,7 +1611,7 @@ mod if_cond_tests {
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${if 'foo' == 'bar' then 'success' else 'failed'}".to_string();
+        let expected_str = r#"${if "foo" == "bar" then "success" else "failed"}"#.to_string();
         let output_expr = from_string(expected_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1631,7 +1631,7 @@ mod if_cond_tests {
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${if request.foo == 'bar' then 'success' else 'failed'}".to_string();
+        let expected_str = r#"${if request.foo == "bar" then "success" else "failed"}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1682,7 +1682,7 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${if (request, request).foo == (request, request) then 'success' else 'failed'}"
+            r#"${if (request, request).foo == (request, request) then "success" else "failed"}"#
                 .to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
@@ -1704,7 +1704,7 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${if [request, request].foo == [request, request] then 'success' else 'failed'}"
+            r#"${if [request, request].foo == [request, request] then "success" else "failed"}"#
                 .to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
@@ -1732,7 +1732,7 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${if {field: request}.field == {field: request} then 'success' else 'failed'}"
+            r#"${if {field: request}.field == {field: request} then "success" else "failed"}"#
                 .to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
@@ -1754,7 +1754,7 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${if worker.response == {flag1, flag2} then {flag1, flag2} else 'failed'}".to_string();
+            r#"${if worker.response == {flag1, flag2} then {flag1, flag2} else "failed"}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

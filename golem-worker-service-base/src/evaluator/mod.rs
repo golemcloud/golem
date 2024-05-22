@@ -805,7 +805,7 @@ mod tests {
         .unwrap();
 
         let expr = expression::from_string(
-            "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
+            r#"${match worker.response { some(value) => "personal-id", none => "not found" }}"#,
         )
         .unwrap();
         let result = expr.evaluate_with_worker_response(&worker_response);
@@ -821,7 +821,7 @@ mod tests {
             get_worker_response(Value::Null.to_string().as_str()).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
-            "${match worker.response { some(value) => 'personal-id', none => 'not found' }}",
+            r#"${match worker.response { some(value) => "personal-id", none => "not found" }}"#,
         )
         .unwrap();
 
@@ -852,14 +852,14 @@ mod tests {
         .to_test_worker_bridge_response();
 
         let expr1 = expression::from_string(
-            "${if request.path.id == 'foo' then 'bar' else match worker.response { ok(value) => value.id, err(msg) => 'empty' }}",
+            r#"${if request.path.id == "foo" then "bar" else match worker.response { ok(value) => value.id, err(msg) => "empty" }}"#,
         )
             .unwrap();
 
         let result1 = expr1.evaluate_with(&resolved_variables_path, worker_bridge_response);
 
         let expr2 = expression::from_string(
-            "${if request.path.id == 'bar' then 'foo' else match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }}",
+            r#"${if request.path.id == "bar" then "foo" else match worker.response { ok(foo) => foo.id, err(msg) => "empty" }}"#,
 
         ).unwrap();
 
@@ -881,7 +881,7 @@ mod tests {
         let error_worker_response = error_worker_response.to_test_worker_bridge_response();
 
         let expr3 = expression::from_string(
-            "${if request.path.id == 'bar' then 'foo' else match worker.response { ok(foo) => foo.id, err(msg) => 'empty' }}",
+            r#"${if request.path.id == "bar" then "foo" else match worker.response { ok(foo) => foo.id, err(msg) => "empty" }}"#,
 
         ).unwrap();
 
@@ -923,6 +923,8 @@ mod tests {
         )
         .unwrap();
 
+        dbg!(expr.clone());
+
         let result = expr.evaluate_with_worker_response(&worker_response);
         assert_eq!(
             result,
@@ -943,7 +945,7 @@ mod tests {
         .to_test_worker_bridge_response();
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => value, err(msg) => 'not found' }}",
+            r#"${match worker.response { ok(value) => value, err(msg) => "not found" }}"#,
         )
         .unwrap();
         let result = expr.evaluate_with_worker_response(&worker_response);
@@ -968,7 +970,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => value.id, err(msg) => 'not found' }}",
+            r#"${match worker.response { ok(value) => value.id, err(msg) => "not found" }}"#,
         )
         .unwrap();
         let result =
@@ -988,7 +990,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => value.ids[0], err(msg) => 'not found' }}",
+            r#"${match worker.response { ok(value) => value.ids[0], err(msg) => "not found" }}"#,
         )
         .unwrap();
         let result =
@@ -1032,7 +1034,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => none, none => 'not found' }}",
+            r#"${match worker.response { ok(value) => none, none => "not found" }}"#,
         )
         .unwrap();
         let result =
@@ -1254,7 +1256,7 @@ mod tests {
             WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
-            "${match worker.response { Foo(some(value)) => value.id, err(msg) => 'not found' }}",
+            r#"${match worker.response { Foo(some(value)) => value.id, err(msg) => "not found" }}"#,
         )
         .unwrap();
 
@@ -1273,7 +1275,7 @@ mod tests {
             WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
-            "${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => 'not found' }}",
+            r#"${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => "not found" }}"#,
         )
             .unwrap();
         let result = expr.evaluate_with_worker_response(&worker_bridge_response);
@@ -1291,7 +1293,7 @@ mod tests {
             WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
-            "${match worker.response { Foo(ok(some(value))) => value.id, err(msg) => 'not found' }}",
+            r#"${match worker.response { Foo(ok(some(value))) => value.id, err(msg) => "not found" }}"#,
         )
             .unwrap();
         let result = expr.evaluate_with_worker_response(&worker_bridge_response);
@@ -1330,7 +1332,7 @@ mod tests {
         let worker_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
         let expr = expression::from_string(
-            "${match worker.response { Foo(none) => 'not found',  Foo(some(value)) => value.id }}",
+            r#"${match worker.response { Foo(none) => "not found",  Foo(some(value)) => value.id }}"#,
         )
         .unwrap();
         let result = expr.evaluate_with_worker_response(&worker_response);
@@ -1633,7 +1635,7 @@ mod tests {
         fn expr_to_string_round_trip_match_expr_err() {
             let worker_response = get_err_worker_response();
 
-            let expr1_string = "${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
+            let expr1_string = r#"${match worker.response { ok(x) => "foo", err(msg) => "error" }}"#;
             let expr1 = expression::from_string(expr1_string).unwrap();
             let value1 = expr1
                 .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())
@@ -1654,7 +1656,7 @@ mod tests {
             let worker_response = get_err_worker_response().to_test_worker_bridge_response();
 
             let expr1_string =
-                "append-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}";
+                r#"append-${match worker.response { ok(x) => "foo", err(msg) => "error" }}"#;
             let expr1 = expression::from_string(expr1_string).unwrap();
             let value1 = expr1
                 .evaluate_with_worker_response(&worker_response)
@@ -1675,7 +1677,8 @@ mod tests {
             let worker_response = get_err_worker_response();
 
             let expr1_string =
-                "prefix-${match worker.response { ok(x) => 'foo', err(msg) => 'error' }}-suffix";
+                r#"prefix-${match worker.response { ok(x) => "foo", err(msg) => "error" }}-suffix"#;
+
             let expr1 = expression::from_string(expr1_string).unwrap();
             let value1 = expr1
                 .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())

@@ -51,6 +51,7 @@ pub(crate) fn get_arm_pattern(tokenizer: &mut Tokenizer) -> Result<ArmPattern, P
                     match tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
                         Some(constructor_str) => {
                             let patterns = collect_arm_pattern_variables(constructor_str.as_str())?;
+                            dbg!(&patterns);
                             ArmPattern::from(constructor_name.to_string().as_str(), patterns)
                         }
                         None => Err(ParseError::Message(
@@ -91,10 +92,14 @@ fn collect_arm_pattern_variables(
         } else {
             let rest = tokenizer.rest();
             if !rest.is_empty() {
-                let arm_pattern = parse_code(rest).map(ArmPattern::from_expr).or_else(|_| {
+                dbg!(&rest);
+
+                let arm_pattern = {
                     let mut tokenizer = Tokenizer::new(rest);
                     get_arm_pattern(&mut tokenizer)
-                })?;
+                }?;
+
+                dbg!(arm_pattern.clone());
                 arm_patterns.push(arm_pattern);
             }
             break;

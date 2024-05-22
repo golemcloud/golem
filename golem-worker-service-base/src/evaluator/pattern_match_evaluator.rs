@@ -125,13 +125,26 @@ fn evaluate_arm_pattern(
                     input,
                 ),
             },
-            ConstructorTypeName::CustomConstructor(name) => handle_variant(
-                name.as_str(),
-                match_expr_result,
-                variables,
-                binding_variable,
-                input,
-            ),
+            ConstructorTypeName::CustomConstructor(name) => {
+                if variables.is_empty() {
+                    // TODO; Populate evaluation-context with type informations.
+                    // The fact that if name is actually a variant (custom constructor)
+                    // with zero parameters or enum value or a simple variable can now be available as a symbol
+                    // table in evaluation context.
+                    Ok(ArmPatternOutput::Matched(MatchResult {
+                        binding_variable: Some(BindingVariable(name.clone())),
+                        result: match_expr_result.clone(),
+                    }))
+                } else {
+                    handle_variant(
+                        name.as_str(),
+                        match_expr_result,
+                        variables,
+                        binding_variable,
+                        input,
+                    )
+                }
+            },
         },
         ArmPattern::Literal(expr) => match expr.deref() {
             Expr::Identifier(variable) => Ok(ArmPatternOutput::Matched(MatchResult {

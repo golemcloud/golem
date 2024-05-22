@@ -91,7 +91,7 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             Token::LParen => {
                 match &previous_expression {
                     Some(Expr::Identifier(name)) => {
-                        tokenizer.skip_next_non_empty_token();
+                       // tokenizer.skip_next_non_empty_token();
                         if let Some(param_str) = tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
                             let params = params::get_params(param_str.as_str())?;
                             previous_expression = Some(Expr::Call(name.to_string(), params));
@@ -269,9 +269,6 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
 
 mod internal {
     use crate::expression::Expr;
-    use crate::parser::expr::{constructor, util};
-    use crate::parser::ParseError;
-    use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
     #[derive(Default)]
     pub(crate) struct ExpressionBuilder {
@@ -1010,9 +1007,7 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "some",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("foo".to_string())),

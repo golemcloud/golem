@@ -1180,7 +1180,7 @@ else${z}
 
     #[test]
     fn test_capture_string_between_quotes() {
-        let tokens = "foo\" == 'bar'";
+        let tokens = r#"foo\" == "bar""#;
 
         let mut tokeniser = Tokenizer::new(tokens);
         let result = tokeniser.capture_string_until_and_skip_end(&Token::Quote);
