@@ -222,6 +222,8 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                 if let Some(expr) = &previous_expression {
                     multi_line_expressions.build(expr.clone());
                 }
+
+                previous_expression = None;
             }
 
             Token::LCurly => {
@@ -942,7 +944,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker.response { some(foo) => worker.response, none => 'nothing' } }")
+            .parse(r#"${match worker.response { some(foo) => worker.response, none => "nothing" } }"#)
             .unwrap();
 
         let expected = Expr::PatternMatch(
@@ -979,7 +981,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker.response { some(some(foo)) => worker.response, none => 'nothing' } }")
+            .parse(r#"${match worker.response { some(some(foo)) => worker.response, none => "nothing" } }"#)
             .unwrap();
 
         let expected = Expr::PatternMatch(
@@ -1100,7 +1102,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker.response { some(foo) => if foo > 1 then { a : 'foo' } else 0, none => { a : 'bar' } } }")
+            .parse(r#"${match worker.response { some(foo) => if foo > 1 then { a : "foo" } else 0, none => { a : "bar" } } }"#)
             .unwrap();
 
         let expected = Expr::PatternMatch(

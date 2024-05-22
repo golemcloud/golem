@@ -292,7 +292,7 @@ mod tests {
                 "function-params": ["${request}"],
                 "component-id": "00000000-0000-0000-0000-000000000000",
                 "idempotency-key": "test-key",
-                "response": "${{headers : {ContentType: 'json', user-id: 'foo'}, body: worker.response, status: 200}}"
+                "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}"
             }))]
                 .into_iter()
                 .collect(),

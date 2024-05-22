@@ -919,7 +919,7 @@ mod tests {
         .to_test_worker_bridge_response();
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => 'personal-id', err(msg) => 'not found' }}",
+            r#"${match worker.response { ok(value) => "personal-id", err(msg) => "not found" }}"#,
         )
         .unwrap();
 

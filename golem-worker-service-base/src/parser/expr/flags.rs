@@ -14,7 +14,7 @@ fn consume_flags(tokenizer: &mut Tokenizer, flags: &mut Vec<String>) -> Result<(
     while let Some(token) = tokenizer.next_non_empty_token() {
         match token {
             Token::RCurly => return Ok(()),
-            Token::MultiChar(MultiCharTokens::StringLiteral(next_str)) => {
+            Token::MultiChar(MultiCharTokens::Identifier(next_str)) => {
                 flags.push(next_str);
                 if tokenizer.peek_next_non_empty_token_is(&Token::Comma) {
                     tokenizer.skip_next_non_empty_token(); // Consume comma

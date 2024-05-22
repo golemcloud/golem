@@ -78,6 +78,7 @@ mod record_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
+        dbg!(&expr_str);
         let expected_str = "${{field: 1, field: 2}}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
@@ -1496,7 +1497,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${match request {  foo1(_) => ok('foo'), bar(c) => err('bar') } }".to_string();
+            r#"${match request {  foo1(_) => ok("foo"), bar(c) => err("bar") } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1660,7 +1661,7 @@ mod if_cond_tests {
         );
 
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${if request.foo == 'bar' then 'success' else if request.foo == 'baz' then 'success' else 'failed'}".to_string();
+        let expected_str = r#"${if request.foo == "bar" then "success" else if request.foo == "baz" then "success" else "failed"}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
