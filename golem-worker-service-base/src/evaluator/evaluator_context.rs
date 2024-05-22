@@ -1,4 +1,4 @@
-use golem_wasm_ast::analysis::{AnalysedFunction, AnalysedType};
+use golem_wasm_ast::analysis::{AnalysedFunction};
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
 use crate::evaluator::Getter;
@@ -18,12 +18,6 @@ impl EvaluationContext {
         EvaluationContext {
             variables: None,
             analysed_functions: vec![]
-        }
-    }
-
-    pub fn merge(&mut self, that: EvaluationContext) {
-        if let Some(variables) = that.variables {
-            self.merge_variables(&variables);
         }
     }
 
@@ -54,6 +48,7 @@ impl EvaluationContext {
         }
     }
 
+    #[allow(unused)]
     pub fn from_refined_worker_response(
         worker_response: &RefinedWorkerResponse,
     ) -> Self {
@@ -102,7 +97,7 @@ mod internal {
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
-    use crate::merge::Merge;
+    
     use crate::worker_binding::RequestDetails;
 
     pub(crate) fn request_type_annotated_value(request_details: &RequestDetails) -> TypeAnnotatedValue {

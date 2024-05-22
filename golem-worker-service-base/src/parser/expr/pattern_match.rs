@@ -1,5 +1,5 @@
 use crate::expression::{ArmPattern, Expr, MatchArm};
-use crate::parser::expr_parser::{parse_code, parse_text};
+use crate::parser::expr_parser::{parse_code};
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
@@ -122,7 +122,6 @@ impl ArmBody {
             if let Some((end_token, captured_string)) =
                 tokenizer.capture_string_until_either(&Token::Comma, &Token::RCurly)
             {
-                dbg!("The captured string is", captured_string.clone());
                 let arm = parse_code(captured_string.as_str())?;
 
                 let cursor = if end_token == &Token::RCurly {

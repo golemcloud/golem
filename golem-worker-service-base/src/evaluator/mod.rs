@@ -101,7 +101,7 @@ impl Evaluator for Expr {
                     .map(|v| v.into())
                     .map_err(|err| err.into()),
 
-                Expr::Call(name, params) => todo!("Call expression evaluation"),
+                Expr::Call(_name, _params) => todo!("Call expression evaluation"),
 
                 Expr::SelectIndex(expr, index) => {
                     let evaluation_result = go(expr, input)?;
@@ -488,7 +488,7 @@ mod tests {
 
         fn evaluate_with(
             &self,
-            input: &RequestDetails,
+            _input: &RequestDetails,
             worker_response: &RefinedWorkerResponse,
         ) -> Result<EvaluationResult, EvaluationError> {
             let evaluation_context =

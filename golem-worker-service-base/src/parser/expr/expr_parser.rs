@@ -1,7 +1,7 @@
 use crate::expression::Expr;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use crate::parser::expr::{code_block, constructor, flags, if_condition, let_statement, math_op, params, pattern_match, quoted, record, selection, sequence, tuple, util};
+use crate::parser::expr::{code_block, constructor, flags, if_condition, let_statement, math_op, params, pattern_match, record, selection, sequence, tuple, util};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
 
@@ -15,7 +15,6 @@ impl GolemParser<Expr> for ExprParser {
 }
 
 pub(crate) fn parse_text(input: &str) -> Result<Expr, ParseError> {
-    dbg!("Parsing text", input);
     let mut tokenizer: Tokenizer = Tokenizer::new(input);
 
     let mut expressions: Vec<Expr> = vec![];
@@ -262,7 +261,7 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
     }
 
     if let Some(prev_expr) = previous_expression {
-        multi_line_expressions.push(prev_expr);
+        multi_line_expressions.build(prev_expr);
     }
 
     Ok(multi_line_expressions.get_and_reset())
@@ -280,15 +279,7 @@ mod internal {
     }
 
     impl ExpressionBuilder {
-        pub(crate) fn last(&self) -> Option<&Expr> {
-            self.expressions.last()
-        }
-
         pub(crate) fn build(&mut self, expr: Expr) {
-            self.expressions.push(expr);
-        }
-
-        pub(crate) fn push(&mut self, expr: Expr) {
             self.expressions.push(expr);
         }
 
@@ -300,20 +291,6 @@ mod internal {
             } else {
                 Expr::Multiple(expressions)
             }
-        }
-    }
-    
-    // Returns a custom constructor if the string is followed by paranthesis
-    pub(crate) fn get_expr_from_custom_string(
-        tokenizer: &mut Tokenizer,
-        custom_string: &str,
-    ) -> Result<Expr, ParseError> {
-        match tokenizer.peek_next_token() {
-            Some(Token::LParen) => {
-                let expr = constructor::create_constructor(tokenizer, custom_string)?;
-                Ok(expr)
-            }
-            _ => Ok(util::get_primitive_expr(custom_string)),
         }
     }
 }

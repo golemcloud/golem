@@ -126,11 +126,6 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_display(Token::RCurly)
             }
-            Expr::Identifier(variable) => {
-                // self.write_display(Token::MultiChar(MultiCharTokens::InterpolationStart))?;
-                self.write_str(variable)
-                // self.write_display(Token::RCurly)
-            }
             Expr::Boolean(bool) => self.write_display(bool),
             Expr::Concat(concatenated) => {
                 self.write_display(Token::Quote)?;
