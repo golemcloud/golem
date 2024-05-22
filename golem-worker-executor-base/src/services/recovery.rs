@@ -627,6 +627,7 @@ mod tests {
     use crate::services::golem_config::GolemConfig;
     use crate::services::invocation_queue::InvocationQueue;
     use crate::services::key_value::KeyValueService;
+    use crate::services::oplog::mock::OplogServiceMock;
     use crate::services::oplog::{Oplog, OplogService};
     use crate::services::promise::PromiseService;
     use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault, TrapType};
@@ -642,7 +643,6 @@ mod tests {
         HasRunningWorkerEnumerationService, HasWasmtimeEngine, HasWorkerActivator,
         HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
     };
-    use crate::services::oplog::mock::OplogServiceMock;
     use crate::workerctx::{
         ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
         PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,

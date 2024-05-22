@@ -17,12 +17,12 @@ use crate::services::oplog::multilayer::OplogLayer;
 use crate::storage::blob::memory::InMemoryBlobStorage;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
+use crate::storage::indexed::IndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::ComponentId;
 use golem_common::redis::RedisPool;
-use log::info;
 use nonempty_collections::nev;
 use tracing::debug;
 use tracing_subscriber::layer::SubscriberExt;
@@ -198,7 +198,7 @@ async fn open_add_and_read_back() {
 
     let entries = oplog_service.read(&worker_id, start_idx, 3).await;
     assert_eq!(
-        entries.into_values().into_iter().collect::<Vec<_>>(),
+        entries.into_values().collect::<Vec<_>>(),
         vec![entry1, entry2, entry3]
     );
 }
@@ -270,7 +270,7 @@ async fn entries_with_small_payload() {
 
     let entries = oplog_service.read(&worker_id, start_idx, 4).await;
     assert_eq!(
-        entries.into_values().into_iter().collect::<Vec<_>>(),
+        entries.into_values().collect::<Vec<_>>(),
         vec![
             entry1.clone(),
             entry2.clone(),
@@ -378,7 +378,7 @@ async fn entries_with_large_payload() {
 
     let entries = oplog_service.read(&worker_id, start_idx, 4).await;
     assert_eq!(
-        entries.into_values().into_iter().collect::<Vec<_>>(),
+        entries.into_values().collect::<Vec<_>>(),
         vec![
             entry1.clone(),
             entry2.clone(),
@@ -416,20 +416,21 @@ async fn entries_with_large_payload() {
 
 #[tokio::test]
 async fn multilayer_transfers_entries_after_limit_reached_1() {
-    multilayer_transfers_entries_after_limit_reached(315, 5, 1, 3).await;
+    multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3).await;
 }
 
 #[tokio::test]
 async fn multilayer_transfers_entries_after_limit_reached_2() {
-    multilayer_transfers_entries_after_limit_reached(12, 2, 1, 0).await;
+    multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0).await;
 }
 
 #[tokio::test]
 async fn multilayer_transfers_entries_after_limit_reached_3() {
-    multilayer_transfers_entries_after_limit_reached(10000, 0, 0, 100).await;
+    multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100).await;
 }
 
 async fn multilayer_transfers_entries_after_limit_reached(
+    use_redis: bool,
     n: u64,
     expected_1: u64,
     expected_2: u64,
@@ -444,11 +445,14 @@ async fn multilayer_transfers_entries_after_limit_reached(
         );
     tracing_subscriber::registry().with(ansi_layer).init();
 
-    // let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
-    let pool = RedisPool::configured(&RedisConfig::default())
-        .await
-        .unwrap();
-    let indexed_storage = Arc::new(RedisIndexedStorage::new(pool));
+    let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = if use_redis {
+        let pool = RedisPool::configured(&RedisConfig::default())
+            .await
+            .unwrap();
+        Arc::new(RedisIndexedStorage::new(pool))
+    } else {
+        Arc::new(InMemoryIndexedStorage::new())
+    };
 
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service =

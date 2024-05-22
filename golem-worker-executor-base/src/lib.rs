@@ -50,7 +50,7 @@ use crate::services::golem_config::{
     BlobStorageConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
-use crate::services::oplog::{PrimaryOplogService, OplogService};
+use crate::services::oplog::{OplogService, PrimaryOplogService};
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};

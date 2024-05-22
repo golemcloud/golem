@@ -34,6 +34,7 @@ use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, Indexed
 #[derive(Debug)]
 pub struct CompressedOplogLayer {
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+    #[allow(clippy::type_complexity)]
     cache: DashMap<
         WorkerId,
         RwLock<
@@ -154,30 +155,26 @@ impl OplogLayer for CompressedOplogLayer {
             if let Some(fetched_last_idx) = fetched_last_idx {
                 debug!("fetched_last_idx: {fetched_last_idx}");
                 before = last_idx;
-            } else {
-                if result.is_empty() {
-                    // We allow to have a gap on the right side of the query - as we cannot guarantee
-                    // that the 'n' parameter is exactly matches the available number of elements. However,
-                    // there must not be any gaps in the middle.
-                    if let Some(idx) = self.indexed_storage.with_entity("compressed_oplog", "get_first_index", "compressed_entry")
-                        .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &Self::compressed_oplog_key(worker_id))
-                        .await
-                        .unwrap_or_else(|err| {
-                            panic!("failed to get first entry from compressed oplog for worker {worker_id} in indexed storage: {err}")
-                        }) {
-                        last_idx = min(last_idx, idx);
-                    } else {
-                        debug!("no compressed entries found for worker {worker_id}, finishing read");
-                        break;
-                    }
+            } else if result.is_empty() {
+                // We allow to have a gap on the right side of the query - as we cannot guarantee
+                // that the 'n' parameter is exactly matches the available number of elements. However,
+                // there must not be any gaps in the middle.
+                if let Some(idx) = self.indexed_storage.with_entity("compressed_oplog", "get_first_index", "compressed_entry")
+                    .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &Self::compressed_oplog_key(worker_id))
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!("failed to get first entry from compressed oplog for worker {worker_id} in indexed storage: {err}")
+                    }) {
+                    last_idx = min(last_idx, idx);
                 } else {
-                    debug!(
-                        "no more compressed entries found for worker {worker_id}, finishing read"
-                    );
-                    // We go newer towards older entries so if we didn't fetch the chunk we reached the
-                    // boundary of this layer
+                    debug!("no compressed entries found for worker {worker_id}, finishing read");
                     break;
                 }
+            } else {
+                debug!("no more compressed entries found for worker {worker_id}, finishing read");
+                // We go newer towards older entries so if we didn't fetch the chunk we reached the
+                // boundary of this layer
+                break;
             }
         }
 
@@ -185,7 +182,7 @@ impl OplogLayer for CompressedOplogLayer {
     }
 
     async fn append(&self, worker_id: &WorkerId, chunk: Vec<(OplogIndex, OplogEntry)>) {
-        if chunk.len() > 0 {
+        if !chunk.is_empty() {
             let cache = self
                 .cache
                 .entry(worker_id.clone())

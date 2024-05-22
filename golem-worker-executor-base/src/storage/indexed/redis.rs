@@ -52,6 +52,27 @@ impl RedisIndexedStorage {
                 .map_err(|e| format!("Failed to parse {id} as u64: {e}"))
         }
     }
+
+    fn process_stream(
+        &self,
+        svc_name: &'static str,
+        entity_name: &'static str,
+        items: Vec<HashMap<String, HashMap<String, Bytes>>>,
+    ) -> Result<Vec<(u64, Bytes)>, String> {
+        let mut result = Vec::new();
+        for item in items {
+            for (id, value) in item {
+                let id = Self::parse_entry_id(&id)?;
+                for (key, value) in value {
+                    if key == Self::KEY {
+                        record_redis_deserialized_size(svc_name, entity_name, value.len());
+                        result.push((id, value));
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
 }
 
 #[async_trait]
@@ -188,18 +209,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .await
             .map_err(|e| e.to_string())?;
 
-        let mut result = Vec::new();
-        for item in items {
-            for (id, value) in item {
-                let id = Self::parse_entry_id(&id)?;
-                for (key, value) in value {
-                    if key == Self::KEY {
-                        record_redis_deserialized_size(svc_name, entity_name, value.len());
-                        result.push((id, value));
-                    }
-                }
-            }
-        }
+        let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result)
     }
 
@@ -218,18 +228,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .await
             .map_err(|e| e.to_string())?;
 
-        let mut result = Vec::new();
-        for item in items {
-            for (id, value) in item {
-                let id: u64 = Self::parse_entry_id(&id)?;
-                for (key, value) in value {
-                    if key == Self::KEY {
-                        record_redis_deserialized_size(svc_name, entity_name, value.len());
-                        result.push((id, value));
-                    }
-                }
-            }
-        }
+        let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
     }
 
@@ -248,18 +247,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .await
             .map_err(|e| e.to_string())?;
 
-        let mut result = Vec::new();
-        for item in items {
-            for (id, value) in item {
-                let id: u64 = Self::parse_entry_id(&id)?;
-                for (key, value) in value {
-                    if key == Self::KEY {
-                        record_redis_deserialized_size(svc_name, entity_name, value.len());
-                        result.push((id, value));
-                    }
-                }
-            }
-        }
+        let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
     }
 
@@ -281,18 +269,7 @@ impl IndexedStorage for RedisIndexedStorage {
 
         debug!("closest: {:?}", items);
 
-        let mut result = Vec::new();
-        for item in items {
-            for (id, value) in item {
-                let id = Self::parse_entry_id(&id)?;
-                for (key, value) in value {
-                    if key == Self::KEY {
-                        record_redis_deserialized_size(svc_name, entity_name, value.len());
-                        result.push((id, value));
-                    }
-                }
-            }
-        }
+        let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
     }
 

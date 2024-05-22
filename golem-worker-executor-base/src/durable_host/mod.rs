@@ -1181,8 +1181,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         self.oplog_service
             .read(&self.worker_id, idx, n)
             .await
-            .into_iter()
-            .map(|(_, v)| v)
+            .into_values()
             .collect()
     }
 

@@ -221,7 +221,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
     ) -> Result<Option<(u64, Bytes)>, String> {
         let composite_key = Self::composite_key(namespace, key);
         if let Some(entry) = self.data.get(&composite_key) {
-            if let Some(key) = entry.keys().filter(|k| **k >= id).next() {
+            if let Some(key) = entry.keys().find(|k| **k >= id) {
                 Ok(Some((*key, Bytes::from(entry[key].clone()))))
             } else {
                 Ok(None)
@@ -250,6 +250,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
 #[cfg(test)]
 mod tests {
     use crate::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
+    use assert2::check;
 
     #[tokio::test]
     async fn closest_exact_match() {
@@ -275,7 +276,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, Some((3, 300)));
+        check!(result == Some((3, 300)));
     }
 
     #[tokio::test]
@@ -302,7 +303,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, None);
+        check!(result == None);
     }
 
     #[tokio::test]
@@ -329,6 +330,132 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, Some((40, 400)));
+        check!(result == Some((40, 400)));
+    }
+
+    #[tokio::test]
+    async fn read() {
+        let storage = super::InMemoryIndexedStorage::new();
+        let api = storage.with_entity("test", "test", "test");
+        let key = "key";
+
+        api.append(IndexedStorageNamespace::OpLog, key, 10, &100)
+            .await
+            .unwrap();
+        api.append(IndexedStorageNamespace::OpLog, key, 20, &200)
+            .await
+            .unwrap();
+        api.append(IndexedStorageNamespace::OpLog, key, 30, &300)
+            .await
+            .unwrap();
+        api.append(IndexedStorageNamespace::OpLog, key, 40, &400)
+            .await
+            .unwrap();
+
+        let result = api
+            .read(IndexedStorageNamespace::OpLog, key, 20, 40)
+            .await
+            .unwrap();
+
+        check!(result == vec![(20, 200), (30, 300), (40, 400)]);
+    }
+
+    #[tokio::test]
+    async fn read_wider() {
+        let storage = super::InMemoryIndexedStorage::new();
+        let api = storage.with_entity("test", "test", "test");
+        let key = "key";
+
+        api.append(IndexedStorageNamespace::OpLog, key, 10, &100)
+            .await
+            .unwrap();
+        api.append(IndexedStorageNamespace::OpLog, key, 20, &200)
+            .await
+            .unwrap();
+        api.append(IndexedStorageNamespace::OpLog, key, 30, &300)
+            .await
+            .unwrap();
+        api.append(IndexedStorageNamespace::OpLog, key, 40, &400)
+            .await
+            .unwrap();
+
+        let result = api
+            .read(IndexedStorageNamespace::OpLog, key, 1, 100)
+            .await
+            .unwrap();
+
+        check!(result == vec![(10, 100), (20, 200), (30, 300), (40, 400)]);
+    }
+
+    #[tokio::test]
+    async fn first() {
+        let storage = super::InMemoryIndexedStorage::new();
+        let api = storage.with_entity("test", "test", "test");
+        let key = "key";
+
+        api.append(IndexedStorageNamespace::OpLog, key, 10, &100)
+            .await
+            .unwrap();
+        api.append(IndexedStorageNamespace::OpLog, key, 20, &200)
+            .await
+            .unwrap();
+
+        let result = api
+            .first(IndexedStorageNamespace::OpLog, key)
+            .await
+            .unwrap();
+
+        check!(result == Some((10, 100)));
+    }
+
+    #[tokio::test]
+    async fn last() {
+        let storage = super::InMemoryIndexedStorage::new();
+        let api = storage.with_entity("test", "test", "test");
+        let key = "key";
+
+        api.append(IndexedStorageNamespace::OpLog, key, 10, &100)
+            .await
+            .unwrap();
+        api.append(IndexedStorageNamespace::OpLog, key, 20, &200)
+            .await
+            .unwrap();
+
+        let result = api.last(IndexedStorageNamespace::OpLog, key).await.unwrap();
+
+        check!(result == Some((20, 200)));
+    }
+
+    #[tokio::test]
+    async fn drop_prefix() {
+        let storage = super::InMemoryIndexedStorage::new();
+        let api = storage.with_entity("test", "test", "test");
+        let key = "key";
+
+        api.append(IndexedStorageNamespace::OpLog, key, 1, &100)
+            .await
+            .unwrap();
+        api.append(IndexedStorageNamespace::OpLog, key, 2, &200)
+            .await
+            .unwrap();
+        api.append(IndexedStorageNamespace::OpLog, key, 3, &300)
+            .await
+            .unwrap();
+        api.append(IndexedStorageNamespace::OpLog, key, 4, &400)
+            .await
+            .unwrap();
+
+        storage
+            .with("test", "test")
+            .drop_prefix(IndexedStorageNamespace::OpLog, key, 2)
+            .await
+            .unwrap();
+
+        let result = api
+            .read(IndexedStorageNamespace::OpLog, key, 1, 4)
+            .await
+            .unwrap();
+
+        check!(result == vec![(3, 300), (4, 400)]);
     }
 }

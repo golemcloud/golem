@@ -26,7 +26,7 @@ use std::fmt::{Debug, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::error;
+use tracing::{debug, error};
 
 /// The primary oplog service implementation, suitable for direct use (top level of a multi-layered setup).
 ///
@@ -185,7 +185,7 @@ impl OplogService for PrimaryOplogService {
                 IndexedStorageNamespace::OpLog,
                 &Self::oplog_key(worker_id),
                 idx,
-                idx + n,
+                idx + n - 1,
             )
             .await
             .unwrap_or_else(|err| {
@@ -213,6 +213,8 @@ impl PrimaryOplog {
         worker_id: WorkerId,
         account_id: AccountId,
     ) -> Self {
+        debug!("Opened oplog for worker {worker_id} with last index {last_oplog_idx}");
+
         Self {
             state: Arc::new(Mutex::new(PrimaryOplogState {
                 indexed_storage,
@@ -251,11 +253,10 @@ impl PrimaryOplogState {
         record_oplog_call("append");
 
         for entry in arrays {
-            let id = self.last_committed_idx + 1;
-
+            let oplog_idx = self.last_committed_idx + 1;
             self.indexed_storage
                 .with_entity("oplog", "append", "entry")
-                .append(IndexedStorageNamespace::OpLog, &self.key, id, entry)
+                .append(IndexedStorageNamespace::OpLog, &self.key, oplog_idx, entry)
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -264,6 +265,11 @@ impl PrimaryOplogState {
                     )
                 });
             self.last_committed_idx += 1;
+
+            debug!(
+                "Appended oplog entry with id {oplog_idx}, last committed id is {}",
+                self.last_committed_idx
+            );
         }
     }
 
@@ -275,6 +281,11 @@ impl PrimaryOplogState {
             self.commit().await;
         }
         self.last_oplog_idx += 1;
+
+        debug!(
+            "Added oplog entry, last oplog id is {}",
+            self.last_oplog_idx
+        );
     }
 
     async fn commit(&mut self) {
@@ -311,8 +322,8 @@ impl PrimaryOplogState {
             .read(
                 IndexedStorageNamespace::OpLog,
                 &self.key,
-                oplog_index + 1,
-                oplog_index + 1,
+                oplog_index,
+                oplog_index,
             )
             .await
             .unwrap_or_else(|err| {
@@ -337,8 +348,7 @@ impl PrimaryOplogState {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         record_oplog_call("drop_prefix");
 
-        let _ = self
-            .indexed_storage
+        self.indexed_storage
             .with("oplog", "drop_prefix")
             .drop_prefix(IndexedStorageNamespace::OpLog, &self.key, last_dropped_id)
             .await
