@@ -2,9 +2,9 @@ use async_trait::async_trait;
 pub use evaluator_context::*;
 use std::sync::Arc;
 mod evaluator_context;
-mod getter;
+pub(crate) mod getter;
 mod math_op_evaluator;
-mod path;
+pub(crate) mod path;
 mod pattern_match_evaluator;
 
 use golem_wasm_ast::analysis::AnalysedType;
@@ -20,7 +20,7 @@ use std::str::FromStr;
 
 use crate::expression::{Expr, InnerNumber};
 use crate::worker_bridge_execution::{
-    NoopWorkerRequestExecutor, RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor,
+    NoopWorkerRequestExecutor, RefinedWorkerResponse, WorkerRequestExecutor,
 };
 
 #[async_trait]
@@ -93,7 +93,7 @@ impl<T: AsRef<str>> From<T> for EvaluationError {
 }
 
 pub struct DefaultEvaluator {
-    worker_request_executor: Arc<dyn WorkerRequestExecutor>,
+    worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
 }
 
 impl DefaultEvaluator {
@@ -104,7 +104,7 @@ impl DefaultEvaluator {
     }
 
     pub fn from_worker_request_executor(
-        worker_request_executor: Arc<dyn WorkerRequestExecutor>,
+        worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     ) -> Self {
         DefaultEvaluator {
             worker_request_executor,
@@ -125,7 +125,7 @@ impl Evaluator for DefaultEvaluator {
         async fn go(
             expr: &Expr,
             input: &mut EvaluationContext,
-            executor: &Arc<dyn WorkerRequestExecutor>,
+            executor: &Arc<dyn WorkerRequestExecutor + Sync + Send>,
         ) -> Result<EvaluationResult, EvaluationError> {
             match expr {
                 Expr::Identifier(variable) => input
@@ -487,7 +487,6 @@ mod internal {
     use crate::primitive::GetPrimitive;
     use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor};
     use golem_common::model::{ComponentId, IdempotencyKey};
-    use golem_wasm_rpc::TypeAnnotatedValue;
     use std::str::FromStr;
     use std::sync::Arc;
 
@@ -495,7 +494,7 @@ mod internal {
         runtime: &EvaluationContext,
         function_name: &str,
         json_params: Vec<serde_json::Value>,
-        executor: &Arc<dyn WorkerRequestExecutor>,
+        executor: &Arc<dyn WorkerRequestExecutor + Sync + Send>,
     ) -> Result<RefinedWorkerResponse, EvaluationError> {
         let variables = runtime.clone().variables.ok_or(EvaluationError::Message(
             "No variables found in the context".to_string(),

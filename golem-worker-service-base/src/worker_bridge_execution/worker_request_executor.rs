@@ -9,12 +9,6 @@ use std::fmt::Display;
 
 #[async_trait]
 pub trait WorkerRequestExecutor {
-    async fn functions(
-        &self,
-        component_id: ComponentId,
-        worker_name: String,
-    ) -> Result<Vec<AnalysedFunction>, WorkerRequestExecutorError>;
-
     async fn execute(
         &self,
         resolved_worker_request: WorkerRequest,

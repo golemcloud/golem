@@ -1,16 +1,35 @@
+use async_trait::async_trait;
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
 use crate::evaluator::Getter;
 use crate::merge::Merge;
-use crate::worker_binding::RequestDetails;
+use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
 use golem_wasm_ast::analysis::AnalysedFunction;
 use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_common::model::ComponentId;
+use crate::evaluator::evaluator_context::internal::create_record;
 
 #[derive(Clone)]
 pub struct EvaluationContext {
     pub variables: Option<TypeAnnotatedValue>,
     pub analysed_functions: Vec<AnalysedFunction>,
+}
+
+#[async_trait]
+pub trait WorkerMetadataFetcher {
+    async fn get_worker_metadata(&self, component_id: &ComponentId) -> Result< Vec<AnalysedFunction>, MetadataFetchError,>;
+}
+
+pub struct MetadataFetchError(pub String);
+
+pub struct NoopWorkerMetadataFetcher;
+
+#[async_trait]
+impl WorkerMetadataFetcher for NoopWorkerMetadataFetcher {
+    async fn get_worker_metadata(&self, _component_id: &ComponentId) -> Vec<AnalysedFunction> {
+        vec![]
+    }
 }
 
 impl EvaluationContext {
@@ -19,6 +38,14 @@ impl EvaluationContext {
             variables: None,
             analysed_functions: vec![],
         }
+    }
+
+    pub fn merge(&mut self, that: &EvaluationContext) -> EvaluationContext {
+        if let Some(that_variables) = &that.variables {
+            self.merge_variables(that_variables);
+        }
+
+        self.clone()
     }
 
     pub fn merge_variables(&mut self, variables: &TypeAnnotatedValue) {
@@ -36,6 +63,16 @@ impl EvaluationContext {
         match &self.variables {
             Some(variables) => variables.get(&Path::from_key(variable_name)),
             None => Err(GetError::KeyNotFound(variable_name.to_string())),
+        }
+    }
+
+    pub fn from_worker_detail(worker_detail: &WorkerDetail) -> Self {
+        let typed_value = worker_detail.clone().to_type_annotated_value();
+        let worker_data = create_record("worker", typed_value);
+
+        EvaluationContext {
+            variables: Some(worker_data),
+            analysed_functions: vec![],
         }
     }
 

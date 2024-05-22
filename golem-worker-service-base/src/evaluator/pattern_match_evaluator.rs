@@ -27,7 +27,7 @@ struct TypeMisMatchResult {
 }
 
 pub(crate) async fn evaluate_pattern_match(
-    worker_executor: &Arc<dyn WorkerRequestExecutor>,
+    worker_executor: &Arc<dyn WorkerRequestExecutor + Sync + Send>,
     match_expr: &Expr,
     arms: &Vec<MatchArm>,
     input: &mut EvaluationContext,
