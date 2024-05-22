@@ -15,6 +15,7 @@ impl GolemParser<Expr> for ExprParser {
 }
 
 pub(crate) fn parse_text(input: &str) -> Result<Expr, ParseError> {
+    dbg!("Parsing text", input);
     let mut tokenizer: Tokenizer = Tokenizer::new(input);
 
     let mut expressions: Vec<Expr> = vec![];
@@ -65,6 +66,12 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                 previous_expression = Some(new_expr);
             }
 
+            Token::MultiChar(MultiCharTokens::BooleanLiteral(boolean)) => {
+                let new_expr = boolean.parse::<bool>().map(Expr::Boolean).map_err(|_| {
+                    ParseError::Message(format!("Invalid boolean literal {}", boolean))
+                })?;
+                previous_expression = Some(new_expr);
+            }
 
             token @ Token::MultiChar(MultiCharTokens::Some)
             | token @ Token::MultiChar(MultiCharTokens::None)
@@ -240,6 +247,7 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                     format!("Arrow at {} is not a valid expression", tokenizer.pos()).into(),
                 )
             }
+            Token::Escape => {}
             Token::RCurly => {}
             Token::RSquare => {}
             Token::RParen => {}
@@ -1011,7 +1019,7 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${match worker.response { some(foo) => 'foo', none => 'bar bar' } }")
+            .parse("${match worker.response { some(foo) => \"foo\", none => \"bar\" } }")
             .unwrap();
 
         let expected = Expr::PatternMatch(

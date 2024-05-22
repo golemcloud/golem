@@ -71,6 +71,7 @@ impl Rules {
             Token::SemiColon => vec![],
             Token::WildCard => vec![],
             Token::At => vec![],
+            Token::Escape => vec![],
             Token::MultiChar(multi) => {
                 match multi {
                     MultiCharTokens::Ok => vec![],      // hardly act as an end token
@@ -89,7 +90,8 @@ impl Rules {
                     MultiCharTokens::Let => vec![],   // hardly act as an end token
                     MultiCharTokens::NumberLiteral(_) => vec![], // hardly act as an end token
                     MultiCharTokens::StringLiteral(_) => vec![], // hardly act as an end token
-                    MultiCharTokens::Identifier(_) => vec![]
+                    MultiCharTokens::Identifier(_) => vec![],
+                    MultiCharTokens::BooleanLiteral(_) => vec![], // hardly act as an end token
                 }
             }
             Token::LCurly => vec![],
