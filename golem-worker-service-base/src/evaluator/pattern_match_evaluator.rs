@@ -1,10 +1,12 @@
 use crate::evaluator::evaluator_context::EvaluationContext;
-use crate::evaluator::Evaluator;
+use crate::evaluator::{DefaultEvaluator, Evaluator};
 use crate::evaluator::{EvaluationError, EvaluationResult};
 use crate::expression::{ArmPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, MatchArm};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::ops::Deref;
+use std::sync::Arc;
+use crate::worker_bridge_execution::WorkerRequestExecutor;
 
 struct BindingVariable(String);
 
@@ -24,12 +26,15 @@ struct TypeMisMatchResult {
     actual_type: String,
 }
 
-pub(crate) fn evaluate_pattern_match(
+pub(crate) async fn evaluate_pattern_match(
+    worker_executor: &Arc<dyn WorkerRequestExecutor>,
     match_expr: &Expr,
     arms: &Vec<MatchArm>,
     input: &mut EvaluationContext,
 ) -> Result<EvaluationResult, EvaluationError> {
-    let match_evaluated = match_expr.evaluate(input)?;
+    let evaluator = DefaultEvaluator::from_worker_request_executor(worker_executor.clone());
+
+    let match_evaluated = evaluator.evaluate(match_expr, input).await?;
 
     let mut resolved: Option<EvaluationResult> = None;
 
@@ -57,7 +62,7 @@ pub(crate) fn evaluate_pattern_match(
 
                 let arm_body = &arm.0 .1;
 
-                resolved = Some(arm_body.evaluate(input)?);
+                resolved = Some(evaluator.evaluate(arm_body, input).await?);
                 break;
             }
             ArmPatternOutput::TypeMisMatch(type_mismatch) => {
