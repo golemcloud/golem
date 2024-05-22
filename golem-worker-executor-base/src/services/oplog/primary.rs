@@ -265,11 +265,6 @@ impl PrimaryOplogState {
                     )
                 });
             self.last_committed_idx += 1;
-
-            debug!(
-                "Appended oplog entry with id {oplog_idx}, last committed id is {}",
-                self.last_committed_idx
-            );
         }
     }
 
@@ -281,11 +276,6 @@ impl PrimaryOplogState {
             self.commit().await;
         }
         self.last_oplog_idx += 1;
-
-        debug!(
-            "Added oplog entry, last oplog id is {}",
-            self.last_oplog_idx
-        );
     }
 
     async fn commit(&mut self) {

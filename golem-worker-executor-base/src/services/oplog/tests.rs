@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::*;
-use crate::services::oplog::multilayer::OplogLayer;
+use crate::services::oplog::compressed::CompressedOplogArchiveService;
+use crate::services::oplog::multilayer::OplogArchiveService;
 use crate::storage::blob::memory::InMemoryBlobStorage;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
@@ -457,10 +458,12 @@ async fn multilayer_transfers_entries_after_limit_reached(
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service =
         Arc::new(PrimaryOplogService::new(indexed_storage.clone(), blob_storage, 1, 100).await);
-    let secondary_layer: Arc<dyn OplogLayer + Send + Sync> =
-        Arc::new(CompressedOplogLayer::new(indexed_storage.clone(), 1));
-    let tertiary_layer: Arc<dyn OplogLayer + Send + Sync> =
-        Arc::new(CompressedOplogLayer::new(indexed_storage.clone(), 2));
+    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 2),
+    );
     let oplog_service = Arc::new(MultiLayerOplogService::new(
         primary_oplog_service.clone(),
         nev![secondary_layer.clone(), tertiary_layer.clone()],
@@ -502,8 +505,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.length(&worker_id).await;
-    let tertiary_length = tertiary_layer.length(&worker_id).await;
+    let secondary_length = secondary_layer.open(&worker_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&worker_id).await.length().await;
 
     let all_entries = oplog_service.read(&worker_id, 0, n + 100).await;
 

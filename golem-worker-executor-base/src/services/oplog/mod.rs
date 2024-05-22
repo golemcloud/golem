@@ -33,7 +33,7 @@ mod compressed;
 mod multilayer;
 mod primary;
 
-pub use compressed::CompressedOplogLayer;
+pub use compressed::CompressedOplogArchive;
 pub use multilayer::MultiLayerOplogService;
 pub use primary::PrimaryOplogService;
 
@@ -81,6 +81,14 @@ pub trait OplogService: Debug {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry>;
+
+    async fn read_prefix(
+        &self,
+        worker_id: &WorkerId,
+        last_idx: OplogIndex,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.read(worker_id, 1, last_idx).await
+    }
 }
 
 /// An open oplog providing write access
