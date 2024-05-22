@@ -143,7 +143,7 @@ impl Display for Token {
             Token::GreaterThan => write!(f, ">"),
             Token::LParen => write!(f, "("),
             Token::RParen => write!(f, ")"),
-            Token::NewLine => write!(f, "\n"),
+            Token::NewLine => writeln!(f),
             Token::LSquare => write!(f, "["),
             Token::RSquare => write!(f, "]"),
             Token::Dot => write!(f, "."),
