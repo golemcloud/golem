@@ -856,9 +856,7 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "some",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Identifier("foo".to_string())),
@@ -890,9 +888,7 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "ok",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Identifier("foo".to_string())),
@@ -900,9 +896,7 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "err",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "bar".to_string(),
-                        )))],
+                        vec![ArmPattern::from("bar", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Identifier("result2".to_string())),
@@ -930,9 +924,7 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "some",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::SelectField(
@@ -1043,9 +1035,7 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "some",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Cond(
@@ -1084,9 +1074,7 @@ mod tests {
                 MatchArm((
                     ArmPattern::from(
                         "some",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "foo".to_string(),
-                        )))],
+                        vec![ArmPattern::from("foo", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Cond(

@@ -149,9 +149,10 @@ mod tests {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
-        let function_params = "[\"${{x : 'y'}}\"]";
 
-        let api_specification: HttpApiDefinition = get_api_spec(
+        let function_params = r#"{x : \"y\"}"#;
+
+        let api_specification: HttpApiDefinition = get_api_spec_single_param(
             "foo/{user-id}",
             "shopping-cart-${request.path.user-id}",
             function_params,
@@ -881,7 +882,7 @@ mod tests {
 
             let function_params = "[]";
 
-            let api_specification: HttpApiDefinition = get_api_spec(
+            let api_specification: HttpApiDefinition = get_api_spec_single_param(
                 "getcartcontent/{cart-id}",
                 "shopping-cart-${request.path.cart-id}",
                 function_params,
@@ -921,11 +922,40 @@ mod tests {
         }
     }
 
+    fn get_api_spec_single_param(
+        path_pattern: &str,
+        worker_name: &str,
+        function_params: &str,
+    ) -> HttpApiDefinition {
+
+        let yaml_string = format!(
+            r#"
+          id: users-api
+          version: 0.0.1
+          routes:
+          - method: Get
+            path: {}
+            binding:
+              type: wit-worker
+              componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              workerName: '{}'
+              functionName: golem:it/api/get-cart-contents
+              functionParams: ["${{{}}}"]
+        "#,
+            path_pattern, worker_name, function_params
+        );
+
+        dbg!(&yaml_string);
+
+        serde_yaml::from_str(yaml_string.as_str()).unwrap()
+    }
+
     fn get_api_spec(
         path_pattern: &str,
         worker_name: &str,
         function_params: &str,
     ) -> HttpApiDefinition {
+
         let yaml_string = format!(
             r#"
           id: users-api
@@ -942,6 +972,8 @@ mod tests {
         "#,
             path_pattern, worker_name, function_params
         );
+
+        dbg!(&yaml_string);
 
         serde_yaml::from_str(yaml_string.as_str()).unwrap()
     }

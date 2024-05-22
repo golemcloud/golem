@@ -709,7 +709,7 @@ mod tuple_tests {
             Expr::Literal("world".to_string()),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${('hello', 'world')}".to_string();
+        let expected_str = r#"${("hello", "world")}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -798,7 +798,7 @@ mod tuple_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            "${('user-id-1-${request.user-id-1}', 'user-id-2-${request.user-id-2}')}".to_string();
+            r#"${("user-id-1-${request.user-id-1}", "user-id-2-${request.user-id-2}")}"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

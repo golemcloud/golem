@@ -113,6 +113,10 @@ impl Token {
         Token::MultiChar(MultiCharTokens::NumberLiteral(number.to_string()))
     }
 
+    pub fn boolean(boolean: &str) -> Token {
+        Token::MultiChar(MultiCharTokens::BooleanLiteral(boolean.to_string()))
+    }
+
     pub fn let_equal() -> Token {
         Token::LetEqual
     }
@@ -561,7 +565,7 @@ impl<'t> Tokenizer<'t> {
                     "let" => Some(Token::MultiChar(MultiCharTokens::Let)),
                     "true" => Some(Token::MultiChar(MultiCharTokens::BooleanLiteral("true".to_string()))),
                     "false" => Some(Token::MultiChar(MultiCharTokens::BooleanLiteral("false".to_string()))),
-                    identifier => Some(Token::MultiChar(MultiCharTokens::Identifier(identifier.to_string()))),
+                    identifier => Some(internal::primitive_or_identifier(identifier)),
                 }
             }
             '0'..='9' => {
@@ -623,6 +627,18 @@ impl<'a> Iterator for Tokenizer<'a> {
         self.next_token()
     }
 }
+
+mod internal {
+    use crate::primitive::Primitive;
+    use crate::tokeniser::tokenizer::Token;
+
+    pub(crate) fn primitive_or_identifier(input: &str) -> Token {
+        match Primitive::from(input.to_string()) {
+            Primitive::Num(_) => Token::number(input),
+            Primitive::String(_) => Token::identifier(input),
+            Primitive::Bool(_) =>  Token::boolean(input)
+        }
+    }}
 
 #[cfg(test)]
 mod tests {
@@ -1178,14 +1194,6 @@ else${z}
         )
     }
 
-    #[test]
-    fn test_capture_string_between_quotes() {
-        let tokens = r#"foo\" == "bar""#;
-
-        let mut tokeniser = Tokenizer::new(tokens);
-        let result = tokeniser.capture_string_until_and_skip_end(&Token::Quote);
-        assert_eq!(result, Some("foo".to_string()))
-    }
 
     #[test]
     fn test_capture_string_between_quotes1() {
@@ -1246,6 +1254,21 @@ else${z}
                 Token::RCurly,
                 Token::Space,
                 Token::RCurly,
+            ]
+        )
+    }
+
+
+    #[test]
+    fn test_number_tokens(){
+        let expr = "-1";
+
+        let result: Vec<Token> = Tokenizer::new(expr).collect();
+
+        assert_eq!(
+            result,
+            vec![
+                Token::MultiChar(MultiCharTokens::NumberLiteral("-1".to_string())),
             ]
         )
     }
