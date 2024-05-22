@@ -1,0 +1,22 @@
+{
+  "name": "test",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "package": "esbuild index.js --bundle --outdir=out --platform=node --external:golem:api/host@0.2.0 --format=esm",
+    "build": "jco componentize -w wit -o out/component.wasm out/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "golem-ts": "file:../lib"
+  },
+  "devDependencies": {
+    "@bytecodealliance/componentize-js": "^0.8.3",
+    "@bytecodealliance/jco": "^1.2.4",
+    "esbuild": "0.21.3"
+  }
+}

@@ -1,0 +1,6 @@
+package golem:rust;
+
+world golem-rust {
+  import golem:api/host@0.2.0;
+  
+}
