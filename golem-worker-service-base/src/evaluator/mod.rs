@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use async_trait::async_trait;
 pub use evaluator_context::*;
 mod evaluator_context;
 mod getter;
@@ -14,13 +16,16 @@ use crate::primitive::{GetPrimitive, Primitive};
 use getter::GetError;
 use getter::Getter;
 use path::Path;
+use std::str::FromStr;
 
 use crate::expression::{Expr, InnerNumber};
-use crate::worker_bridge_execution::RefinedWorkerResponse;
+use crate::worker_bridge_execution::{NoopWorkerRequestExecutor, RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor};
 
+#[async_trait]
 pub trait Evaluator {
-    fn evaluate(
+    async fn evaluate(
         &self,
+        expr: &Expr,
         evaluation_context: &EvaluationContext,
     ) -> Result<EvaluationResult, EvaluationError>;
 }
@@ -85,15 +90,36 @@ impl<T: AsRef<str>> From<T> for EvaluationError {
     }
 }
 
-impl Evaluator for Expr {
-    fn evaluate(&self, input: &EvaluationContext) -> Result<EvaluationResult, EvaluationError> {
-        let expr: &Expr = self;
+pub struct DefaultEvaluator {
+    worker_request_executor: Arc<dyn WorkerRequestExecutor>,
+}
 
+impl DefaultEvaluator {
+    pub fn noop() -> Self {
+        DefaultEvaluator {
+            worker_request_executor: Arc::new(NoopWorkerRequestExecutor),
+        }
+    }
+
+    pub fn from_worker_request_executor(worker_request_executor: Arc<dyn WorkerRequestExecutor>) -> Self {
+        DefaultEvaluator {
+            worker_request_executor,
+        }
+    }
+}
+
+
+
+#[async_trait]
+impl Evaluator for DefaultEvaluator {
+   async fn evaluate(&self, expr: &Expr, input: &EvaluationContext) -> Result<EvaluationResult, EvaluationError> {
+       let executor = self.worker_request_executor.clone();
         // An expression evaluation needs to be careful with string values
         // and therefore returns ValueTyped
-        fn go(
+        async fn go(
             expr: &Expr,
             input: &mut EvaluationContext,
+            executor: &Arc<dyn WorkerRequestExecutor>,
         ) -> Result<EvaluationResult, EvaluationError> {
             match expr {
                 Expr::Identifier(variable) => input
@@ -101,10 +127,23 @@ impl Evaluator for Expr {
                     .map(|v| v.into())
                     .map_err(|err| err.into()),
 
-                Expr::Call(_name, _params) => todo!("Call expression evaluation"),
+                Expr::Call(name, params) => {
+
+                    let function_params =
+                        params.iter().map(|expr| go(expr, input, executor)).collect::<Result<Vec<EvaluationResult>, EvaluationError>>()?;
+
+                    let function_params_typed =
+                        function_params.iter().map(|v| v.get_value().ok_or(EvaluationError::Message("Function parameter is evaluated to unit".to_string()))?).collect::<Vec<TypeAnnotatedValue>>();
+
+                    let json_params =
+                        function_params_typed.iter().map(|v| get_json_from_typed_value(v)).collect::<Vec<serde_json::Value>>();
+
+                    internal::call_worker_function(input, name, json_params, executor).await.map(|v| v.into())
+
+                }
 
                 Expr::SelectIndex(expr, index) => {
-                    let evaluation_result = go(expr, input)?;
+                    let evaluation_result = go(expr, input, executor)?;
                     evaluation_result
                         .get_value()
                         .ok_or(EvaluationError::Message(format!(
@@ -118,7 +157,7 @@ impl Evaluator for Expr {
 
                 Expr::SelectField(expr, field_name) => {
                     let evaluation_result =
-                        go(expr, input)?
+                        go(expr, input, executor)?
                             .get_value()
                             .ok_or(EvaluationError::Message(format!(
                                 "The expression is evaluated to unit and doesn't have an field {}",
@@ -132,40 +171,40 @@ impl Evaluator for Expr {
                 }
 
                 Expr::EqualTo(left, right) => {
-                    let left = go(left, input)?;
-                    let right = go(right, input)?;
+                    let left = go(left, input, executor)?;
+                    let right = go(right, input, executor)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left == right
                     })
                 }
                 Expr::GreaterThan(left, right) => {
-                    let left = go(left, input)?;
-                    let right = go(right, input)?;
+                    let left = go(left, input, executor)?;
+                    let right = go(right, input, executor)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left > right
                     })
                 }
                 Expr::GreaterThanOrEqualTo(left, right) => {
-                    let left = go(left, input)?;
-                    let right = go(right, input)?;
+                    let left = go(left, input, executor)?;
+                    let right = go(right, input, executor)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left >= right
                     })
                 }
                 Expr::LessThan(left, right) => {
-                    let left = go(left, input)?;
-                    let right = go(right, input)?;
+                    let left = go(left, input, executor)?;
+                    let right = go(right, input, executor)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left < right
                     })
                 }
                 Expr::LessThanOrEqualTo(left, right) => {
-                    let left = go(left, input)?;
-                    let right = go(right, input)?;
+                    let left = go(left, input, executor)?;
+                    let right = go(right, input, executor)?;
 
                     math_op_evaluator::compare_eval_result(&left, &right, |left, right| {
                         left <= right
@@ -185,9 +224,9 @@ impl Evaluator for Expr {
                 }
 
                 Expr::Cond(pred0, left, right) => {
-                    let pred = go(pred0, input)?;
-                    let left = go(left, input)?;
-                    let right = go(right, input)?;
+                    let pred = go(pred0, input, executor)?;
+                    let left = go(left, input, executor)?;
+                    let right = go(right, input, executor)?;
 
                     match pred {
                         EvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => {
@@ -205,7 +244,7 @@ impl Evaluator for Expr {
                 }
 
                 Expr::Let(str, expr) => {
-                    let eval_result = go(expr, input)?;
+                    let eval_result = go(expr, input, executor)?;
 
                     eval_result
                         .get_value()
@@ -227,7 +266,7 @@ impl Evaluator for Expr {
                     let mut result: Vec<EvaluationResult> = vec![];
 
                     for expr in multiple {
-                        match go(expr, input) {
+                        match go(expr, input, executor) {
                             Ok(expr_result) => {
                                 if let Some(value) = expr_result.get_value() {
                                     input.merge_variables(&value);
@@ -247,7 +286,7 @@ impl Evaluator for Expr {
                     let mut result: Vec<TypeAnnotatedValue> = vec![];
 
                     for expr in exprs {
-                        match go(expr, input) {
+                        match go(expr, input, executor) {
                             Ok(eval_result) => {
                                 if let Some(value) = eval_result.get_value() {
                                     result.push(value);
@@ -277,7 +316,7 @@ impl Evaluator for Expr {
                     let mut values: Vec<(String, TypeAnnotatedValue)> = vec![];
 
                     for (key, expr) in tuples {
-                        match go(expr, input) {
+                        match go(expr, input, executor) {
                             Ok(expr_result) => {
                                 if let Some(value) = expr_result.get_value() {
                                     values.push((key.to_string(), value));
@@ -306,7 +345,7 @@ impl Evaluator for Expr {
                     let mut result = String::new();
 
                     for expr in exprs {
-                        match go(expr, input) {
+                        match go(expr, input, executor) {
                             Ok(value) => {
                                 if let Some(primitive) = value.get_primitive() {
                                     result.push_str(primitive.to_string().as_str())
@@ -337,7 +376,7 @@ impl Evaluator for Expr {
 
                 Expr::Option(option_expr) => match option_expr {
                     Some(expr) => {
-                        let expr_result = go(expr, input)?;
+                        let expr_result = go(expr, input, executor)?;
 
                         if let Some(value) = expr_result.get_value() {
                             let analysed_type = AnalysedType::from(&value);
@@ -358,7 +397,7 @@ impl Evaluator for Expr {
 
                 Expr::Result(result_expr) => match result_expr {
                     Ok(expr) => {
-                        let expr_result = go(expr, input)?;
+                        let expr_result = go(expr, input, executor)?;
 
                         if let Some(value) = expr_result.get_value() {
                             let analysed_type = AnalysedType::from(&value);
@@ -374,7 +413,7 @@ impl Evaluator for Expr {
                         }
                     }
                     Err(expr) => {
-                        let eval_result = go(expr, input)?;
+                        let eval_result = go(expr, input, executor)?;
 
                         if let Some(value) = eval_result.get_value() {
                             let analysed_type = AnalysedType::from(&value);
@@ -395,7 +434,7 @@ impl Evaluator for Expr {
                     let mut result: Vec<TypeAnnotatedValue> = vec![];
 
                     for expr in tuple_exprs {
-                        let eval_result = go(expr, input)?;
+                        let eval_result = go(expr, input, executor.clone())?;
 
                         if let Some(value) = eval_result.get_value() {
                             result.push(value);
@@ -421,13 +460,67 @@ impl Evaluator for Expr {
         }
 
         let mut input = input.clone();
-        go(expr, &mut input)
+        go(expr, &mut input, &executor)
+    }
+}
+
+mod internal {
+    use golem_common::model::{ComponentId, IdempotencyKey};
+    use crate::evaluator::EvaluationError;
+    use crate::evaluator::path::Path;
+    use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutor};
+    use crate::evaluator::EvaluationContext;
+    use crate::evaluator::getter::Getter;
+    use crate::primitive::GetPrimitive;
+    use std::str::FromStr;
+    use std::sync::Arc;
+    use golem_wasm_rpc::TypeAnnotatedValue;
+
+    pub(crate) async fn call_worker_function(runtime: &EvaluationContext, function_name: &str, json_params: Vec<serde_json::Value>, executor: &Arc<dyn WorkerRequestExecutor>) -> Result<TypeAnnotatedValue, EvaluationError> {
+        let variables =
+            runtime.clone().variables.ok_or(EvaluationError::Message("No variables found in the context".to_string()))?;
+
+        let analysed_function =
+            runtime.analysed_functions.iter().find(|f| f.name == function_name.to_string()).ok_or(EvaluationError::Message(format!("The function {} is not found at Runtime", function_name)))?;
+
+        let worker_variables =
+            variables.get(&Path::from_key("worker")).map_err(|_| EvaluationError::Message("No worker variables found in the context".to_string()))?;
+
+        let worker_name_typed =
+            worker_variables.get(&Path::from_key("name")).map_err(|_| EvaluationError::Message("No worker name found in the context".to_string()))?;
+
+        let worker_name =
+            worker_name_typed.get_primitive().ok_or(EvaluationError::Message("Worker name is not a string".to_string()))?.as_string();
+
+        let idempotency_key =
+            worker_variables.get(&Path::from_key("idempotency-key")).ok().and_then(|v| v.get_primitive()).map(|p| IdempotencyKey::new(p.as_string()));
+
+        let component_id =
+            worker_variables.get(&Path::from_key("component_id")).map_err(|_| EvaluationError::Message("No component_id found in the context".to_string()))?;
+
+        let component_id_string =
+            component_id.get_primitive().ok_or(EvaluationError::Message("Component_id is not a string".to_string()))?.as_string();
+
+        let component_id = ComponentId::from_str(component_id_string.as_str()).map_err(|err| EvaluationError::Message(err.to_string()))?;
+
+
+        let worker_request = WorkerRequest {
+            component_id,
+            worker_name,
+            function_name: analysed_function.name.clone(),
+            function_params: json_params,
+            idempotency_key,
+        };
+
+        let worker_response = executor.execute(worker_request).await?;
+        Ok(worker_response.into())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+    use async_trait::async_trait;
 
     use golem_service_base::model::FunctionResult;
     use golem_service_base::type_inference::infer_analysed_type;
@@ -443,32 +536,39 @@ mod tests {
     use crate::evaluator::{EvaluationError, EvaluationResult, Evaluator};
     use crate::expression;
     use crate::worker_binding::RequestDetails;
-    use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerResponse};
+    use crate::worker_bridge_execution::{NoopWorkerRequestExecutor, RefinedWorkerResponse, WorkerResponse};
     use test_utils::*;
+    use crate::expression::Expr;
 
+    #[async_trait]
     trait EvaluatorTestExt {
-        fn evaluate_with_request_details(
+        async fn evaluate_with_request_details(
             &self,
+            expr: &Expr,
             input: &RequestDetails,
         ) -> Result<TypeAnnotatedValue, EvaluationError>;
-        fn evaluate_with_worker_response(
+        async fn evaluate_with_worker_response(
             &self,
+            expr: &Expr,
             worker_bridge_response: &RefinedWorkerResponse,
         ) -> Result<TypeAnnotatedValue, EvaluationError>;
 
-        fn evaluate_with(
+        async fn evaluate_with(
             &self,
+            expr: &Expr,
             input: &RequestDetails,
             worker_response: &RefinedWorkerResponse,
         ) -> Result<EvaluationResult, EvaluationError>;
     }
 
+    #[async_trait]
     impl<T: Evaluator> EvaluatorTestExt for T {
-        fn evaluate_with_request_details(
+        async fn evaluate_with_request_details(
             &self,
+            expr: &Expr,
             input: &RequestDetails,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
-            let eval_result = self.evaluate(&EvaluationContext::from_request_data(input))?;
+            let eval_result = self.evaluate(expr, &EvaluationContext::from_request_data(input))?;
             Ok(eval_result
                 .get_value()
                 .ok_or("The expression is evaluated to unit and doesn't have a value")?)
@@ -476,9 +576,10 @@ mod tests {
 
         fn evaluate_with_worker_response(
             &self,
+            expr: &Expr,
             worker_bridge_response: &RefinedWorkerResponse,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
-            let eval_result = self.evaluate(&EvaluationContext::from_refined_worker_response(
+            let eval_result = self.evaluate(expr, &EvaluationContext::from_refined_worker_response(
                 worker_bridge_response,
             ))?;
 
@@ -487,8 +588,9 @@ mod tests {
                 .ok_or("The expression is evaluated to unit and doesn't have a value")?)
         }
 
-        fn evaluate_with(
+        async fn evaluate_with(
             &self,
+            expr: &Expr,
             input: &RequestDetails,
             worker_response: &RefinedWorkerResponse,
         ) -> Result<EvaluationResult, EvaluationError> {
@@ -503,7 +605,7 @@ mod tests {
                 evaluation_context.clone()
             };
 
-            let eval_result = self.evaluate(&evaluation_context)?;
+            let eval_result = self.evaluate(expr, &evaluation_context)?;
             Ok(eval_result)
         }
     }
@@ -520,6 +622,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_request_path() {
+        let noop_executor = NoopWorkerRequestExecutor;
         let uri = Uri::builder().path_and_query("/pId/items").build().unwrap();
 
         let path_pattern = AllPathPatterns::from_str("/{id}/items").unwrap();
@@ -528,12 +631,14 @@ mod tests {
 
         let expr = expression::from_string("${request.path.id}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("pId".to_string());
-        let result = expr.evaluate_with_request_details(&resolved_variables);
+        let result = noop_executor.evaluate_with_request_details(&expr, &resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
 
     #[test]
     fn test_evaluation_with_request_body_id() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
@@ -554,12 +659,14 @@ mod tests {
 
         let expr = expression::from_string("${request.body.id}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("bId".to_string());
-        let result = expr.evaluate_with_request_details(&resolved_variables);
+        let result = noop_executor.evaluate_with_request_details(&expr, &resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
 
     #[test]
     fn test_evaluation_with_request_body_select_index() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
@@ -575,12 +682,14 @@ mod tests {
 
         let expr = expression::from_string("${request.body.titles[0]}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("bTitle1".to_string());
-        let result = expr.evaluate_with_request_details(&resolved_variables);
+        let result = noop_executor.evaluate_with_request_details(&expr, &resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
 
     #[test]
     fn test_evaluation_with_request_body_select_from_object() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let resolved_request = resolved_variables_from_request_body(
             r#"
                     {
@@ -598,12 +707,15 @@ mod tests {
             expression::from_string("${request.body.address.street} ${request.body.address.city}")
                 .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet bCity".to_string());
-        let result = expr.evaluate_with_request_details(&resolved_request);
+        let result = noop_executor.evaluate_with_request_details(&expr, &resolved_request);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
 
     #[test]
     fn test_evaluation_with_request_body_if_condition() {
+
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let mut header_map = HeaderMap::new();
         header_map.insert("authorisation", "admin".parse().unwrap());
 
@@ -620,13 +732,15 @@ mod tests {
         )
         .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::U64("200".parse().unwrap());
-        let result = expr.evaluate_with_request_details(&resolved_variables);
+        let result = noop_executor.evaluate_with_request_details(&expr, &resolved_variables);
         assert_eq!(result, Ok(expected_evaluated_result));
     }
 
     #[test]
     fn test_evaluation_with_request_body_select_unknown_field() {
-        let resolved_variables = resolved_variables_from_request_body(
+        let noop_executor = NoopWorkerRequestExecutor;
+
+        let request_details = resolved_variables_from_request_body(
             r#"
                     {
 
@@ -648,12 +762,14 @@ mod tests {
         let expected_evaluated_result =
             EvaluationError::InvalidReference(GetError::KeyNotFound("street2".to_string()));
 
-        let result = expr.evaluate_with_request_details(&resolved_variables);
+        let result = noop_executor.evaluate_with_request_details(&expr, &request_details);
         assert_eq!(result, Err(expected_evaluated_result));
     }
 
     #[test]
     fn test_evaluation_with_request_body_select_invalid_index() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
@@ -673,12 +789,14 @@ mod tests {
         let expected_evaluated_result =
             EvaluationError::InvalidReference(GetError::IndexNotFound(4));
 
-        let result = expr.evaluate_with_request_details(&resolved_variables);
+        let result = noop_executor.evaluate_with_request_details(&expr, &resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
 
     #[test]
     fn test_evaluation_with_request_body_index_of_object() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
@@ -703,12 +821,14 @@ mod tests {
             .to_string(),
         });
 
-        let result = expr.evaluate_with_request_details(&resolved_variables);
+        let result = noop_executor.evaluate_with_request_details(&expr, &resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
 
     #[test]
     fn test_evaluation_with_request_body_invalid_type_comparison() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let mut header_map = HeaderMap::new();
         header_map.insert("authorisation", "admin".parse().unwrap());
 
@@ -733,12 +853,14 @@ mod tests {
             "The predicate expression is evaluated to {} but it is not a boolean value",
             json!("admin")
         ));
-        let result = expr.evaluate_with_request_details(&resolved_variables);
+        let result = noop_executor.evaluate_with_request_details(&expr, &resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
 
     #[test]
     fn test_evaluation_with_request_body_invalid_object_reference() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
@@ -764,12 +886,14 @@ mod tests {
             found: json!("bStreet").to_string(),
         });
 
-        let result = expr.evaluate_with_request_details(&resolved_variables);
+        let result = noop_executor.evaluate_with_request_details(&expr, &resolved_variables);
         assert_eq!(result, Err(expected_evaluated_result));
     }
 
     #[test]
     fn test_evaluation_with_zero_worker_response() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let resolved_variables = resolved_variables_from_request_body(
             r#"
                     {
@@ -781,12 +905,14 @@ mod tests {
         );
 
         let expr = expression::from_string("${worker.response.address.street}").unwrap();
-        let result = expr.evaluate_with_request_details(&resolved_variables);
+        let result = noop_executor.evaluate_with_request_details(&expr, &resolved_variables);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_evaluation_with_pattern_match_optional() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let value: Value = serde_json::from_str(
             r#"
                         {
@@ -817,7 +943,7 @@ mod tests {
             r#"${match worker.response { some(value) => "personal-id", none => "not found" }}"#,
         )
         .unwrap();
-        let result = expr.evaluate_with_worker_response(&worker_response);
+        let result = noop_executor.evaluate_with_worker_response(&expr, &worker_response);
         assert_eq!(
             result,
             Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
@@ -826,6 +952,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_none() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let worker_response =
             get_worker_response(Value::Null.to_string().as_str()).to_test_worker_bridge_response();
 
@@ -834,12 +962,14 @@ mod tests {
         )
         .unwrap();
 
-        let result = expr.evaluate_with_worker_response(&worker_response);
+        let result = noop_executor.evaluate_with_worker_response(&expr, &worker_response);
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("not found".to_string())));
     }
 
     #[test]
     fn test_evaluation_with_pattern_match_with_other_exprs() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let uri = Uri::builder()
             .path_and_query("/shopping-cart/foo")
             .build()
@@ -865,14 +995,14 @@ mod tests {
         )
             .unwrap();
 
-        let result1 = expr1.evaluate_with(&resolved_variables_path, worker_bridge_response);
+        let result1 = noop_executor.evaluate_with(&expr1, &resolved_variables_path, worker_bridge_response);
 
         let expr2 = expression::from_string(
             r#"${if request.path.id == "bar" then "foo" else match worker.response { ok(foo) => foo.id, err(msg) => "empty" }}"#,
 
         ).unwrap();
 
-        let result2 = expr2.evaluate_with(&resolved_variables_path, worker_bridge_response);
+        let result2 = noop_executor.evaluate_with(&expr2, &resolved_variables_path, worker_bridge_response);
 
         let error_worker_response = get_worker_response(
             r#"
@@ -894,7 +1024,8 @@ mod tests {
 
         ).unwrap();
 
-        let result3 = expr3.evaluate_with(
+        let result3 = noop_executor.evaluate_with(
+            &expr3,
             &error_response_with_request_variables,
             &error_worker_response,
         );
@@ -917,6 +1048,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let worker_response = get_worker_response(
             r#"
                     {
@@ -932,7 +1065,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = expr.evaluate_with_worker_response(&worker_response);
+        let result = noop_executor.evaluate_with_worker_response(&expr, &worker_response);
         assert_eq!(
             result,
             Ok(TypeAnnotatedValue::Str("personal-id".to_string()))
@@ -941,6 +1074,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_use_success_variable() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let worker_response = get_worker_response(
             r#"
                     {
@@ -955,7 +1090,7 @@ mod tests {
             r#"${match worker.response { ok(value) => value, err(msg) => "not found" }}"#,
         )
         .unwrap();
-        let result = expr.evaluate_with_worker_response(&worker_response);
+        let result = noop_executor.evaluate_with_worker_response(&expr, &worker_response);
 
         let expected_result = TypeAnnotatedValue::Record {
             value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
@@ -967,6 +1102,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_select_field() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let worker_response = get_worker_response(
             r#"
                     {
@@ -981,12 +1118,14 @@ mod tests {
         )
         .unwrap();
         let result =
-            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
+            noop_executor.evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response());
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("pId".to_string())));
     }
 
     #[test]
     fn test_evaluation_with_pattern_match_with_select_from_array() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let worker_response = get_worker_response(
             r#"
                     {
@@ -1001,12 +1140,14 @@ mod tests {
         )
         .unwrap();
         let result =
-            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
+            noop_executor.evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response());
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("id1".to_string())));
     }
 
     #[test]
     fn test_evaluation_with_pattern_match_with_some_construction() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let worker_response = get_worker_response(
             r#"
                     {
@@ -1021,7 +1162,7 @@ mod tests {
         )
         .unwrap();
         let result =
-            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
+            noop_executor.evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response());
         let expected = TypeAnnotatedValue::Option {
             value: Some(Box::new(TypeAnnotatedValue::Str("id1".to_string()))),
             typ: AnalysedType::Str,
@@ -1031,6 +1172,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_none_construction() {
+        let noop_executor = NoopWorkerRequestExecutor;
         let worker_response = get_worker_response(
             r#"
                     {
@@ -1045,7 +1187,7 @@ mod tests {
         )
         .unwrap();
         let result =
-            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
+            noop_executor.evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response());
         let expected = TypeAnnotatedValue::Option {
             value: None,
             typ: AnalysedType::Str,
@@ -1055,6 +1197,7 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_nested_construction() {
+        let noop_executor = NoopWorkerRequestExecutor;
         let worker_response = get_worker_response(
             r#"
                     {
@@ -1069,7 +1212,7 @@ mod tests {
         )
         .unwrap();
         let result =
-            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
+            noop_executor.evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response());
         let expected = TypeAnnotatedValue::Option {
             value: Some(Box::new(TypeAnnotatedValue::Option {
                 typ: AnalysedType::Str,
@@ -1082,6 +1225,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_ok_construction() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let worker_response = get_worker_response(
             r#"
                     {
@@ -1096,7 +1241,7 @@ mod tests {
         )
         .unwrap();
         let result =
-            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
+            noop_executor.evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response());
         let expected = TypeAnnotatedValue::Result {
             value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
             ok: Some(Box::new(AnalysedType::U64)),
@@ -1107,6 +1252,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_err_construction() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let worker_response = get_worker_response(
             r#"
                     {
@@ -1121,7 +1268,7 @@ mod tests {
         )
         .unwrap();
         let result =
-            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
+            noop_executor.evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response());
 
         let expected = TypeAnnotatedValue::Result {
             value: Err(Some(Box::new(TypeAnnotatedValue::U64(2)))),
@@ -1133,6 +1280,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_wild_card() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let worker_response = get_worker_response(
             r#"
                     {
@@ -1147,7 +1296,7 @@ mod tests {
         )
         .unwrap();
         let result =
-            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
+            noop_executor.evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response());
 
         let expected = TypeAnnotatedValue::Result {
             value: Err(Some(Box::new(TypeAnnotatedValue::U64(2)))),
@@ -1159,6 +1308,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_with_name_alias() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let worker_response = get_worker_response(
             r#"
                     {
@@ -1174,8 +1325,8 @@ mod tests {
             "${match worker.response { a @ ok(b @ _) => ok(1), c @ err(d @ ok(e)) => {p : c, q: d, r: e.id} }}",
         )
             .unwrap();
-        let result = expr
-            .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())
+        let result = noop_executor
+            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .unwrap();
 
         let output_json = golem_wasm_rpc::json::get_json_from_typed_value(&result);
@@ -1200,6 +1351,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_variant_positive() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let worker_response = WorkerResponse::new(
             TypeAnnotatedValue::Variant {
                 case_name: "Foo".to_string(),
@@ -1222,7 +1375,7 @@ mod tests {
             expression::from_string("${match worker.response { Foo(value) => ok(value.id) }}")
                 .unwrap();
         let result =
-            expr.evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response());
+            noop_executor.evaluate_with_worker_response(&expr,  &worker_response.to_test_worker_bridge_response());
 
         let expected = TypeAnnotatedValue::Result {
             value: Ok(Some(Box::new(TypeAnnotatedValue::Str("pId".to_string())))),
@@ -1234,6 +1387,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_variant_nested_with_some() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let output = TypeAnnotatedValue::Variant {
             case_name: "Foo".to_string(),
             case_value: Some(Box::new(TypeAnnotatedValue::Option {
@@ -1267,7 +1422,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = expr.evaluate_with_worker_response(&worker_bridge_response);
+        let result = noop_executor.evaluate_with_worker_response(&expr, &worker_bridge_response);
 
         let expected = TypeAnnotatedValue::Str("pId".to_string());
 
@@ -1276,6 +1431,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_variant_nested_with_some_result() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let output = get_complex_variant_typed_value();
 
         let worker_bridge_response =
@@ -1285,7 +1442,7 @@ mod tests {
             r#"${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => "not found" }}"#,
         )
             .unwrap();
-        let result = expr.evaluate_with_worker_response(&worker_bridge_response);
+        let result = noop_executor.evaluate_with_worker_response(&expr, &worker_bridge_response);
 
         let expected = TypeAnnotatedValue::Str("pId".to_string());
 
@@ -1294,6 +1451,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_variant_nested_type_mismatch() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let output = get_complex_variant_typed_value();
 
         let worker_bridge_response =
@@ -1303,7 +1462,7 @@ mod tests {
             r#"${match worker.response { Foo(ok(some(value))) => value.id, err(msg) => "not found" }}"#,
         )
             .unwrap();
-        let result = expr.evaluate_with_worker_response(&worker_bridge_response);
+        let result = noop_executor.evaluate_with_worker_response(&expr, &worker_bridge_response);
 
         assert!(result
             .err()
@@ -1314,6 +1473,8 @@ mod tests {
 
     #[test]
     fn test_evaluation_with_pattern_match_variant_nested_with_none() {
+        let noop_executor = NoopWorkerRequestExecutor;
+
         let output = TypeAnnotatedValue::Variant {
             case_name: "Foo".to_string(),
             case_value: Some(Box::new(TypeAnnotatedValue::Option {
@@ -1342,7 +1503,7 @@ mod tests {
             r#"${match worker.response { Foo(none) => "not found",  Foo(some(value)) => value.id }}"#,
         )
         .unwrap();
-        let result = expr.evaluate_with_worker_response(&worker_response);
+        let result = noop_executor.evaluate_with_worker_response(&expr, &worker_response);
 
         let expected = TypeAnnotatedValue::Str("not found".to_string());
 
@@ -1512,7 +1673,7 @@ mod tests {
         use crate::expression;
         use crate::http::router::RouterPattern;
         use crate::worker_binding::RequestDetails;
-        use crate::worker_bridge_execution::WorkerResponse;
+        use crate::worker_bridge_execution::{NoopWorkerRequestExecutor, WorkerResponse};
         use golem_service_base::type_inference::infer_analysed_type;
         use golem_wasm_ast::analysis::AnalysedType;
         use golem_wasm_rpc::json::get_typed_value_from_json;
@@ -1640,19 +1801,21 @@ mod tests {
 
         #[test]
         fn expr_to_string_round_trip_match_expr_err() {
+            let noop_executor = NoopWorkerRequestExecutor;
+
             let worker_response = get_err_worker_response();
 
             let expr1_string =
                 r#"${match worker.response { ok(x) => "foo", err(msg) => "error" }}"#;
             let expr1 = expression::from_string(expr1_string).unwrap();
-            let value1 = expr1
-                .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())
+            let value1 = noop_executor
+                .evaluate_with_worker_response(&expr1, &worker_response.to_test_worker_bridge_response())
                 .unwrap();
 
             let expr2_string = expr1.to_string();
             let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
-            let value2 = expr2
-                .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())
+            let value2 = noop_executor
+                .evaluate_with_worker_response(&expr2, &worker_response.to_test_worker_bridge_response())
                 .unwrap();
 
             let expected = TypeAnnotatedValue::Str("error".to_string());
@@ -1661,19 +1824,21 @@ mod tests {
 
         #[test]
         fn expr_to_string_round_trip_match_expr_append() {
+            let noop_executor = NoopWorkerRequestExecutor;
+
             let worker_response = get_err_worker_response().to_test_worker_bridge_response();
 
             let expr1_string =
                 r#"append-${match worker.response { ok(x) => "foo", err(msg) => "error" }}"#;
             let expr1 = expression::from_string(expr1_string).unwrap();
-            let value1 = expr1
-                .evaluate_with_worker_response(&worker_response)
+            let value1 = noop_executor
+                .evaluate_with_worker_response(&expr1, &worker_response)
                 .unwrap();
 
             let expr2_string = expr1.to_string();
             let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
-            let value2 = expr2
-                .evaluate_with_worker_response(&worker_response)
+            let value2 = noop_executor
+                .evaluate_with_worker_response(&expr2, &worker_response)
                 .unwrap();
 
             let expected = TypeAnnotatedValue::Str("append-error".to_string());
@@ -1682,20 +1847,22 @@ mod tests {
 
         #[test]
         fn expr_to_string_round_trip_match_expr_append_suffix() {
+            let noop_executor = NoopWorkerRequestExecutor;
+
             let worker_response = get_err_worker_response();
 
             let expr1_string =
                 r#"prefix-${match worker.response { ok(x) => "foo", err(msg) => "error" }}-suffix"#;
 
             let expr1 = expression::from_string(expr1_string).unwrap();
-            let value1 = expr1
-                .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())
+            let value1 = noop_executor
+                .evaluate_with_worker_response(&expr1, &worker_response.to_test_worker_bridge_response())
                 .unwrap();
 
             let expr2_string = expr1.to_string();
             let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
-            let value2 = expr2
-                .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())
+            let value2 = noop_executor
+                .evaluate_with_worker_response(&expr2, &worker_response.to_test_worker_bridge_response())
                 .unwrap();
 
             let expected = TypeAnnotatedValue::Str("prefix-error-suffix".to_string());

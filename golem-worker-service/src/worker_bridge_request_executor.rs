@@ -34,6 +34,7 @@ impl WorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
     }
 }
 
+
 mod internal {
     use crate::empty_worker_metadata;
     use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;

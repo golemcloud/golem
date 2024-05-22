@@ -89,7 +89,7 @@ impl CustomHttpRequestApi {
             }
         };
 
-        match api_request.resolve(&api_definition) {
+        match api_request.resolve(&api_definition).await {
             Ok(resolved_worker_request) => {
                 resolved_worker_request
                     .execute_with::<poem::Response>(&self.worker_request_executor_service)

@@ -1,5 +1,5 @@
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
-use crate::evaluator::EvaluationContext;
+use crate::evaluator::{DefaultEvaluator, EvaluationContext};
 use crate::evaluator::Evaluator;
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
@@ -11,19 +11,19 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
+use async_trait::async_trait;
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::to_response::ToResponse;
-use crate::worker_bridge_execution::{
-    WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
-};
+use crate::worker_bridge_execution::{NoopWorkerRequestExecutor, WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse};
 
 // For any input request type, there should be a way to resolve the
 // worker binding component, which is then used to form the worker request
 // resolved binding is always kept along with the request as binding may refer
 // to request details
+#[async_trait]
 pub trait WorkerBindingResolver<ApiDefinition> {
-    fn resolve(
+    async fn resolve(
         &self,
         api_specification: &ApiDefinition,
     ) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError>;
@@ -78,11 +78,14 @@ impl ResolvedWorkerBinding {
     }
 }
 
+#[async_trait]
 impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
-    fn resolve(
+    async fn resolve(
         &self,
         api_definition: &HttpApiDefinition,
     ) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError> {
+        let default_evaluator = DefaultEvaluator::noop();
+
         let api_request = self;
         let router = router::build(api_definition.routes.clone());
         let path: Vec<&str> = RouterPattern::split(&api_request.input_path.base_path).collect();
@@ -116,9 +119,9 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 
         let request_evaluation_context = EvaluationContext::from_request_data(&request_details);
 
-        let worker_name: String = binding
-            .worker_name
-            .evaluate(&request_evaluation_context)
+        let worker_name: String = default_evaluator
+            .evaluate(&binding.worker_name, &request_evaluation_context)
+            .await
             .map_err(|err| err.to_string())?
             .get_value()
             .ok_or("Failed to evaluate worker name expression".to_string())?
@@ -133,8 +136,9 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
         let mut function_params: Vec<Value> = vec![];
 
         for expr in &binding.function_params {
-            let type_annotated_value = expr
-                .evaluate(&request_evaluation_context)
+            let type_annotated_value = default_evaluator
+                .evaluate(&expr, &request_evaluation_context)
+                .await
                 .map_err(|err| err.to_string())?
                 .get_value()
                 .ok_or("Failed to evaluate Route expression".to_string())?;
@@ -145,8 +149,9 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
         }
 
         let idempotency_key = if let Some(expr) = &binding.idempotency_key {
-            let idempotency_key_value = expr
-                .evaluate(&request_evaluation_context)
+            let idempotency_key_value = default_evaluator
+                .evaluate(&expr, &request_evaluation_context)
+                .await
                 .map_err(|err| err.to_string())?;
 
             let idempotency_key = idempotency_key_value
