@@ -300,7 +300,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expression::{ArmPattern, MatchArm};
+    use crate::expression::{ArmPattern, InnerNumber, MatchArm};
 
     #[test]
     fn expr_parser_without_vars() {
@@ -1131,6 +1131,45 @@ mod tests {
             ),
             Expr::Identifier("x".to_string()),
         ]);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_function_call() {
+        let expression_parser = ExprParser {};
+
+        let result = expression_parser
+            .parse("${foo(1, 2, request.user-id)}")
+            .unwrap();
+
+        let expected = Expr::Call(
+            "foo".to_string(),
+            vec![
+                Expr::Number(InnerNumber::UnsignedInteger(1)),
+                Expr::Number(InnerNumber::UnsignedInteger(2)),
+                Expr::SelectField(
+                    Box::new(Expr::Identifier("request".to_string())),
+                    "user-id".to_string(),
+                ),
+            ],
+        );
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_function_call_with_zero_params() {
+        let expression_parser = ExprParser {};
+
+        let result = expression_parser
+            .parse("${foo()}")
+            .unwrap();
+
+        let expected = Expr::Call(
+            "foo".to_string(),
+            vec![],
+        );
 
         assert_eq!(result, expected);
     }
