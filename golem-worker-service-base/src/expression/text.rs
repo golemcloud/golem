@@ -697,7 +697,7 @@ mod sequence_tests {
             Expr::Result(Err(Box::new(Expr::Literal("msg".to_string())))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${[ok('foo'), err('msg')]}".to_string();
+        let expected_str = "${[ok(\"foo\"), err(\"msg\")]}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

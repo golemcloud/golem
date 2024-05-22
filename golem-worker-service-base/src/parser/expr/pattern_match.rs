@@ -123,7 +123,7 @@ impl ArmBody {
                 tokenizer.capture_string_until_either(&Token::Comma, &Token::RCurly)
             {
                 dbg!("The captured string is", captured_string.clone());
-                let arm = parse_text(captured_string.as_str())?;
+                let arm = parse_code(captured_string.as_str())?;
 
                 let cursor = if end_token == &Token::RCurly {
                     Cursor::Break
