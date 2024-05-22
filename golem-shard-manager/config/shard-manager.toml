@@ -1,13 +1,13 @@
 enable_tracing_console = false
 enable_json_log = false
 number_of_shards = 1024
-http_port = 8080
+http_port = 8081
 
 rebalance_threshold = 0.1
 
 [redis]
-# host
-# port
+host = "localhost"
+port = 6380
 database = 0
 tracing = false
 pool_size = 8

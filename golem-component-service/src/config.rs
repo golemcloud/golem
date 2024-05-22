@@ -107,27 +107,6 @@ impl Default for ComponentServiceConfig {
 mod tests {
     #[test]
     pub fn config_is_loadable() {
-        std::env::set_var("GOLEM__DB__TYPE", "Postgres");
-        std::env::set_var("GOLEM__DB__CONFIG__USERNAME", "postgres");
-        std::env::set_var("GOLEM__DB__CONFIG__PASSWORD", "postgres");
-        std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "localhost");
-        std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
-
-        std::env::set_var("GOLEM__COMPONENT_STORE__TYPE", "Local");
-        std::env::set_var(
-            "GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH",
-            "component_store",
-        );
-        std::env::set_var("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", "");
-
-        std::env::set_var("GOLEM__COMPILATION__TYPE", "Enabled");
-        std::env::set_var("GOLEM__COMPILATION__CONFIG__HOST", "localhost");
-        std::env::set_var("GOLEM__COMPILATION__CONFIG__PORT", "1234");
-
-        std::env::set_var("GOLEM__HTTP_PORT", "9001");
-        std::env::set_var("GOLEM__GRPC_PORT", "9002");
-
-        // The rest can be loaded from the toml
         let _ = super::ComponentServiceConfig::new();
     }
 }

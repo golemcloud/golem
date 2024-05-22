@@ -46,6 +46,7 @@ pub trait TestDependencies {
     fn kill_all(&self) {
         self.worker_executor_cluster().kill_all();
         self.worker_service().kill();
+        self.component_compilation_service().kill();
         self.component_service().kill();
         self.shard_manager().kill();
         self.rdb().kill();

@@ -4,12 +4,15 @@ enable_json_log = false
 grpc_address = "0.0.0.0"
 http_address = "0.0.0.0"
 
+http_port = 8082
+port = 9000
+
 [key_value_storage]
 type = "Redis"
 
 [key_value_storage.config]
-# host
-# port
+host = "localhost"
+port = 6380
 database = 0
 tracing = false
 pool_size = 8
@@ -25,9 +28,12 @@ multiplier = 2
 type = "KVStoreRedis"
 
 [blob_storage]
-type = "S3"
+type = "LocalFileSystem"
 
 [blob_storage.config]
+root = "../data/blob_storage"
+
+# S3 defaults
 # region
 # aws_endpoint_url
 object_prefix = ""
@@ -69,10 +75,10 @@ time_to_idle = "12h"
 type = "Grpc"
 
 [component_service.config]
-max_component_size = 52428800 # 50 Mb
-# host
-# port
-# access_token
+max_component_size = 52428800                         # 50 Mb
+host = "localhost"
+port = 9090
+access_token = "2A354594-7A63-4091-A46B-CC58D379F677"
 
 [component_service.config.retries]
 max_attempts = 3
@@ -88,8 +94,8 @@ type = "Enabled"
 type = "Grpc"
 
 [shard_manager_service.config]
-# host
-# port
+host = "localhost"
+port = 9002
 
 [shard_manager_service.config.retries]
 max_attempts = 5
@@ -112,6 +118,6 @@ pending_key_retention = "1m"
 confirm_queue_capacity = 1024
 
 [public_worker_api]
-# host
-# port
-# access_token
+host = "localhost"
+port = 9007
+access_token = "2A354594-7A63-4091-A46B-CC58D379F677"
