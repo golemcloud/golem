@@ -303,17 +303,23 @@ mod internal {
                 write_constructor(pattern, writer)
             }
             ArmPattern::Constructor(constructor_type, variables) => {
-                writer.write_display(constructor_type)?;
-                writer.write_str("(")?;
+                if !variables.is_empty() {
+                    writer.write_display(constructor_type)?;
 
-                for (idx, pattern) in variables.iter().enumerate() {
-                    if idx != 0 {
-                        writer.write_str(",")?;
+                    writer.write_str("(")?;
+
+                    for (idx, pattern) in variables.iter().enumerate() {
+                        if idx != 0 {
+                            writer.write_str(",")?;
+                        }
+                        write_constructor(pattern, writer)?;
                     }
-                    write_constructor(pattern, writer)?;
-                }
 
-                writer.write_str(")")
+                    writer.write_str(")")
+                } else {
+                    writer.write_display(constructor_type)
+
+                }
             }
             ArmPattern::Literal(expr) => match *expr.clone() {
                 Expr::Identifier(s) => writer.write_str(s),

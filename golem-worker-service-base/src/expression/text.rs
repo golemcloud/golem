@@ -1345,8 +1345,8 @@ mod match_tests {
                     ArmPattern::from(
                         "foo",
                         vec![
-                            ArmPattern::Literal(Box::new(Expr::Identifier("a".to_string()))),
-                            ArmPattern::Literal(Box::new(Expr::Identifier("b".to_string()))),
+                            ArmPattern::from("a", vec![]).unwrap(),
+                            ArmPattern::from("b", vec![]).unwrap(),
                         ],
                     )
                     .unwrap(),
@@ -1355,9 +1355,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "bar",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "c".to_string(),
-                        )))],
+                        vec![ArmPattern::from("c", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
@@ -1384,9 +1382,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "bar",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "c".to_string(),
-                        )))],
+                        vec![ArmPattern::from("c", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
@@ -1396,7 +1392,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            r#"${match request {  foo() => "success", bar(c) => "failure" } }"#.to_string();
+            r#"${match request {  foo => "success", bar(c) => "failure" } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1411,9 +1407,7 @@ mod match_tests {
                         "foo",
                         vec![ArmPattern::from(
                             "bar",
-                            vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                "v1".to_string(),
-                            )))],
+                            vec![ArmPattern::from("v1", vec![]).unwrap()],
                         )
                         .unwrap()],
                     )
@@ -1423,9 +1417,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "bar",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "c".to_string(),
-                        )))],
+                        vec![ArmPattern::from("c", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Literal("failure".to_string())),
@@ -1452,9 +1444,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "bar",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "c".to_string(),
-                        )))],
+                        vec![ArmPattern::from("c", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Result(Err(Box::new(Expr::Literal(
@@ -1466,7 +1456,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            r#"${match request {  foo1() => ok("foo"), bar(c) => err("bar") } }"#.to_string();
+            r#"${match request {  foo1 => ok("foo"), bar(c) => err("bar") } }"#.to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1483,9 +1473,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from(
                         "bar",
-                        vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                            "c".to_string(),
-                        )))],
+                        vec![ArmPattern::from("c", vec![]).unwrap()],
                     )
                     .unwrap(),
                     Box::new(Expr::Result(Err(Box::new(Expr::Literal(

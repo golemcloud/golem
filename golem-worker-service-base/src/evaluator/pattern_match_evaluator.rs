@@ -125,7 +125,7 @@ fn evaluate_arm_pattern(
                     input,
                 ),
             },
-            ConstructorTypeName::CustomConstructor(name) => {
+            ConstructorTypeName::Identifier(name) => {
                 if variables.is_empty() {
                     // TODO; Populate evaluation-context with type informations.
                     // The fact that if name is actually a variant (custom constructor)

@@ -488,11 +488,21 @@ mod tests {
 
         fn evaluate_with(
             &self,
-            _input: &RequestDetails,
+            input: &RequestDetails,
             worker_response: &RefinedWorkerResponse,
         ) -> Result<EvaluationResult, EvaluationError> {
-            let evaluation_context =
+            let mut evaluation_context =
+                EvaluationContext::from_request_data(input);
+
+            let response_context =
                 EvaluationContext::from_refined_worker_response(worker_response);
+
+            let merged = if let Some(variables) = response_context.variables {
+                evaluation_context.merge_variables(&variables);
+                evaluation_context.clone()
+            } else {
+                evaluation_context.clone()
+            };
 
             let eval_result = self.evaluate(&evaluation_context)?;
             Ok(eval_result)
@@ -607,7 +617,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${if request.headers.authorisation == 'admin' then 200 else 401}",
+            r#"${if request.headers.authorisation == "admin" then 200 else 401}"#,
         )
         .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::U64("200".parse().unwrap());
@@ -923,8 +933,6 @@ mod tests {
         )
         .unwrap();
 
-        dbg!(expr.clone());
-
         let result = expr.evaluate_with_worker_response(&worker_response);
         assert_eq!(
             result,
@@ -1010,7 +1018,7 @@ mod tests {
         );
 
         let expr = expression::from_string(
-            "${match worker.response { ok(value) => some(value.ids[0]), err(msg) => 'not found' }}",
+            r#"${match worker.response { ok(value) => some(value.ids[0]), err(msg) => "not found" }}"#,
         )
         .unwrap();
         let result =

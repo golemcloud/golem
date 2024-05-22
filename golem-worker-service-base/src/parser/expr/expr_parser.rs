@@ -969,9 +969,7 @@ mod tests {
                         "some",
                         vec![ArmPattern::from(
                             "some",
-                            vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                "foo".to_string(),
-                            )))],
+                            vec![ArmPattern::from("foo", vec![]).unwrap()],
                         )
                         .unwrap()],
                     )
