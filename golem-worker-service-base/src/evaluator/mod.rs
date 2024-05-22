@@ -478,8 +478,9 @@ mod tests {
             &self,
             worker_bridge_response: &RefinedWorkerResponse,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
-            let eval_result =
-                self.evaluate(&EvaluationContext::from_refined_worker_response(worker_bridge_response))?;
+            let eval_result = self.evaluate(&EvaluationContext::from_refined_worker_response(
+                worker_bridge_response,
+            ))?;
 
             Ok(eval_result
                 .get_value()
@@ -491,13 +492,11 @@ mod tests {
             input: &RequestDetails,
             worker_response: &RefinedWorkerResponse,
         ) -> Result<EvaluationResult, EvaluationError> {
-            let mut evaluation_context =
-                EvaluationContext::from_request_data(input);
+            let mut evaluation_context = EvaluationContext::from_request_data(input);
 
-            let response_context =
-                EvaluationContext::from_refined_worker_response(worker_response);
+            let response_context = EvaluationContext::from_refined_worker_response(worker_response);
 
-             if let Some(variables) = response_context.variables {
+            if let Some(variables) = response_context.variables {
                 evaluation_context.merge_variables(&variables);
                 evaluation_context.clone()
             } else {
@@ -1643,7 +1642,8 @@ mod tests {
         fn expr_to_string_round_trip_match_expr_err() {
             let worker_response = get_err_worker_response();
 
-            let expr1_string = r#"${match worker.response { ok(x) => "foo", err(msg) => "error" }}"#;
+            let expr1_string =
+                r#"${match worker.response { ok(x) => "foo", err(msg) => "error" }}"#;
             let expr1 = expression::from_string(expr1_string).unwrap();
             let value1 = expr1
                 .evaluate_with_worker_response(&worker_response.to_test_worker_bridge_response())

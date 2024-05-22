@@ -144,7 +144,7 @@ fn evaluate_arm_pattern(
                         input,
                     )
                 }
-            },
+            }
         },
         ArmPattern::Literal(expr) => match expr.deref() {
             Expr::Identifier(variable) => Ok(ArmPatternOutput::Matched(MatchResult {

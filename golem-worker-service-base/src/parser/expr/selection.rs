@@ -7,10 +7,7 @@ pub fn get_select_index(
     selection_on: &Expr,
 ) -> Result<Expr, ParseError> {
     match selection_on {
-        Expr::Sequence(_)
-        | Expr::Record(_)
-        | Expr::Identifier(_)
-        | Expr::SelectField(_, _) => {
+        Expr::Sequence(_) | Expr::Record(_) | Expr::Identifier(_) | Expr::SelectField(_, _) => {
             //
             let optional_possible_index = tokenizer.capture_string_until(&Token::RSquare);
 

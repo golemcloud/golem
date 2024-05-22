@@ -1,17 +1,18 @@
 use crate::service::worker::TypedResult;
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
 use async_trait::async_trait;
+use golem_common::model::ComponentId;
 use golem_service_base::model::FunctionResult;
+use golem_wasm_ast::analysis::AnalysedFunction;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
-use golem_wasm_ast::analysis::AnalysedFunction;
-use golem_common::model::ComponentId;
 
 #[async_trait]
 pub trait WorkerRequestExecutor {
     async fn functions(
-        &self, component_id: ComponentId,
-        worker_name: String
+        &self,
+        component_id: ComponentId,
+        worker_name: String,
     ) -> Result<Vec<AnalysedFunction>, WorkerRequestExecutorError>;
 
     async fn execute(

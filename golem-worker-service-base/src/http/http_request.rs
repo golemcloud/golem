@@ -149,7 +149,6 @@ mod tests {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
-
         let function_params = r#"{x : \"y\"}"#;
 
         let api_specification: HttpApiDefinition = get_api_spec_single_param(
@@ -927,7 +926,6 @@ mod tests {
         worker_name: &str,
         function_params: &str,
     ) -> HttpApiDefinition {
-
         let yaml_string = format!(
             r#"
           id: users-api
@@ -955,7 +953,6 @@ mod tests {
         worker_name: &str,
         function_params: &str,
     ) -> HttpApiDefinition {
-
         let yaml_string = format!(
             r#"
           id: users-api

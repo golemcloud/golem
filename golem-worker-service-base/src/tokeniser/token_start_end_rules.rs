@@ -74,16 +74,16 @@ impl Rules {
             Token::Escape => vec![],
             Token::MultiChar(multi) => {
                 match multi {
-                    MultiCharTokens::Ok => vec![],      // hardly act as an end token
-                    MultiCharTokens::Err => vec![],     // hardly act as an end token
-                    MultiCharTokens::Some => vec![],    // hardly act as an end token
-                    MultiCharTokens::None => vec![],    // hardly act as an end token
-                    MultiCharTokens::Match => vec![],   // hardly act as an end token
+                    MultiCharTokens::Ok => vec![],    // hardly act as an end token
+                    MultiCharTokens::Err => vec![],   // hardly act as an end token
+                    MultiCharTokens::Some => vec![],  // hardly act as an end token
+                    MultiCharTokens::None => vec![],  // hardly act as an end token
+                    MultiCharTokens::Match => vec![], // hardly act as an end token
                     MultiCharTokens::InterpolationStart => vec![], // hardly act as an end token
                     MultiCharTokens::GreaterThanOrEqualTo => vec![], // hardly act as an end token
                     MultiCharTokens::LessThanOrEqualTo => vec![], // hardly act as an end token
                     MultiCharTokens::EqualTo => vec![], // hardly act as an end token
-                    MultiCharTokens::If => vec![],      // hardly act as an end token
+                    MultiCharTokens::If => vec![],    // hardly act as an end token
                     MultiCharTokens::Then => vec![TokenStartEnd::of_if()],
                     MultiCharTokens::Else => vec![TokenStartEnd::of_then()],
                     MultiCharTokens::Arrow => vec![], // hardly act as an end token

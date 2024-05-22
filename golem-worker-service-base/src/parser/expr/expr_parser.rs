@@ -1,7 +1,10 @@
 use crate::expression::Expr;
 use crate::tokeniser::tokenizer::{MultiCharTokens, Token, Tokenizer};
 
-use crate::parser::expr::{code_block, constructor, flags, if_condition, let_statement, math_op, params, pattern_match, record, selection, sequence, tuple, util};
+use crate::parser::expr::{
+    code_block, constructor, flags, if_condition, let_statement, math_op, params, pattern_match,
+    record, selection, sequence, tuple, util,
+};
 use crate::parser::{GolemParser, ParseError};
 use internal::*;
 
@@ -50,8 +53,9 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
 
     while let Some(token) = tokenizer.next_non_empty_token() {
         match token {
-            Token::MultiChar(MultiCharTokens::Identifier(var)) =>
-                previous_expression = Some(Expr::Identifier(var)),
+            Token::MultiChar(MultiCharTokens::Identifier(var)) => {
+                previous_expression = Some(Expr::Identifier(var))
+            }
 
             Token::MultiChar(MultiCharTokens::StringLiteral(raw_string)) => {
                 // we are parsing text (in turn calls parse code) with mutual recursion to handle
@@ -91,17 +95,18 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             Token::LParen => {
                 match &previous_expression {
                     Some(Expr::Identifier(name)) => {
-                       // tokenizer.skip_next_non_empty_token();
-                        if let Some(param_str) = tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
+                        // tokenizer.skip_next_non_empty_token();
+                        if let Some(param_str) =
+                            tokenizer.capture_string_until_and_skip_end(&Token::RParen)
+                        {
                             let params = params::get_params(param_str.as_str())?;
                             previous_expression = Some(Expr::Call(name.to_string(), params));
                         } else {
                             previous_expression = Some(Expr::Call(name.to_string(), vec![]));
                         }
                     }
-                    _ =>  previous_expression = Some(tuple::create_tuple(&mut tokenizer)?)
+                    _ => previous_expression = Some(tuple::create_tuple(&mut tokenizer)?),
                 }
-
             }
 
             Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo) => {
@@ -854,11 +859,8 @@ mod tests {
             )),
             vec![
                 MatchArm((
-                    ArmPattern::from(
-                        "some",
-                        vec![ArmPattern::from("foo", vec![]).unwrap()],
-                    )
-                    .unwrap(),
+                    ArmPattern::from("some", vec![ArmPattern::from("foo", vec![]).unwrap()])
+                        .unwrap(),
                     Box::new(Expr::Identifier("foo".to_string())),
                 )),
                 MatchArm((
@@ -886,19 +888,12 @@ mod tests {
             )),
             vec![
                 MatchArm((
-                    ArmPattern::from(
-                        "ok",
-                        vec![ArmPattern::from("foo", vec![]).unwrap()],
-                    )
-                    .unwrap(),
+                    ArmPattern::from("ok", vec![ArmPattern::from("foo", vec![]).unwrap()]).unwrap(),
                     Box::new(Expr::Identifier("foo".to_string())),
                 )),
                 MatchArm((
-                    ArmPattern::from(
-                        "err",
-                        vec![ArmPattern::from("bar", vec![]).unwrap()],
-                    )
-                    .unwrap(),
+                    ArmPattern::from("err", vec![ArmPattern::from("bar", vec![]).unwrap()])
+                        .unwrap(),
                     Box::new(Expr::Identifier("result2".to_string())),
                 )),
             ],
@@ -912,7 +907,9 @@ mod tests {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse(r#"${match worker.response { some(foo) => worker.response, none => "nothing" } }"#)
+            .parse(
+                r#"${match worker.response { some(foo) => worker.response, none => "nothing" } }"#,
+            )
             .unwrap();
 
         let expected = Expr::PatternMatch(
@@ -922,11 +919,8 @@ mod tests {
             )),
             vec![
                 MatchArm((
-                    ArmPattern::from(
-                        "some",
-                        vec![ArmPattern::from("foo", vec![]).unwrap()],
-                    )
-                    .unwrap(),
+                    ArmPattern::from("some", vec![ArmPattern::from("foo", vec![]).unwrap()])
+                        .unwrap(),
                     Box::new(Expr::SelectField(
                         Box::new(Expr::Identifier("worker".to_string())),
                         "response".to_string(),
@@ -995,11 +989,8 @@ mod tests {
             )),
             vec![
                 MatchArm((
-                    ArmPattern::from(
-                        "some",
-                        vec![ArmPattern::from("foo", vec![]).unwrap()],
-                    )
-                    .unwrap(),
+                    ArmPattern::from("some", vec![ArmPattern::from("foo", vec![]).unwrap()])
+                        .unwrap(),
                     Box::new(Expr::Literal("foo".to_string())),
                 )),
                 MatchArm((
@@ -1033,11 +1024,8 @@ mod tests {
             )),
             vec![
                 MatchArm((
-                    ArmPattern::from(
-                        "some",
-                        vec![ArmPattern::from("foo", vec![]).unwrap()],
-                    )
-                    .unwrap(),
+                    ArmPattern::from("some", vec![ArmPattern::from("foo", vec![]).unwrap()])
+                        .unwrap(),
                     Box::new(Expr::Cond(
                         Box::new(Expr::GreaterThan(
                             Box::new(Expr::Identifier("foo".to_string())),
@@ -1072,11 +1060,8 @@ mod tests {
             )),
             vec![
                 MatchArm((
-                    ArmPattern::from(
-                        "some",
-                        vec![ArmPattern::from("foo", vec![]).unwrap()],
-                    )
-                    .unwrap(),
+                    ArmPattern::from("some", vec![ArmPattern::from("foo", vec![]).unwrap()])
+                        .unwrap(),
                     Box::new(Expr::Cond(
                         Box::new(Expr::GreaterThan(
                             Box::new(Expr::Identifier("foo".to_string())),

@@ -1,5 +1,5 @@
 use crate::expression::{ArmPattern, Expr, MatchArm};
-use crate::parser::expr_parser::{parse_code};
+use crate::parser::expr_parser::parse_code;
 use crate::parser::ParseError;
 use crate::tokeniser::tokenizer::{Token, Tokenizer};
 
@@ -33,9 +33,10 @@ pub(crate) fn accumulate_match_arms(
     }
 
     if match_arms.is_empty() {
-        return Err(ParseError::Message(
-            format!("Expecting a constructor pattern, but found nothing at {}", tokenizer.pos())
-        ));
+        return Err(ParseError::Message(format!(
+            "Expecting a constructor pattern, but found nothing at {}",
+            tokenizer.pos()
+        )));
     }
 
     Ok(match_arms)
@@ -82,9 +83,9 @@ fn collect_arm_pattern_variables(
     loop {
         if let Some(value) = tokenizer.capture_string_until_and_skip_end(&Token::Comma) {
             let arm_pattern = {
-                    let mut tokenizer = Tokenizer::new(value.as_str());
-                    get_arm_pattern(&mut tokenizer)
-                }?;
+                let mut tokenizer = Tokenizer::new(value.as_str());
+                get_arm_pattern(&mut tokenizer)
+            }?;
             arm_patterns.push(arm_pattern);
         } else {
             let rest = tokenizer.rest();

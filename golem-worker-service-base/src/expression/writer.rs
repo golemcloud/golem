@@ -57,8 +57,7 @@ impl<W: Write> Writer<W> {
                 self.write_str(string)?;
                 self.write_display(Token::Quote)
             }
-            Expr::Identifier(identifier) =>
-                self.write_str(identifier),
+            Expr::Identifier(identifier) => self.write_str(identifier),
 
             Expr::Let(let_variable, expr) => {
                 self.write_str("let ")?;
@@ -318,7 +317,6 @@ mod internal {
                     writer.write_str(")")
                 } else {
                     writer.write_display(constructor_type)
-
                 }
             }
             ArmPattern::Literal(expr) => match *expr.clone() {
