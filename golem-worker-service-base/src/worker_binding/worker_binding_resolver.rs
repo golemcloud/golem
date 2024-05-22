@@ -1,21 +1,24 @@
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
-use crate::evaluator::{DefaultEvaluator, EvaluationContext};
 use crate::evaluator::Evaluator;
+use crate::evaluator::{DefaultEvaluator, EvaluationContext};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
 use crate::primitive::GetPrimitive;
+use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
-use async_trait::async_trait;
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::to_response::ToResponse;
-use crate::worker_bridge_execution::{NoopWorkerRequestExecutor, WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse};
+use crate::worker_bridge_execution::{
+    NoopWorkerRequestExecutor, WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError,
+    WorkerResponse,
+};
 
 // For any input request type, there should be a way to resolve the
 // worker binding component, which is then used to form the worker request

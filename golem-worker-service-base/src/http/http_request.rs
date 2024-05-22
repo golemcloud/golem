@@ -112,8 +112,8 @@ mod tests {
     use crate::worker_binding::WorkerBindingResolver;
     use crate::worker_bridge_execution::WorkerRequest;
 
-    #[test]
-    fn test_worker_request_resolution() {
+    #[tokio::test]
+    async fn test_worker_request_resolution() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
         let function_params = "[\"a\", \"b\"]";
@@ -124,7 +124,7 @@ mod tests {
             function_params,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -144,8 +144,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_resolution_with_concrete_params() {
+    #[tokio::test]
+    async fn test_worker_request_resolution_with_concrete_params() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
@@ -157,7 +157,7 @@ mod tests {
             function_params,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -178,8 +178,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_resolution_with_path_params() {
+    #[tokio::test]
+    async fn test_worker_request_resolution_with_path_params() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
@@ -191,7 +191,7 @@ mod tests {
             function_params,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -215,8 +215,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_resolution_with_path_and_query_params() {
+    #[tokio::test]
+    async fn test_worker_request_resolution_with_path_and_query_params() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request(
             "foo/1",
@@ -233,7 +233,7 @@ mod tests {
             function_params,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -260,8 +260,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_resolution_with_path_and_query_body_params() {
+    #[tokio::test]
+    async fn test_worker_request_resolution_with_path_and_query_body_params() {
         let mut request_body_amp = serde_json::Map::new();
 
         request_body_amp.insert(
@@ -286,7 +286,7 @@ mod tests {
             function_params,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -307,8 +307,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_resolution_with_record_params() {
+    #[tokio::test]
+    async fn test_worker_request_resolution_with_record_params() {
         let mut request_body_amp = serde_json::Map::new();
 
         request_body_amp.insert(
@@ -343,7 +343,7 @@ mod tests {
             function_params.as_str(),
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -379,8 +379,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_cond_expr_resolution() {
+    #[tokio::test]
+    async fn test_worker_request_cond_expr_resolution() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/2", None, &empty_headers, serde_json::Value::Null);
         let function_params = "[\"a\", \"b\"]";
@@ -391,7 +391,7 @@ mod tests {
             function_params,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -411,8 +411,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_request_body_resolution() {
+    #[tokio::test]
+    async fn test_worker_request_request_body_resolution() {
         let empty_headers = HeaderMap::new();
 
         let api_request = get_api_request(
@@ -430,7 +430,7 @@ mod tests {
             function_params,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -447,8 +447,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_resolution_for_predicate_gives_bool() {
+    #[tokio::test]
+    async fn test_worker_resolution_for_predicate_gives_bool() {
         let empty_headers = HeaderMap::new();
 
         let api_request = get_api_request(
@@ -463,7 +463,7 @@ mod tests {
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -480,8 +480,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_resolution_for_predicate_gives_bool_greater() {
+    #[tokio::test]
+    async fn test_worker_resolution_for_predicate_gives_bool_greater() {
         let empty_headers = HeaderMap::new();
 
         let api_request = get_api_request(
@@ -496,7 +496,7 @@ mod tests {
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -513,8 +513,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_resolution_for_cond_expr_fn_params() {
+    #[tokio::test]
+    async fn test_worker_resolution_for_cond_expr_fn_params() {
         let empty_headers = HeaderMap::new();
 
         let api_request = get_api_request(
@@ -529,7 +529,7 @@ mod tests {
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -546,8 +546,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_resolution_for_cond_expr_req_body_fn_params() {
+    #[tokio::test]
+    async fn test_worker_resolution_for_cond_expr_req_body_fn_params() {
         let empty_headers = HeaderMap::new();
 
         let api_request = get_api_request(
@@ -565,7 +565,7 @@ mod tests {
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -582,8 +582,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_resolution_for_cond_expr_req_body_direct_fn_params() {
+    #[tokio::test]
+    async fn test_worker_resolution_for_cond_expr_req_body_direct_fn_params() {
         let empty_headers = HeaderMap::new();
 
         let api_request = get_api_request(
@@ -598,7 +598,7 @@ mod tests {
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", function_params);
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -618,8 +618,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_map_request_body_resolution() {
+    #[tokio::test]
+    async fn test_worker_request_map_request_body_resolution() {
         let empty_headers = HeaderMap::new();
 
         let mut request_body: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
@@ -652,7 +652,7 @@ mod tests {
             function_params.as_str(),
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -672,8 +672,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_map_list_request_body_resolution() {
+    #[tokio::test]
+    async fn test_worker_request_map_list_request_body_resolution() {
         let empty_headers = HeaderMap::new();
 
         let mut request_body: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
@@ -706,7 +706,7 @@ mod tests {
             function_params.as_str(),
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -726,8 +726,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_request_body_direct() {
+    #[tokio::test]
+    async fn test_worker_request_request_body_direct() {
         let empty_headers = HeaderMap::new();
 
         let mut request_body: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
@@ -759,7 +759,7 @@ mod tests {
             function_params.as_str(),
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -776,8 +776,8 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_with_request_header_resolution() {
+    #[tokio::test]
+    async fn test_worker_request_with_request_header_resolution() {
         let mut headers = HeaderMap::new();
 
         headers.append(
@@ -816,7 +816,7 @@ mod tests {
             function_params.as_str(),
         );
 
-        let resolved_route = api_request.resolve(&api_specification).unwrap();
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
         let result = resolved_route.worker_request;
 
@@ -837,9 +837,9 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_worker_request_resolution_paths() {
-        fn test_paths(definition_path: &str, request_path: &str, ok: bool) {
+    #[tokio::test]
+    async fn test_worker_request_resolution_paths() {
+        async fn test_paths(definition_path: &str, request_path: &str, ok: bool) {
             let empty_headers = HeaderMap::new();
             let api_request =
                 get_api_request(request_path, None, &empty_headers, serde_json::Value::Null);
@@ -852,7 +852,7 @@ mod tests {
                 function_params,
             );
 
-            let resolved_route = api_request.resolve(&api_specification);
+            let resolved_route = api_request.resolve(&api_specification).await;
 
             let result = resolved_route.map(|x| x.worker_request);
 
@@ -869,9 +869,9 @@ mod tests {
         test_paths("/getcartcontent/{cart-id}", "/getcartcontent/1", true);
     }
 
-    #[test]
-    fn test_worker_idempotency_key_header() {
-        fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
+    #[tokio::test]
+    async fn test_worker_idempotency_key_header() {
+        async fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
             let api_request = get_api_request(
                 "/getcartcontent/1",
                 None,
@@ -887,7 +887,7 @@ mod tests {
                 function_params,
             );
 
-            let resolved_route = api_request.resolve(&api_specification).unwrap();
+            let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
             assert_eq!(
                 resolved_route.worker_request.idempotency_key,

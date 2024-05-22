@@ -59,12 +59,15 @@ impl<T: AsRef<str>> From<T> for WorkerRequestExecutorError {
     }
 }
 
-
 pub struct NoopWorkerRequestExecutor;
 
 #[async_trait]
 impl WorkerRequestExecutor for NoopWorkerRequestExecutor {
-    async fn functions(&self, _component_id: ComponentId, _worker_name: String) -> Result<Vec<AnalysedFunction>, WorkerRequestExecutorError> {
+    async fn functions(
+        &self,
+        _component_id: ComponentId,
+        _worker_name: String,
+    ) -> Result<Vec<AnalysedFunction>, WorkerRequestExecutorError> {
         Ok(vec![])
     }
 
@@ -72,6 +75,8 @@ impl WorkerRequestExecutor for NoopWorkerRequestExecutor {
         &self,
         _worker_request_params: WorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        Err(WorkerRequestExecutorError("NoopWorkerRequestExecutor".to_string()))
+        Err(WorkerRequestExecutorError(
+            "NoopWorkerRequestExecutor".to_string(),
+        ))
     }
 }
