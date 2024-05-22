@@ -1162,14 +1162,9 @@ mod tests {
     fn test_function_call_with_zero_params() {
         let expression_parser = ExprParser {};
 
-        let result = expression_parser
-            .parse("${foo()}")
-            .unwrap();
+        let result = expression_parser.parse("${foo()}").unwrap();
 
-        let expected = Expr::Call(
-            "foo".to_string(),
-            vec![],
-        );
+        let expected = Expr::Call("foo".to_string(), vec![]);
 
         assert_eq!(result, expected);
     }
