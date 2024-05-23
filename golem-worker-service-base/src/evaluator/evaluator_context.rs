@@ -4,7 +4,7 @@ use crate::evaluator::path::Path;
 use crate::evaluator::Getter;
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
-use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
+use crate::worker_bridge_execution::RefinedWorkerResponse;
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
 use golem_wasm_ast::analysis::AnalysedFunction;
@@ -122,7 +122,7 @@ impl EvaluationContext {
 }
 
 mod internal {
-    use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
+    use crate::worker_bridge_execution::RefinedWorkerResponse;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::TypeAnnotatedValue;
 
@@ -133,13 +133,6 @@ mod internal {
     ) -> TypeAnnotatedValue {
         let type_annoated_value = request_details.to_type_annotated_value();
         create_record("request", type_annoated_value)
-    }
-
-    pub(crate) fn worker_request_type_annotated_value(
-        worker_request: &WorkerRequest,
-    ) -> TypeAnnotatedValue {
-        let typed_value = worker_request.clone().to_type_annotated_value();
-        create_record("worker", typed_value)
     }
 
     pub(crate) fn worker_response_type_annotated_value(

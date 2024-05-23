@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use crate::api_definition::http::HttpApiDefinition;
+use crate::evaluator::{DefaultEvaluator, Evaluator};
 use async_trait::async_trait;
 use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
-use crate::evaluator::{DefaultEvaluator, Evaluator};
 
 use crate::http::{ApiInputPath, InputHttpRequest};
 use crate::service::api_definition_lookup::ApiDefinitionLookup;
@@ -30,8 +30,9 @@ impl CustomHttpRequestApi {
             dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         >,
     ) -> Self {
-        let evaluator =
-            Arc::new(DefaultEvaluator::from_worker_request_executor(worker_request_executor_service.clone()));
+        let evaluator = Arc::new(DefaultEvaluator::from_worker_request_executor(
+            worker_request_executor_service.clone(),
+        ));
 
         Self {
             evaluator,

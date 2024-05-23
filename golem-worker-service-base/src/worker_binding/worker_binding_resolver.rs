@@ -1,5 +1,7 @@
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
-use crate::evaluator::{DefaultEvaluator, EvaluationContext, EvaluationError, EvaluationResult};
+use crate::evaluator::{
+    DefaultEvaluator, EvaluationContext, EvaluationError, EvaluationResult, MetadataFetchError,
+};
 use crate::evaluator::{Evaluator, WorkerMetadataFetcher};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
@@ -101,6 +103,7 @@ impl ResolvedWorkerBinding {
     where
         EvaluationResult: ToResponse<R>,
         EvaluationError: ToResponse<R>,
+        MetadataFetchError: ToResponse<R>,
     {
         let functions_available = worker_metadata_fetcher
             .get_worker_metadata(&self.worker_detail.component_id)
@@ -167,8 +170,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
         )
         .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
-        let request_evaluation_context =
-            EvaluationContext::from_request_data(&request_details);
+        let request_evaluation_context = EvaluationContext::from_request_data(&request_details);
 
         let worker_name: String = default_evaluator
             .evaluate(&binding.worker_name, &request_evaluation_context)
@@ -180,9 +182,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             .ok_or("Worker name is not a String".to_string())?
             .as_string();
 
-
         let component_id = &binding.component_id;
-
 
         let idempotency_key = if let Some(expr) = &binding.idempotency_key {
             let idempotency_key_value = default_evaluator
