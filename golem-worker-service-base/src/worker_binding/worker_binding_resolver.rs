@@ -113,37 +113,26 @@ impl ResolvedWorkerBinding {
         WorkerResponse: ToResponse<R>,
         WorkerRequestExecutorError: ToResponse<R>,
     {
-        let worker_request = &self.worker_detail;
-        let mut request_evaluation_context = EvaluationContext::from_request_data(&self.request_details);
-        let worker_evaluation_context =
-            EvaluationContext::from_worker_detail(&self.worker_detail);
-        let mut evaluation_context =
-            request_evaluation_context.merge(&worker_evaluation_context);
-        let available_functions =
-            worker_metadata_fetcher.get_worker_metadata(&worker_request.component_id).await;
+        let functions_available =
+            worker_metadata_fetcher.get_worker_metadata(&self.worker_detail.component_id).await;
 
-        if let Err(err) = available_functions {
-            return err.to_response(
-                &self.worker_detail,
-                &self.response_mapping.clone(),
-                &self.request_details,
-            );
-        }
+        match functions_available {
+            Ok(functions) => {
+                let runtime = EvaluationContext::from_all(
+                    &self.worker_detail,
+                    &self.request_details,
+                    functions
+                );
 
+                let result =
+                    evaluator.evaluate(&self.response_mapping.clone().unwrap().0, &runtime).await;
 
-        let worker_response = executor.execute(worker_request.clone()).await;
-
-        match worker_response {
-            Ok(worker_response) => worker_response.to_response(
-                &self.worker_detail,
-                &self.response_mapping,
-                &self.request_details,
-            ),
-            Err(error) => error.to_response(
-                &self.worker_detail,
-                &self.response_mapping.clone(),
-                &self.request_details,
-            ),
+                match result {
+                    Ok(worker_response) => worker_response.to_response(&self.request_details),
+                    Err(err) => err.to_response(&self.request_details)
+                }
+            }
+            Err(err) => err.to_response(&self.request_details)
         }
     }
 }

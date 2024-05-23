@@ -66,6 +66,17 @@ impl EvaluationContext {
         }
     }
 
+    pub fn from_all(worker_detail: &WorkerDetail, request: &RequestDetails, functions: Vec<AnalysedFunction>) -> Self {
+        let mut request_data = internal::request_type_annotated_value(&request);
+        let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
+        let merged = request_data.merge(&worker_data);
+
+        EvaluationContext {
+            variables: Some(merged.clone()),
+            analysed_functions: functions
+        }
+    }
+
     pub fn from_worker_detail(worker_detail: &WorkerDetail) -> Self {
         let typed_value = worker_detail.clone().to_type_annotated_value();
         let worker_data = create_record("worker", typed_value);

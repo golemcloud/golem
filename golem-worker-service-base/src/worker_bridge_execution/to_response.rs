@@ -2,62 +2,53 @@ use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutorError, WorkerResponse};
 use http::StatusCode;
 use poem::Body;
+use crate::evaluator::{EvaluationError, EvaluationResult, MetadataFetchError, WorkerMetadataFetcher};
 
 pub trait ToResponse<A> {
-    fn to_response(
-        &self,
-        worker_request: &WorkerRequest,
-        response_mapping: &Option<ResponseMapping>,
-        request_details: &RequestDetails,
-    ) -> A;
+    fn to_response(&self, request_details: &RequestDetails) -> A;
 }
 
-impl ToResponse<poem::Response> for WorkerResponse {
+impl ToResponse<poem::Response> for EvaluationResult {
     fn to_response(
         &self,
-        worker_request: &WorkerRequest,
-        response_mapping: &Option<ResponseMapping>,
-        request_details: &RequestDetails,
+        request_details: &RequestDetails
     ) -> poem::Response {
-        match self.refined() {
-            Ok(refined) => {
-                match internal::IntermediateHttpResponse::from(
-                    &refined,
-                    response_mapping,
-                    request_details,
-                    worker_request,
-                ) {
-                    Ok(intermediate_response) => {
-                        intermediate_response.to_http_response(request_details)
-                    }
-                    Err(e) => poem::Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Body::from_string(format!(
-                            "Error when  converting worker response to http response. Error: {}",
-                            e
-                        ))),
-                }
+        match internal::IntermediateHttpResponse::from(self) {
+            Ok(intermediate_response) => {
+                intermediate_response.to_http_response(request_details)
             }
             Err(e) => poem::Response::builder()
-                .status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
-                .body(poem::Body::from_string(
-                    format!("API request error {}", e).to_string(),
-                )),
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from_string(format!(
+                    "Error when  converting worker response to http response. Error: {}",
+                    e
+                ))),
         }
     }
 }
 
-impl ToResponse<poem::Response> for WorkerRequestExecutorError {
+impl ToResponse<poem::Response> for EvaluationError {
     fn to_response(
         &self,
-        _worker_request: &WorkerRequest,
-        _response_mapping: &Option<ResponseMapping>,
         _request_details: &RequestDetails,
     ) -> poem::Response {
         poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::from_string(
-                format!("API request error {}", self).to_string(),
+                format!("Error {}", self).to_string(),
+            ))
+    }
+}
+
+impl ToResponse<poem::Response> for MetadataFetchError {
+    fn to_response(
+        &self,
+        _request_details: &RequestDetails,
+    ) -> poem::Response {
+        poem::Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::from_string(
+                format!("Worker metadata fetch error {}", self).to_string(),
             ))
     }
 }
@@ -113,7 +104,7 @@ mod internal {
                 })
             }
         }
-        
+
         pub(crate) fn to_http_response(&self, request_details: &RequestDetails) -> poem::Response {
             let headers: Result<HeaderMap, String> = (&self.headers.headers)
                 .try_into()
@@ -135,7 +126,7 @@ mod internal {
                         ContentTypeHeaders::from(response_content_type, accepted_content_types);
 
                     match evaluation_result {
-                        EvaluationResult::Value(type_annotated_value) => {
+                        Some(type_annotated_value) => {
                             match type_annotated_value.to_http_response_body(content_type) {
                                 Ok(body_with_header) => {
                                     let mut response = body_with_header.into_response();
@@ -148,7 +139,7 @@ mod internal {
                                     .body(Body::from_string(content_map_error.to_string())),
                             }
                         }
-                        EvaluationResult::Unit => {
+                       None => {
                             let parts = ResponseParts {
                                 status: *status,
                                 version: Default::default(),
