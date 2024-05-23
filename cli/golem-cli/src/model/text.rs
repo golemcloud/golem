@@ -70,8 +70,6 @@ struct RouteView {
     pub component_id: String,
     #[table(title = "WorkerName")]
     pub worker_name: String,
-    #[table(title = "Function")]
-    pub function_name: String,
 }
 
 impl From<&Route> for RouteView {
@@ -83,7 +81,6 @@ impl From<&Route> for RouteView {
             path: value.path.to_string(),
             component_id: format!("*{component_end}"),
             worker_name: value.binding.worker_name.to_string(),
-            function_name: value.binding.function_name.to_string(),
         }
     }
 }
