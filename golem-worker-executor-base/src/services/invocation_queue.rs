@@ -180,7 +180,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         let entry = OplogEntry::pending_update(update_description.clone());
         let timestamped_update = TimestampedUpdateDescription {
             timestamp: entry.timestamp(),
-            oplog_index: self.oplog.current_oplog_index().await,
+            oplog_index: self.oplog.current_oplog_index().await + 1,
             description: update_description,
         };
         self.pending_updates

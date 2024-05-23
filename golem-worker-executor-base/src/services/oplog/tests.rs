@@ -183,21 +183,21 @@ async fn open_add_and_read_back() {
     let entry2 = rounded(OplogEntry::suspend());
     let entry3 = rounded(OplogEntry::exited());
 
-    let start_idx = oplog.current_oplog_index().await;
+    let last_oplog_idx = oplog.current_oplog_index().await;
     oplog.add(entry1.clone()).await;
     oplog.add(entry2.clone()).await;
     oplog.add(entry3.clone()).await;
     oplog.commit().await;
 
-    let r1 = oplog.read(start_idx).await;
-    let r2 = oplog.read(start_idx + 1).await;
-    let r3 = oplog.read(start_idx + 2).await;
+    let r1 = oplog.read(last_oplog_idx + 1).await;
+    let r2 = oplog.read(last_oplog_idx + 2).await;
+    let r3 = oplog.read(last_oplog_idx + 3).await;
 
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
 
-    let entries = oplog_service.read(&worker_id, start_idx, 3).await;
+    let entries = oplog_service.read(&worker_id, last_oplog_idx + 1, 3).await;
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
         vec![entry1, entry2, entry3]
@@ -218,7 +218,7 @@ async fn entries_with_small_payload() {
     };
     let oplog = oplog_service.open(&account_id, &worker_id).await;
 
-    let start_idx = oplog.current_oplog_index().await;
+    let last_oplog_idx = oplog.current_oplog_index().await;
     let entry1 = rounded(
         oplog
             .add_imported_function_invoked(
@@ -259,17 +259,17 @@ async fn entries_with_small_payload() {
 
     oplog.commit().await;
 
-    let r1 = oplog.read(start_idx).await;
-    let r2 = oplog.read(start_idx + 1).await;
-    let r3 = oplog.read(start_idx + 2).await;
-    let r4 = oplog.read(start_idx + 3).await;
+    let r1 = oplog.read(last_oplog_idx + 1).await;
+    let r2 = oplog.read(last_oplog_idx + 2).await;
+    let r3 = oplog.read(last_oplog_idx + 3).await;
+    let r4 = oplog.read(last_oplog_idx + 4).await;
 
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
     assert_eq!(r4, entry4);
 
-    let entries = oplog_service.read(&worker_id, start_idx, 4).await;
+    let entries = oplog_service.read(&worker_id, last_oplog_idx + 1, 4).await;
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
         vec![
@@ -326,7 +326,7 @@ async fn entries_with_large_payload() {
     let large_payload3 = vec![2u8; 1024 * 1024];
     let large_payload4 = vec![3u8; 1024 * 1024];
 
-    let start_idx = oplog.current_oplog_index().await;
+    let last_oplog_idx = oplog.current_oplog_index().await;
     let entry1 = rounded(
         oplog
             .add_imported_function_invoked(
@@ -367,17 +367,17 @@ async fn entries_with_large_payload() {
 
     oplog.commit().await;
 
-    let r1 = oplog.read(start_idx).await;
-    let r2 = oplog.read(start_idx + 1).await;
-    let r3 = oplog.read(start_idx + 2).await;
-    let r4 = oplog.read(start_idx + 3).await;
+    let r1 = oplog.read(last_oplog_idx + 1).await;
+    let r2 = oplog.read(last_oplog_idx + 2).await;
+    let r3 = oplog.read(last_oplog_idx + 3).await;
+    let r4 = oplog.read(last_oplog_idx + 4).await;
 
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
     assert_eq!(r4, entry4);
 
-    let entries = oplog_service.read(&worker_id, start_idx, 4).await;
+    let entries = oplog_service.read(&worker_id, last_oplog_idx + 1, 4).await;
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
         vec![
@@ -444,7 +444,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
                 .with_default_directive("debug".parse().unwrap())
                 .from_env_lossy(),
         );
-    tracing_subscriber::registry().with(ansi_layer).init();
+    let _ = tracing_subscriber::registry().with(ansi_layer).try_init();
 
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = if use_redis {
         let pool = RedisPool::configured(&RedisConfig::default())

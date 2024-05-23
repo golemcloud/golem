@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,7 +30,7 @@ use golem_common::model::{AccountId, WorkerId};
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
-use crate::services::oplog::{Oplog, OplogService};
+use crate::services::oplog::{OpenOplogs, Oplog, OplogConstructor, OplogService};
 
 // TODO: need a "global" background thread that transfers things from closed old oplogs
 
@@ -79,6 +79,8 @@ pub struct MultiLayerOplogService {
     primary: Arc<dyn OplogService + Send + Sync>,
     lower: NEVec<Arc<dyn OplogArchiveService + Send + Sync>>,
 
+    oplogs: OpenOplogs,
+
     entry_count_limit: u64,
 }
 
@@ -91,6 +93,7 @@ impl MultiLayerOplogService {
         Self {
             primary,
             lower,
+            oplogs: OpenOplogs::new(),
             entry_count_limit,
         }
     }
@@ -101,8 +104,52 @@ impl Clone for MultiLayerOplogService {
         Self {
             primary: self.primary.clone(),
             lower: self.lower.clone(),
+            oplogs: self.oplogs.clone(),
             entry_count_limit: self.entry_count_limit,
         }
+    }
+}
+
+struct CreateOplogConstructor {
+    worker_id: WorkerId,
+    account_id: AccountId,
+    initial_entry: Option<OplogEntry>,
+    primary: Arc<dyn OplogService + Send + Sync>,
+    service: MultiLayerOplogService,
+}
+
+impl CreateOplogConstructor {
+    fn new(
+        worker_id: WorkerId,
+        account_id: AccountId,
+        initial_entry: Option<OplogEntry>,
+        primary: Arc<dyn OplogService + Send + Sync>,
+        service: MultiLayerOplogService,
+    ) -> Self {
+        Self {
+            worker_id,
+            account_id,
+            initial_entry,
+            primary,
+            service,
+        }
+    }
+}
+
+#[async_trait]
+impl OplogConstructor for CreateOplogConstructor {
+    async fn create_oplog(
+        self,
+        close: Box<dyn FnOnce() + Send + Sync>,
+    ) -> Arc<dyn Oplog + Send + Sync> {
+        let primary = if let Some(initial_entry) = self.initial_entry {
+            self.primary
+                .create(&self.account_id, &self.worker_id, initial_entry)
+                .await
+        } else {
+            self.primary.open(&self.account_id, &self.worker_id).await
+        };
+        Arc::new(MultiLayerOplog::new(self.worker_id, primary, self.service, close).await)
     }
 }
 
@@ -114,16 +161,18 @@ impl OplogService for MultiLayerOplogService {
         worker_id: &WorkerId,
         initial_entry: OplogEntry,
     ) -> Arc<dyn Oplog + Send + Sync> {
-        Arc::new(
-            MultiLayerOplog::new(
-                worker_id.clone(),
-                self.primary
-                    .create(account_id, worker_id, initial_entry)
-                    .await,
-                self.clone(),
+        self.oplogs
+            .get_or_open(
+                worker_id,
+                CreateOplogConstructor::new(
+                    worker_id.clone(),
+                    account_id.clone(),
+                    Some(initial_entry),
+                    self.primary.clone(),
+                    self.clone(),
+                ),
             )
-            .await,
-        )
+            .await
     }
 
     async fn open(
@@ -131,14 +180,18 @@ impl OplogService for MultiLayerOplogService {
         account_id: &AccountId,
         worker_id: &WorkerId,
     ) -> Arc<dyn Oplog + Send + Sync> {
-        Arc::new(
-            MultiLayerOplog::new(
-                worker_id.clone(),
-                self.primary.open(account_id, worker_id).await,
-                self.clone(),
+        self.oplogs
+            .get_or_open(
+                worker_id,
+                CreateOplogConstructor::new(
+                    worker_id.clone(),
+                    account_id.clone(),
+                    None,
+                    self.primary.clone(),
+                    self.clone(),
+                ),
             )
-            .await,
-        )
+            .await
     }
 
     async fn get_first_index(&self, worker_id: &WorkerId) -> OplogIndex {
@@ -221,7 +274,6 @@ impl OplogService for MultiLayerOplogService {
     }
 }
 
-#[derive(Debug)]
 pub struct MultiLayerOplog {
     worker_id: WorkerId,
     primary: Arc<dyn Oplog + Send + Sync>,
@@ -230,6 +282,7 @@ pub struct MultiLayerOplog {
     transfer_fiber: Option<tokio::task::JoinHandle<()>>,
     transfer: UnboundedSender<BackgroundTransferMessage>,
     primary_length: AtomicU64,
+    close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
 impl MultiLayerOplog {
@@ -237,6 +290,7 @@ impl MultiLayerOplog {
         worker_id: WorkerId,
         primary: Arc<dyn Oplog + Send + Sync>,
         multi_layer_oplog_service: MultiLayerOplogService,
+        close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -278,6 +332,7 @@ impl MultiLayerOplog {
             transfer_fiber: Some(transfer_fiber),
             transfer: tx,
             primary_length: AtomicU64::new(initial_primary_length),
+            close_fn: Some(close),
         }
     }
 
@@ -333,7 +388,18 @@ impl MultiLayerOplog {
 
 impl Drop for MultiLayerOplog {
     fn drop(&mut self) {
+        if let Some(close_fn) = self.close_fn.take() {
+            close_fn();
+        }
         self.transfer_fiber.take().unwrap().abort();
+    }
+}
+
+impl Debug for MultiLayerOplog {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MultiLayerOplog")
+            .field("worker_id", &self.worker_id)
+            .finish()
     }
 }
 

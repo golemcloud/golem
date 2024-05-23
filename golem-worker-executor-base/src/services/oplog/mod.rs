@@ -20,7 +20,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 
+pub use compressed::CompressedOplogArchive;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, OplogPayload, UpdateDescription, WrappedFunctionType,
 };
@@ -28,14 +31,12 @@ use golem_common::model::{
     AccountId, CallingConvention, ComponentVersion, IdempotencyKey, Timestamp, WorkerId,
 };
 use golem_common::serialization::{serialize, try_deserialize};
+pub use multilayer::MultiLayerOplogService;
+pub use primary::PrimaryOplogService;
 
 mod compressed;
 mod multilayer;
 mod primary;
-
-pub use compressed::CompressedOplogArchive;
-pub use multilayer::MultiLayerOplogService;
-pub use primary::PrimaryOplogService;
 
 #[cfg(any(feature = "mocks", test))]
 pub mod mock;
@@ -63,12 +64,12 @@ pub trait OplogService: Debug {
         account_id: &AccountId,
         worker_id: &WorkerId,
         initial_entry: OplogEntry,
-    ) -> Arc<dyn Oplog + Send + Sync>;
+    ) -> Arc<dyn Oplog + Send + Sync + 'static>;
     async fn open(
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-    ) -> Arc<dyn Oplog + Send + Sync>;
+    ) -> Arc<dyn Oplog + Send + Sync + 'static>;
 
     async fn get_first_index(&self, worker_id: &WorkerId) -> OplogIndex;
     async fn get_last_index(&self, worker_id: &WorkerId) -> OplogIndex;
@@ -122,10 +123,9 @@ pub trait Oplog: Debug {
 
     /// Adds an entry to the oplog and immediately commits it
     async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
-        let idx = self.current_oplog_index().await;
         self.add(entry).await;
         self.commit().await;
-        idx
+        self.current_oplog_index().await
     }
 
     /// Uploads a big oplog payload and returns a reference to it
@@ -243,3 +243,45 @@ pub trait OplogOps: Oplog {
 
 #[async_trait]
 impl<O: Oplog + ?Sized> OplogOps for O {}
+
+#[derive(Debug, Clone)]
+struct OpenOplogs {
+    oplogs: Arc<DashMap<WorkerId, Arc<dyn Oplog + Send + Sync>>>,
+}
+
+impl OpenOplogs {
+    fn new() -> Self {
+        Self {
+            oplogs: Arc::new(DashMap::new()),
+        }
+    }
+
+    async fn get_or_open(
+        &self,
+        worker_id: &WorkerId,
+        constructor: impl OplogConstructor,
+    ) -> Arc<dyn Oplog + Send + Sync> {
+        let oplogs_clone = self.oplogs.clone();
+        let worker_id_clone = worker_id.clone();
+        let entry = self.oplogs.entry(worker_id.clone());
+        match entry {
+            Entry::Occupied(existing) => existing.get().clone(),
+            Entry::Vacant(entry) => {
+                let close = Box::new(move || {
+                    oplogs_clone.remove(&worker_id_clone);
+                });
+                let oplog = constructor.create_oplog(close).await;
+                entry.insert(oplog.clone());
+                oplog
+            }
+        }
+    }
+}
+
+#[async_trait]
+trait OplogConstructor {
+    async fn create_oplog(
+        self,
+        close: Box<dyn FnOnce() + Send + Sync>,
+    ) -> Arc<dyn Oplog + Send + Sync>;
+}
