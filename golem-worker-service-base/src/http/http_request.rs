@@ -103,6 +103,7 @@ pub mod router {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use async_trait::async_trait;
     use golem_wasm_ast::analysis::{AnalysedFunction, AnalysedType};
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
@@ -127,6 +128,7 @@ mod tests {
 
     struct TestWorkerRequestExecutor {}
 
+    #[async_trait]
     impl WorkerRequestExecutor for TestWorkerRequestExecutor {
         async fn execute(
             &self,
@@ -182,7 +184,7 @@ mod tests {
             ],
         };
 
-        let optional_idempotency_key = self.idempotency_key.map(|x| TypeAnnotatedValue::Record {
+        let optional_idempotency_key = worker_request.clone().idempotency_key.map(|x| TypeAnnotatedValue::Record {
             // Idempotency key can exist in header of the request in which case users can refer to it as
             // request.headers.idempotency-key. In order to keep some consistency, we are keeping the same key name here,
             // if it exists as part of the API definition
@@ -209,6 +211,7 @@ mod tests {
         function_name: String,
     }
 
+    #[async_trait]
     impl WorkerMetadataFetcher for TestMetadataFetcher {
         async fn get_worker_metadata(&self, component_id: &ComponentId) -> Result<Vec<AnalysedFunction>, MetadataFetchError> {
             Ok(vec![AnalysedFunction {

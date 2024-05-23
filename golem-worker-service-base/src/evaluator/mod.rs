@@ -664,7 +664,7 @@ mod tests {
                 evaluation_context.clone()
             };
 
-            let eval_result = self.evaluate(expr, &evaluation_context)?;
+            let eval_result = self.evaluate(expr, &evaluation_context).await?;
             Ok(eval_result)
         }
     }
