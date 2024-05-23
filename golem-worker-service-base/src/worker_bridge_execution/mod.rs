@@ -1,5 +1,5 @@
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::TypeAnnotatedValue;
+
+
 use serde_json::Value;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
@@ -9,7 +9,7 @@ mod refined_worker_response;
 pub mod to_response;
 mod worker_request_executor;
 
-use crate::merge::Merge;
+
 pub use refined_worker_response::*;
 pub use worker_request_executor::*;
 

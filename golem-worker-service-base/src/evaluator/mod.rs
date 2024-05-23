@@ -16,7 +16,7 @@ use crate::primitive::{GetPrimitive, Primitive};
 use getter::GetError;
 use getter::Getter;
 use path::Path;
-use std::str::FromStr;
+
 
 use crate::expression::{Expr, InnerNumber};
 use crate::worker_bridge_execution::{
@@ -53,7 +53,7 @@ impl From<&RefinedWorkerResponse> for EvaluationResult {
 }
 
 impl EvaluationResult {
-    pub fn get_primitive(&self) -> Option<Primitive> {
+    pub(crate) fn get_primitive(&self) -> Option<Primitive> {
         match self {
             EvaluationResult::Value(value) => value.get_primitive(),
             EvaluationResult::Unit => None,
