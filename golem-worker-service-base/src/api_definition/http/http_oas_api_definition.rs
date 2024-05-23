@@ -155,8 +155,6 @@ mod internal {
 
         let binding = GolemWorkerBinding {
             worker_name: get_worker_id_expr(worker_bridge_info)?,
-            function_name: get_function_name(worker_bridge_info)?,
-            function_params: get_function_params_expr(worker_bridge_info)?,
             component_id: get_component_id(worker_bridge_info)?,
             idempotency_key: get_idempotency_key(worker_bridge_info)?,
             response: get_response_mapping(worker_bridge_info)?,
@@ -212,39 +210,6 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_function_params_expr(
-        worker_bridge_info: &Value,
-    ) -> Result<Vec<Expr>, String> {
-        let function_params = worker_bridge_info
-            .get("function-params")
-            .ok_or("No function-params found")?
-            .as_array()
-            .ok_or("function-params is not an array")?;
-        let mut exprs = vec![];
-        for param in function_params {
-            match param {
-                Value::String(function_param_expr_str) => {
-                    let function_param_expr = expression::from_string(function_param_expr_str)
-                        .map_err(|err| err.to_string())?;
-                    exprs.push(function_param_expr);
-                }
-                _ => return Err(
-                    "Invalid function param type. It should be a string representing expression"
-                        .to_string(),
-                ),
-            }
-        }
-        Ok(exprs)
-    }
-
-    pub(crate) fn get_function_name(worker_bridge_info: &Value) -> Result<String, String> {
-        let function_name = worker_bridge_info
-            .get("function-name")
-            .ok_or("No function-name found")?
-            .as_str()
-            .ok_or("function-name is not a string")?;
-        Ok(function_name.to_string())
-    }
 
     pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Expr, String> {
         let worker_id = worker_bridge_info
@@ -318,8 +283,6 @@ mod tests {
                             "user".to_string()
                         )
                     ]),
-                    function_name: "test".to_string(),
-                    function_params: vec![Expr::Identifier("request".to_string())],
                     component_id: ComponentId(Uuid::nil()),
                     idempotency_key: Some(Expr::Literal("test-key".to_string())),
                     response: Some(ResponseMapping(Expr::Record(

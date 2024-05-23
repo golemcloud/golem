@@ -41,33 +41,9 @@ impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
     fn validate(
         &self,
         api: &HttpApiDefinition,
-        components: &[Component],
+        _components: &[Component],
     ) -> Result<(), ValidationErrors<RouteValidationError>> {
-        let components: HashMap<&ComponentId, &ComponentMetadata> = components
-            .iter()
-            .map(|component| {
-                (
-                    &component.versioned_component_id.component_id,
-                    &component.metadata,
-                )
-            })
-            .collect();
-
-        let errors = {
-            let route_validation = api
-                .routes
-                .iter()
-                .cloned()
-                .flat_map(|route| validate_route(route, &components).err())
-                .collect::<Vec<_>>();
-
-            let unique_route_errors = unique_routes(api.routes.as_slice());
-
-            let mut errors = route_validation;
-            errors.extend(unique_route_errors);
-
-            errors
-        };
+        let errors = unique_routes(api.routes.as_slice());
 
         if errors.is_empty() {
             Ok(())
@@ -109,47 +85,6 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
     errors
 }
 
-fn validate_route(
-    route: Route,
-    components: &HashMap<&ComponentId, &ComponentMetadata>,
-) -> Result<(), RouteValidationError> {
-    let component_id = route.binding.component_id.clone();
-    // We can unwrap here because we've already validated that all components are present.
-    let component = components.get(&component_id).unwrap();
-
-    let function_name = route.binding.function_name.clone();
-
-    // TODO: Validate function params.
-    let _function = find_function(function_name.as_str(), component).ok_or_else(|| {
-        RouteValidationError::from_route(route, format!("Invalid function name: {function_name}"))
-    })?;
-
-    Ok(())
-}
-
-fn find_function(name: &str, component: &ComponentMetadata) -> Option<ExportFunction> {
-    component.exports.iter().find_map(|exp| match exp {
-        Export::Instance(ExportInstance {
-            name: instance_name,
-            functions,
-        }) => functions.iter().find_map(|f| {
-            let full_name = format!("{}/{}", instance_name, f.name);
-            if full_name == name {
-                Some(f.clone())
-            } else {
-                None
-            }
-        }),
-        Export::Function(f) => {
-            if f.name == name {
-                Some(f.clone())
-            } else {
-                None
-            }
-        }
-    })
-}
-
 #[test]
 fn test_unique_routes() {
     fn make_route(method: MethodPattern, path: &str) -> Route {
@@ -159,8 +94,6 @@ fn test_unique_routes() {
             binding: crate::worker_binding::GolemWorkerBinding {
                 component_id: ComponentId::new_v4(),
                 worker_name: crate::expression::Expr::Identifier("request".to_string()),
-                function_name: "test".into(),
-                function_params: vec![],
                 idempotency_key: None,
                 response: None,
             },

@@ -203,14 +203,14 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
                 .map(|value| IdempotencyKey::new(value.to_string()))
         };
 
-        let worker_request = WorkerDetail {
+        let worker_detail = WorkerDetail {
             component_id: component_id.clone(),
             worker_name,
             idempotency_key,
         };
 
         let resolved_binding = ResolvedWorkerBinding {
-            worker_detail: worker_request,
+            worker_detail,
             request_details,
             response_mapping: binding.response.clone(),
         };

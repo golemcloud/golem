@@ -46,8 +46,6 @@ enum HttpMethod {
 message WorkerBinding {
   golem.component.ComponentId component = 1;
   string worker_id = 2;
-  string function_name = 3;
-  repeated string function_params = 4;
-  optional string response = 5;
-  optional string idempotency_key = 6;
+  optional string response = 3;
+  optional string idempotency_key = 4;
 }
