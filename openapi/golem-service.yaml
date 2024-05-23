@@ -2399,6 +2399,7 @@ components:
       required:
       - componentId
       - workerName
+      - response
     HealthcheckResponse:
       type: object
     HttpApiDefinition:
