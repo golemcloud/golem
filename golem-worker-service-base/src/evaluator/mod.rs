@@ -618,13 +618,13 @@ mod tests {
     }
 
     #[async_trait]
-    impl<T: Evaluator> EvaluatorTestExt for T {
+    impl<T: Evaluator + Send + Sync> EvaluatorTestExt for T {
         async fn evaluate_with_request_details(
             &self,
             expr: &Expr,
             input: &RequestDetails,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
-            let eval_result = self.evaluate(expr, &EvaluationContext::from_request_data(input))?;
+            let eval_result = self.evaluate(expr, &EvaluationContext::from_request_data(input)).await?;
             Ok(eval_result
                 .get_value()
                 .ok_or("The expression is evaluated to unit and doesn't have a value")?)
