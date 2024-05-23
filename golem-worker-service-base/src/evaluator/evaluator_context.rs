@@ -1,30 +1,65 @@
+use crate::evaluator::evaluator_context::internal::create_record;
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
 use crate::evaluator::Getter;
 use crate::merge::Merge;
-use crate::worker_binding::RequestDetails;
-use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
-use golem_wasm_rpc::TypeAnnotatedValue;
+use crate::worker_binding::{RequestDetails, WorkerDetail};
+use crate::worker_bridge_execution::RefinedWorkerResponse;
+use async_trait::async_trait;
 
-// Evaluator of an expression doesn't necessarily need a context all the time, and can be empty.
-// or contain worker details, request details, worker_response or all of them.
+use golem_service_base::model::WorkerId;
+use golem_wasm_ast::analysis::AnalysedFunction;
+use golem_wasm_rpc::TypeAnnotatedValue;
+use std::fmt::Display;
 
 #[derive(Clone)]
 pub struct EvaluationContext {
-    pub worker_request: Option<WorkerRequest>,
-    pub worker_response: Option<RefinedWorkerResponse>,
     pub variables: Option<TypeAnnotatedValue>,
-    pub request_data: Option<RequestDetails>,
+    pub analysed_functions: Vec<AnalysedFunction>,
+}
+
+#[async_trait]
+pub trait WorkerMetadataFetcher {
+    async fn get_worker_metadata(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Result<Vec<AnalysedFunction>, MetadataFetchError>;
+}
+
+pub struct MetadataFetchError(pub String);
+
+impl Display for MetadataFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Worker component metadata fetch error: {}", self.0)
+    }
+}
+
+pub struct NoopWorkerMetadataFetcher;
+
+#[async_trait]
+impl WorkerMetadataFetcher for NoopWorkerMetadataFetcher {
+    async fn get_worker_metadata(
+        &self,
+        _worker_id: &WorkerId,
+    ) -> Result<Vec<AnalysedFunction>, MetadataFetchError> {
+        Ok(vec![])
+    }
 }
 
 impl EvaluationContext {
     pub fn empty() -> Self {
         EvaluationContext {
-            worker_request: None,
-            worker_response: None,
             variables: None,
-            request_data: None,
+            analysed_functions: vec![],
         }
+    }
+
+    pub fn merge(&mut self, that: &EvaluationContext) -> EvaluationContext {
+        if let Some(that_variables) = &that.variables {
+            self.merge_variables(that_variables);
+        }
+
+        self.clone()
     }
 
     pub fn merge_variables(&mut self, variables: &TypeAnnotatedValue) {
@@ -45,25 +80,75 @@ impl EvaluationContext {
         }
     }
 
-    pub fn from_request_data(request: &RequestDetails) -> Self {
+    pub fn from_all(
+        worker_detail: &WorkerDetail,
+        request: &RequestDetails,
+        functions: Vec<AnalysedFunction>,
+    ) -> Self {
+        let mut request_data = internal::request_type_annotated_value(request);
+        let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
+        let merged = request_data.merge(&worker_data);
+
         EvaluationContext {
-            worker_request: None,
-            worker_response: None,
-            variables: None,
-            request_data: Some(request.clone()),
+            variables: Some(merged.clone()),
+            analysed_functions: functions,
         }
     }
 
-    pub fn from(
-        worker_request: &WorkerRequest,
-        worker_response: &RefinedWorkerResponse,
-        request: &RequestDetails,
-    ) -> Self {
+    pub fn from_worker_detail(worker_detail: &WorkerDetail) -> Self {
+        let typed_value = worker_detail.clone().to_type_annotated_value();
+        let worker_data = create_record("worker", typed_value);
+
         EvaluationContext {
-            worker_request: Some(worker_request.clone()),
-            worker_response: Some(worker_response.clone()),
-            variables: None,
-            request_data: Some(request.clone()),
+            variables: Some(worker_data),
+            analysed_functions: vec![],
+        }
+    }
+
+    pub fn from_request_data(request: &RequestDetails) -> Self {
+        let variables = internal::request_type_annotated_value(request);
+
+        EvaluationContext {
+            variables: Some(variables),
+            analysed_functions: vec![],
+        }
+    }
+
+    #[allow(unused)]
+    pub fn from_refined_worker_response(worker_response: &RefinedWorkerResponse) -> Self {
+        let type_annoated_value = worker_response.to_type_annotated_value();
+
+        if let Some(typed_res) = type_annoated_value {
+            let response_data = internal::create_record("response", typed_res);
+            let worker_data = internal::create_record("worker", response_data);
+
+            EvaluationContext {
+                variables: Some(worker_data),
+                analysed_functions: vec![],
+            }
+        } else {
+            EvaluationContext::empty()
+        }
+    }
+}
+
+mod internal {
+    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::TypeAnnotatedValue;
+
+    use crate::worker_binding::RequestDetails;
+
+    pub(crate) fn request_type_annotated_value(
+        request_details: &RequestDetails,
+    ) -> TypeAnnotatedValue {
+        let type_annoated_value = request_details.to_type_annotated_value();
+        create_record("request", type_annoated_value)
+    }
+
+    pub(crate) fn create_record(name: &str, value: TypeAnnotatedValue) -> TypeAnnotatedValue {
+        TypeAnnotatedValue::Record {
+            typ: vec![(name.to_string(), AnalysedType::from(&value))],
+            value: vec![(name.to_string(), value)].into_iter().collect(),
         }
     }
 }

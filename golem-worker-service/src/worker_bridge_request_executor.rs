@@ -33,6 +33,7 @@ mod internal {
     use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
     use golem_common::model::CallingConvention;
     use golem_service_base::model::WorkerId;
+    use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_worker_service_base::auth::EmptyAuthCtx;
     use serde_json::Value;
 
@@ -71,13 +72,20 @@ mod internal {
             component_id, worker_name.clone(), idempotency_key_str, invoke_parameters
         );
 
+        let mut invoke_parameters_values = vec![];
+
+        for param in invoke_parameters {
+            let value = get_json_from_typed_value(&param);
+            invoke_parameters_values.push(value);
+        }
+
         let invoke_result = default_executor
             .worker_service
             .invoke_and_await_function_typed_value(
                 &worker_id,
                 worker_request_params.idempotency_key,
                 worker_request_params.function_name,
-                Value::Array(invoke_parameters),
+                Value::Array(invoke_parameters_values),
                 &CallingConvention::Component,
                 empty_worker_metadata(),
                 &EmptyAuthCtx {},

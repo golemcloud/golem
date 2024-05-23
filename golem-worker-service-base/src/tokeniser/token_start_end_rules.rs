@@ -71,26 +71,27 @@ impl Rules {
             Token::SemiColon => vec![],
             Token::WildCard => vec![],
             Token::At => vec![],
+            Token::Escape => vec![],
             Token::MultiChar(multi) => {
                 match multi {
-                    MultiCharTokens::Worker => vec![],  // hardly act as an end token
-                    MultiCharTokens::Request => vec![], // shardly act as an end token
-                    MultiCharTokens::Ok => vec![],      // hardly act as an end token
-                    MultiCharTokens::Err => vec![],     // hardly act as an end token
-                    MultiCharTokens::Some => vec![],    // hardly act as an end token
-                    MultiCharTokens::None => vec![],    // hardly act as an end token
-                    MultiCharTokens::Match => vec![],   // hardly act as an end token
+                    MultiCharTokens::Ok => vec![],    // hardly act as an end token
+                    MultiCharTokens::Err => vec![],   // hardly act as an end token
+                    MultiCharTokens::Some => vec![],  // hardly act as an end token
+                    MultiCharTokens::None => vec![],  // hardly act as an end token
+                    MultiCharTokens::Match => vec![], // hardly act as an end token
                     MultiCharTokens::InterpolationStart => vec![], // hardly act as an end token
                     MultiCharTokens::GreaterThanOrEqualTo => vec![], // hardly act as an end token
                     MultiCharTokens::LessThanOrEqualTo => vec![], // hardly act as an end token
                     MultiCharTokens::EqualTo => vec![], // hardly act as an end token
-                    MultiCharTokens::If => vec![],      // hardly act as an end token
+                    MultiCharTokens::If => vec![],    // hardly act as an end token
                     MultiCharTokens::Then => vec![TokenStartEnd::of_if()],
                     MultiCharTokens::Else => vec![TokenStartEnd::of_then()],
                     MultiCharTokens::Arrow => vec![], // hardly act as an end token
                     MultiCharTokens::Let => vec![],   // hardly act as an end token
-                    MultiCharTokens::Number(_) => vec![], // hardly act as an end token
-                    MultiCharTokens::Other(_) => vec![], // hardly act as an end token
+                    MultiCharTokens::NumberLiteral(_) => vec![], // hardly act as an end token
+                    MultiCharTokens::StringLiteral(_) => vec![], // hardly act as an end token
+                    MultiCharTokens::Identifier(_) => vec![],
+                    MultiCharTokens::BooleanLiteral(_) => vec![], // hardly act as an end token
                 }
             }
             Token::LCurly => vec![],
