@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "rust-http-service",
+    "rust-component-service"
+]

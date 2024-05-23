@@ -11,16 +11,8 @@
         "workerName": "worker-${request.path.user-id}",
         "functionName": "golem:it/api/get-cart-contents",
         "functionParams": [],
-        "response" : {
-          "status": "200",
-          "body": {
-            "name" : "${worker.response[0].name}",
-            "price" : "${worker.response[0].price}",
-            "quantity" : "${worker.response[0].quantity}"
-          },
-          "headers": {}
+        "response" : "${let result = golem:it/api/get-cart-contents(); { status: 200, body: { name: result[0].name, price: result[0].price, quantity: result[0].quantity }}}"
         }
       }
-    }
   ]
 }

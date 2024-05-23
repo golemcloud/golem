@@ -7,6 +7,7 @@ use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_wasm_rpc::TypeAnnotatedValue;
+use poem_openapi::types::ToJSON;
 use serde_json::Value;
 use tokio::time::sleep;
 use tonic::transport::Channel;
@@ -154,6 +155,12 @@ pub trait WorkerService<AuthCtx> {
         target_version: ComponentVersion,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
+
+    async fn get_component_for_worker(
+        &self,
+        worker_id: &WorkerId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Component, WorkerServiceError>;
 }
 
 pub struct TypedResult {
@@ -839,6 +846,14 @@ where
             .await?;
         Ok(())
     }
+
+    async fn get_component_for_worker(
+        &self,
+        worker_id: &WorkerId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Component, WorkerServiceError> {
+        self.try_get_component_for_worker(worker_id, auth_ctx).await
+    }
 }
 
 impl<AuthCtx> WorkerServiceDefault<AuthCtx>
@@ -1464,5 +1479,17 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         Ok(())
+    }
+
+    async fn get_component_for_worker(
+        &self,
+        worker_id: &WorkerId,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<Component> {
+        let worker_id = golem_common::model::WorkerId {
+            component_id: worker_id.component_id.clone(),
+            worker_name: worker_id.worker_name.to_json_string(),
+        };
+        Err(WorkerServiceError::WorkerNotFound(worker_id))
     }
 }

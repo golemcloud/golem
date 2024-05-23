@@ -1,131 +1,97 @@
-use crate::worker_binding::{RequestDetails, ResponseMapping};
-use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutorError, WorkerResponse};
+use crate::evaluator::{EvaluationError, EvaluationResult, MetadataFetchError};
+use crate::worker_binding::RequestDetails;
+
 use http::StatusCode;
 use poem::Body;
 
 pub trait ToResponse<A> {
-    fn to_response(
-        &self,
-        worker_request: &WorkerRequest,
-        response_mapping: &Option<ResponseMapping>,
-        request_details: &RequestDetails,
-    ) -> A;
+    fn to_response(&self, request_details: &RequestDetails) -> A;
 }
 
-impl ToResponse<poem::Response> for WorkerResponse {
-    fn to_response(
-        &self,
-        worker_request: &WorkerRequest,
-        response_mapping: &Option<ResponseMapping>,
-        request_details: &RequestDetails,
-    ) -> poem::Response {
-        match self.refined() {
-            Ok(refined) => {
-                match internal::IntermediateHttpResponse::from(
-                    &refined,
-                    response_mapping,
-                    request_details,
-                    worker_request,
-                ) {
-                    Ok(intermediate_response) => {
-                        intermediate_response.to_http_response(request_details)
-                    }
-                    Err(e) => poem::Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Body::from_string(format!(
-                            "Error when  converting worker response to http response. Error: {}",
-                            e
-                        ))),
-                }
-            }
+impl ToResponse<poem::Response> for EvaluationResult {
+    fn to_response(&self, request_details: &RequestDetails) -> poem::Response {
+        match internal::IntermediateHttpResponse::from(self) {
+            Ok(intermediate_response) => intermediate_response.to_http_response(request_details),
             Err(e) => poem::Response::builder()
-                .status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
-                .body(poem::Body::from_string(
-                    format!("API request error {}", e).to_string(),
-                )),
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from_string(format!(
+                    "Error when  converting worker response to http response. Error: {}",
+                    e
+                ))),
         }
     }
 }
 
-impl ToResponse<poem::Response> for WorkerRequestExecutorError {
-    fn to_response(
-        &self,
-        _worker_request: &WorkerRequest,
-        _response_mapping: &Option<ResponseMapping>,
-        _request_details: &RequestDetails,
-    ) -> poem::Response {
+impl ToResponse<poem::Response> for EvaluationError {
+    fn to_response(&self, _request_details: &RequestDetails) -> poem::Response {
+        poem::Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::from_string(format!("Error {}", self).to_string()))
+    }
+}
+
+impl ToResponse<poem::Response> for MetadataFetchError {
+    fn to_response(&self, _request_details: &RequestDetails) -> poem::Response {
         poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::from_string(
-                format!("API request error {}", self).to_string(),
+                format!("Worker metadata fetch error {}", self).to_string(),
             ))
     }
 }
 
 mod internal {
-    use crate::api_definition::http::HttpResponseMapping;
-    use crate::evaluator::Evaluator;
-    use crate::evaluator::{EvaluationContext, EvaluationError, EvaluationResult};
-    use crate::expression::Expr;
+    use crate::evaluator::{EvaluationError, EvaluationResult};
     use crate::primitive::{GetPrimitive, Primitive};
-    use crate::worker_binding::{RequestDetails, ResponseMapping};
+    use crate::worker_binding::RequestDetails;
     use crate::worker_bridge_execution::content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
-    use crate::worker_bridge_execution::refined_worker_response::RefinedWorkerResponse;
-    use crate::worker_bridge_execution::WorkerRequest;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use http::{HeaderMap, StatusCode};
     use std::str::FromStr;
 
+    use golem_wasm_rpc::TypeAnnotatedValue;
     use poem::{Body, IntoResponse, ResponseParts};
     use std::collections::HashMap;
 
+    use crate::evaluator::getter::Getter;
+    use crate::evaluator::path::Path;
     use poem::web::headers::ContentType;
 
     pub(crate) struct IntermediateHttpResponse {
-        body: EvaluationResult,
+        body: Option<TypeAnnotatedValue>,
         status: StatusCode,
         headers: ResolvedResponseHeaders,
     }
 
     impl IntermediateHttpResponse {
         pub(crate) fn from(
-            worker_response: &RefinedWorkerResponse,
-            response_mapping: &Option<ResponseMapping>,
-            request_details: &RequestDetails,
-            worker_request: &WorkerRequest,
+            worker_result: &EvaluationResult,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
-            let evaluation_context =
-                EvaluationContext::from(worker_request, worker_response, request_details);
+            match worker_result {
+                EvaluationResult::Value(type_annotated_value) => {
+                    let status_typed = type_annotated_value.get(&Path::from_key("status"))?;
+                    let status = get_status_code(&status_typed)?;
+                    let body = type_annotated_value.get(&Path::from_key("body"))?;
+                    let headers = ResolvedResponseHeaders::from_map(
+                        &type_annotated_value.get(&Path::from_key("headers"))?,
+                    )?;
 
-            if let Some(res_map) = response_mapping {
-                let http_response_mapping =
-                    HttpResponseMapping::try_from(res_map).map_err(EvaluationError::Message)?;
-
-                let status_code =
-                    get_status_code(&http_response_mapping.status, &evaluation_context)?;
-
-                let headers = ResolvedResponseHeaders::from(
-                    &http_response_mapping.headers,
-                    &evaluation_context,
-                )?;
-
-                let evaluation_result = http_response_mapping.body.evaluate(&evaluation_context)?;
-
-                Ok(IntermediateHttpResponse {
-                    body: evaluation_result,
-                    status: status_code,
-                    headers,
-                })
-            } else {
-                Ok(IntermediateHttpResponse {
-                    body: EvaluationResult::from(worker_response),
+                    Ok(IntermediateHttpResponse {
+                        body: Some(body),
+                        status,
+                        headers,
+                    })
+                }
+                EvaluationResult::Unit => Ok(IntermediateHttpResponse {
+                    body: None,
                     status: StatusCode::default(),
                     headers: ResolvedResponseHeaders::default(),
-                })
+                }),
             }
         }
+
         pub(crate) fn to_http_response(&self, request_details: &RequestDetails) -> poem::Response {
             let headers: Result<HeaderMap, String> = (&self.headers.headers)
                 .try_into()
@@ -147,7 +113,7 @@ mod internal {
                         ContentTypeHeaders::from(response_content_type, accepted_content_types);
 
                     match evaluation_result {
-                        EvaluationResult::Value(type_annotated_value) => {
+                        Some(type_annotated_value) => {
                             match type_annotated_value.to_http_response_body(content_type) {
                                 Ok(body_with_header) => {
                                     let mut response = body_with_header.into_response();
@@ -160,7 +126,7 @@ mod internal {
                                     .body(Body::from_string(content_map_error.to_string())),
                             }
                         }
-                        EvaluationResult::Unit => {
+                        None => {
                             let parts = ResponseParts {
                                 status: *status,
                                 version: Default::default(),
@@ -193,13 +159,9 @@ mod internal {
             })
     }
 
-    fn get_status_code(
-        status_expr: &Expr,
-        evaluator_context: &EvaluationContext,
-    ) -> Result<StatusCode, EvaluationError> {
-        let status_value = status_expr.evaluate(evaluator_context)?;
+    fn get_status_code(status_code: &TypeAnnotatedValue) -> Result<StatusCode, EvaluationError> {
         let status_res: Result<u16, EvaluationError> =
-            match status_value.get_primitive() {
+            match status_code.get_primitive() {
                 Some(Primitive::String(status_str)) => status_str.parse().map_err(|e| {
                     EvaluationError::Message(format!(
                         "Invalid Status Code Expression. It is resolved to a string but not a number {}. Error: {}",
@@ -214,7 +176,7 @@ mod internal {
                 }),
                 _ => Err(EvaluationError::Message(format!(
                     "Status Code Expression is evaluated to a complex value. It is resolved to {:?}",
-                    status_value
+                    get_json_from_typed_value(status_code)
                 )))
             };
 
@@ -232,33 +194,37 @@ mod internal {
     }
 
     impl ResolvedResponseHeaders {
-        // Example: In API definition, user may define a header as "X-Request-${worker-response.value}" to be added
-        // to the http response. Here we resolve the expression based on the resolved variables (that was formed from the response of the worker)
-        fn from(
-            header_mapping: &HashMap<String, Expr>,
-            input: &EvaluationContext, // The input to evaluating header expression is a type annotated value
-        ) -> Result<ResolvedResponseHeaders, EvaluationError> {
-            let mut resolved_headers: HashMap<String, String> = HashMap::new();
+        pub fn from_map(
+            header_map: &TypeAnnotatedValue,
+        ) -> Result<ResolvedResponseHeaders, String> {
+            match header_map {
+                TypeAnnotatedValue::Record { value, .. } => {
+                    let mut resolved_headers: HashMap<String, String> = HashMap::new();
 
-            for (header_name, header_value_expr) in header_mapping {
-                let value = header_value_expr
-                    .evaluate(input)?
-                    .get_value()
-                    .ok_or("Unable to resolve header. Resulted in ()".to_string())?;
+                    for (header_name, header_value) in value {
+                        let value_str = header_value
+                            .get_primitive()
+                            .map(|primitive| primitive.to_string())
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "Unable to resolve header. Resulted in {}",
+                                    get_json_from_typed_value(header_value)
+                                )
+                            });
 
-                let value_str = value
-                    .get_primitive()
-                    .ok_or(EvaluationError::Message(format!(
-                        "Header value is not a string. {}",
-                        get_json_from_typed_value(&value)
-                    )))?;
+                        resolved_headers.insert(header_name.clone(), value_str);
+                    }
 
-                resolved_headers.insert(header_name.clone(), value_str.to_string());
+                    Ok(ResolvedResponseHeaders {
+                        headers: resolved_headers,
+                    })
+                }
+
+                _ => Err(format!(
+                    "Header expression is not a record. It is resolved to {}",
+                    get_json_from_typed_value(header_map)
+                )),
             }
-
-            Ok(ResolvedResponseHeaders {
-                headers: resolved_headers,
-            })
         }
     }
 }

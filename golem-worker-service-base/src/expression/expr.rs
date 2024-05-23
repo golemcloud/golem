@@ -11,9 +11,7 @@ use crate::parser::{GolemParser, ParseError};
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
-    Request(),
     Let(String, Box<Expr>),
-    Worker(),
     SelectField(Box<Expr>, String),
     SelectIndex(Box<Expr>, usize),
     Sequence(Vec<Expr>),
@@ -22,7 +20,7 @@ pub enum Expr {
     Literal(String),
     Number(InnerNumber),
     Flags(Vec<String>),
-    Variable(String),
+    Identifier(String), // Upto the evaluator to find from the context what String represents
     Boolean(bool),
     Concat(Vec<Expr>),
     Multiple(Vec<Expr>),
@@ -36,6 +34,7 @@ pub enum Expr {
     PatternMatch(Box<Expr>, Vec<MatchArm>),
     Option(Option<Box<Expr>>),
     Result(Result<Box<Expr>, Box<Expr>>),
+    Call(String, Vec<Expr>), // Upto the evaluator to find from the context what String represents
 }
 
 impl Expr {
@@ -129,7 +128,7 @@ impl ArmPattern {
                 variables,
             )
         } else {
-            let constructor_type = ConstructorTypeName::CustomConstructor(pattern_name.to_string());
+            let constructor_type = ConstructorTypeName::Identifier(pattern_name.to_string());
             Ok(ArmPattern::Constructor(constructor_type, variables))
         }
     }
@@ -165,14 +164,14 @@ fn validate_single_variable_constructor(
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum ConstructorTypeName {
     InBuiltConstructor(InBuiltConstructorInner),
-    CustomConstructor(String),
+    Identifier(String),
 }
 
 impl Display for ConstructorTypeName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConstructorTypeName::InBuiltConstructor(inner) => write!(f, "{}", inner),
-            ConstructorTypeName::CustomConstructor(name) => write!(f, "{}", name),
+            ConstructorTypeName::Identifier(name) => write!(f, "{}", name),
         }
     }
 }

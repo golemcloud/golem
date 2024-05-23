@@ -2392,12 +2392,6 @@ components:
           format: uuid
         workerName:
           type: string
-        functionName:
-          type: string
-        functionParams:
-          type: array
-          items:
-            type: string
         idempotencyKey:
           type: string
         response:
@@ -2405,8 +2399,7 @@ components:
       required:
       - componentId
       - workerName
-      - functionName
-      - functionParams
+      - response
     HealthcheckResponse:
       type: object
     HttpApiDefinition:
