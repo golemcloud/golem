@@ -310,7 +310,7 @@ mod tests {
 
         let site = ApiSite {
             host: "dev-api.golem.cloud".to_string(),
-            subdomain: "test".to_string(),
+            subdomain: Some("test".to_string()),
         };
 
         let site_str = ApiSiteString::from(&site);
