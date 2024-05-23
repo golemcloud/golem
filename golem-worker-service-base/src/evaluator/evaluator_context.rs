@@ -1,4 +1,3 @@
-use std::fmt::Display;
 use crate::evaluator::evaluator_context::internal::create_record;
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
@@ -10,6 +9,7 @@ use async_trait::async_trait;
 use golem_common::model::ComponentId;
 use golem_wasm_ast::analysis::AnalysedFunction;
 use golem_wasm_rpc::TypeAnnotatedValue;
+use std::fmt::Display;
 
 #[derive(Clone)]
 pub struct EvaluationContext {
@@ -28,7 +28,7 @@ pub trait WorkerMetadataFetcher {
 pub struct MetadataFetchError(pub String);
 
 impl Display for MetadataFetchError {
-fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Worker component metadata fetch error: {}", self.0)
     }
 }
@@ -37,7 +37,10 @@ pub struct NoopWorkerMetadataFetcher;
 
 #[async_trait]
 impl WorkerMetadataFetcher for NoopWorkerMetadataFetcher {
-    async fn get_worker_metadata(&self, _component_id: &ComponentId) ->  Result<Vec<AnalysedFunction>, MetadataFetchError> {
+    async fn get_worker_metadata(
+        &self,
+        _component_id: &ComponentId,
+    ) -> Result<Vec<AnalysedFunction>, MetadataFetchError> {
         Ok(vec![])
     }
 }

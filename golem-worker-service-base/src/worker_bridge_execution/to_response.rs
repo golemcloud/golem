@@ -1,7 +1,5 @@
-use crate::evaluator::{
-    EvaluationError, EvaluationResult, MetadataFetchError,
-};
-use crate::worker_binding::{RequestDetails};
+use crate::evaluator::{EvaluationError, EvaluationResult, MetadataFetchError};
+use crate::worker_binding::RequestDetails;
 
 use http::StatusCode;
 use poem::Body;
@@ -45,7 +43,7 @@ impl ToResponse<poem::Response> for MetadataFetchError {
 mod internal {
     use crate::evaluator::{EvaluationError, EvaluationResult};
     use crate::primitive::{GetPrimitive, Primitive};
-    use crate::worker_binding::{RequestDetails};
+    use crate::worker_binding::RequestDetails;
     use crate::worker_bridge_execution::content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };

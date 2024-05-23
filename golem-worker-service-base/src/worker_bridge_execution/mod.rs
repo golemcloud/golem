@@ -1,5 +1,3 @@
-
-
 use serde_json::Value;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
@@ -8,7 +6,6 @@ mod content_type_mapper;
 mod refined_worker_response;
 pub mod to_response;
 mod worker_request_executor;
-
 
 pub use refined_worker_response::*;
 pub use worker_request_executor::*;
