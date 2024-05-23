@@ -18,7 +18,7 @@
       "x-golem-worker-bridge": {
         "worker-name": "worker-${request.path.user-id}",
         "component-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-        "response" : "${ let result = golem:it/api/get-cart-contents(); { headers : {ContentType: \"json\", userid: \"foo\"}, {body: result, status: 200} }"
+        "response" : "${ let result = golem:it/api/get-cart-contents(); { headers : { content-type: \"application/json\", userid: \"foo\"}, body: result, status: 200} }"
       },
       "get": {
         "summary": "Get Cart Contents",

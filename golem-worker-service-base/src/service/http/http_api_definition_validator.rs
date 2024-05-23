@@ -10,7 +10,6 @@ use crate::api_definition::http::{HttpApiDefinition, MethodPattern, Route};
 use crate::http::router::{Router, RouterPattern};
 use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 
-
 // Http Api Definition Validator
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct RouteValidationError {
@@ -86,11 +85,11 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
 
 #[cfg(test)]
 mod tests {
-    use golem_common::model::ComponentId;
     use crate::api_definition::http::{MethodPattern, Route};
     use crate::expression::Expr;
     use crate::service::http::http_api_definition_validator::unique_routes;
     use crate::worker_binding::ResponseMapping;
+    use golem_common::model::ComponentId;
 
     #[test]
     fn test_unique_routes() {
@@ -137,4 +136,3 @@ mod tests {
         assert!(errors[0].detail.contains(paths[0]), "Received: {errors:?}");
     }
 }
-
