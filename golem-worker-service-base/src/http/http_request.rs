@@ -133,6 +133,7 @@ mod tests {
 
     #[async_trait]
     impl WorkerRequestExecutor for TestWorkerRequestExecutor {
+        // This test executor simply returns the worker request details itself to a type-annotated-value
         async fn execute(
             &self,
             resolved_worker_request: WorkerRequest,
@@ -150,7 +151,7 @@ mod tests {
             };
 
             Ok(WorkerResponse::new(
-                convert_to_worker_response(&resolved_worker_request),
+                response_dummy,
                 vec![function_result_type],
             ))
         }
@@ -212,7 +213,7 @@ mod tests {
         required
     }
 
-    fn test_evaluator() -> Arc<dyn Evaluator + Sync + Send> {
+    fn get_test_evaluator() -> Arc<dyn Evaluator + Sync + Send> {
         Arc::new(DefaultEvaluator::from_worker_request_executor(Arc::new(
             TestWorkerRequestExecutor {},
         )))
@@ -236,12 +237,13 @@ mod tests {
         }
     }
 
-    fn test_fetcher(function_name: &str) -> Arc<dyn WorkerMetadataFetcher + Sync + Send> {
+    fn get_test_metadata_fetcher(function_name: &str) -> Arc<dyn WorkerMetadataFetcher + Sync + Send> {
         Arc::new(TestMetadataFetcher {
             function_name: function_name.to_string(),
         })
     }
 
+    #[derive(Debug)]
     struct TestResponse {
         function_name: String,
         function_params: Value,
@@ -274,56 +276,43 @@ mod tests {
 
     impl ToResponse<TestResponse> for EvaluationError {
         fn to_response(&self, request_details: &RequestDetails) -> TestResponse {
-            TestResponse {
-                function_name: "".to_string(),
-                function_params: Value::Null,
-            }
+            panic!("{}", self.to_string())
         }
     }
 
     impl ToResponse<TestResponse> for MetadataFetchError {
         fn to_response(&self, request_details: &RequestDetails) -> TestResponse {
-            TestResponse {
-                function_name: "".to_string(),
-                function_params: Value::Null,
-            }
+            panic!("{}", self.to_string())
         }
     }
 
-    #[test]
-    fn test_worker_request_resolution() {
-        //let evaluator = test_evaluator();
+    #[tokio::test]
+    async fn test_end_to_end_evaluation_simple() {
+        let evaluator = get_test_evaluator();
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
-        let expression = "${let response = golem:it/api/get-cart-contents(\"a\", \"b\"); response}";
-        //
+        let expression = r#"let response = golem:it/api/get-cart-contents("a", "b"); response"#;
+
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${request.path.user-id}",
             expression,
         );
-        //
-        // dbg!(api_specification.clone());
 
-        //let fetcher = test_fetcher("golem:it/api/get-cart-contents");
+        let worker_metadata_fetcher =
+            get_test_metadata_fetcher("golem:it/api/get-cart-contents");
 
-        // let resolved_route = api_request.resolve(&api_specification).await;
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
-        // dbg!(resolved_route);
-        //
-        // let test_response: TestResponse = resolved_route.execute_with(&evaluator, &fetcher).await;
-        //
-        // let result = resolved_route.worker_detail;
-        //
-        // let expected = WorkerDetail {
-        //     component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-        //         .parse::<ComponentId>()
-        //         .unwrap(),
-        //     worker_name: "shopping-cart-1".to_string(),
-        //     idempotency_key: None,
-        // };
+        let test_response: TestResponse = resolved_route.execute_with(&evaluator, &worker_metadata_fetcher).await;
+        
+        let result =
+            (test_response.function_name, test_response.function_params);
 
-        assert_eq!(1, 2);
+        let expected =
+            ("golem:it/api/get-cart-contents".to_string(), Value::Array(vec![Value::String("a".to_string()), Value::String("b".to_string())]));
+
+        assert_eq!(result, expected);
     }
     //
     // #[tokio::test]
@@ -1084,10 +1073,10 @@ mod tests {
               type: wit-worker
               componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
               workerName: '{}'
-              response: "${{let result = api:abc/get-cart-contents(\"a\", \"b\"); result}}"
+              response: '${{{}}}'
 
         "#,
-            path_pattern, worker_name
+            path_pattern, worker_name, rib_expression
         );
 
         let http_api_definition: HttpApiDefinition =
