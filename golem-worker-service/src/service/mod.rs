@@ -54,6 +54,7 @@ pub struct Services {
     pub http_definition_lookup_service:
         Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
+    pub worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     pub api_definition_validator_service: Arc<
         dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
     >,
