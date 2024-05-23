@@ -119,30 +119,6 @@ impl EvaluationContext {
             EvaluationContext::empty()
         }
     }
-
-    pub fn from(
-        worker_request: &WorkerRequest,
-        worker_response: &RefinedWorkerResponse,
-        request: &RequestDetails,
-    ) -> Self {
-        let mut worker_request_data = internal::worker_request_type_annotated_value(worker_request);
-
-        let worker_response_data = internal::worker_response_type_annotated_value(worker_response);
-
-        if let Some(worker_response) = worker_response_data {
-            let worker_data = worker_request_data.merge(&worker_response);
-            let request_data = internal::request_type_annotated_value(request);
-
-            let variables = worker_data.merge(&request_data).clone();
-
-            EvaluationContext {
-                variables: Some(variables),
-                analysed_functions: vec![],
-            }
-        } else {
-            EvaluationContext::from_request_data(request)
-        }
-    }
 }
 
 mod internal {

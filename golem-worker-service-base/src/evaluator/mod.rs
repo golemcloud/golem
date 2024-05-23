@@ -149,9 +149,7 @@ impl Evaluator for DefaultEvaluator {
 
                     let response_context = EvaluationContext::from_refined_worker_response(&result);
 
-                    if let Some(worker_response) = response_context.variables {
-                        input.merge_variables(&worker_response);
-                    }
+                    input.merge(&response_context);
 
                     Ok(EvaluationResult::from(&result))
                 }

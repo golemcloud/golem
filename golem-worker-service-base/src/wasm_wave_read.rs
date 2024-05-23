@@ -5,7 +5,7 @@ use golem_wasm_rpc::{TypeAnnotatedValue, Value};
 // A handy utility that allows you to read string of wasm_syntax to wasm value (golem_wasm_rpc::value::Value)
 // without explicitly passing `AnalysedType` unlike wasm_wave functionalities. It may not be used in the wild.
 pub async fn read_wasm_wave_string(wave_syntax_str: impl AsRef<str>) -> Result<Value, String> {
-    let typed_value = read_wasm_wave_string_internal(wave_syntax_str)?;
+    let typed_value = read_wasm_wave_string_internal(wave_syntax_str).await?;
     Value::try_from(typed_value).map_err(|e| e.to_string())
 }
 
