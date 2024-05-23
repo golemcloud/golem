@@ -102,42 +102,193 @@ pub mod router {
 
 #[cfg(test)]
 mod tests {
-
+    use std::sync::Arc;
+    use golem_wasm_ast::analysis::{AnalysedFunction, AnalysedType};
+    use golem_wasm_rpc::json::get_json_from_typed_value;
+    use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
+    use serde_json::Value;
 
     use golem_common::model::{ComponentId, IdempotencyKey};
+    use golem_service_base::model::FunctionResult;
 
     use crate::api_definition::http::HttpApiDefinition;
+    use crate::evaluator::{DefaultEvaluator, EvaluationError, EvaluationResult, Evaluator, MetadataFetchError, NoopWorkerMetadataFetcher, WorkerMetadataFetcher};
+    use crate::evaluator::getter::Getter;
+    use crate::evaluator::path::Path;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
-    use crate::worker_binding::WorkerBindingResolver;
-    use crate::worker_bridge_execution::WorkerRequest;
+    use crate::merge::Merge;
+    use crate::primitive::GetPrimitive;
+    use crate::worker_binding::{RequestDetails, WorkerBindingResolver, WorkerDetail};
+    use crate::worker_bridge_execution::{
+        WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
+    };
+    use crate::worker_bridge_execution::to_response::ToResponse;
+
+    struct TestWorkerRequestExecutor {}
+
+    impl WorkerRequestExecutor for TestWorkerRequestExecutor {
+        async fn execute(
+            &self,
+            resolved_worker_request: WorkerRequest,
+        ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
+            let function_result_type = FunctionResult {
+                name: None,
+                typ: AnalysedType::Str.into(),
+            };
+
+            let response =
+                convert_to_worker_response(&resolved_worker_request);
+
+            let response_dummy = TypeAnnotatedValue::Tuple {
+                typ: vec![AnalysedType::from(&response)],
+                value: vec![response],
+            };
+
+            Ok(WorkerResponse::new(
+                convert_to_worker_response(&resolved_worker_request),
+                vec![function_result_type],
+            ))
+        }
+    }
+
+    fn convert_to_worker_response(worker_request: &WorkerRequest) -> TypeAnnotatedValue {
+        let mut required = TypeAnnotatedValue::Record {
+            typ: vec![
+                ("component_id".to_string(), AnalysedType::Str),
+                ("name".to_string(), AnalysedType::Str),
+                ("function_name".to_string(), AnalysedType::Str),
+            ],
+            value: vec![
+                (
+                    "component_id".to_string(),
+                    TypeAnnotatedValue::Str(worker_request.component_id.0.to_string()),
+                ),
+                (
+                    "name".to_string(),
+                    TypeAnnotatedValue::Str(worker_request.worker_name.clone()),
+                ),
+                (
+                    "function_name".to_string(),
+                    TypeAnnotatedValue::Str(worker_request.function_name.clone()),
+                ),
+                (
+                    "function_params".to_string(),
+                    TypeAnnotatedValue::Tuple {
+                        typ: worker_request.function_params.iter().map(|x| AnalysedType::from(x)).collect(),
+                        value: worker_request.function_params.clone(),
+                    },
+                )
+            ],
+        };
+
+        let optional_idempotency_key = self.idempotency_key.map(|x| TypeAnnotatedValue::Record {
+            // Idempotency key can exist in header of the request in which case users can refer to it as
+            // request.headers.idempotency-key. In order to keep some consistency, we are keeping the same key name here,
+            // if it exists as part of the API definition
+            typ: vec![("idempotency-key".to_string(), AnalysedType::Str)],
+            value: vec![(
+                "idempotency-key".to_string(),
+                TypeAnnotatedValue::Str(x.to_string()),
+            )],
+        });
+
+        if let Some(idempotency_key) = optional_idempotency_key {
+            required = required.merge(&idempotency_key).clone();
+        }
+
+        required
+    }
+
+    fn test_evaluator() ->  Arc<dyn Evaluator + Sync + Send> {
+        Arc::new(DefaultEvaluator::from_worker_request_executor(Arc::new(TestWorkerRequestExecutor{})))
+    }
+
+
+    struct TestMetadataFetcher{
+        function_name: String,
+    }
+
+    impl WorkerMetadataFetcher for TestMetadataFetcher {
+        async fn get_worker_metadata(&self, component_id: &ComponentId) -> Result<Vec<AnalysedFunction>, MetadataFetchError> {
+            Ok(vec![AnalysedFunction {
+                name: self.function_name.clone(),
+                params: vec![],
+                results: vec![],
+            }])
+        }
+    }
+
+    fn test_fetcher(function_name: &str) -> Arc<dyn WorkerMetadataFetcher + Sync + Send> {
+        Arc::new(TestMetadataFetcher{function_name: function_name.to_string()})
+    }
+
+    struct TestResponse {
+        function_name: String,
+        function_params: Value,
+    }
+
+    impl ToResponse<TestResponse> for EvaluationResult {
+        fn to_response(&self, request_details: &RequestDetails) -> TestResponse {
+            let function_name =
+                self.get_value().map(|x| x.get(&Path::from_key("function_name")).unwrap()).unwrap().get_primitive().unwrap().as_string();
+
+            let function_params = {
+                let params = self.get_value().map(|x| x.get(&Path::from_key("function_params")).unwrap()).unwrap();
+                get_json_from_typed_value(&params)
+            };
+
+            TestResponse {
+                function_name,
+                function_params
+            }
+        }
+    }
+
+    impl ToResponse<TestResponse> for EvaluationError {
+        fn to_response(&self, request_details: &RequestDetails) -> TestResponse {
+            TestResponse {
+                function_name: "".to_string(),
+                function_params: Value::Null
+            }
+        }
+    }
+
+    impl ToResponse<TestResponse> for MetadataFetchError {
+        fn to_response(&self, request_details: &RequestDetails) -> TestResponse {
+            TestResponse {
+                function_name: "".to_string(),
+                function_params: Value::Null
+            }
+        }
+    }
 
     #[tokio::test]
     async fn test_worker_request_resolution() {
+        let evaluator = test_evaluator();
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
-        let function_params = "[\"a\", \"b\"]";
+        let expression = "${let response = golem:it/api/get-cart-contents(\"a\", \"b\"); response}";
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${request.path.user-id}",
-            function_params,
+            expression,
         );
+
+        let fetcher = test_fetcher("golem:it/api/get-cart-contents");
 
         let resolved_route = api_request.resolve(&api_specification).await.unwrap();
 
+        let test_response: TestResponse = resolved_route.execute_with(&evaluator, &fetcher).await;
+
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![
-                serde_json::Value::String("a".to_string()),
-                serde_json::Value::String("b".to_string()),
-            ],
             idempotency_key: None,
         };
 
@@ -165,13 +316,11 @@ mod tests {
 
         expected_map.insert("x".to_string(), serde_json::Value::String("y".to_string()));
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Object(expected_map)],
             idempotency_key: None,
         };
 
@@ -202,13 +351,11 @@ mod tests {
             serde_json::Value::Number(serde_json::Number::from(1)),
         );
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Object(expected_map)],
             idempotency_key: None,
         };
 
@@ -244,16 +391,11 @@ mod tests {
             serde_json::Value::Number(serde_json::Number::from(1)),
         );
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![
-                serde_json::Value::Number(serde_json::Number::from(1)),
-                serde_json::Value::Number(serde_json::Number::from(2)),
-            ],
             idempotency_key: None,
         };
 
@@ -290,17 +432,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![
-                serde_json::Value::Number(serde_json::Number::from(1)),
-                serde_json::Value::Number(serde_json::Number::from(2)),
-                serde_json::Value::String("age-10".to_string()),
-            ],
             idempotency_key: None,
         };
 
@@ -361,18 +497,11 @@ mod tests {
             serde_json::Value::String("foo".to_string()),
         );
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![
-                serde_json::Value::Object(user_id_map),
-                serde_json::Value::Number(serde_json::Number::from(2)),
-                serde_json::Value::String("age-10".to_string()),
-                serde_json::Value::Object(user_name_map),
-            ],
             idempotency_key: None,
         };
 
@@ -395,16 +524,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![
-                serde_json::Value::String("a".to_string()),
-                serde_json::Value::String("b".to_string()),
-            ],
             idempotency_key: None,
         };
 
@@ -434,13 +558,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::String("address".to_string())],
             idempotency_key: None,
         };
 
@@ -467,13 +589,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Bool(true)],
             idempotency_key: None,
         };
 
@@ -500,13 +620,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Bool(true)],
             idempotency_key: None,
         };
 
@@ -533,13 +651,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Number(serde_json::Number::from(1))],
             idempotency_key: None,
         };
 
@@ -569,13 +685,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Number(serde_json::Number::from(0))],
             idempotency_key: None,
         };
 
@@ -602,16 +716,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![
-                serde_json::Value::Number(serde_json::Number::from(2)),
-                serde_json::Value::Number(serde_json::Number::from(1)),
-            ],
             idempotency_key: None,
         };
 
@@ -656,16 +765,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![
-                serde_json::Value::String("foo_value".to_string()),
-                serde_json::Value::String("bar_value".to_string()),
-            ],
             idempotency_key: None,
         };
 
@@ -710,16 +814,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![
-                serde_json::Value::String("foo_value".to_string()),
-                serde_json::Value::String("bar_value".to_string()),
-            ],
             idempotency_key: None,
         };
 
@@ -763,13 +862,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![serde_json::Value::Object(request_body.clone())],
             idempotency_key: None,
         };
 
@@ -820,17 +917,11 @@ mod tests {
 
         let result = resolved_route.worker_detail;
 
-        let expected = WorkerRequest {
+        let expected = WorkerDetail {
             component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
                 .parse::<ComponentId>()
                 .unwrap(),
             worker_name: "shopping-cart-1".to_string(),
-            function_name: "golem:it/api/get-cart-contents".to_string(),
-            function_params: vec![
-                serde_json::Value::String("foo_value".to_string()),
-                serde_json::Value::String("bar_value".to_string()),
-                serde_json::Value::String("token_value".to_string()),
-            ],
             idempotency_key: None,
         };
 
@@ -951,7 +1042,7 @@ mod tests {
     fn get_api_spec(
         path_pattern: &str,
         worker_name: &str,
-        function_params: &str,
+        rib_expression: &str,
     ) -> HttpApiDefinition {
         let yaml_string = format!(
             r#"
@@ -964,10 +1055,9 @@ mod tests {
               type: wit-worker
               componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
               workerName: '{}'
-              functionName: golem:it/api/get-cart-contents
-              functionParams: {}
+              response: {}
         "#,
-            path_pattern, worker_name, function_params
+            path_pattern, worker_name, rib_expression
         );
 
         dbg!(&yaml_string);

@@ -49,7 +49,7 @@ pub struct ResolvedWorkerBinding {
     pub response_mapping: Option<ResponseMapping>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorkerDetail {
     pub component_id: ComponentId,
     pub worker_name: String,

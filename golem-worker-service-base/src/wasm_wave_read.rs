@@ -36,14 +36,18 @@ mod tests {
     #[tokio::test]
     async fn test_read_wasm_wave_number() {
         let wasm_wave_string = "1";
-        let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string)).unwrap();
+        let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string))
+            .await
+            .unwrap();
         assert_eq!(result, golem_wasm_rpc::Value::U64(1));
     }
 
     #[tokio::test]
     async fn test_read_wasm_wave_record_of_constructors() {
         let wasm_wave_string = "{ a : ok(1), b : err(2) }";
-        let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string)).unwrap();
+        let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string))
+            .await
+            .unwrap();
         let expected = Value::Record(vec![
             Value::Result(Ok(Some(Box::new(Value::U64(1))))),
             Value::Result(Err(Some(Box::new(Value::U64(2))))),
@@ -55,7 +59,9 @@ mod tests {
     #[tokio::test]
     async fn test_read_wasm_wave_of_sequence() {
         let wasm_wave_string = "[1, 2, 3]";
-        let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string)).unwrap();
+        let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string))
+            .await
+            .unwrap();
         let expected = Value::List(vec![Value::U64(1), Value::U64(2), Value::U64(3)]);
         assert_eq!(result, expected);
     }
@@ -63,7 +69,9 @@ mod tests {
     #[tokio::test]
     async fn test_read_wasm_wave_of_tuple() {
         let wasm_wave_string = "(1, 2, 3)";
-        let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string)).unwrap();
+        let result = read_wasm_wave_string(wrap_in_code_interpolation(wasm_wave_string))
+            .await
+            .unwrap();
         let expected = Value::Tuple(vec![Value::U64(1), Value::U64(2), Value::U64(3)]);
         assert_eq!(result, expected);
     }

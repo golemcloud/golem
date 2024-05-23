@@ -1,3 +1,4 @@
+use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
@@ -15,6 +16,6 @@ pub struct WorkerRequest {
     pub component_id: ComponentId,
     pub worker_name: String,
     pub function_name: String,
-    pub function_params: Vec<Value>,
+    pub function_params: Vec<TypeAnnotatedValue>,
     pub idempotency_key: Option<IdempotencyKey>,
 }

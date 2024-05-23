@@ -554,7 +554,7 @@ impl<'t> Tokenizer<'t> {
         let rest_opt = self.rest_opt()?;
         let ch = rest_opt.chars().next()?;
         match ch {
-            'a'..='z' | 'A'..='Z' | '-' | '_' => {
+            'a'..='z' | 'A'..='Z' | '-' | '_' | ':' | '/' => {
                 let str =
                     self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')?;
                 match str {
