@@ -547,7 +547,7 @@ fn text_api_definition_import(
             +--------+------------------------------+-------------+--------------------------------+
             | Method | Path                         | ComponentId | WorkerName                     |
             +--------+------------------------------+-------------+--------------------------------+
-            | Get    | /{user-id}/get-cart-contents |    *{component_end} | worker-${request.path.user-id} |
+            | Get    | /{{user-id}}/get-cart-contents |    *{component_end} | worker-${{request.path.user-id}} |
             +--------+------------------------------+-------------+--------------------------------+
             "
         );
