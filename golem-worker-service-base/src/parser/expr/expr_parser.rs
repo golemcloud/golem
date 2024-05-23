@@ -295,17 +295,9 @@ mod internal {
     use crate::expression::Expr;
     use crate::parser::ParseError;
 
-    #[derive(Clone)]
+    #[derive(Clone, Default)]
     pub(crate) struct ConcatenatedExpr {
         expressions: Vec<Expr>,
-    }
-
-    impl Default for ConcatenatedExpr {
-        fn default() -> Self {
-            ConcatenatedExpr {
-                expressions: vec![],
-            }
-        }
     }
 
     impl ConcatenatedExpr {
@@ -327,8 +319,8 @@ mod internal {
                     "Expressions to be separated by semi column".to_string(),
                 ))
             } else {
-                let last = self.expressions.get(0);
-                Ok(last.map(|expr| expr.clone()))
+                let first = self.expressions.first();
+                Ok(first.cloned())
             }
         }
 
@@ -343,7 +335,7 @@ mod internal {
                         Expr::Literal(str) => Ok(str.to_string()),
                         expr => Err(ParseError::Message(format!(
                             "Invalid expression: {}",
-                            expression::to_string(&expr).unwrap()
+                            expression::to_string(expr).unwrap()
                         ))),
                     };
 

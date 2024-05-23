@@ -509,7 +509,7 @@ mod internal {
         let analysed_function = runtime
             .analysed_functions
             .iter()
-            .find(|f| f.name == function_name.to_string())
+            .find(|f| f.name == *function_name)
             .ok_or(EvaluationError::Message(format!(
                 "The function {} is not found at Runtime",
                 function_name
@@ -592,9 +592,7 @@ mod tests {
     use crate::expression;
     use crate::expression::Expr;
     use crate::worker_binding::RequestDetails;
-    use crate::worker_bridge_execution::{
-        NoopWorkerRequestExecutor, RefinedWorkerResponse, WorkerResponse,
-    };
+    use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerResponse};
     use test_utils::*;
 
     #[async_trait]
@@ -1817,7 +1815,7 @@ mod tests {
         use crate::expression;
         use crate::http::router::RouterPattern;
         use crate::worker_binding::RequestDetails;
-        use crate::worker_bridge_execution::{NoopWorkerRequestExecutor, WorkerResponse};
+        use crate::worker_bridge_execution::WorkerResponse;
         use golem_service_base::type_inference::infer_analysed_type;
         use golem_wasm_ast::analysis::AnalysedType;
         use golem_wasm_rpc::json::get_typed_value_from_json;

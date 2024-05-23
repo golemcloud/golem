@@ -123,7 +123,7 @@ mod tests {
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
     use crate::primitive::GetPrimitive;
-    use crate::worker_binding::{RequestDetails, WorkerBindingResolver, WorkerDetail};
+    use crate::worker_binding::{RequestDetails, WorkerBindingResolver};
     use crate::worker_bridge_execution::to_response::ToResponse;
     use crate::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
@@ -183,7 +183,7 @@ mod tests {
                         typ: worker_request
                             .function_params
                             .iter()
-                            .map(|x| AnalysedType::from(x))
+                            .map(AnalysedType::from)
                             .collect(),
                         value: worker_request.function_params.clone(),
                     },
@@ -227,7 +227,7 @@ mod tests {
     impl WorkerMetadataFetcher for TestMetadataFetcher {
         async fn get_worker_metadata(
             &self,
-            component_id: &ComponentId,
+            _component_id: &ComponentId,
         ) -> Result<Vec<AnalysedFunction>, MetadataFetchError> {
             Ok(vec![AnalysedFunction {
                 name: self.function_name.clone(),
@@ -253,7 +253,7 @@ mod tests {
     }
 
     impl ToResponse<TestResponse> for EvaluationResult {
-        fn to_response(&self, request_details: &RequestDetails) -> TestResponse {
+        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
             let function_name = self
                 .get_value()
                 .map(|x| x.get(&Path::from_key("function_name")).unwrap())
@@ -287,15 +287,29 @@ mod tests {
     }
 
     impl ToResponse<TestResponse> for EvaluationError {
-        fn to_response(&self, request_details: &RequestDetails) -> TestResponse {
+        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
             panic!("{}", self.to_string())
         }
     }
 
     impl ToResponse<TestResponse> for MetadataFetchError {
-        fn to_response(&self, request_details: &RequestDetails) -> TestResponse {
+        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
             panic!("{}", self.to_string())
         }
+    }
+
+    async fn execute(
+        api_request: &InputHttpRequest,
+        api_specification: &HttpApiDefinition,
+    ) -> TestResponse {
+        let evaluator = get_test_evaluator();
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+
+        let resolved_route = api_request.resolve(api_specification).await.unwrap();
+
+        resolved_route
+            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .await
     }
 
     #[tokio::test]
@@ -310,14 +324,7 @@ mod tests {
             expression,
         );
 
-        let evaluator = get_test_evaluator();
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (test_response.function_name, test_response.function_params);
 
@@ -348,14 +355,7 @@ mod tests {
             expression,
         );
 
-        let evaluator = get_test_evaluator();
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let mut expected_map = serde_json::Map::new();
 
@@ -392,15 +392,7 @@ mod tests {
             expression,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let mut expected_map = serde_json::Map::new();
 
@@ -439,15 +431,7 @@ mod tests {
             expression,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (
             test_response.worker_name,
@@ -495,15 +479,7 @@ mod tests {
             expression,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (
             test_response.worker_name,
@@ -558,15 +534,7 @@ mod tests {
             expression,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let mut user_id_map = serde_json::Map::new();
 
@@ -605,23 +573,13 @@ mod tests {
         let api_request = get_api_request("foo/2", None, &empty_headers, Value::Null);
         let expression = r#"let response = golem:it/api/get-cart-contents("a", "b"); response"#;
 
-
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
             expression,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (
             test_response.worker_name,
@@ -660,17 +618,7 @@ mod tests {
             expression,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (
             test_response.worker_name,
@@ -681,11 +629,8 @@ mod tests {
         let expected = (
             "shopping-cart-1".to_string(),
             "golem:it/api/get-cart-contents".to_string(),
-            Value::Array(vec![
-                Value::String("address".to_string()),
-            ]),
+            Value::Array(vec![Value::String("address".to_string())]),
         );
-
 
         assert_eq!(result, expected);
     }
@@ -706,17 +651,7 @@ mod tests {
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", expression);
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (
             test_response.worker_name,
@@ -727,9 +662,7 @@ mod tests {
         let expected = (
             "shopping-cart".to_string(),
             "golem:it/api/get-cart-contents".to_string(),
-            Value::Array(vec![
-                Value::Bool(true),
-            ]),
+            Value::Array(vec![Value::Bool(true)]),
         );
 
         assert_eq!(result, expected);
@@ -751,17 +684,7 @@ mod tests {
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", expression);
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (
             test_response.worker_name,
@@ -772,9 +695,7 @@ mod tests {
         let expected = (
             "shopping-cart".to_string(),
             "golem:it/api/get-cart-contents".to_string(),
-            Value::Array(vec![
-                Value::Bool(true),
-            ]),
+            Value::Array(vec![Value::Bool(true)]),
         );
 
         assert_eq!(result, expected);
@@ -799,17 +720,7 @@ mod tests {
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", expression);
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (
             test_response.worker_name,
@@ -820,9 +731,7 @@ mod tests {
         let expected = (
             "shopping-cart".to_string(),
             "golem:it/api/get-cart-contents".to_string(),
-            Value::Array(vec![
-                Value::Number(serde_json::Number::from(1)),
-            ]),
+            Value::Array(vec![Value::Number(serde_json::Number::from(1))]),
         );
 
         assert_eq!(result, expected);
@@ -842,8 +751,6 @@ mod tests {
             )])),
         );
 
-        let function_params = "[\"${if (request.body.number < 11) then 0 else 1}\"]";
-
         let expression = r#"
           let response = golem:it/api/get-cart-contents(if (request.body.number < 11) then 0 else 1);
           response
@@ -852,17 +759,7 @@ mod tests {
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", expression);
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (
             test_response.worker_name,
@@ -873,13 +770,10 @@ mod tests {
         let expected = (
             "shopping-cart".to_string(),
             "golem:it/api/get-cart-contents".to_string(),
-            Value::Array(vec![
-                Value::Number(serde_json::Number::from(0)),
-            ]),
+            Value::Array(vec![Value::Number(serde_json::Number::from(0))]),
         );
 
         assert_eq!(result, expected);
-
     }
 
     #[tokio::test]
@@ -896,8 +790,6 @@ mod tests {
             )])),
         );
 
-        let function_params = "[\"${if (request.body.number < 11) then 0 else 1}\"]";
-
         let expression = r#"
           let condition1 = if (request.body.number < 11) then request.path.user-id else 1;
           let condition2 = if (request.body.number < 5) then request.path.user-id else 1;
@@ -908,17 +800,7 @@ mod tests {
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", expression);
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (
             test_response.worker_name,
@@ -937,7 +819,6 @@ mod tests {
 
         assert_eq!(result, expected);
     }
-
 
     #[tokio::test]
     async fn test_worker_request_map_list_request_body_resolution() {
@@ -962,10 +843,6 @@ mod tests {
             serde_json::Value::Object(request_body),
         );
 
-        let foo_key = "${request.body.foo_key}";
-        let bar_key = "${request.body.bar_key[0]}";
-
-
         let expression = r#"
           let param1 = request.body.foo_key;
           let param2 = request.body.bar_key[0];
@@ -973,25 +850,13 @@ mod tests {
           response
         "#;
 
-        let function_params = format!("[\"{}\", \"{}\"]", foo_key, bar_key);
-
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            expression
+            expression,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (
             test_response.worker_name,
@@ -1007,7 +872,6 @@ mod tests {
                 Value::String("bar_value".to_string()),
             ]),
         );
-
 
         assert_eq!(result, expected);
     }
@@ -1035,35 +899,19 @@ mod tests {
             Value::Object(request_body.clone()),
         );
 
-        let foo_key = "${request.body.foo_key}";
-        let bar_key = "${request.body.bar_key[0]}";
-
-
         let expression = r#"
           let param = request.body;
           let response = golem:it/api/get-cart-contents(param);
           response
         "#;
 
-        let function_params = format!("[\"{}\", \"{}\"]", foo_key, bar_key);
-
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            expression
+            expression,
         );
 
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let evaluator = get_test_evaluator();
-
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
-
-        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-
-        let test_response: TestResponse = resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await;
+        let test_response = execute(&api_request, &api_specification).await;
 
         let result = (
             test_response.worker_name,
@@ -1074,11 +922,8 @@ mod tests {
         let expected = (
             "shopping-cart-1".to_string(),
             "golem:it/api/get-cart-contents".to_string(),
-            Value::Array(vec![
-                Value::Object(request_body),
-            ]),
+            Value::Array(vec![Value::Object(request_body)]),
         );
-
 
         assert_eq!(result, expected);
     }
@@ -1118,13 +963,7 @@ mod tests {
     #[tokio::test]
     async fn test_worker_idempotency_key_header() {
         async fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
-            let api_request = get_api_request(
-                "/getcartcontent/1",
-                None,
-                header_map,
-                Value::Null,
-            );
-
+            let api_request = get_api_request("/getcartcontent/1", None, header_map, Value::Null);
 
             let expression = r#"
             let param = request.body;

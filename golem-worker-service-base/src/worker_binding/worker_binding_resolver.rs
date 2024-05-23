@@ -57,7 +57,7 @@ pub struct WorkerDetail {
 }
 
 impl WorkerDetail {
-    pub fn to_type_annotated_value(self) -> TypeAnnotatedValue {
+    pub fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
         let mut required = TypeAnnotatedValue::Record {
             typ: vec![
                 ("component_id".to_string(), AnalysedType::Str),
@@ -70,21 +70,24 @@ impl WorkerDetail {
                 ),
                 (
                     "name".to_string(),
-                    TypeAnnotatedValue::Str(self.worker_name),
+                    TypeAnnotatedValue::Str(self.worker_name.clone()),
                 ),
             ],
         };
 
-        let optional_idempotency_key = self.idempotency_key.map(|x| TypeAnnotatedValue::Record {
-            // Idempotency key can exist in header of the request in which case users can refer to it as
-            // request.headers.idempotency-key. In order to keep some consistency, we are keeping the same key name here,
-            // if it exists as part of the API definition
-            typ: vec![("idempotency-key".to_string(), AnalysedType::Str)],
-            value: vec![(
-                "idempotency-key".to_string(),
-                TypeAnnotatedValue::Str(x.to_string()),
-            )],
-        });
+        let optional_idempotency_key =
+            self.idempotency_key
+                .clone()
+                .map(|x| TypeAnnotatedValue::Record {
+                    // Idempotency key can exist in header of the request in which case users can refer to it as
+                    // request.headers.idempotency-key. In order to keep some consistency, we are keeping the same key name here,
+                    // if it exists as part of the API definition
+                    typ: vec![("idempotency-key".to_string(), AnalysedType::Str)],
+                    value: vec![(
+                        "idempotency-key".to_string(),
+                        TypeAnnotatedValue::Str(x.to_string()),
+                    )],
+                });
 
         if let Some(idempotency_key) = optional_idempotency_key {
             required = required.merge(&idempotency_key).clone();
@@ -186,7 +189,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 
         let idempotency_key = if let Some(expr) = &binding.idempotency_key {
             let idempotency_key_value = default_evaluator
-                .evaluate(&expr, &request_evaluation_context)
+                .evaluate(expr, &request_evaluation_context)
                 .await
                 .map_err(|err| err.to_string())?;
 

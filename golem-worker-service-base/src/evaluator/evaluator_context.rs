@@ -84,7 +84,7 @@ impl EvaluationContext {
         request: &RequestDetails,
         functions: Vec<AnalysedFunction>,
     ) -> Self {
-        let mut request_data = internal::request_type_annotated_value(&request);
+        let mut request_data = internal::request_type_annotated_value(request);
         let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
         let merged = request_data.merge(&worker_data);
 
