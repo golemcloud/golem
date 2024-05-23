@@ -102,6 +102,7 @@ mod internal {
     }
 
     pub(crate) fn get_routes(paths: Paths) -> Result<Vec<Route>, String> {
+        dbg!("here???");
         let mut routes: Vec<Route> = vec![];
 
         for (path, path_item) in paths.iter() {
@@ -201,10 +202,10 @@ mod internal {
 
     pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Expr, String> {
         let worker_id = worker_bridge_info
-            .get("worker-id")
-            .ok_or("No worker-id found")?
+            .get("worker-name")
+            .ok_or("No worker-name found")?
             .as_str()
-            .ok_or("worker-id is not a string")?;
+            .ok_or("worker-name is not a string")?;
 
         expression::from_string(worker_id).map_err(|err| err.to_string())
     }
@@ -240,9 +241,7 @@ mod tests {
     fn test_get_route_from_path_item() {
         let path_item = PathItem {
             extensions: vec![("x-golem-worker-bridge".to_string(), json!({
-                "worker-id": "worker-${request.body.user}",
-                "function-name": "test",
-                "function-params": ["${request}"],
+                "worker-name": "worker-${request.body.user}",
                 "component-id": "00000000-0000-0000-0000-000000000000",
                 "idempotency-key": "test-key",
                 "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}"
