@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
 
-
 use golem_service_base::model::{Id, WorkerId};
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
@@ -49,7 +48,7 @@ impl Display for WorkerBindingResolutionError {
 pub struct ResolvedWorkerBinding {
     pub worker_detail: WorkerDetail,
     pub request_details: RequestDetails,
-    pub response_mapping: Option<ResponseMapping>,
+    pub response_mapping: ResponseMapping,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -120,7 +119,7 @@ impl ResolvedWorkerBinding {
 
         let worker_id = WorkerId {
             component_id: self.worker_detail.component_id.clone(),
-            worker_name
+            worker_name,
         };
 
         let functions_available = worker_metadata_fetcher
@@ -136,7 +135,7 @@ impl ResolvedWorkerBinding {
                 );
 
                 let result = evaluator
-                    .evaluate(&self.response_mapping.clone().unwrap().0, &runtime)
+                    .evaluate(&self.response_mapping.clone().0, &runtime)
                     .await;
 
                 match result {

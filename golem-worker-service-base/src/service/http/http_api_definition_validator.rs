@@ -6,8 +6,10 @@ use golem_common::model::ComponentId;
 use golem_service_base::model::Component;
 
 use crate::api_definition::http::{HttpApiDefinition, MethodPattern, Route};
+use crate::expression::Expr;
 use crate::http::router::{Router, RouterPattern};
 use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
+use crate::worker_binding::ResponseMapping;
 
 // Http Api Definition Validator
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -92,7 +94,7 @@ fn test_unique_routes() {
                 component_id: ComponentId::new_v4(),
                 worker_name: crate::expression::Expr::Identifier("request".to_string()),
                 idempotency_key: None,
-                response: None,
+                response: ResponseMapping(Expr::Literal("sample".to_string())),
             },
         }
     }

@@ -49,7 +49,7 @@ pub struct GolemWorkerBinding {
     pub component_id: ComponentId,
     pub worker_name: String,
     pub idempotency_key: Option<String>,
-    pub response: Option<String>,
+    pub response: String,
 }
 
 impl<N> From<crate::api_definition::ApiDeployment<N>> for ApiDeployment {
@@ -138,13 +138,9 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
-        let response: Option<String> = match value.response {
-            Some(v) => {
-                let r = expression::to_string(&v.0).map_err(|e| e.to_string())?;
-                Some(r)
-            }
-            None => None,
-        };
+        let response: String =
+            expression::to_string(&value.response.0).map_err(|e| e.to_string())?;
+
         let worker_id = expression::to_string(&value.worker_name).map_err(|e| e.to_string())?;
 
         let idempotency_key = if let Some(key) = &value.idempotency_key {
@@ -166,12 +162,9 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
     fn try_into(self) -> Result<crate::worker_binding::GolemWorkerBinding, Self::Error> {
-        let response: Option<crate::worker_binding::ResponseMapping> = match self.response {
-            Some(v) => {
-                let r = expression::from_string(v).map_err(|e| e.to_string())?;
-                Some(crate::worker_binding::ResponseMapping(r))
-            }
-            None => None,
+        let response: crate::worker_binding::ResponseMapping = {
+            let r = expression::from_string(self.response).map_err(|e| e.to_string())?;
+            crate::worker_binding::ResponseMapping(r)
         };
 
         let worker_name: Expr =
@@ -304,10 +297,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
     type Error = String;
 
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
-        let response: Option<String> = match value.response {
-            Some(v) => Some(v.0.to_string()),
-            None => None,
-        };
+        let response: String = value.response.0.to_string();
 
         let worker_id = expression::to_string(&value.worker_name).map_err(|e| e.to_string())?;
 
@@ -332,12 +322,12 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::WorkerBinding) -> Result<Self, Self::Error> {
-        let response: Option<crate::worker_binding::ResponseMapping> = match value.response {
-            Some(v) => {
-                let r: Expr = v.parse().map_err(|e: ParseError| e.to_string())?;
-                Some(crate::worker_binding::ResponseMapping(r))
-            }
-            None => None,
+        let response: crate::worker_binding::ResponseMapping = {
+            let r: Expr = value
+                .response
+                .parse()
+                .map_err(|e: ParseError| e.to_string())?;
+            crate::worker_binding::ResponseMapping(r)
         };
 
         let worker_name = value

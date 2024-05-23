@@ -75,7 +75,7 @@ impl ParseFromJSON for JsonOpenApiDefinition {
 }
 
 mod internal {
-    use crate::api_definition::http::{AllPathPatterns, HttpResponseMapping, MethodPattern, Route};
+    use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::expression::Expr;
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
@@ -180,34 +180,23 @@ mod internal {
 
     pub(crate) fn get_response_mapping(
         worker_bridge_info: &Value,
-    ) -> Result<Option<ResponseMapping>, String> {
+    ) -> Result<ResponseMapping, String> {
         let response = {
-            let response_mapping_optional = worker_bridge_info.get("response");
+            let response_mapping_optional = worker_bridge_info.get("response").ok_or(
+                "No response mapping found. It should be a string representing expression"
+                    .to_string(),
+            )?;
 
             match response_mapping_optional {
-                None => Ok(None),
-                Some(Value::Null) => Ok(None),
-                Some(Value::String(expr)) => expression::from_string(expr)
-                    .map_err(|err| err.to_string())
-                    .map(Some),
+                Value::String(expr) => expression::from_string(expr).map_err(|err| err.to_string()),
                 _ => Err(
                     "Invalid response mapping type. It should be a string representing expression"
                         .to_string(),
                 ),
             }
-        };
+        }?;
 
-        match response? {
-            Some(response_mapping_expr) => {
-                // Validating
-                let _ =
-                    HttpResponseMapping::try_from(&ResponseMapping(response_mapping_expr.clone()))
-                        .map_err(|err| err.to_string())?;
-
-                Ok(Some(ResponseMapping(response_mapping_expr)))
-            }
-            None => Ok(None),
-        }
+        Ok(ResponseMapping(response.clone()))
     }
 
     pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Expr, String> {
@@ -284,7 +273,7 @@ mod tests {
                     ]),
                     component_id: ComponentId(Uuid::nil()),
                     idempotency_key: Some(Expr::Literal("test-key".to_string())),
-                    response: Some(ResponseMapping(Expr::Record(
+                    response: ResponseMapping(Expr::Record(
                         vec![
                             (
                                 "headers".to_string(),
@@ -313,7 +302,7 @@ mod tests {
                         ]
                         .into_iter()
                         .collect()
-                    )))
+                    ))
                 }
             })
         );

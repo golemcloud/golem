@@ -847,7 +847,11 @@ where
         Ok(())
     }
 
-    async fn get_component_for_worker(&self, worker_id: &WorkerId, auth_ctx: &AuthCtx) -> Result<Component, WorkerServiceError> {
+    async fn get_component_for_worker(
+        &self,
+        worker_id: &WorkerId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Component, WorkerServiceError> {
         self.try_get_component_for_worker(worker_id, auth_ctx).await
     }
 }
@@ -1477,7 +1481,11 @@ where
         Ok(())
     }
 
-    async fn get_component_for_worker(&self, worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<Component> {
+    async fn get_component_for_worker(
+        &self,
+        worker_id: &WorkerId,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<Component> {
         let worker_id = golem_common::model::WorkerId {
             component_id: worker_id.component_id.clone(),
             worker_name: worker_id.worker_name.to_json_string(),

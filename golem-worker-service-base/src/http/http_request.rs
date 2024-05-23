@@ -110,7 +110,7 @@ mod tests {
     use serde_json::Value;
     use std::sync::Arc;
 
-    use golem_common::model::{ComponentId, IdempotencyKey};
+    use golem_common::model::IdempotencyKey;
     use golem_service_base::model::{FunctionResult, WorkerId};
 
     use crate::api_definition::http::HttpApiDefinition;

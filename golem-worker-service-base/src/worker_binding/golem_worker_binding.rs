@@ -11,7 +11,7 @@ pub struct GolemWorkerBinding {
     pub component_id: ComponentId,
     pub worker_name: Expr,
     pub idempotency_key: Option<Expr>,
-    pub response: Option<ResponseMapping>,
+    pub response: ResponseMapping,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
