@@ -1,5 +1,4 @@
 use golem_wasm_rpc::TypeAnnotatedValue;
-use serde_json::Value;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
 

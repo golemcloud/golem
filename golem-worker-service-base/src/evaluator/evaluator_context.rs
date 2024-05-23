@@ -132,7 +132,6 @@ impl EvaluationContext {
 }
 
 mod internal {
-    use crate::worker_bridge_execution::RefinedWorkerResponse;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::TypeAnnotatedValue;
 
@@ -143,17 +142,6 @@ mod internal {
     ) -> TypeAnnotatedValue {
         let type_annoated_value = request_details.to_type_annotated_value();
         create_record("request", type_annoated_value)
-    }
-
-    pub(crate) fn worker_response_type_annotated_value(
-        worker_response: &RefinedWorkerResponse,
-    ) -> Option<TypeAnnotatedValue> {
-        let typed_value = worker_response.to_type_annotated_value();
-
-        typed_value.map(|typed_value| {
-            let response = create_record("response", typed_value);
-            create_record("worker", response)
-        })
     }
 
     pub(crate) fn create_record(name: &str, value: TypeAnnotatedValue) -> TypeAnnotatedValue {

@@ -1,12 +1,9 @@
 use poem_openapi::Object;
-use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
 use golem_common::model::ComponentId;
-use golem_service_base::model::{
-    Component, ComponentMetadata, Export, ExportFunction, ExportInstance,
-};
+use golem_service_base::model::{Component};
 
 use crate::api_definition::http::{HttpApiDefinition, MethodPattern, Route};
 use crate::http::router::{Router, RouterPattern};

@@ -48,32 +48,33 @@ pub(crate) fn parse_text(input: &str) -> Result<Expr, ParseError> {
 
 pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
     let mut multi_line_expressions: ExpressionBuilder = ExpressionBuilder::default();
-    let mut previous_expression: Option<Expr> = None;
+    let mut previous_expression: ConcatenatedExpr = ConcatenatedExpr::default();
+
     let mut tokenizer: Tokenizer = Tokenizer::new(input.as_ref());
 
     while let Some(token) = tokenizer.next_non_empty_token() {
         match token {
             Token::MultiChar(MultiCharTokens::Identifier(var)) => {
-                previous_expression = Some(Expr::Identifier(var))
+                previous_expression.build(Expr::Identifier(var))
             }
 
             Token::MultiChar(MultiCharTokens::StringLiteral(raw_string)) => {
                 // we are parsing text (in turn calls parse code) with mutual recursion to handle
                 // string interpolations
                 let text = parse_text(raw_string.as_str())?;
-                previous_expression = Some(text);
+                previous_expression.build(text);
             }
 
             Token::MultiChar(MultiCharTokens::NumberLiteral(number)) => {
                 let new_expr = util::get_primitive_expr(number.as_str());
-                previous_expression = Some(new_expr);
+                previous_expression.build(new_expr);
             }
 
             Token::MultiChar(MultiCharTokens::BooleanLiteral(boolean)) => {
                 let new_expr = boolean.parse::<bool>().map(Expr::Boolean).map_err(|_| {
                     ParseError::Message(format!("Invalid boolean literal {}", boolean))
                 })?;
-                previous_expression = Some(new_expr);
+                previous_expression.build(new_expr);
             }
 
             token @ Token::MultiChar(MultiCharTokens::Some)
@@ -82,35 +83,32 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             | token @ Token::MultiChar(MultiCharTokens::Err) => {
                 let expr =
                     constructor::create_constructor(&mut tokenizer, token.to_string().as_str())?;
-                previous_expression = Some(expr);
+                previous_expression.build(expr);
             }
 
             Token::MultiChar(MultiCharTokens::InterpolationStart) => {
                 let code_block = code_block::create_code_block(&mut tokenizer)?;
-                previous_expression = Some(code_block);
+                previous_expression.build(code_block);
             }
 
             Token::Quote => {}
 
             Token::LParen => {
-                match &previous_expression {
-                    Some(Expr::Identifier(name)) => {
-                        // tokenizer.skip_next_non_empty_token();
-                        if let Some(param_str) =
-                            tokenizer.capture_string_until_and_skip_end(&Token::RParen)
-                        {
-                            let params = params::get_params(param_str.as_str())?;
-                            previous_expression = Some(Expr::Call(name.to_string(), params));
-                        } else {
-                            previous_expression = Some(Expr::Call(name.to_string(), vec![]));
-                        }
+                if let Some(concatenated_str) = previous_expression.get_concatenated_str()? {
+                    if let Some(param_str) =
+                        tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
+                        let params = params::get_params(param_str.as_str())?;
+                        previous_expression.reset_and_build(Expr::Call(concatenated_str, params));
+                    } else {
+                        previous_expression.reset_and_build(Expr::Call(concatenated_str, vec![]));
                     }
-                    _ => previous_expression = Some(tuple::create_tuple(&mut tokenizer)?),
+                } else {
+                    previous_expression.build(tuple::create_tuple(&mut tokenizer)?)
                 }
             }
 
             Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo) => {
-                let left_op = previous_expression.clone().ok_or::<ParseError>(
+                let left_op = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
                     "GreaterThanOrEqualTo (>=) is applied to a non existing left expression".into(),
                 )?;
 
@@ -119,11 +117,11 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                         Expr::GreaterThanOrEqualTo(left, right)
                     })?;
 
-                previous_expression = Some(new_expr);
+                previous_expression.reset_and_build(new_expr);
             }
 
             Token::GreaterThan => {
-                let left_op = previous_expression.clone().ok_or::<ParseError>(
+                let left_op = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
                     "GreaterThan (>) is applied to a non existing left expression".into(),
                 )?;
 
@@ -132,11 +130,11 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                         Expr::GreaterThan(left, right)
                     })?;
 
-                previous_expression = Some(new_expr);
+                previous_expression.reset_and_build(new_expr);
             }
 
             Token::LessThan => {
-                let left_op = previous_expression.clone().ok_or::<ParseError>(
+                let left_op = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
                     "LessThan (<) is applied to a non existing left expression".into(),
                 )?;
 
@@ -145,11 +143,11 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                         Expr::LessThan(left, right)
                     })?;
 
-                previous_expression = Some(new_expr);
+                previous_expression.reset_and_build(new_expr);
             }
 
             Token::MultiChar(MultiCharTokens::LessThanOrEqualTo) => {
-                let left_op = previous_expression.clone().ok_or::<ParseError>(
+                let left_op = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
                     "LessThanOrEqualTo (<=) is applied to a non existing left expression".into(),
                 )?;
 
@@ -158,11 +156,11 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                         Expr::LessThanOrEqualTo(left, right)
                     })?;
 
-                previous_expression = Some(new_expr);
+                previous_expression.reset_and_build(new_expr);
             }
 
             Token::MultiChar(MultiCharTokens::EqualTo) => {
-                let left_op = previous_expression.clone().ok_or::<ParseError>(
+                let left_op = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
                     "EqualTo (==) is applied to a non existing left expression".into(),
                 )?;
 
@@ -171,43 +169,42 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                         Expr::EqualTo(left, right)
                     })?;
 
-                previous_expression = Some(new_expr);
+                previous_expression.reset_and_build(new_expr);
             }
 
             Token::MultiChar(MultiCharTokens::Let) => {
                 let let_expr = let_statement::create_let_statement(&mut tokenizer)?;
-                previous_expression = Some(let_expr);
+                previous_expression.reset_and_build(let_expr);
             }
 
             Token::Dot => {
-                let expr = previous_expression.clone().ok_or::<ParseError>(
+                let expr = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
                     "Selection of field is applied to a non existing left expression".into(),
                 )?;
 
                 let expr = selection::get_select_field(&mut tokenizer, expr)?;
-                previous_expression = Some(expr);
+                previous_expression.reset_and_build(expr);
             }
 
             Token::LSquare => {
-                if let Some(expr) = previous_expression.clone() {
+                if let Some(expr) = previous_expression.final_expr()? {
                     let expr = selection::get_select_index(&mut tokenizer, &expr)?;
-
-                    previous_expression = Some(expr);
+                    previous_expression.reset_and_build(expr);
                 } else {
                     let expr = sequence::create_sequence(&mut tokenizer)?;
-                    previous_expression = Some(expr);
+                    previous_expression.build(expr);
                 }
             }
 
             Token::MultiChar(MultiCharTokens::If) => {
                 let if_expr = if_condition::create_if_condition(&mut tokenizer)?;
-                previous_expression = Some(if_expr);
+                previous_expression.build(if_expr);
             }
 
             Token::MultiChar(MultiCharTokens::Match) => {
                 let new_expr = pattern_match::create_pattern_match_expr(&mut tokenizer)?;
 
-                previous_expression = Some(new_expr);
+                previous_expression.build(new_expr);
             }
 
             Token::MultiChar(MultiCharTokens::Then) => {
@@ -223,11 +220,11 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::SemiColon => {
-                if let Some(expr) = &previous_expression {
+                if let Some(expr) = &previous_expression.final_expr()? {
                     multi_line_expressions.build(expr.clone());
                 }
 
-                previous_expression = None;
+                previous_expression = ConcatenatedExpr::default();
             }
 
             Token::LCurly => {
@@ -237,7 +234,7 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                     record::create_record(&mut tokenizer)
                 }?;
 
-                previous_expression = Some(expr);
+                previous_expression.build(expr);
             }
             Token::WildCard => {
                 return Err(
@@ -261,11 +258,11 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             Token::NewLine => {}
             Token::LetEqual => {}
             Token::Comma => {}
-            Token::Colon => {}
+            Token::Colon => { previous_expression.build(Expr::Literal(":".to_string())) }
         }
     }
 
-    if let Some(prev_expr) = previous_expression {
+    if let Some(prev_expr) = previous_expression.final_expr()? {
         multi_line_expressions.build(prev_expr);
     }
 
@@ -273,7 +270,64 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
 }
 
 mod internal {
+    use crate::expression;
     use crate::expression::Expr;
+    use crate::parser::ParseError;
+
+    #[derive(Clone)]
+    pub(crate) struct ConcatenatedExpr {
+        expressions: Vec<Expr>
+    }
+
+    impl Default for ConcatenatedExpr {
+        fn default() -> Self {
+            ConcatenatedExpr {
+                expressions: vec![]
+            }
+        }
+    }
+
+    impl ConcatenatedExpr {
+        pub(crate) fn is_empty(&self) -> bool {
+            self.expressions.is_empty()
+        }
+
+        pub(crate) fn build(&mut self, expr: Expr) {
+            self.expressions.push(expr)
+        }
+
+        pub(crate) fn reset_and_build(&mut self, expr: Expr) {
+            self.expressions = vec![expr]
+        }
+
+        pub(crate) fn final_expr(&self) -> Result<Option<Expr>, ParseError> {
+            if self.expressions.len() > 1 {
+                Err(ParseError::Message("Expressions to be separated by semi column".to_string()))
+            } else {
+                let last = self.expressions.get(0);
+                Ok(last.map(|expr| expr.clone()))
+            }
+        }
+
+        pub(crate) fn get_concatenated_str(&self) -> Result<Option<String>, ParseError>{
+            if self.is_empty() {
+                Ok(None)
+            } else {
+                let mut vec = vec![];
+                for i in &self.expressions {
+                    let str = match i {
+                        Expr::Identifier(str) => Ok(str.to_string()),
+                        Expr::Literal(str) => Ok(str.to_string()),
+                        expr => Err(ParseError::Message(format!("Invalid expression: {}", expression::to_string(&expr).unwrap())))
+                    };
+
+                    vec.push(str?)
+                }
+
+                Ok(Some(vec.join("")))
+            }
+        }
+    }
 
     #[derive(Default)]
     pub(crate) struct ExpressionBuilder {
@@ -1136,15 +1190,15 @@ mod tests {
     }
 
     #[test]
-    fn test_function_call() {
+    fn test_function_call1() {
         let expression_parser = ExprParser {};
 
         let result = expression_parser
-            .parse("${foo(1, 2, request.user-id)}")
+            .parse("${api:abc/get-cart-contents(1, 2, request.user-id)}")
             .unwrap();
 
         let expected = Expr::Call(
-            "foo".to_string(),
+            "api:abc/get-cart-contents".to_string(),
             vec![
                 Expr::Number(InnerNumber::UnsignedInteger(1)),
                 Expr::Number(InnerNumber::UnsignedInteger(2)),

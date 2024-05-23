@@ -87,7 +87,6 @@ mod record_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        dbg!(&expr_str);
         let expected_str = "${{field: 1, field: 2}}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));

@@ -1065,8 +1065,6 @@ mod tests {
             path_pattern, worker_name, function_params
         );
 
-        dbg!(&yaml_string);
-
         serde_yaml::from_str(yaml_string.as_str()).unwrap()
     }
 
@@ -1086,13 +1084,13 @@ mod tests {
               type: wit-worker
               componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
               workerName: '{}'
-              response: {}
+              response: "${{let result = api:abc/get-cart-contents(\"a\", \"b\"); result}}"
+
         "#,
-            path_pattern, worker_name, rib_expression
+            path_pattern, worker_name
         );
 
-        dbg!(&yaml_string);
-
-        serde_yaml::from_str(yaml_string.as_str()).unwrap()
+        let http_api_definition: HttpApiDefinition = serde_yaml::from_str(yaml_string.as_str()).unwrap();
+        http_api_definition
     }
 }
