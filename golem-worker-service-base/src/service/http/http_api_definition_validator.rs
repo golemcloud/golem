@@ -6,10 +6,10 @@ use golem_common::model::ComponentId;
 use golem_service_base::model::Component;
 
 use crate::api_definition::http::{HttpApiDefinition, MethodPattern, Route};
-use crate::expression::Expr;
+
 use crate::http::router::{Router, RouterPattern};
 use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
-use crate::worker_binding::ResponseMapping;
+
 
 // Http Api Definition Validator
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -84,47 +84,57 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
     errors
 }
 
-#[test]
-fn test_unique_routes() {
-    fn make_route(method: MethodPattern, path: &str) -> Route {
-        Route {
-            method,
-            path: crate::api_definition::http::AllPathPatterns::parse(path).unwrap(),
-            binding: crate::worker_binding::GolemWorkerBinding {
-                component_id: ComponentId::new_v4(),
-                worker_name: crate::expression::Expr::Identifier("request".to_string()),
-                idempotency_key: None,
-                response: ResponseMapping(Expr::Literal("sample".to_string())),
-            },
+#[cfg(test)]
+mod tests {
+    use golem_common::model::ComponentId;
+    use crate::api_definition::http::{MethodPattern, Route};
+    use crate::expression::Expr;
+    use crate::service::http::http_api_definition_validator::unique_routes;
+    use crate::worker_binding::ResponseMapping;
+
+    #[test]
+    fn test_unique_routes() {
+        fn make_route(method: MethodPattern, path: &str) -> Route {
+            Route {
+                method,
+                path: crate::api_definition::http::AllPathPatterns::parse(path).unwrap(),
+                binding: crate::worker_binding::GolemWorkerBinding {
+                    component_id: ComponentId::new_v4(),
+                    worker_name: crate::expression::Expr::Identifier("request".to_string()),
+                    idempotency_key: None,
+                    response: ResponseMapping(Expr::Literal("sample".to_string())),
+                },
+            }
         }
+
+        let paths = &[
+            "/users/{id}/posts/{post_id}",
+            "/users/{id}/posts/{post_id}/comments/{comment_id}",
+            "/users/{id}/posts/{post_id}/comments/{comment_id}/replies/{reply_id}",
+        ];
+
+        let get_paths: Vec<Route> = paths
+            .iter()
+            .map(|s| make_route(MethodPattern::Get, s))
+            .collect();
+
+        let post_paths: Vec<Route> = paths
+            .iter()
+            .map(|s| make_route(MethodPattern::Post, s))
+            .collect();
+
+        let all_paths = [&get_paths[..], &post_paths[..]].concat();
+
+        let errors = unique_routes(&all_paths);
+        assert!(errors.is_empty());
+
+        let conflict_route = make_route(MethodPattern::Get, "/users/{a}/posts/{b}");
+
+        let with_conflict = [&get_paths[..], &[conflict_route]].concat();
+
+        let errors = unique_routes(&with_conflict);
+        assert!(errors.len() == 1);
+        assert!(errors[0].detail.contains(paths[0]), "Received: {errors:?}");
     }
-
-    let paths = &[
-        "/users/{id}/posts/{post_id}",
-        "/users/{id}/posts/{post_id}/comments/{comment_id}",
-        "/users/{id}/posts/{post_id}/comments/{comment_id}/replies/{reply_id}",
-    ];
-
-    let get_paths: Vec<Route> = paths
-        .iter()
-        .map(|s| make_route(MethodPattern::Get, s))
-        .collect();
-
-    let post_paths: Vec<Route> = paths
-        .iter()
-        .map(|s| make_route(MethodPattern::Post, s))
-        .collect();
-
-    let all_paths = [&get_paths[..], &post_paths[..]].concat();
-
-    let errors = unique_routes(&all_paths);
-    assert!(errors.is_empty());
-
-    let conflict_route = make_route(MethodPattern::Get, "/users/{a}/posts/{b}");
-
-    let with_conflict = [&get_paths[..], &[conflict_route]].concat();
-
-    let errors = unique_routes(&with_conflict);
-    assert!(errors.len() == 1);
-    assert!(errors[0].detail.contains(paths[0]), "Received: {errors:?}");
 }
+
