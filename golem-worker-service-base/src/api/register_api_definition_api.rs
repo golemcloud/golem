@@ -177,7 +177,6 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
         let worker_name: Expr =
             expression::from_string(self.worker_name).map_err(|e| e.to_string())?;
 
-
         let idempotency_key = if let Some(key) = &self.idempotency_key {
             Some(expression::from_string(key).map_err(|e| e.to_string())?)
         } else {
@@ -345,7 +344,6 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             .worker_id
             .parse()
             .map_err(|e: ParseError| e.to_string())?;
-
 
         let component_id = value.component.ok_or("component is missing")?.try_into()?;
 

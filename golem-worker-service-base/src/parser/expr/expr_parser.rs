@@ -96,7 +96,8 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             Token::LParen => {
                 if let Some(concatenated_str) = previous_expression.get_concatenated_str()? {
                     if let Some(param_str) =
-                        tokenizer.capture_string_until_and_skip_end(&Token::RParen) {
+                        tokenizer.capture_string_until_and_skip_end(&Token::RParen)
+                    {
                         let params = params::get_params(param_str.as_str())?;
                         previous_expression.reset_and_build(Expr::Call(concatenated_str, params));
                     } else {
@@ -108,9 +109,13 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::MultiChar(MultiCharTokens::GreaterThanOrEqualTo) => {
-                let left_op = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
-                    "GreaterThanOrEqualTo (>=) is applied to a non existing left expression".into(),
-                )?;
+                let left_op = previous_expression
+                    .clone()
+                    .final_expr()?
+                    .ok_or::<ParseError>(
+                        "GreaterThanOrEqualTo (>=) is applied to a non existing left expression"
+                            .into(),
+                    )?;
 
                 let new_expr =
                     math_op::create_binary_op(&mut tokenizer, left_op, |left, right| {
@@ -121,9 +126,12 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::GreaterThan => {
-                let left_op = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
-                    "GreaterThan (>) is applied to a non existing left expression".into(),
-                )?;
+                let left_op = previous_expression
+                    .clone()
+                    .final_expr()?
+                    .ok_or::<ParseError>(
+                        "GreaterThan (>) is applied to a non existing left expression".into(),
+                    )?;
 
                 let new_expr =
                     math_op::create_binary_op(&mut tokenizer, left_op, |left, right| {
@@ -134,9 +142,12 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::LessThan => {
-                let left_op = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
-                    "LessThan (<) is applied to a non existing left expression".into(),
-                )?;
+                let left_op = previous_expression
+                    .clone()
+                    .final_expr()?
+                    .ok_or::<ParseError>(
+                        "LessThan (<) is applied to a non existing left expression".into(),
+                    )?;
 
                 let new_expr =
                     math_op::create_binary_op(&mut tokenizer, left_op, |left, right| {
@@ -147,9 +158,13 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::MultiChar(MultiCharTokens::LessThanOrEqualTo) => {
-                let left_op = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
-                    "LessThanOrEqualTo (<=) is applied to a non existing left expression".into(),
-                )?;
+                let left_op = previous_expression
+                    .clone()
+                    .final_expr()?
+                    .ok_or::<ParseError>(
+                        "LessThanOrEqualTo (<=) is applied to a non existing left expression"
+                            .into(),
+                    )?;
 
                 let new_expr =
                     math_op::create_binary_op(&mut tokenizer, left_op, |left, right| {
@@ -160,9 +175,12 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::MultiChar(MultiCharTokens::EqualTo) => {
-                let left_op = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
-                    "EqualTo (==) is applied to a non existing left expression".into(),
-                )?;
+                let left_op = previous_expression
+                    .clone()
+                    .final_expr()?
+                    .ok_or::<ParseError>(
+                        "EqualTo (==) is applied to a non existing left expression".into(),
+                    )?;
 
                 let new_expr =
                     math_op::create_binary_op(&mut tokenizer, left_op, |left, right| {
@@ -178,9 +196,12 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             }
 
             Token::Dot => {
-                let expr = previous_expression.clone().final_expr()?.ok_or::<ParseError>(
-                    "Selection of field is applied to a non existing left expression".into(),
-                )?;
+                let expr = previous_expression
+                    .clone()
+                    .final_expr()?
+                    .ok_or::<ParseError>(
+                        "Selection of field is applied to a non existing left expression".into(),
+                    )?;
 
                 let expr = selection::get_select_field(&mut tokenizer, expr)?;
                 previous_expression.reset_and_build(expr);
@@ -258,7 +279,7 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             Token::NewLine => {}
             Token::LetEqual => {}
             Token::Comma => {}
-            Token::Colon => { previous_expression.build(Expr::Literal(":".to_string())) }
+            Token::Colon => previous_expression.build(Expr::Literal(":".to_string())),
         }
     }
 
@@ -276,13 +297,13 @@ mod internal {
 
     #[derive(Clone)]
     pub(crate) struct ConcatenatedExpr {
-        expressions: Vec<Expr>
+        expressions: Vec<Expr>,
     }
 
     impl Default for ConcatenatedExpr {
         fn default() -> Self {
             ConcatenatedExpr {
-                expressions: vec![]
+                expressions: vec![],
             }
         }
     }
@@ -302,14 +323,16 @@ mod internal {
 
         pub(crate) fn final_expr(&self) -> Result<Option<Expr>, ParseError> {
             if self.expressions.len() > 1 {
-                Err(ParseError::Message("Expressions to be separated by semi column".to_string()))
+                Err(ParseError::Message(
+                    "Expressions to be separated by semi column".to_string(),
+                ))
             } else {
                 let last = self.expressions.get(0);
                 Ok(last.map(|expr| expr.clone()))
             }
         }
 
-        pub(crate) fn get_concatenated_str(&self) -> Result<Option<String>, ParseError>{
+        pub(crate) fn get_concatenated_str(&self) -> Result<Option<String>, ParseError> {
             if self.is_empty() {
                 Ok(None)
             } else {
@@ -318,7 +341,10 @@ mod internal {
                     let str = match i {
                         Expr::Identifier(str) => Ok(str.to_string()),
                         Expr::Literal(str) => Ok(str.to_string()),
-                        expr => Err(ParseError::Message(format!("Invalid expression: {}", expression::to_string(&expr).unwrap())))
+                        expr => Err(ParseError::Message(format!(
+                            "Invalid expression: {}",
+                            expression::to_string(&expr).unwrap()
+                        ))),
                     };
 
                     vec.push(str?)

@@ -110,14 +110,15 @@ mod tests {
     use serde_json::Value;
     use std::sync::Arc;
 
-    use golem_common::model::{ComponentId};
+    use golem_common::model::ComponentId;
     use golem_service_base::model::FunctionResult;
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
     use crate::evaluator::{
-        DefaultEvaluator, EvaluationError, EvaluationResult, Evaluator, MetadataFetchError, WorkerMetadataFetcher,
+        DefaultEvaluator, EvaluationError, EvaluationResult, Evaluator, MetadataFetchError,
+        WorkerMetadataFetcher,
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
@@ -289,11 +290,10 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_worker_request_resolution() {
         //let evaluator = test_evaluator();
-         let empty_headers = HeaderMap::new();
+        let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
         let expression = "${let response = golem:it/api/get-cart-contents(\"a\", \"b\"); response}";
         //
@@ -307,7 +307,7 @@ mod tests {
 
         //let fetcher = test_fetcher("golem:it/api/get-cart-contents");
 
-       // let resolved_route = api_request.resolve(&api_specification).await;
+        // let resolved_route = api_request.resolve(&api_specification).await;
 
         // dbg!(resolved_route);
         //
@@ -1090,7 +1090,8 @@ mod tests {
             path_pattern, worker_name
         );
 
-        let http_api_definition: HttpApiDefinition = serde_yaml::from_str(yaml_string.as_str()).unwrap();
+        let http_api_definition: HttpApiDefinition =
+            serde_yaml::from_str(yaml_string.as_str()).unwrap();
         http_api_definition
     }
 }

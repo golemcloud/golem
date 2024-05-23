@@ -555,8 +555,9 @@ impl<'t> Tokenizer<'t> {
         let ch = rest_opt.chars().next()?;
         match ch {
             'a'..='z' | 'A'..='Z' | '-' | '_' | '/' => {
-                let str =
-                    self.eat_while(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '/') ?;
+                let str = self.eat_while(|ch| {
+                    ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '/'
+                })?;
                 match str {
                     "ok" => Some(Token::MultiChar(MultiCharTokens::Ok)),
                     "err" => Some(Token::MultiChar(MultiCharTokens::Err)),

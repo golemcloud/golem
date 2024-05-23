@@ -210,7 +210,6 @@ mod internal {
         }
     }
 
-
     pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Expr, String> {
         let worker_id = worker_bridge_info
             .get("worker-id")
