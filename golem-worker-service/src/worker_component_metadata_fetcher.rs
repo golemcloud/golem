@@ -33,7 +33,7 @@ impl WorkerMetadataFetcher for DefaultWorkerComponentMetadataFetcher {
             .exports
             .iter()
             .flat_map(|x| match x {
-               Export::Function(function) => vec![function.clone().into()],
+                Export::Function(function) => vec![function.clone().into()],
                 _ => vec![],
             })
             .collect::<Vec<AnalysedFunction>>();
