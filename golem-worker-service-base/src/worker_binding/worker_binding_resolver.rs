@@ -15,6 +15,9 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
+use http::Response;
+use golem_service_base::api_tags::ApiTags::Worker;
+use golem_service_base::model::{Id, WorkerId};
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::to_response::ToResponse;
@@ -108,8 +111,20 @@ impl ResolvedWorkerBinding {
         EvaluationError: ToResponse<R>,
         MetadataFetchError: ToResponse<R>,
     {
+        let worker_name = match Id::try_from(self.worker_detail.worker_name.clone()) {
+            Ok(worker_name) => worker_name,
+            Err(err) => {
+                return EvaluationError::Message(err.to_string()).to_response(&self.request_details)
+            }
+        };
+
+        let worker_id = WorkerId {
+            component_id: self.worker_detail.component_id.clone(),
+            worker_name
+        };
+
         let functions_available = worker_metadata_fetcher
-            .get_worker_metadata(&self.worker_detail.component_id)
+            .get_worker_metadata(&worker_id)
             .await;
 
         match functions_available {

@@ -28,6 +28,8 @@ use golem_worker_service_base::service::worker::{
 };
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 
+use crate::worker_component_metadata_fetcher::DefaultWorkerComponentMetadataFetcher;
+use golem_worker_service_base::evaluator::WorkerMetadataFetcher;
 use golem_worker_service_base::repo::api_deployment_repo::{
     ApiDeploymentRepo, InMemoryDeployment, RedisApiDeploy,
 };
@@ -97,6 +99,10 @@ impl Services {
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
         );
 
+        let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> = Arc::new(
+            DefaultWorkerComponentMetadataFetcher::new(worker_service.clone()),
+        );
+
         let definition_repo: Arc<
             dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
         > = Arc::new(RedisApiRegistry::new(&config.redis).await.map_err(|e| {
@@ -144,6 +150,7 @@ impl Services {
             http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
             component_service,
+            worker_metadata_fetcher,
             api_definition_validator_service,
         })
     }
@@ -194,6 +201,10 @@ impl Services {
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
         );
 
+        let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> = Arc::new(
+            DefaultWorkerComponentMetadataFetcher::new(worker_service.clone()),
+        );
+
         Services {
             worker_service,
             definition_service,
@@ -201,6 +212,7 @@ impl Services {
             http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
             component_service,
+            worker_metadata_fetcher,
             api_definition_validator_service,
         }
     }

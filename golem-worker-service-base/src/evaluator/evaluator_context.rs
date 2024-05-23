@@ -10,6 +10,7 @@ use golem_common::model::ComponentId;
 use golem_wasm_ast::analysis::AnalysedFunction;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
+use golem_service_base::model::WorkerId;
 
 #[derive(Clone)]
 pub struct EvaluationContext {
@@ -21,7 +22,7 @@ pub struct EvaluationContext {
 pub trait WorkerMetadataFetcher {
     async fn get_worker_metadata(
         &self,
-        component_id: &ComponentId,
+        worker_id: &WorkerId,
     ) -> Result<Vec<AnalysedFunction>, MetadataFetchError>;
 }
 
@@ -39,7 +40,7 @@ pub struct NoopWorkerMetadataFetcher;
 impl WorkerMetadataFetcher for NoopWorkerMetadataFetcher {
     async fn get_worker_metadata(
         &self,
-        _component_id: &ComponentId,
+        _worker_id: &WorkerId,
     ) -> Result<Vec<AnalysedFunction>, MetadataFetchError> {
         Ok(vec![])
     }

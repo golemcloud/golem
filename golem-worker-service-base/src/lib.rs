@@ -3,7 +3,7 @@ pub mod api;
 pub mod api_definition;
 pub mod app_config;
 pub mod auth;
-mod evaluator;
+pub mod evaluator;
 mod expression;
 pub mod http;
 mod merge;
