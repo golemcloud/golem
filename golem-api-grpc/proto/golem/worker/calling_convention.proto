@@ -6,5 +6,4 @@ package golem.worker;
 enum CallingConvention {
   COMPONENT = 0;
   STDIO = 1;
-  STDIO_EVENTLOOP = 2;
 }

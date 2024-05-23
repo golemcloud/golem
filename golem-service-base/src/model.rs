@@ -35,6 +35,8 @@ pub struct WorkerCreationRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub struct WorkerCreationResponse {
     pub worker_id: WorkerId,
     pub component_version: ComponentVersion,

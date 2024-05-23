@@ -149,7 +149,7 @@ where
             .iter()
             .cloned()
             .map(|binding| async move {
-                let id = &binding.component;
+                let id = &binding.component_id;
                 self.component_service
                     .get_latest(id, auth_ctx)
                     .await

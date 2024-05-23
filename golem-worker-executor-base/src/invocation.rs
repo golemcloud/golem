@@ -16,9 +16,9 @@ use anyhow::anyhow;
 use golem_common::model::{parse_function_name, CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output};
 use golem_wasm_rpc::Value;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
-use wasmtime::{AsContextMut, StoreContextMut};
+use wasmtime::AsContextMut;
 
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
@@ -44,15 +44,11 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     instance: &wasmtime::component::Instance,
     calling_convention: CallingConvention,
     was_live_before: bool,
-) -> bool {
+) -> Option<Result<Vec<Value>, anyhow::Error>> {
     let mut store = store.as_context_mut();
 
     let worker_id = store.data().worker_id().clone();
     debug!("invoke_worker: {worker_id}/{full_function_name}");
-
-    if let Some(invocation_key) = &store.data().get_current_invocation_key().await {
-        store.data_mut().resume_invocation_key(invocation_key).await
-    }
 
     let result = invoke_or_fail(
         &worker_id,
@@ -70,86 +66,37 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
         result
     );
 
-    let invocation_key = store.data().get_current_invocation_key().await;
     match result {
         Err(err) => {
             let trap_type = TrapType::from_error::<Ctx>(&err);
             match trap_type {
                 TrapType::Interrupt(InterruptKind::Interrupt) => {
-                    // this invocation was interrupted and has to be resumed manually later
-                    match invocation_key {
-                        Some(invocation_key) => {
-                            debug!(
-                            "Storing interrupted status for invocation key {:?} in {worker_id}/{full_function_name}",
-                            &invocation_key
-                        );
-                            store
-                                .data_mut()
-                                .interrupt_invocation_key(&invocation_key)
-                                .await;
-                        }
-                        None => {
-                            warn!("Fire-and-forget invocation of {worker_id}/{full_function_name} got interrupted");
-                        }
-                    }
                     record_invocation(was_live_before, "interrupted");
-                    false
+                    None
                 }
                 TrapType::Interrupt(InterruptKind::Suspend) => {
                     // this invocation was suspended and expected to be resumed by an external call or schedule
                     record_invocation(was_live_before, "suspended");
-                    false
+                    None
                 }
                 TrapType::Exit => {
-                    // this invocation finished by calling the WASI exit function
-                    match invocation_key {
-                        Some(invocation_key) => {
-                            debug!(
-                            "Storing exited result for invocation key {:?} in {worker_id}/{full_function_name}",
-                            &invocation_key
-                        );
-                            store
-                                .data_mut()
-                                .confirm_invocation_key(&invocation_key, Err(err.into()))
-                                .await;
-                        }
-                        None => {
-                            error!("Fire-and-forget invocation of {worker_id}/{full_function_name} exited: {}", err);
-                        }
-                    }
                     record_invocation(was_live_before, "exited");
-                    true
+                    Some(Err(err))
                 }
                 _ => {
-                    // this invocation failed it won't be retried later
-                    match invocation_key {
-                        Some(invocation_key) => {
-                            debug!(
-                            "Storing failed result for invocation key {:?} in {worker_id}/{full_function_name}",
-                            &invocation_key
-                        );
-                            store
-                                .data_mut()
-                                .confirm_invocation_key(&invocation_key, Err(err.into()))
-                                .await;
-                        }
-                        None => {
-                            error!("Fire-and-forget invocation of {worker_id}/{full_function_name} failed: {}", err);
-                        }
-                    }
                     record_invocation(was_live_before, "failed");
-                    true
+                    Some(Err(err))
                 }
             }
         }
         Ok(None) => {
             // this invocation did not produce any result, but we may get one in the future
-            false
+            None
         }
-        Ok(Some(_)) => {
+        Ok(Some(result)) => {
             // this invocation finished and produced a result
             record_invocation(was_live_before, "success");
-            true
+            Some(Ok(result))
         }
     }
 }
@@ -229,7 +176,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
                 &mut store,
                 function,
                 &function_input,
-                (&calling_convention).try_into().unwrap(),
+                calling_convention,
                 &format!("{worker_id}/{full_function_name}"),
             )
             .await
@@ -250,11 +197,11 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
     match call_result {
         Err(err) => {
             let trap_type = TrapType::from_error::<Ctx>(&err);
-            store.data_mut().on_invocation_failure(&trap_type).await?;
+            let failure_payload = store.data_mut().on_invocation_failure(&trap_type).await?;
             store.data_mut().deactivate().await;
             let result_status = store
                 .data_mut()
-                .on_invocation_failure_deactivated(&trap_type)
+                .on_invocation_failure_deactivated(&failure_payload, &trap_type)
                 .await?;
             store
                 .data_mut()
@@ -264,6 +211,10 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
             if result_status == WorkerStatus::Retrying || result_status == WorkerStatus::Running {
                 Ok(None)
             } else {
+                store
+                    .data_mut()
+                    .on_invocation_failure_final(&failure_payload, &trap_type)
+                    .await?;
                 Err(err)
             }
         }
@@ -298,12 +249,12 @@ async fn invoke<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
     function_input: &[Value],
-    calling_convention: InternalCallingConvention,
+    calling_convention: CallingConvention,
     context: &str,
 ) -> Result<InvokeResult, anyhow::Error> {
     let mut store = store.as_context_mut();
     match calling_convention {
-        InternalCallingConvention::Component => {
+        CallingConvention::Component => {
             let param_types = function.params(&store);
 
             if function_input.len() != param_types.len() {
@@ -339,15 +290,13 @@ async fn invoke<Ctx: WorkerCtx>(
                 output.push(result_value);
             }
 
-            store_results(&mut store, &output, context).await;
-
             Ok(InvokeResult {
                 exited: false,
                 consumed_fuel,
                 output,
             })
         }
-        InternalCallingConvention::Stdio => {
+        CallingConvention::Stdio => {
             if function_input.len() != 1 {
                 panic!("unexpected parameter count for stdio calling convention for {context}")
             }
@@ -375,34 +324,12 @@ async fn invoke<Ctx: WorkerCtx>(
             let stdout = store.data_mut().finish_capturing_stdout().await.ok();
             let output: Vec<Value> = vec![Value::String(stdout.unwrap_or("".to_string()))];
 
-            store_results(&mut store, &output, context).await;
-
             Ok(InvokeResult {
                 exited,
                 consumed_fuel,
                 output,
             })
         }
-    }
-}
-
-async fn store_results<'a, Ctx: WorkerCtx>(
-    store: &mut StoreContextMut<'a, Ctx>,
-    output: &[Value],
-    context: &str,
-) {
-    if let Some(invocation_key) = store.data().get_current_invocation_key().await {
-        debug!(
-            "Storing successful results for invocation key {:?} in {context}",
-            &invocation_key
-        );
-
-        store
-            .data_mut()
-            .confirm_invocation_key(&invocation_key, Ok(output.to_vec()))
-            .await;
-    } else {
-        debug!("No invocation key for {context}");
     }
 }
 
@@ -444,7 +371,6 @@ async fn drop_resource<Ctx: WorkerCtx>(
     }
 
     let output = Vec::new();
-    store_results(&mut store, &output, context).await;
 
     Ok(InvokeResult {
         exited: false,
@@ -502,24 +428,4 @@ struct InvokeResult {
     pub exited: bool,
     pub consumed_fuel: i64,
     pub output: Vec<Value>,
-}
-
-#[derive(Clone, Debug)]
-pub enum InternalCallingConvention {
-    Component,
-    Stdio,
-}
-
-impl TryFrom<&CallingConvention> for InternalCallingConvention {
-    type Error = String;
-
-    fn try_from(value: &CallingConvention) -> Result<Self, Self::Error> {
-        match *value {
-            CallingConvention::Component => Ok(InternalCallingConvention::Component),
-            CallingConvention::Stdio => Ok(InternalCallingConvention::Stdio),
-            CallingConvention::StdioEventloop => {
-                Err("Invalid state: StdioEventLoop must be handled on higher level, can never reach invoke()".to_string())
-            }
-        }
-    }
 }

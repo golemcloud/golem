@@ -1,18 +1,36 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
-use golem_common::config::RetryConfig;
-use golem_worker_executor_base::services::golem_config::CompiledComponentServiceConfig;
 use http::Uri;
 use serde::Deserialize;
 use uuid::Uuid;
+
+use golem_common::config::RetryConfig;
+use golem_worker_executor_base::services::golem_config::{
+    BlobStorageConfig, CompiledComponentServiceConfig,
+};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ServerConfig {
     // Services.
     pub component_service: ComponentServiceConfig,
     pub compiled_component_service: CompiledComponentServiceConfig,
+    pub blob_storage: BlobStorageConfig,
 
     // Workers.
     pub upload_worker: UploadWorkerConfig,
@@ -83,25 +101,5 @@ impl ServerConfig {
 
 #[test]
 fn config_load() {
-    std::env::set_var("GOLEM__COMPONENT_SERVICE__HOST", "0.0.0.0");
-    std::env::set_var("GOLEM__COMPONENT_SERVICE__PORT", "9001");
-    std::env::set_var(
-        "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
-        "6778f06f-43ac-4e45-b501-6adb3253edf2",
-    );
-
-    std::env::set_var(
-        "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__REGION",
-        "us-east-1",
-    );
-    std::env::set_var(
-        "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__BUCKET",
-        "golem-compiled-components",
-    );
-    std::env::set_var(
-        "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__OBJECT_PREFIX",
-        "",
-    );
-
     let _ = ServerConfig::new();
 }

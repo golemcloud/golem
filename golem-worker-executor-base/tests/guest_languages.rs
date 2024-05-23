@@ -24,11 +24,7 @@ async fn zig_example_1() {
     let worker_id = executor.start_worker(&component_id, "zig-1").await;
 
     let result = executor
-        .invoke_and_await_stdio(
-            &worker_id,
-            "wasi:cli/run@0.2.0/run",
-            serde_json::Value::Number(1234.into()),
-        )
+        .invoke_and_await_stdio(&worker_id, "run", serde_json::Value::Number(1234.into()))
         .await;
 
     drop(executor);
@@ -38,51 +34,29 @@ async fn zig_example_1() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn zig_example_2() {
+async fn zig_example_3() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
 
-    let component_id = executor.store_component("zig-2").await;
-    let worker_id = executor.start_worker(&component_id, "zig-2").await;
-    let rx = executor.capture_output(&worker_id).await;
+    let component_id = executor.store_component("zig-3").await;
+    let worker_id = executor.start_worker(&component_id, "zig-3").await;
 
     let _ = executor
-        .invoke_and_await_stdio_eventloop(
-            &worker_id,
-            "wasi:cli/run@0.2.0/run",
-            serde_json::Value::Object(serde_json::Map::from_iter([(
-                "add".to_string(),
-                serde_json::Value::Number(10.into()),
-            )])),
-        )
+        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(10)])
         .await
-        .expect("invoke_and_await_stdio_eventloop 1");
+        .unwrap();
     let _ = executor
-        .invoke_and_await_stdio_eventloop(
-            &worker_id,
-            "wasi:cli/run@0.2.0/run",
-            serde_json::Value::Object(serde_json::Map::from_iter([(
-                "add".to_string(),
-                serde_json::Value::Number(1.into()),
-            )])),
-        )
+        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(11)])
         .await
-        .expect("invoke_and_await_stdio_eventloop 2");
-    let response = executor
-        .invoke_and_await_stdio_eventloop(
-            &worker_id,
-            "wasi:cli/run@0.2.0/run",
-            serde_json::Value::Object(serde_json::Map::from_iter([(
-                "get".to_string(),
-                serde_json::Value::Object(serde_json::Map::new()),
-            )])),
-        )
-        .await;
+        .unwrap();
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .await
+        .unwrap();
 
     drop(executor);
-    drop(rx);
 
-    assert!(response == Ok(serde_json::Value::Number(11.into())))
+    assert!(result == vec![Value::U64(21)])
 }
 
 #[tokio::test]
@@ -454,63 +428,6 @@ async fn javascript_example_2() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn javascript_example_3() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
-
-    let component_id = executor.store_component("js-3").await;
-    let worker_id = executor.start_worker(&component_id, "js-3").await;
-
-    let timeout_time = 1000;
-    // Invoke_and_await will wait for the timeout to be finished.
-    let result_set = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api/set-timeout",
-            vec![Value::U64(timeout_time)],
-        )
-        .await
-        .unwrap();
-
-    let result_get = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
-        .await
-        .unwrap();
-
-    drop(executor);
-
-    let_assert!(Some(Value::U64(start)) = result_set.into_iter().next());
-    let_assert!(Some(Value::U64(end)) = result_get.into_iter().next());
-
-    check!(end > start, "End time is not greater than start time");
-
-    let total_time = end - start;
-
-    check!(total_time >= timeout_time);
-    check!(total_time < timeout_time + 100);
-}
-
-#[tokio::test]
-#[tracing::instrument]
-async fn javascript_example_4() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
-
-    let component_id = executor.store_component("js-4").await;
-    let worker_id = executor.start_worker(&component_id, "js-4").await;
-
-    let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/create-promise", vec![])
-        .await
-        .unwrap();
-
-    drop(executor);
-
-    let_assert!(Some(Value::Record(_)) = result.into_iter().next());
-}
-
-#[tokio::test]
-#[tracing::instrument]
 async fn csharp_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
@@ -607,61 +524,4 @@ async fn c_example_2() {
     let year = now.year();
 
     check!(first_line == format!("Hello C! {year}"));
-}
-
-#[tokio::test]
-#[tracing::instrument]
-async fn swift_example_1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
-
-    let component_id = executor.store_component("swift-1").await;
-    let worker_id = executor.start_worker(&component_id, "swift-1").await;
-
-    let mut rx = executor.capture_output(&worker_id).await;
-
-    let _ = executor
-        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0/run", vec![])
-        .await
-        .unwrap();
-
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    let lines = events_to_lines(&mut rx).await;
-
-    drop(executor);
-
-    let now = chrono::Local::now();
-    let year = now.year();
-
-    check!(lines[0] == "Hello world!".to_string());
-    check!(lines[1] == year.to_string());
-}
-
-#[tokio::test]
-#[tracing::instrument]
-async fn python_example_1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
-
-    let component_id = executor.store_component("python-1").await;
-    let worker_id = executor.start_worker(&component_id, "python-1").await;
-
-    let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(3)])
-        .await
-        .unwrap();
-
-    let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(8)])
-        .await
-        .unwrap();
-
-    let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
-        .await
-        .unwrap();
-
-    drop(executor);
-
-    check!(result == vec![Value::U64(11)]);
 }

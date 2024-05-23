@@ -15,13 +15,15 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub use cli::{CliParams, CliTestDependencies};
+use crate::components::component_compilation_service::ComponentCompilationService;
+pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
 
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::RedisMonitor;
+use crate::components::service::Service;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
@@ -36,12 +38,16 @@ pub trait TestDependencies {
     fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static>;
     fn component_directory(&self) -> PathBuf;
     fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static>;
+    fn component_compilation_service(
+        &self,
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static>;
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static>;
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
 
     fn kill_all(&self) {
         self.worker_executor_cluster().kill_all();
         self.worker_service().kill();
+        self.component_compilation_service().kill();
         self.component_service().kill();
         self.shard_manager().kill();
         self.rdb().kill();
@@ -54,4 +60,12 @@ pub trait TestDependencies {
 pub enum DbType {
     Postgres,
     Sqlite,
+}
+
+pub trait TestService {
+    fn service(&self) -> Arc<dyn Service + Send + Sync + 'static>;
+
+    fn kill_all(&self) {
+        self.service().kill();
+    }
 }

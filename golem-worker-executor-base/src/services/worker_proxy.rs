@@ -18,13 +18,12 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
-    get_invocation_key_response, invoke_and_await_response, invoke_response,
-    update_worker_response, worker_error, CallingConvention, GetInvocationKeyRequest,
-    GetInvocationKeyResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeParameters,
+    invoke_and_await_response, invoke_response, update_worker_response, worker_error,
+    CallingConvention, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeParameters,
     InvokeRequest, InvokeResponse, UpdateMode, UpdateWorkerRequest, UpdateWorkerResponse,
     WorkerError,
 };
-use golem_common::model::{AccountId, ComponentVersion, WorkerId};
+use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, WorkerId};
 use golem_wasm_rpc::{Value, WitValue};
 use http::Uri;
 use std::error::Error;
@@ -37,6 +36,7 @@ pub trait WorkerProxy {
     async fn invoke_and_await(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
         account_id: &AccountId,
@@ -45,6 +45,7 @@ pub trait WorkerProxy {
     async fn invoke(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
         account_id: &AccountId,
@@ -152,6 +153,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn invoke_and_await(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
         _account_id: &AccountId,
@@ -171,10 +173,14 @@ impl WorkerProxy for RemoteWorkerProxy {
 
         let mut client = WorkerServiceClient::connect(self.endpoint.as_http_02()).await?;
 
-        let response: GetInvocationKeyResponse = client
-            .get_invocation_key(authorised_grpc_request(
-                GetInvocationKeyRequest {
+        let response: InvokeAndAwaitResponse = client
+            .invoke_and_await(authorised_grpc_request(
+                InvokeAndAwaitRequest {
                     worker_id: Some(worker_id.clone().into()),
+                    idempotency_key: idempotency_key.map(|k| k.into()),
+                    function: function_name,
+                    invoke_parameters,
+                    calling_convention: CallingConvention::Component as i32,
                 },
                 &self.access_token,
             ))
@@ -182,42 +188,20 @@ impl WorkerProxy for RemoteWorkerProxy {
             .into_inner();
 
         match response.result {
-            Some(get_invocation_key_response::Result::Success(invocation_key)) => {
-                let response: InvokeAndAwaitResponse = client
-                    .invoke_and_await(authorised_grpc_request(
-                        InvokeAndAwaitRequest {
-                            worker_id: Some(worker_id.clone().into()),
-                            invocation_key: Some(invocation_key),
-                            function: function_name,
-                            invoke_parameters,
-                            calling_convention: CallingConvention::Component as i32,
-                        },
-                        &self.access_token,
-                    ))
-                    .await?
-                    .into_inner();
-
-                match response.result {
-                    Some(invoke_and_await_response::Result::Success(result)) => {
-                        let mut result_values = Vec::new();
-                        for proto_value in result.result {
-                            let value: Value = proto_value.try_into().map_err(|err| {
-                                WorkerProxyError::InternalError(GolemError::unknown(format!(
-                                    "Could not decode result: {err}"
-                                )))
-                            })?;
-                            result_values.push(value);
-                        }
-                        let result: WitValue = Value::Tuple(result_values).into();
-                        Ok(result)
-                    }
-                    Some(invoke_and_await_response::Result::Error(error)) => Err(error.into()),
-                    None => Err(WorkerProxyError::InternalError(GolemError::unknown(
-                        "Empty response through the worker API".to_string(),
-                    ))),
+            Some(invoke_and_await_response::Result::Success(result)) => {
+                let mut result_values = Vec::new();
+                for proto_value in result.result {
+                    let value: Value = proto_value.try_into().map_err(|err| {
+                        WorkerProxyError::InternalError(GolemError::unknown(format!(
+                            "Could not decode result: {err}"
+                        )))
+                    })?;
+                    result_values.push(value);
                 }
+                let result: WitValue = Value::Tuple(result_values).into();
+                Ok(result)
             }
-            Some(get_invocation_key_response::Result::Error(error)) => Err(error.into()),
+            Some(invoke_and_await_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(GolemError::unknown(
                 "Empty response through the worker API".to_string(),
             ))),
@@ -227,6 +211,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn invoke(
         &self,
         worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
         _account_id: &AccountId,
@@ -250,6 +235,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .invoke(authorised_grpc_request(
                 InvokeRequest {
                     worker_id: Some(worker_id.clone().into()),
+                    idempotency_key: idempotency_key.map(|k| k.into()),
                     function: function_name,
                     invoke_parameters,
                 },
@@ -323,6 +309,7 @@ impl WorkerProxy for WorkerProxyMock {
     async fn invoke_and_await(
         &self,
         _worker_id: &WorkerId,
+        _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
         _account_id: &AccountId,
@@ -333,6 +320,7 @@ impl WorkerProxy for WorkerProxyMock {
     async fn invoke(
         &self,
         _worker_id: &WorkerId,
+        _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
         _account_id: &AccountId,

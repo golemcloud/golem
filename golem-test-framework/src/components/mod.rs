@@ -23,11 +23,13 @@ use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
 
+pub mod component_compilation_service;
 pub mod component_service;
 pub mod k8s;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
+pub mod service;
 pub mod shard_manager;
 pub mod worker_executor;
 pub mod worker_executor_cluster;

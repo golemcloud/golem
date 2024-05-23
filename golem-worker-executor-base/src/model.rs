@@ -17,6 +17,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
 use bincode::{Decode, Encode};
+use golem_wasm_rpc::Value;
 use serde::{Deserialize, Serialize};
 use wasmtime::Trap;
 
@@ -190,6 +191,17 @@ impl TrapType {
             },
         }
     }
+
+    pub fn as_golem_error(&self) -> Option<GolemError> {
+        match self {
+            TrapType::Interrupt(InterruptKind::Interrupt) => {
+                Some(GolemError::runtime("Interrupted via the Golem API"))
+            }
+            TrapType::Error(error) => Some(GolemError::runtime(error.to_string())),
+            TrapType::Exit => Some(GolemError::runtime("Process exited")),
+            _ => None,
+        }
+    }
 }
 
 /// Encapsulates a worker error with the number of retries already attempted.
@@ -243,8 +255,16 @@ impl From<PersistenceLevel> for crate::preview2::golem::api::host::PersistenceLe
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum LookupResult {
+    New,
+    Pending,
+    Interrupted,
+    Complete(Result<Vec<Value>, GolemError>),
+}
+
 #[cfg(test)]
-mod shard_id_tests {
+mod tests {
     use uuid::Uuid;
 
     use golem_common::model::ComponentId;

@@ -3,7 +3,7 @@ pub mod component;
 pub mod worker;
 
 use crate::service::api_definition_lookup_impl::CustomRequestDefinitionLookupDefault;
-use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
+use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
 
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
 
@@ -28,13 +28,14 @@ use golem_worker_service_base::service::worker::{
 };
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 
+use crate::worker_component_metadata_fetcher::DefaultWorkerComponentMetadataFetcher;
+use golem_worker_service_base::evaluator::WorkerMetadataFetcher;
 use golem_worker_service_base::repo::api_deployment_repo::{
     ApiDeploymentRepo, InMemoryDeployment, RedisApiDeploy,
 };
 use golem_worker_service_base::service::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
 };
-use poem::Response;
 use std::sync::Arc;
 use tracing::error;
 
@@ -54,7 +55,8 @@ pub struct Services {
     pub deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send>,
     pub http_definition_lookup_service:
         Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
-    pub worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+    pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
+    pub worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     pub api_definition_validator_service: Arc<
         dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
     >,
@@ -93,8 +95,13 @@ impl Services {
             routing_table_service.clone(),
         ));
 
-        let worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
-            Arc::new(WorkerRequestToHttpResponse::new(worker_service.clone()));
+        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
+            UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
+        );
+
+        let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> = Arc::new(
+            DefaultWorkerComponentMetadataFetcher::new(worker_service.clone()),
+        );
 
         let definition_repo: Arc<
             dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
@@ -143,6 +150,7 @@ impl Services {
             http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
             component_service,
+            worker_metadata_fetcher,
             api_definition_validator_service,
         })
     }
@@ -189,8 +197,13 @@ impl Services {
             api_definition_validator_service.clone(),
         ));
 
-        let worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
-            Arc::new(WorkerRequestToHttpResponse::new(worker_service.clone()));
+        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
+            UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
+        );
+
+        let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> = Arc::new(
+            DefaultWorkerComponentMetadataFetcher::new(worker_service.clone()),
+        );
 
         Services {
             worker_service,
@@ -199,6 +212,7 @@ impl Services {
             http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
             component_service,
+            worker_metadata_fetcher,
             api_definition_validator_service,
         }
     }

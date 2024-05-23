@@ -1,6 +1,7 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
 use crate::model::PersistenceLevel;
+use crate::services::oplog::OplogOps;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
@@ -151,8 +152,11 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             let oplog_entry =
                 crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
             Self::validate_oplog_entry(&oplog_entry, function_name)?;
-            let response = oplog_entry
-                .payload::<Result<SerializedSuccess, SerializedErr>>()
+            let response = self
+                .state
+                .oplog
+                .get_payload_of_entry::<Result<SerializedSuccess, SerializedErr>>(&oplog_entry)
+                .await
                 .map_err(|err| {
                     GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
                 })?
@@ -215,8 +219,11 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             let oplog_entry =
                 crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
             Self::validate_oplog_entry(&oplog_entry, function_name)?;
-            let response = oplog_entry
-                .payload::<Result<SerializedSuccess, SerializedErr>>()
+            let response = self
+                .state
+                .oplog
+                .get_payload_of_entry::<Result<SerializedSuccess, SerializedErr>>(&oplog_entry)
+                .await
                 .map_err(|err| {
                     GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
                 })?
@@ -243,22 +250,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> Result<(), Err>
     where
         Err: Send,
-        SerializedSuccess: Encode + Debug + Send,
-        SerializedErr: Encode + Debug + From<GolemError> + Into<Err> + Send,
+        SerializedSuccess: Encode + Debug + Send + Sync,
+        SerializedErr: Encode + Debug + From<GolemError> + Into<Err> + Send + Sync,
     {
         if self.state.persistence_level != PersistenceLevel::PersistNothing {
-            let oplog_entry = OplogEntry::imported_function_invoked(
-                function_name.to_string(),
-                &serializable_result,
-                wrapped_function_type.clone(),
-            )
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to serialize function response: {:?}: {err}",
-                    serializable_result
+            self.state
+                .oplog
+                .add_imported_function_invoked(
+                    function_name.to_string(),
+                    &serializable_result,
+                    wrapped_function_type.clone(),
                 )
-            });
-            self.state.oplog.add(oplog_entry).await;
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to serialize and store function response: {:?}: {err}",
+                        serializable_result
+                    )
+                });
             self.state
                 .end_function(wrapped_function_type, begin_index)
                 .await

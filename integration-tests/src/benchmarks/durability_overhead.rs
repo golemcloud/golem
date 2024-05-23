@@ -18,64 +18,81 @@ use async_trait::async_trait;
 use golem_common::model::WorkerId;
 use golem_wasm_rpc::Value;
 
-use golem_test_framework::config::{CliParams, CliTestDependencies, TestDependencies};
-use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder};
+use golem_test_framework::config::{CliParams, TestDependencies};
+use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
-use integration_tests::benchmarks::{run_benchmark, setup_with};
+use integration_tests::benchmarks::{
+    get_worker_ids, run_benchmark, setup_benchmark, start, BenchmarkContext,
+};
 
 struct DurabilityOverhead {
-    config: CliParams,
+    config: RunConfig,
 }
 
 #[derive(Clone)]
 pub struct Context {
-    pub deps: CliTestDependencies,
     pub durable_worker_ids: Vec<WorkerId>,
     pub not_durable_worker_ids: Vec<WorkerId>,
 }
 
 #[async_trait]
 impl Benchmark for DurabilityOverhead {
+    type BenchmarkContext = BenchmarkContext;
     type IterationContext = Context;
 
     fn name() -> &'static str {
         "durability-overhead"
     }
 
-    async fn create(config: CliParams) -> Self {
+    async fn create_benchmark_context(
+        params: CliParams,
+        cluster_size: usize,
+    ) -> Self::BenchmarkContext {
+        setup_benchmark(params, cluster_size).await
+    }
+
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
+        benchmark_context.deps.kill_all()
+    }
+
+    async fn create(_params: CliParams, config: RunConfig) -> Self {
         Self { config }
     }
 
-    async fn setup_iteration(&self) -> Self::IterationContext {
-        let deps = CliTestDependencies::new(self.config.clone()).await;
+    async fn setup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+    ) -> Self::IterationContext {
+        let component_id = benchmark_context
+            .deps
+            .store_unique_component("shopping-cart")
+            .await;
 
-        let durable_worker_ids = setup_with(
-            self.config.benchmark_config.size,
-            "shopping-cart",
-            "durable-worker",
-            true,
-            deps.clone(),
-        )
-        .await;
+        let durable_worker_ids = get_worker_ids(self.config.size, &component_id, "durable-worker");
 
-        let not_durable_worker_ids = setup_with(
-            self.config.benchmark_config.size,
-            "shopping-cart",
-            "not-durable-worker",
-            true,
-            deps.clone(),
+        start(durable_worker_ids.clone(), benchmark_context.deps.clone()).await;
+
+        let not_durable_worker_ids =
+            get_worker_ids(self.config.size, &component_id, "not-durable-worker");
+
+        start(
+            not_durable_worker_ids.clone(),
+            benchmark_context.deps.clone(),
         )
         .await;
 
         Context {
-            deps,
             durable_worker_ids,
             not_durable_worker_ids,
         }
     }
 
-    async fn warmup(&self, context: &Self::IterationContext) {
-        async fn initialize(worker_ids: Vec<WorkerId>, context: &Context) {
+    async fn warmup(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+    ) {
+        async fn initialize(worker_ids: Vec<WorkerId>, context: &BenchmarkContext) {
             // Invoke each worker a few times in parallel
             let mut fibers = Vec::new();
             for worker_id in worker_ids.clone() {
@@ -100,11 +117,11 @@ impl Benchmark for DurabilityOverhead {
             }
         }
 
-        initialize(context.durable_worker_ids.clone(), context).await;
+        initialize(context.durable_worker_ids.clone(), benchmark_context).await;
 
         let mut fibers = Vec::new();
         for worker_id in &context.not_durable_worker_ids.clone() {
-            let context_clone = context.clone();
+            let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let fiber = tokio::task::spawn(async move {
                 context_clone
@@ -120,15 +137,20 @@ impl Benchmark for DurabilityOverhead {
             fiber.await.expect("fiber failed");
         }
 
-        initialize(context.not_durable_worker_ids.clone(), context).await;
+        initialize(context.not_durable_worker_ids.clone(), benchmark_context).await;
     }
 
-    async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
+    async fn run(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+        recorder: BenchmarkRecorder,
+    ) {
         async fn run_for(
             worker_ids: Vec<WorkerId>,
             prefix: String,
             length: usize,
-            context: &Context,
+            context: &BenchmarkContext,
             recorder: &BenchmarkRecorder,
         ) {
             // Invoke each worker a 'length' times in parallel and record the duration
@@ -171,8 +193,8 @@ impl Benchmark for DurabilityOverhead {
         run_for(
             context.durable_worker_ids.clone(),
             "durable".to_string(),
-            self.config.benchmark_config.length,
-            context,
+            self.config.length,
+            benchmark_context,
             &recorder,
         )
         .await;
@@ -180,15 +202,25 @@ impl Benchmark for DurabilityOverhead {
         run_for(
             context.not_durable_worker_ids.clone(),
             "not-durable".to_string(),
-            self.config.benchmark_config.length,
-            context,
+            self.config.length,
+            benchmark_context,
             &recorder,
         )
         .await;
     }
 
-    async fn cleanup_iteration(&self, context: Self::IterationContext) {
-        context.deps.kill_all();
+    async fn cleanup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: Self::IterationContext,
+    ) {
+        for worker_id in &context.durable_worker_ids {
+            benchmark_context.deps.delete_worker(worker_id).await
+        }
+
+        for worker_id in &context.not_durable_worker_ids {
+            benchmark_context.deps.delete_worker(worker_id).await
+        }
     }
 }
 

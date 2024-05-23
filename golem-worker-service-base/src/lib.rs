@@ -3,8 +3,7 @@ pub mod api;
 pub mod api_definition;
 pub mod app_config;
 pub mod auth;
-
-mod evaluator;
+pub mod evaluator;
 mod expression;
 pub mod http;
 mod merge;
@@ -17,6 +16,7 @@ pub mod tokeniser;
 pub mod wasm_wave_read;
 mod worker_binding;
 pub mod worker_bridge_execution;
+
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;
 }

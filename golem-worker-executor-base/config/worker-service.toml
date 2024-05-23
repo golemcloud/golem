@@ -6,8 +6,10 @@ port = 9000
 custom_request_port = 9001
 worker_grpc_port = 9092
 
+[key_value_storage]
+type = "Redis"
 
-[redis]
+[key_value_storage.config]
 # host
 # port
 database = 0
@@ -15,11 +17,31 @@ tracing = false
 pool_size = 8
 key_prefix = ""
 
-[redis.retries]
+[key_value_storage.config.retries]
 max_attempts = 5
 min_delay = "100ms"
 max_delay = "2s"
 multiplier = 2
+
+[indexed_storage]
+type = "KVStoreRedis"
+
+[blob_storage]
+type = "S3"
+
+[blob_storage.config]
+# region
+# aws_endpoint_url
+object_prefix = ""
+compilation_cache_bucket = "compilation-cache"
+custom_data_bucket = "custom-data"
+oplog_payload_bucket = "oplog-payload"
+
+[blob_storage.config.retries]
+max_attempts = 3
+min_delay = "100ms"
+max_delay = "1s"
+multiplier = 3
 
 [component_service]
 # host

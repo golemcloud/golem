@@ -33,6 +33,7 @@ use crate::durable_host::http::serialized::{
 use crate::durable_host::serialized::SerializableError;
 use crate::get_oplog_entry;
 use crate::model::PersistenceLevel;
+use crate::services::oplog::OplogOps;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use wasmtime_wasi_http::bindings::wasi::http::types::{
@@ -573,13 +574,15 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             };
 
             if self.state.persistence_level != PersistenceLevel::PersistNothing {
-                let oplog_entry = OplogEntry::imported_function_invoked(
-                    "http::types::future_incoming_response::get".to_string(),
-                    &serializable_response,
-                    WrappedFunctionType::WriteRemote,
-                )
-                .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
-                self.state.oplog.add(oplog_entry).await;
+                self.state
+                    .oplog
+                    .add_imported_function_invoked(
+                        "http::types::future_incoming_response::get".to_string(),
+                        &serializable_response,
+                        WrappedFunctionType::WriteRemote,
+                    )
+                    .await
+                    .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
 
                 if matches!(serializable_response, SerializableResponse::Pending) {
                     match self.state.open_function_table.get(&handle) {
@@ -601,8 +604,11 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         } else {
             let oplog_entry = get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
 
-            let serialized_response = oplog_entry
-                .payload::<SerializableResponse>()
+            let serialized_response = self
+                .state
+                .oplog
+                .get_payload_of_entry::<SerializableResponse>(&oplog_entry)
+                .await
                 .unwrap_or_else(|err| {
                     panic!(
                         "failed to deserialize function response: {:?}: {err}",

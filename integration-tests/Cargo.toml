@@ -14,13 +14,16 @@ golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 
-assert2 = "0.3.11"
+assert2 = { workspace = true }
 async-trait = { workspace = true }
-clap = { version = "4.5.4", features = ["derive", "suggestions", "color", "help"] }
+clap = { workspace = true }
 console-subscriber = { workspace = true }
-ctor = "0.2.7"
+ctor = { workspace = true }
 golem-wasm-rpc = { workspace = true }
-rand = "0.8.5"
+rand = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -69,4 +72,8 @@ path = "src/benchmarks/latency_large.rs"
 [[bin]]
 name = "benchmark_durability_overhead"
 path = "src/benchmarks/durability_overhead.rs"
+
+[[bin]]
+name = "benchmark_throughput"
+path = "src/benchmarks/throughput.rs"
 

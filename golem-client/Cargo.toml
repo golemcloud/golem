@@ -7,27 +7,22 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Client for Golem Cloud's REST API"
 
-include = [
-    "src/**/*",
-    "Cargo.toml",
-    "build.rs",
-    "openapi/**/*",
-]
+include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 
 [lib]
 
 [dependencies]
-async-trait = "^0.1"
-bytes = "^1.5"
-chrono = { version = "^0.4", features = ["serde"] }
-futures-core = "^0.3"
-http = "^1.0"
-reqwest = { version = "^0.11", features = ["gzip", "json", "multipart", "stream"] }
-serde = { version = "^1.0", features = ["derive"] }
-serde_json = "^1.0"
-tracing = "^0.1"
-uuid = { version = "^1.6", features = ["serde"] }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+futures-core = { workspace = true }
+http = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
 
 [build-dependencies]
-golem-openapi-client-generator = "0.0.5"
+golem-openapi-client-generator = "0.0.7"
 relative-path = "1.9.2"

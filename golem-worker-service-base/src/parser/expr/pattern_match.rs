@@ -19,26 +19,27 @@ pub(crate) fn create_pattern_match_expr(tokenizer: &mut Tokenizer) -> Result<Exp
 pub(crate) fn accumulate_match_arms(
     tokenizer: &mut Tokenizer,
 ) -> Result<Vec<MatchArm>, ParseError> {
-    let mut constructor_patterns = Vec::new();
+    let mut match_arms = Vec::new();
 
     loop {
         let arm_pattern = get_arm_pattern(tokenizer)?;
         let ArmBody { cursor, arm_body } = ArmBody::from_tokenizer(tokenizer)?;
         let complete_arm = MatchArm((arm_pattern, arm_body));
-        constructor_patterns.push(complete_arm);
+        match_arms.push(complete_arm);
 
         if cursor == Cursor::Break {
             break;
         }
     }
 
-    if constructor_patterns.is_empty() {
-        return Err(ParseError::Message(
-            "Expecting a constructor pattern, but found nothing".to_string(),
-        ));
+    if match_arms.is_empty() {
+        return Err(ParseError::Message(format!(
+            "Expecting a constructor pattern, but found nothing at {}",
+            tokenizer.pos()
+        )));
     }
 
-    Ok(constructor_patterns)
+    Ok(match_arms)
 }
 
 pub(crate) fn get_arm_pattern(tokenizer: &mut Tokenizer) -> Result<ArmPattern, ParseError> {
@@ -81,20 +82,19 @@ fn collect_arm_pattern_variables(
     let mut arm_patterns = vec![];
     loop {
         if let Some(value) = tokenizer.capture_string_until_and_skip_end(&Token::Comma) {
-            let arm_pattern = parse_code(value.as_str())
-                .map(ArmPattern::from_expr)
-                .or_else(|_| {
-                    let mut tokenizer = Tokenizer::new(value.as_str());
-                    get_arm_pattern(&mut tokenizer)
-                })?;
+            let arm_pattern = {
+                let mut tokenizer = Tokenizer::new(value.as_str());
+                get_arm_pattern(&mut tokenizer)
+            }?;
             arm_patterns.push(arm_pattern);
         } else {
             let rest = tokenizer.rest();
             if !rest.is_empty() {
-                let arm_pattern = parse_code(rest).map(ArmPattern::from_expr).or_else(|_| {
+                let arm_pattern = {
                     let mut tokenizer = Tokenizer::new(rest);
                     get_arm_pattern(&mut tokenizer)
-                })?;
+                }?;
+
                 arm_patterns.push(arm_pattern);
             }
             break;
@@ -122,7 +122,7 @@ impl ArmBody {
             if let Some((end_token, captured_string)) =
                 tokenizer.capture_string_until_either(&Token::Comma, &Token::RCurly)
             {
-                let arm = parse_code(captured_string)?;
+                let arm = parse_code(captured_string.as_str())?;
 
                 let cursor = if end_token == &Token::RCurly {
                     Cursor::Break

@@ -47,13 +47,20 @@ impl K8sComponentService {
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         verbosity: Level,
+        component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
         info!("Starting Golem Component Service pod");
 
-        let env_vars = env_vars(Self::HTTP_PORT, Self::GRPC_PORT, rdb, verbosity);
+        let env_vars = env_vars(
+            Self::HTTP_PORT,
+            Self::GRPC_PORT,
+            component_compilation_service,
+            rdb,
+            verbosity,
+        );
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))

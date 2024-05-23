@@ -2,10 +2,15 @@ enable_tracing_console = false
 enable_json_log = false
 
 grpc_host = "0.0.0.0"
-grpc_port = 8080
+grpc_port = 9091
 
-http_host= "0.0.0.0"
-http_port = 9090
+http_host = "0.0.0.0"
+http_port = 8084
+
+[component_service]
+host = "localhost"
+port = 9090
+access_token = "5C832D93-FF85-4A8F-9803-513950FDFDB1"
 
 [component_service.retries]
 max_attempts = 3
@@ -13,15 +18,28 @@ min_delay = "100ms"
 max_delay = "1s"
 multiplier = 3
 
-[compiled_component_service]
-type = "S3"
-[compiled_component_service.config]
+[blob_storage]
+type = "LocalFileSystem"
+
+[blob_storage.config]
+root = "../data/blob_storage"
+
+# defaults for S3 mode
 object_prefix = ""
-[compiled_component_service.config.retries]
+compilation_cache_bucket = "compilation-cache"
+custom_data_bucket = "custom-data"
+oplog_payload_bucket = "oplog-payload"
+
+[blob_storage.config.retries]
 max_attempts = 3
 min_delay = "100ms"
 max_delay = "1s"
 multiplier = 3
+
+[compiled_component_service]
+type = "Enabled"
+
+[compiled_component_service.config]
 
 [upload_worker]
 num_workers = 10

@@ -1,16 +1,16 @@
 enable_tracing_console = false
 enable_json_log = false
 # workspace
-# environment
-port = 9000
-custom_request_port = 9001
-worker_grpc_port = 9092
+environment = "local"
 
+port = 9005
+custom_request_port = 9006
+worker_grpc_port = 9007
 
 [redis]
-# host
-# port
-database = 0
+host = "localhost"
+port = 6380
+database = 1
 tracing = false
 pool_size = 8
 key_prefix = ""
@@ -22,8 +22,9 @@ max_delay = "2s"
 multiplier = 2
 
 [component_service]
-# host
-# port
+host = "localhost"
+port = 9090
+access_token = "5C832D93-FF85-4A8F-9803-513950FDFDB1"
 
 [component_service.retries]
 max_attempts = 3
@@ -36,5 +37,5 @@ max_capacity = 1000
 time_to_idle = "4h"
 
 [routing_table]
-# host
-# port
+host = "localhost"
+port = 9002

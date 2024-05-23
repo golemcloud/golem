@@ -33,10 +33,20 @@ impl DockerComponentService {
     const HTTP_PORT: u16 = 8081;
     const GRPC_PORT: u16 = 9091;
 
-    pub fn new(rdb: Arc<dyn Rdb + Send + Sync + 'static>, verbosity: Level) -> Self {
+    pub fn new(
+        component_compilation_service: Option<(&str, u16)>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> Self {
         info!("Starting golem-component-service container");
 
-        let env_vars = env_vars(Self::HTTP_PORT, Self::GRPC_PORT, rdb, verbosity);
+        let env_vars = env_vars(
+            Self::HTTP_PORT,
+            Self::GRPC_PORT,
+            component_compilation_service,
+            rdb,
+            verbosity,
+        );
 
         let image = RunnableImage::from(GolemComponentServiceImage::new(
             Self::GRPC_PORT,

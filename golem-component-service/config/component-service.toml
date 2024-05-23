@@ -1,28 +1,35 @@
 enable_tracing_console = false
 enable_json_log = false
 
-http_port = 8081
-grpc_port = 9091
+http_port = 8083
+grpc_port = 9090
 
 [db]
 type = "Sqlite"
 
 [db.config]
 max_connections = 10
-host = "localhost"
-port = 5432
-database = "golem"
-#username
-#password
-#schema
+database = "../data/golem.sqlite"
 
 [component_store]
+type = "Local"
+
+[component_store.config]
 object_prefix = ""
+root_path = "../data/component_store"
 
 [worker_executor_client_cache]
 max_capacity = 1000
 time_to_idle = "4h"
 
-
 [compilation]
-type = "Disabled"
+type = "Enabled"
+
+[compilation.config]
+host = "localhost"
+port = 9091
+
+[component_service]
+host = "localhost"
+port = 9090
+access_token = "5C832D93-FF85-4A8F-9803-513950FDFDB1"
