@@ -21,4 +21,3 @@ pub struct WorkerRequest {
     pub function_params: Vec<Value>,
     pub idempotency_key: Option<IdempotencyKey>,
 }
-

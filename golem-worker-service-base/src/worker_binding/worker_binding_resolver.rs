@@ -1,20 +1,20 @@
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
-use crate::evaluator::{Evaluator, WorkerMetadataFetcher};
 use crate::evaluator::{DefaultEvaluator, EvaluationContext};
+use crate::evaluator::{Evaluator, WorkerMetadataFetcher};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
+use crate::merge::Merge;
 use crate::primitive::GetPrimitive;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, IdempotencyKey};
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
+use golem_wasm_rpc::TypeAnnotatedValue;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::TypeAnnotatedValue;
-use crate::merge::Merge;
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::to_response::ToResponse;
@@ -57,12 +57,11 @@ pub struct ResolvedWorkerBinding {
     pub response_mapping: Option<ResponseMapping>,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct WorkerDetail {
     pub component_id: ComponentId,
     pub worker_name: String,
-    pub idempotency_key: Option<IdempotencyKey>
+    pub idempotency_key: Option<IdempotencyKey>,
 }
 
 impl WorkerDetail {
@@ -80,7 +79,7 @@ impl WorkerDetail {
                 (
                     "name".to_string(),
                     TypeAnnotatedValue::Str(self.worker_name),
-                )
+                ),
             ],
         };
 
@@ -107,32 +106,34 @@ impl ResolvedWorkerBinding {
     pub async fn execute_with<R>(
         &self,
         evaluator: &Arc<dyn Evaluator + Sync + Send>,
-        worker_metadata_fetcher: &Arc<dyn WorkerMetadataFetcher + Sync + Send>
+        worker_metadata_fetcher: &Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     ) -> R
     where
         WorkerResponse: ToResponse<R>,
         WorkerRequestExecutorError: ToResponse<R>,
     {
-        let functions_available =
-            worker_metadata_fetcher.get_worker_metadata(&self.worker_detail.component_id).await;
+        let functions_available = worker_metadata_fetcher
+            .get_worker_metadata(&self.worker_detail.component_id)
+            .await;
 
         match functions_available {
             Ok(functions) => {
                 let runtime = EvaluationContext::from_all(
                     &self.worker_detail,
                     &self.request_details,
-                    functions
+                    functions,
                 );
 
-                let result =
-                    evaluator.evaluate(&self.response_mapping.clone().unwrap().0, &runtime).await;
+                let result = evaluator
+                    .evaluate(&self.response_mapping.clone().unwrap().0, &runtime)
+                    .await;
 
                 match result {
                     Ok(worker_response) => worker_response.to_response(&self.request_details),
-                    Err(err) => err.to_response(&self.request_details)
+                    Err(err) => err.to_response(&self.request_details),
                 }
             }
-            Err(err) => err.to_response(&self.request_details)
+            Err(err) => err.to_response(&self.request_details),
         }
     }
 }

@@ -134,9 +134,8 @@ impl Evaluator for DefaultEvaluator {
                     .map_err(|err| err.into()),
 
                 Expr::Call(name, params) => {
-
                     let mut json_params = vec![];
-                    
+
                     for param in params {
                         let evaluated_param = Box::pin(go(param, input, executor)).await?;
                         let value = evaluated_param.get_value().ok_or(EvaluationError::Message(
@@ -171,13 +170,13 @@ impl Evaluator for DefaultEvaluator {
                 }
 
                 Expr::SelectField(expr, field_name) => {
-                    let evaluation_result =
-                        Box::pin(go(expr, input, executor)).await?
-                            .get_value()
-                            .ok_or(EvaluationError::Message(format!(
-                                "The expression is evaluated to unit and doesn't have an field {}",
-                                field_name
-                            )))?;
+                    let evaluation_result = Box::pin(go(expr, input, executor))
+                        .await?
+                        .get_value()
+                        .ok_or(EvaluationError::Message(format!(
+                            "The expression is evaluated to unit and doesn't have an field {}",
+                            field_name
+                        )))?;
 
                     evaluation_result
                         .get(&Path::from_key(field_name.as_str()))
@@ -227,7 +226,7 @@ impl Evaluator for DefaultEvaluator {
                 }
 
                 Expr::Not(expr) => {
-                    let evaluated_expr = Box::pin(go(expr,input, executor)).await?;
+                    let evaluated_expr = Box::pin(go(expr, input, executor)).await?;
 
                     match evaluated_expr {
                         EvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => Ok(EvaluationResult::Value(TypeAnnotatedValue::Bool(!value))),
@@ -386,7 +385,13 @@ impl Evaluator for DefaultEvaluator {
 
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(*bool).into()),
                 Expr::PatternMatch(match_expression, arms) => {
-                    pattern_match_evaluator::evaluate_pattern_match(executor, match_expression, arms, input).await
+                    pattern_match_evaluator::evaluate_pattern_match(
+                        executor,
+                        match_expression,
+                        arms,
+                        input,
+                    )
+                    .await
                 }
 
                 Expr::Option(option_expr) => match option_expr {
@@ -485,7 +490,9 @@ mod internal {
     use crate::evaluator::EvaluationContext;
     use crate::evaluator::EvaluationError;
     use crate::primitive::GetPrimitive;
-    use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor};
+    use crate::worker_bridge_execution::{
+        RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor,
+    };
     use golem_common::model::{ComponentId, IdempotencyKey};
     use std::str::FromStr;
     use std::sync::Arc;
@@ -554,14 +561,13 @@ mod internal {
             idempotency_key,
         };
 
-        let worker_response = executor.execute(worker_request).await.map_err(
-            |err| EvaluationError::Message(format!("Failed to execute worker function: {}", err)),
-        )?;
+        let worker_response = executor.execute(worker_request).await.map_err(|err| {
+            EvaluationError::Message(format!("Failed to execute worker function: {}", err))
+        })?;
 
-        let refined_worker_response = worker_response.refined().map_err(
-            |err| EvaluationError::Message(format!("Failed to refine worker response: {}", err)),
-        )?;
-
+        let refined_worker_response = worker_response.refined().map_err(|err| {
+            EvaluationError::Message(format!("Failed to refine worker response: {}", err))
+        })?;
 
         Ok(refined_worker_response)
     }

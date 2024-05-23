@@ -15,7 +15,8 @@ async fn read_wasm_wave_string_internal(
     let expr = expression::from_string(wave_syntax_str).map_err(|e| e.to_string())?;
     let noop_executor = DefaultEvaluator::noop();
     let result = noop_executor
-        .evaluate(&expr, &EvaluationContext::empty()).await
+        .evaluate(&expr, &EvaluationContext::empty())
+        .await
         .map_err(|err| err.to_string())?;
 
     result

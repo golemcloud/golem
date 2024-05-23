@@ -1,14 +1,14 @@
-use async_trait::async_trait;
+use crate::evaluator::evaluator_context::internal::create_record;
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
 use crate::evaluator::Getter;
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
+use async_trait::async_trait;
+use golem_common::model::ComponentId;
 use golem_wasm_ast::analysis::AnalysedFunction;
 use golem_wasm_rpc::TypeAnnotatedValue;
-use golem_common::model::ComponentId;
-use crate::evaluator::evaluator_context::internal::create_record;
 
 #[derive(Clone)]
 pub struct EvaluationContext {
@@ -18,7 +18,10 @@ pub struct EvaluationContext {
 
 #[async_trait]
 pub trait WorkerMetadataFetcher {
-    async fn get_worker_metadata(&self, component_id: &ComponentId) -> Result< Vec<AnalysedFunction>, MetadataFetchError,>;
+    async fn get_worker_metadata(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Vec<AnalysedFunction>, MetadataFetchError>;
 }
 
 pub struct MetadataFetchError(pub String);
@@ -66,14 +69,18 @@ impl EvaluationContext {
         }
     }
 
-    pub fn from_all(worker_detail: &WorkerDetail, request: &RequestDetails, functions: Vec<AnalysedFunction>) -> Self {
+    pub fn from_all(
+        worker_detail: &WorkerDetail,
+        request: &RequestDetails,
+        functions: Vec<AnalysedFunction>,
+    ) -> Self {
         let mut request_data = internal::request_type_annotated_value(&request);
         let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
         let merged = request_data.merge(&worker_data);
 
         EvaluationContext {
             variables: Some(merged.clone()),
-            analysed_functions: functions
+            analysed_functions: functions,
         }
     }
 
