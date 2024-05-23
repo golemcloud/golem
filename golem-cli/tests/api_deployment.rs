@@ -92,7 +92,7 @@ fn api_deployment_deploy(
         "sdomain",
     ])?;
 
-    assert_eq!(deployment.site.subdomain, "sdomain");
+    assert_eq!(deployment.site.subdomain, Some("sdomain".to_string()));
     assert_eq!(deployment.site.host, host);
     assert_eq!(deployment.api_definition_id, definition.id);
     assert_eq!(deployment.version, definition.version);

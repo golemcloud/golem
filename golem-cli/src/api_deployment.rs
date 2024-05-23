@@ -35,7 +35,7 @@ pub enum ApiDeploymentSubcommand {
         host: String,
 
         #[arg(short, long)]
-        subdomain: String,
+        subdomain: Option<String>,
     },
 
     /// Get api deployment
@@ -82,7 +82,7 @@ impl<C: ApiDeploymentClient + Send + Sync> ApiDeploymentHandler for ApiDeploymen
                 host,
                 subdomain,
             } => {
-                let deployment = self.client.deploy(&id, &version, &host, &subdomain).await?;
+                let deployment = self.client.deploy(&id, &version, &host, subdomain).await?;
 
                 Ok(GolemResult::Ok(Box::new(deployment)))
             }
