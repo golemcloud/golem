@@ -399,10 +399,12 @@ impl TextFormat for ApiDeployment {
     fn print(&self) {
         printdoc!(
             "
-            API deployment on {}.{} with definition {}/{}
+            API deployment on {} with definition {}/{}
             ",
-            self.site.subdomain,
-            self.site.host,
+            match &self.site.subdomain {
+                Some(subdomain) => format!("{}.{}", subdomain, self.site.host),
+                None => self.site.host.to_string(),
+            },
             self.api_definition_id,
             self.version,
         );
@@ -422,7 +424,10 @@ struct ApiDeploymentView {
 impl From<&ApiDeployment> for ApiDeploymentView {
     fn from(value: &ApiDeployment) -> Self {
         ApiDeploymentView {
-            site: format!("{}.{}", value.site.subdomain, value.site.host),
+            site: match &value.site.subdomain {
+                Some(subdomain) => format!("{}.{}", subdomain, value.site.host),
+                None => value.site.host.to_string(),
+            },
             id: value.api_definition_id.to_string(),
             version: value.version.to_string(),
         }
