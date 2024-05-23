@@ -15,8 +15,8 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
-use http::Response;
-use golem_service_base::api_tags::ApiTags::Worker;
+
+
 use golem_service_base::model::{Id, WorkerId};
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};

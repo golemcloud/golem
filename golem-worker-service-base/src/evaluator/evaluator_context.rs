@@ -6,7 +6,7 @@ use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::RefinedWorkerResponse;
 use async_trait::async_trait;
-use golem_common::model::ComponentId;
+
 use golem_wasm_ast::analysis::AnalysedFunction;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
