@@ -110,7 +110,7 @@ mod tests {
     use serde_json::Value;
     use std::sync::Arc;
 
-    use golem_common::model::ComponentId;
+    use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_service_base::model::FunctionResult;
 
     use crate::api_definition::http::HttpApiDefinition;
@@ -337,7 +337,10 @@ mod tests {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
-        let expression = r#"let response = golem:it/api/get-cart-contents({x : "y"}); response"#;
+        let expression = r#"
+          let response = golem:it/api/get-cart-contents({x : "y"});
+          response
+        "#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
@@ -378,7 +381,10 @@ mod tests {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
-        let expression = r#"let response = golem:it/api/get-cart-contents({x : request.path.user-id}); response"#;
+        let expression = r#"
+          let response = golem:it/api/get-cart-contents({x : request.path.user-id});
+          response
+        "#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
@@ -467,7 +473,7 @@ mod tests {
 
         request_body_amp.insert(
             "age".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(10)),
+            Value::Number(serde_json::Number::from(10)),
         );
 
         let empty_headers = HeaderMap::new();
@@ -482,7 +488,7 @@ mod tests {
           let response = golem:it/api/get-cart-contents(request.path.user-id, request.path.token-id, "age-${request.body.age}");
           response
         "#;
-        
+
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
             "shopping-cart-${request.path.user-id}",
@@ -592,493 +598,562 @@ mod tests {
 
         assert_eq!(result, expected);
     }
-    //
-    // #[tokio::test]
-    // async fn test_worker_request_cond_expr_resolution() {
-    //     let empty_headers = HeaderMap::new();
-    //     let api_request = get_api_request("foo/2", None, &empty_headers, serde_json::Value::Null);
-    //     let function_params = "[\"a\", \"b\"]";
-    //
-    //     let api_specification: HttpApiDefinition = get_api_spec(
-    //         "foo/{user-id}",
-    //         "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-    //         function_params,
-    //     );
-    //
-    //     let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //     let result = resolved_route.worker_detail;
-    //
-    //     let expected = WorkerDetail {
-    //         component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-    //             .parse::<ComponentId>()
-    //             .unwrap(),
-    //         worker_name: "shopping-cart-1".to_string(),
-    //         idempotency_key: None,
-    //     };
-    //
-    //     assert_eq!(result, expected);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_request_request_body_resolution() {
-    //     let empty_headers = HeaderMap::new();
-    //
-    //     let api_request = get_api_request(
-    //         "foo/2",
-    //         None,
-    //         &empty_headers,
-    //         serde_json::Value::String("address".to_string()),
-    //     );
-    //
-    //     let function_params = "[\"${request.body}\"]";
-    //
-    //     let api_specification: HttpApiDefinition = get_api_spec(
-    //         "foo/{user-id}",
-    //         "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-    //         function_params,
-    //     );
-    //
-    //     let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //     let result = resolved_route.worker_detail;
-    //
-    //     let expected = WorkerDetail {
-    //         component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-    //             .parse::<ComponentId>()
-    //             .unwrap(),
-    //         worker_name: "shopping-cart-1".to_string(),
-    //         idempotency_key: None,
-    //     };
-    //
-    //     assert_eq!(result, expected);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_resolution_for_predicate_gives_bool() {
-    //     let empty_headers = HeaderMap::new();
-    //
-    //     let api_request = get_api_request(
-    //         "foo/2",
-    //         None,
-    //         &empty_headers,
-    //         serde_json::Value::String("address".to_string()),
-    //     );
-    //
-    //     let function_params = "[\"${1 == 1}\"]";
-    //
-    //     let api_specification: HttpApiDefinition =
-    //         get_api_spec("foo/{user-id}", "shopping-cart", function_params);
-    //
-    //     let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //     let result = resolved_route.worker_detail;
-    //
-    //     let expected = WorkerDetail {
-    //         component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-    //             .parse::<ComponentId>()
-    //             .unwrap(),
-    //         worker_name: "shopping-cart".to_string(),
-    //         idempotency_key: None,
-    //     };
-    //
-    //     assert_eq!(result, expected);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_resolution_for_predicate_gives_bool_greater() {
-    //     let empty_headers = HeaderMap::new();
-    //
-    //     let api_request = get_api_request(
-    //         "foo/2",
-    //         None,
-    //         &empty_headers,
-    //         serde_json::Value::String("address".to_string()),
-    //     );
-    //
-    //     let function_params = "[\"${2 > 1}\"]";
-    //
-    //     let api_specification: HttpApiDefinition =
-    //         get_api_spec("foo/{user-id}", "shopping-cart", function_params);
-    //
-    //     let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //     let result = resolved_route.worker_detail;
-    //
-    //     let expected = WorkerDetail {
-    //         component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-    //             .parse::<ComponentId>()
-    //             .unwrap(),
-    //         worker_name: "shopping-cart".to_string(),
-    //         idempotency_key: None,
-    //     };
-    //
-    //     assert_eq!(result, expected);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_resolution_for_cond_expr_fn_params() {
-    //     let empty_headers = HeaderMap::new();
-    //
-    //     let api_request = get_api_request(
-    //         "foo/2",
-    //         None,
-    //         &empty_headers,
-    //         serde_json::Value::String("address".to_string()),
-    //     );
-    //
-    //     let function_params = "[\"${if (2 < 1) then 0 else 1}\"]";
-    //
-    //     let api_specification: HttpApiDefinition =
-    //         get_api_spec("foo/{user-id}", "shopping-cart", function_params);
-    //
-    //     let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //     let result = resolved_route.worker_detail;
-    //
-    //     let expected = WorkerDetail {
-    //         component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-    //             .parse::<ComponentId>()
-    //             .unwrap(),
-    //         worker_name: "shopping-cart".to_string(),
-    //         idempotency_key: None,
-    //     };
-    //
-    //     assert_eq!(result, expected);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_resolution_for_cond_expr_req_body_fn_params() {
-    //     let empty_headers = HeaderMap::new();
-    //
-    //     let api_request = get_api_request(
-    //         "foo/2",
-    //         None,
-    //         &empty_headers,
-    //         serde_json::Value::Object(serde_json::Map::from_iter(vec![(
-    //             "number".to_string(),
-    //             serde_json::Value::Number(serde_json::Number::from(10)),
-    //         )])),
-    //     );
-    //
-    //     let function_params = "[\"${if (request.body.number < 11) then 0 else 1}\"]";
-    //
-    //     let api_specification: HttpApiDefinition =
-    //         get_api_spec("foo/{user-id}", "shopping-cart", function_params);
-    //
-    //     let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //     let result = resolved_route.worker_detail;
-    //
-    //     let expected = WorkerDetail {
-    //         component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-    //             .parse::<ComponentId>()
-    //             .unwrap(),
-    //         worker_name: "shopping-cart".to_string(),
-    //         idempotency_key: None,
-    //     };
-    //
-    //     assert_eq!(result, expected);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_resolution_for_cond_expr_req_body_direct_fn_params() {
-    //     let empty_headers = HeaderMap::new();
-    //
-    //     let api_request = get_api_request(
-    //         "foo/2",
-    //         None,
-    //         &empty_headers,
-    //         serde_json::Value::Number(serde_json::Number::from(10)),
-    //     );
-    //
-    //     let function_params = "[\"${if (request.body < 11) then request.path.user-id else 1}\", \"${if (request.body < 5) then ${request.path.user-id} else 1}\"]";
-    //
-    //     let api_specification: HttpApiDefinition =
-    //         get_api_spec("foo/{user-id}", "shopping-cart", function_params);
-    //
-    //     let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //     let result = resolved_route.worker_detail;
-    //
-    //     let expected = WorkerDetail {
-    //         component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-    //             .parse::<ComponentId>()
-    //             .unwrap(),
-    //         worker_name: "shopping-cart".to_string(),
-    //         idempotency_key: None,
-    //     };
-    //
-    //     assert_eq!(result, expected);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_request_map_request_body_resolution() {
-    //     let empty_headers = HeaderMap::new();
-    //
-    //     let mut request_body: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-    //
-    //     request_body.insert(
-    //         "foo_key".to_string(),
-    //         serde_json::Value::String("foo_value".to_string()),
-    //     );
-    //
-    //     request_body.insert(
-    //         "bar_key".to_string(),
-    //         serde_json::Value::String("bar_value".to_string()),
-    //     );
-    //
-    //     let api_request = get_api_request(
-    //         "foo/2",
-    //         None,
-    //         &empty_headers,
-    //         serde_json::Value::Object(request_body),
-    //     );
-    //
-    //     let foo_key = "${request.body.foo_key}";
-    //     let bar_key = "${request.body.bar_key}";
-    //
-    //     let function_params = format!("[\"{}\", \"{}\"]", foo_key, bar_key);
-    //
-    //     let api_specification: HttpApiDefinition = get_api_spec(
-    //         "foo/{user-id}",
-    //         "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-    //         function_params.as_str(),
-    //     );
-    //
-    //     let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //     let result = resolved_route.worker_detail;
-    //
-    //     let expected = WorkerDetail {
-    //         component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-    //             .parse::<ComponentId>()
-    //             .unwrap(),
-    //         worker_name: "shopping-cart-1".to_string(),
-    //         idempotency_key: None,
-    //     };
-    //
-    //     assert_eq!(result, expected);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_request_map_list_request_body_resolution() {
-    //     let empty_headers = HeaderMap::new();
-    //
-    //     let mut request_body: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-    //
-    //     request_body.insert(
-    //         "foo_key".to_string(),
-    //         serde_json::Value::String("foo_value".to_string()),
-    //     );
-    //
-    //     request_body.insert(
-    //         "bar_key".to_string(),
-    //         serde_json::Value::Array(vec![serde_json::Value::String("bar_value".to_string())]),
-    //     );
-    //
-    //     let api_request = get_api_request(
-    //         "foo/2",
-    //         None,
-    //         &empty_headers,
-    //         serde_json::Value::Object(request_body),
-    //     );
-    //
-    //     let foo_key = "${request.body.foo_key}";
-    //     let bar_key = "${request.body.bar_key[0]}";
-    //
-    //     let function_params = format!("[\"{}\", \"{}\"]", foo_key, bar_key);
-    //
-    //     let api_specification: HttpApiDefinition = get_api_spec(
-    //         "foo/{user-id}",
-    //         "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-    //         function_params.as_str(),
-    //     );
-    //
-    //     let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //     let result = resolved_route.worker_detail;
-    //
-    //     let expected = WorkerDetail {
-    //         component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-    //             .parse::<ComponentId>()
-    //             .unwrap(),
-    //         worker_name: "shopping-cart-1".to_string(),
-    //         idempotency_key: None,
-    //     };
-    //
-    //     assert_eq!(result, expected);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_request_request_body_direct() {
-    //     let empty_headers = HeaderMap::new();
-    //
-    //     let mut request_body: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-    //
-    //     request_body.insert(
-    //         "foo_key".to_string(),
-    //         serde_json::Value::String("foo_value".to_string()),
-    //     );
-    //
-    //     request_body.insert(
-    //         "bar_key".to_string(),
-    //         serde_json::Value::Array(vec![serde_json::Value::String("bar_value".to_string())]),
-    //     );
-    //
-    //     let api_request = get_api_request(
-    //         "foo/2",
-    //         None,
-    //         &empty_headers,
-    //         serde_json::Value::Object(request_body.clone()),
-    //     );
-    //
-    //     let foo_key: &str = "${request.body}";
-    //
-    //     let function_params = format!("[\"{}\"]", foo_key);
-    //
-    //     let api_specification: HttpApiDefinition = get_api_spec(
-    //         "foo/{user-id}",
-    //         "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-    //         function_params.as_str(),
-    //     );
-    //
-    //     let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //     let result = resolved_route.worker_detail;
-    //
-    //     let expected = WorkerDetail {
-    //         component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-    //             .parse::<ComponentId>()
-    //             .unwrap(),
-    //         worker_name: "shopping-cart-1".to_string(),
-    //         idempotency_key: None,
-    //     };
-    //
-    //     assert_eq!(result, expected);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_request_with_request_header_resolution() {
-    //     let mut headers = HeaderMap::new();
-    //
-    //     headers.append(
-    //         HeaderName::from_static("token"),
-    //         HeaderValue::from_static("token_value"),
-    //     );
-    //
-    //     let mut request_body: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-    //
-    //     request_body.insert(
-    //         "foo_key".to_string(),
-    //         serde_json::Value::String("foo_value".to_string()),
-    //     );
-    //
-    //     request_body.insert(
-    //         "bar_key".to_string(),
-    //         serde_json::Value::Array(vec![serde_json::Value::String("bar_value".to_string())]),
-    //     );
-    //
-    //     let api_request = get_api_request(
-    //         "/foo/2",
-    //         None,
-    //         &headers,
-    //         serde_json::Value::Object(request_body),
-    //     );
-    //
-    //     let foo_key = "${request.body.foo_key}";
-    //     let bar_key = "${request.body.bar_key[0]}";
-    //     let token_key = "${request.headers.token}";
-    //
-    //     let function_params = format!("[\"{}\", \"{}\", \"{}\"]", foo_key, bar_key, token_key);
-    //
-    //     let api_specification: HttpApiDefinition = get_api_spec(
-    //         "/foo/{user-id}",
-    //         "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-    //         function_params.as_str(),
-    //     );
-    //
-    //     let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //     let result = resolved_route.worker_detail;
-    //
-    //     let expected = WorkerDetail {
-    //         component_id: "0b6d9cd8-f373-4e29-8a5a-548e61b868a5"
-    //             .parse::<ComponentId>()
-    //             .unwrap(),
-    //         worker_name: "shopping-cart-1".to_string(),
-    //         idempotency_key: None,
-    //     };
-    //
-    //     assert_eq!(result, expected);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_request_resolution_paths() {
-    //     async fn test_paths(definition_path: &str, request_path: &str, ok: bool) {
-    //         let empty_headers = HeaderMap::new();
-    //         let api_request =
-    //             get_api_request(request_path, None, &empty_headers, serde_json::Value::Null);
-    //
-    //         let function_params = "[]";
-    //
-    //         let api_specification: HttpApiDefinition = get_api_spec(
-    //             definition_path,
-    //             "shopping-cart-${request.path.cart-id}",
-    //             function_params,
-    //         );
-    //
-    //         let resolved_route = api_request.resolve(&api_specification).await;
-    //
-    //         let result = resolved_route.map(|x| x.worker_detail);
-    //
-    //         assert_eq!(result.is_ok(), ok);
-    //     }
-    //
-    //     test_paths("getcartcontent/{cart-id}", "/noexist", false);
-    //     test_paths("/getcartcontent/{cart-id}", "noexist", false);
-    //     test_paths("getcartcontent/{cart-id}", "noexist", false);
-    //     test_paths("/getcartcontent/{cart-id}", "/noexist", false);
-    //     test_paths("getcartcontent/{cart-id}", "/getcartcontent/1", true);
-    //     test_paths("/getcartcontent/{cart-id}", "getcartcontent/1", true);
-    //     test_paths("getcartcontent/{cart-id}", "getcartcontent/1", true);
-    //     test_paths("/getcartcontent/{cart-id}", "/getcartcontent/1", true);
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_worker_idempotency_key_header() {
-    //     async fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
-    //         let api_request = get_api_request(
-    //             "/getcartcontent/1",
-    //             None,
-    //             header_map,
-    //             serde_json::Value::Null,
-    //         );
-    //
-    //         let function_params = "[]";
-    //
-    //         let api_specification: HttpApiDefinition = get_api_spec_single_param(
-    //             "getcartcontent/{cart-id}",
-    //             "shopping-cart-${request.path.cart-id}",
-    //             function_params,
-    //         );
-    //
-    //         let resolved_route = api_request.resolve(&api_specification).await.unwrap();
-    //
-    //         assert_eq!(
-    //             resolved_route.worker_detail.idempotency_key,
-    //             idempotency_key
-    //         );
-    //     }
-    //
-    //     test_key(&HeaderMap::new(), None);
-    //     let mut headers = HeaderMap::new();
-    //     headers.insert("Idempotency-Key", HeaderValue::from_str("foo").unwrap());
-    //     test_key(&headers, Some(IdempotencyKey::new("foo".to_string())));
-    //     let mut headers = HeaderMap::new();
-    //     headers.insert("idempotency-key", HeaderValue::from_str("bar").unwrap());
-    //     test_key(&headers, Some(IdempotencyKey::new("bar".to_string())));
-    // }
+
+    #[tokio::test]
+    async fn test_worker_request_cond_expr_resolution() {
+        let empty_headers = HeaderMap::new();
+        let api_request = get_api_request("foo/2", None, &empty_headers, Value::Null);
+        let expression = r#"let response = golem:it/api/get-cart-contents("a", "b"); response"#;
+
+
+        let api_specification: HttpApiDefinition = get_api_spec(
+            "foo/{user-id}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            expression,
+        );
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let evaluator = get_test_evaluator();
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let test_response: TestResponse = resolved_route
+            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .await;
+
+        let result = (
+            test_response.worker_name,
+            test_response.function_name,
+            test_response.function_params,
+        );
+
+        let expected = (
+            "shopping-cart-1".to_string(),
+            "golem:it/api/get-cart-contents".to_string(),
+            Value::Array(vec![
+                Value::String("a".to_string()),
+                Value::String("b".to_string()),
+            ]),
+        );
+
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_worker_request_request_body_resolution() {
+        let empty_headers = HeaderMap::new();
+
+        let api_request = get_api_request(
+            "foo/2",
+            None,
+            &empty_headers,
+            Value::String("address".to_string()),
+        );
+
+        let expression = r#"let response = golem:it/api/get-cart-contents(request.body); response"#;
+
+        let api_specification: HttpApiDefinition = get_api_spec(
+            "foo/{user-id}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            expression,
+        );
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let evaluator = get_test_evaluator();
+
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let test_response: TestResponse = resolved_route
+            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .await;
+
+        let result = (
+            test_response.worker_name,
+            test_response.function_name,
+            test_response.function_params,
+        );
+
+        let expected = (
+            "shopping-cart-1".to_string(),
+            "golem:it/api/get-cart-contents".to_string(),
+            Value::Array(vec![
+                Value::String("address".to_string()),
+            ]),
+        );
+
+
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_worker_resolution_for_predicate_gives_bool() {
+        let empty_headers = HeaderMap::new();
+
+        let api_request = get_api_request(
+            "foo/2",
+            None,
+            &empty_headers,
+            Value::String("address".to_string()),
+        );
+
+        let expression = r#"let response = golem:it/api/get-cart-contents(1 == 1); response"#;
+
+        let api_specification: HttpApiDefinition =
+            get_api_spec("foo/{user-id}", "shopping-cart", expression);
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let evaluator = get_test_evaluator();
+
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let test_response: TestResponse = resolved_route
+            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .await;
+
+        let result = (
+            test_response.worker_name,
+            test_response.function_name,
+            test_response.function_params,
+        );
+
+        let expected = (
+            "shopping-cart".to_string(),
+            "golem:it/api/get-cart-contents".to_string(),
+            Value::Array(vec![
+                Value::Bool(true),
+            ]),
+        );
+
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_worker_resolution_for_predicate_gives_bool_greater() {
+        let empty_headers = HeaderMap::new();
+
+        let api_request = get_api_request(
+            "foo/2",
+            None,
+            &empty_headers,
+            Value::String("address".to_string()),
+        );
+
+        let expression = r#"let response = golem:it/api/get-cart-contents(2 > 1); response"#;
+
+        let api_specification: HttpApiDefinition =
+            get_api_spec("foo/{user-id}", "shopping-cart", expression);
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let evaluator = get_test_evaluator();
+
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let test_response: TestResponse = resolved_route
+            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .await;
+
+        let result = (
+            test_response.worker_name,
+            test_response.function_name,
+            test_response.function_params,
+        );
+
+        let expected = (
+            "shopping-cart".to_string(),
+            "golem:it/api/get-cart-contents".to_string(),
+            Value::Array(vec![
+                Value::Bool(true),
+            ]),
+        );
+
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_worker_resolution_for_cond_expr_fn_params() {
+        let empty_headers = HeaderMap::new();
+
+        let api_request = get_api_request(
+            "foo/2",
+            None,
+            &empty_headers,
+            Value::String("address".to_string()),
+        );
+
+        let expression = r#"
+          let response = golem:it/api/get-cart-contents(if (2 < 1) then 0 else 1);
+          response
+        "#;
+
+        let api_specification: HttpApiDefinition =
+            get_api_spec("foo/{user-id}", "shopping-cart", expression);
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let evaluator = get_test_evaluator();
+
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let test_response: TestResponse = resolved_route
+            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .await;
+
+        let result = (
+            test_response.worker_name,
+            test_response.function_name,
+            test_response.function_params,
+        );
+
+        let expected = (
+            "shopping-cart".to_string(),
+            "golem:it/api/get-cart-contents".to_string(),
+            Value::Array(vec![
+                Value::Number(serde_json::Number::from(1)),
+            ]),
+        );
+
+        assert_eq!(result, expected);
+    }
+    //
+    #[tokio::test]
+    async fn test_worker_resolution_for_cond_expr_req_body_fn_params() {
+        let empty_headers = HeaderMap::new();
+
+        let api_request = get_api_request(
+            "foo/2",
+            None,
+            &empty_headers,
+            Value::Object(serde_json::Map::from_iter(vec![(
+                "number".to_string(),
+                Value::Number(serde_json::Number::from(10)),
+            )])),
+        );
+
+        let function_params = "[\"${if (request.body.number < 11) then 0 else 1}\"]";
+
+        let expression = r#"
+          let response = golem:it/api/get-cart-contents(if (request.body.number < 11) then 0 else 1);
+          response
+        "#;
+
+        let api_specification: HttpApiDefinition =
+            get_api_spec("foo/{user-id}", "shopping-cart", expression);
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let evaluator = get_test_evaluator();
+
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let test_response: TestResponse = resolved_route
+            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .await;
+
+        let result = (
+            test_response.worker_name,
+            test_response.function_name,
+            test_response.function_params,
+        );
+
+        let expected = (
+            "shopping-cart".to_string(),
+            "golem:it/api/get-cart-contents".to_string(),
+            Value::Array(vec![
+                Value::Number(serde_json::Number::from(0)),
+            ]),
+        );
+
+        assert_eq!(result, expected);
+
+    }
+
+    #[tokio::test]
+    async fn test_worker_resolution_for_cond_expr_req_body_direct_fn_params() {
+        let empty_headers = HeaderMap::new();
+
+        let api_request = get_api_request(
+            "foo/2",
+            None,
+            &empty_headers,
+            Value::Object(serde_json::Map::from_iter(vec![(
+                "number".to_string(),
+                Value::Number(serde_json::Number::from(10)),
+            )])),
+        );
+
+        let function_params = "[\"${if (request.body.number < 11) then 0 else 1}\"]";
+
+        let expression = r#"
+          let condition1 = if (request.body.number < 11) then request.path.user-id else 1;
+          let condition2 = if (request.body.number < 5) then request.path.user-id else 1;
+          let response = golem:it/api/get-cart-contents(condition1, condition2);
+          response
+        "#;
+
+        let api_specification: HttpApiDefinition =
+            get_api_spec("foo/{user-id}", "shopping-cart", expression);
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let evaluator = get_test_evaluator();
+
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let test_response: TestResponse = resolved_route
+            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .await;
+
+        let result = (
+            test_response.worker_name,
+            test_response.function_name,
+            test_response.function_params,
+        );
+
+        let expected = (
+            "shopping-cart".to_string(),
+            "golem:it/api/get-cart-contents".to_string(),
+            Value::Array(vec![
+                Value::Number(serde_json::Number::from(2)),
+                Value::Number(serde_json::Number::from(1)),
+            ]),
+        );
+
+        assert_eq!(result, expected);
+    }
+
+
+    #[tokio::test]
+    async fn test_worker_request_map_list_request_body_resolution() {
+        let empty_headers = HeaderMap::new();
+
+        let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+
+        request_body.insert(
+            "foo_key".to_string(),
+            Value::String("foo_value".to_string()),
+        );
+
+        request_body.insert(
+            "bar_key".to_string(),
+            Value::Array(vec![Value::String("bar_value".to_string())]),
+        );
+
+        let api_request = get_api_request(
+            "foo/2",
+            None,
+            &empty_headers,
+            serde_json::Value::Object(request_body),
+        );
+
+        let foo_key = "${request.body.foo_key}";
+        let bar_key = "${request.body.bar_key[0]}";
+
+
+        let expression = r#"
+          let param1 = request.body.foo_key;
+          let param2 = request.body.bar_key[0];
+          let response = golem:it/api/get-cart-contents(param1, param2);
+          response
+        "#;
+
+        let function_params = format!("[\"{}\", \"{}\"]", foo_key, bar_key);
+
+        let api_specification: HttpApiDefinition = get_api_spec(
+            "foo/{user-id}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            expression
+        );
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let evaluator = get_test_evaluator();
+
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let test_response: TestResponse = resolved_route
+            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .await;
+
+        let result = (
+            test_response.worker_name,
+            test_response.function_name,
+            test_response.function_params,
+        );
+
+        let expected = (
+            "shopping-cart-1".to_string(),
+            "golem:it/api/get-cart-contents".to_string(),
+            Value::Array(vec![
+                Value::String("foo_value".to_string()),
+                Value::String("bar_value".to_string()),
+            ]),
+        );
+
+
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_worker_request_request_body_direct() {
+        let empty_headers = HeaderMap::new();
+
+        let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+
+        request_body.insert(
+            "foo_key".to_string(),
+            Value::String("foo_value".to_string()),
+        );
+
+        request_body.insert(
+            "bar_key".to_string(),
+            Value::Array(vec![Value::String("bar_value".to_string())]),
+        );
+
+        let api_request = get_api_request(
+            "foo/2",
+            None,
+            &empty_headers,
+            Value::Object(request_body.clone()),
+        );
+
+        let foo_key = "${request.body.foo_key}";
+        let bar_key = "${request.body.bar_key[0]}";
+
+
+        let expression = r#"
+          let param = request.body;
+          let response = golem:it/api/get-cart-contents(param);
+          response
+        "#;
+
+        let function_params = format!("[\"{}\", \"{}\"]", foo_key, bar_key);
+
+        let api_specification: HttpApiDefinition = get_api_spec(
+            "foo/{user-id}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            expression
+        );
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let evaluator = get_test_evaluator();
+
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+
+        let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+        let test_response: TestResponse = resolved_route
+            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .await;
+
+        let result = (
+            test_response.worker_name,
+            test_response.function_name,
+            test_response.function_params,
+        );
+
+        let expected = (
+            "shopping-cart-1".to_string(),
+            "golem:it/api/get-cart-contents".to_string(),
+            Value::Array(vec![
+                Value::Object(request_body),
+            ]),
+        );
+
+
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_worker_request_resolution_paths() {
+        async fn test_paths(definition_path: &str, request_path: &str, ok: bool) {
+            let empty_headers = HeaderMap::new();
+            let api_request =
+                get_api_request(request_path, None, &empty_headers, serde_json::Value::Null);
+
+            let function_params = "[]";
+
+            let api_specification: HttpApiDefinition = get_api_spec(
+                definition_path,
+                "shopping-cart-${request.path.cart-id}",
+                function_params,
+            );
+
+            let resolved_route = api_request.resolve(&api_specification).await;
+
+            let result = resolved_route.map(|x| x.worker_detail);
+
+            assert_eq!(result.is_ok(), ok);
+        }
+
+        test_paths("getcartcontent/{cart-id}", "/noexist", false).await;
+        test_paths("/getcartcontent/{cart-id}", "noexist", false).await;
+        test_paths("getcartcontent/{cart-id}", "noexist", false).await;
+        test_paths("/getcartcontent/{cart-id}", "/noexist", false).await;
+        test_paths("getcartcontent/{cart-id}", "/getcartcontent/1", true).await;
+        test_paths("/getcartcontent/{cart-id}", "getcartcontent/1", true).await;
+        test_paths("getcartcontent/{cart-id}", "getcartcontent/1", true).await;
+        test_paths("/getcartcontent/{cart-id}", "/getcartcontent/1", true).await;
+    }
+
+    #[tokio::test]
+    async fn test_worker_idempotency_key_header() {
+        async fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
+            let api_request = get_api_request(
+                "/getcartcontent/1",
+                None,
+                header_map,
+                Value::Null,
+            );
+
+
+            let expression = r#"
+            let param = request.body;
+            let response = golem:it/api/get-cart-contents();
+            response
+            "#;
+
+            let api_specification: HttpApiDefinition = get_api_spec(
+                "getcartcontent/{cart-id}",
+                "shopping-cart-${request.path.cart-id}",
+                expression,
+            );
+
+            let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+
+            assert_eq!(
+                resolved_route.worker_detail.idempotency_key,
+                idempotency_key
+            );
+        }
+
+        test_key(&HeaderMap::new(), None).await;
+        let mut headers = HeaderMap::new();
+        headers.insert("Idempotency-Key", HeaderValue::from_str("foo").unwrap());
+        test_key(&headers, Some(IdempotencyKey::new("foo".to_string()))).await;
+        let mut headers = HeaderMap::new();
+        headers.insert("idempotency-key", HeaderValue::from_str("bar").unwrap());
+        test_key(&headers, Some(IdempotencyKey::new("bar".to_string()))).await;
+    }
 
     fn get_api_request(
         base_path: &str,
