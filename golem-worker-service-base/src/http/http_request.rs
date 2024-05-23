@@ -478,8 +478,11 @@ mod tests {
             serde_json::Value::Object(request_body_amp),
         );
 
-        let expression = r#"let response = golem:it/api/get-cart-contents(request.path.user-id, request.path.token-id, "age-${request.body.age}"); response"#;
-
+        let expression = r#"
+          let response = golem:it/api/get-cart-contents(request.path.user-id, request.path.token-id, "age-${request.body.age}");
+          response
+        "#;
+        
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
             "shopping-cart-${request.path.user-id}",
@@ -496,7 +499,6 @@ mod tests {
             .execute_with(&evaluator, &worker_metadata_fetcher)
             .await;
 
-
         let result = (
             test_response.worker_name,
             test_response.function_name,
@@ -512,7 +514,6 @@ mod tests {
                 Value::String("age-10".to_string()),
             ]),
         );
-
 
         assert_eq!(result, expected);
     }
@@ -540,13 +541,15 @@ mod tests {
             Value::Object(request_body_amp),
         );
 
-
-        let expression = r#"let response = golem:it/api/get-cart-contents({ user-id : request.path.user-id }, request.path.token-id, "age-${request.body.age}", {user-name : request.headers.username}); response"#;
+        let expression = r#"
+          let response = golem:it/api/get-cart-contents({ user-id : request.path.user-id }, request.path.token-id, "age-${request.body.age}", {user-name : request.headers.username});
+          response
+        "#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
             "shopping-cart-${request.path.user-id}",
-            expression
+            expression,
         );
 
         let resolved_route = api_request.resolve(&api_specification).await.unwrap();
@@ -568,11 +571,7 @@ mod tests {
 
         let mut user_name_map = serde_json::Map::new();
 
-        user_name_map.insert(
-            "user-name".to_string(),
-            Value::String("foo".to_string()),
-        );
-
+        user_name_map.insert("user-name".to_string(), Value::String("foo".to_string()));
 
         let result = (
             test_response.worker_name,
@@ -590,8 +589,6 @@ mod tests {
                 Value::Object(user_name_map),
             ]),
         );
-
-
 
         assert_eq!(result, expected);
     }
