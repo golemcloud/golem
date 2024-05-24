@@ -1042,8 +1042,7 @@ fn proto_idempotency_key_string(
 ) -> Option<String> {
     idempotency_key
         .clone()
-        .and_then(|v| TryInto::<IdempotencyKey>::try_into(v).ok())
-        .map(|v| v.to_string())
+        .map(|v| Into::<IdempotencyKey>::into(v).to_string())
 }
 
 fn proto_account_id_string(

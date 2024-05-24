@@ -218,7 +218,7 @@ pub mod grpc {
         ($api_name:expr,  $($fields:tt)*) => {
             {
                 let span = tracing::span!(tracing::Level::INFO, "grpc_request", api = $api_name, $($fields)*);
-                crate::metrics::grpc::RecordedGrpcRequest::new($api_name, span)
+                $crate::metrics::grpc::RecordedGrpcRequest::new($api_name, span)
             }
         };
     }

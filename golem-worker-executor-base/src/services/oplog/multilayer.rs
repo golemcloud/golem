@@ -22,7 +22,7 @@ use bytes::Bytes;
 use nonempty_collections::{NEVec, NonEmptyIterator};
 use prometheus::core::{Atomic, AtomicU64};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tracing::{debug, error, Instrument, warn};
+use tracing::{debug, error, warn, Instrument};
 
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{AccountId, WorkerId};
@@ -314,13 +314,16 @@ impl MultiLayerOplog {
         }
         let lower = NEVec::from_vec(lower).expect("At least one lower layer is required");
 
-        let transfer_fiber = tokio::spawn(Self::background_transfer(
-            worker_id.clone(),
-            primary.clone(),
-            lower.clone(),
-            multi_layer_oplog_service.clone(),
-            rx,
-        ).in_current_span());
+        let transfer_fiber = tokio::spawn(
+            Self::background_transfer(
+                worker_id.clone(),
+                primary.clone(),
+                lower.clone(),
+                multi_layer_oplog_service.clone(),
+                rx,
+            )
+            .in_current_span(),
+        );
 
         let initial_primary_length = primary.length().await;
 

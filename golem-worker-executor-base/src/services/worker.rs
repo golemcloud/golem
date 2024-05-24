@@ -75,9 +75,10 @@ impl DefaultWorkerService {
         let mut workers = Vec::new();
 
         for worker_id in value {
-            let metadata = self.get(&worker_id).await.unwrap_or_else(|| {
-                panic!("failed to get worker metadata from KV storage")
-            });
+            let metadata = self
+                .get(&worker_id)
+                .await
+                .unwrap_or_else(|| panic!("failed to get worker metadata from KV storage"));
             workers.push(metadata);
         }
 
@@ -119,15 +120,15 @@ impl WorkerService for DefaultWorkerService {
                 &worker_metadata.last_known_status,
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to set worker status in KV storage: {err}")
-            });
+            .unwrap_or_else(|err| panic!("failed to set worker status in KV storage: {err}"));
 
         if worker_metadata.last_known_status.status == WorkerStatus::Running {
             let shard_assignment = self.shard_service.current_assignment();
             let shard_id = ShardId::from_worker_id(worker_id, shard_assignment.number_of_shards);
 
-            debug!("Adding worker to the list of running workers for shard {shard_id} in KV storage");
+            debug!(
+                "Adding worker to the list of running workers for shard {shard_id} in KV storage"
+            );
 
             self
                 .key_value_storage
@@ -257,9 +258,7 @@ impl WorkerService for DefaultWorkerService {
                 status_value,
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to set worker status in KV storage: {err}")
-            });
+            .unwrap_or_else(|err| panic!("failed to set worker status in KV storage: {err}"));
 
         let shard_assignment = self.shard_service.current_assignment();
         let shard_id = ShardId::from_worker_id(worker_id, shard_assignment.number_of_shards);
@@ -278,9 +277,7 @@ impl WorkerService for DefaultWorkerService {
                     )
                 });
         } else {
-            debug!(
-                "removing worker from the set of running workers in shard {shard_id}"
-            );
+            debug!("removing worker from the set of running workers in shard {shard_id}");
 
             self
                 .key_value_storage
