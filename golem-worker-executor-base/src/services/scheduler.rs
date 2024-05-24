@@ -19,7 +19,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use tokio::task::JoinHandle;
-use tracing::error;
+use tracing::{error, span, Instrument, Level};
 
 use golem_common::model::{PromiseId, ScheduleId};
 
@@ -138,7 +138,11 @@ impl SchedulerServiceDefault {
         }
 
         for worker_id in worker_ids {
-            self.worker_activator.activate_worker(&worker_id).await;
+            let span = span!(Level::INFO, "scheduler", worker_id = worker_id.to_string());
+            self.worker_activator
+                .activate_worker(&worker_id)
+                .instrument(span)
+                .await;
         }
 
         Ok(())

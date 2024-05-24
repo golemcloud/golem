@@ -55,7 +55,7 @@ use golem_common::model::{
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::AsContextMut;
 use wasmtime_wasi::preview2::{I32Exit, ResourceTable, Stderr, Subscribe, WasiCtx, WasiView};
@@ -137,7 +137,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
         )?);
         debug!(
-            "Created temporary file system root for {worker_id} at {:?}",
+            "Created temporary file system root at {:?}",
             temp_dir.path()
         );
         let root_dir = cap_std::fs::Dir::open_ambient_dir(temp_dir.path(), ambient_authority())
@@ -591,7 +591,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn deactivate(&self) {
-        debug!("deactivating worker {}", self.worker_id);
+        debug!("deactivating worker");
         self.state.active_workers.remove(&self.worker_id);
     }
 }
@@ -687,8 +687,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .await;
 
         debug!(
-            "Recovery decision for {} because of error {:?} after {} tries: {:?}",
-            self.worker_id, error, previous_tries, decision
+            "Recovery decision because of error {:?} after {} tries: {:?}",
+            error, previous_tries, decision
         );
 
         Ok(calculate_worker_status(
@@ -899,7 +899,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<bool, GolemError> {
-        debug!("Starting prepare_instance for {worker_id}");
+        debug!("Starting prepare_instance");
         let start = Instant::now();
         let mut count = 0;
 
@@ -932,7 +932,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         idempotency_key,
                         calling_convention,
                     ))) => {
-                        debug!("prepare_instance invoking function {function_name} on {worker_id}");
+                        debug!("prepare_instance invoking function {function_name}");
+                        let span = span!(Level::INFO, "replaying", function = function_name);
                         store
                             .as_context_mut()
                             .data_mut()
@@ -947,6 +948,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             calling_convention.unwrap_or(CallingConvention::Component),
                             false, // we know it was not live before, because cont=true
                         )
+                        .instrument(span)
                         .await;
 
                         if let Some(invoke_result) = invoke_result {
@@ -976,10 +978,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let retry = Self::finalize_pending_update(&result, instance, store).await;
 
         if retry {
-            debug!("Retrying prepare_instance for {worker_id} after failed update attempt");
+            debug!("Retrying prepare_instance after failed update attempt");
             Ok(true)
         } else {
-            debug!("Finished prepare_instance for {worker_id}");
+            debug!("Finished prepare_instance");
             result
                 .map(|_| false)
                 .map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
@@ -1028,7 +1030,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 )
                 .await;
             if let Some(last_error) = last_error {
-                debug!("Recovery decision for {worker_id} after {last_error}: {decision:?}");
+                debug!("Recovery decision after {last_error}: {decision:?}");
             }
         }
 
@@ -1048,7 +1050,10 @@ async fn last_error_and_retry_count<T: HasOplogService>(
     } else {
         let mut first_error = None;
         loop {
-            debug!("Reading oplog entry at index {} to determine last error and retry count", idx);
+            debug!(
+                "Reading oplog entry at index {} to determine last error and retry count",
+                idx
+            );
             let oplog_entry = this.oplog_service().read(worker_id, idx, 1).await;
             match oplog_entry.first_key_value()
                 .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", worker_id)) {
@@ -1203,7 +1208,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         if self.is_replay() {
             let update_next_deleted_region = match &self.next_deleted_region {
                 Some(region) if region.start == self.replay_idx => {
-                    let target = region.end + 1;
+                    let target = region.end;
                     debug!(
                         "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
                         self.worker_id, self.replay_idx, target, self.replay_target
@@ -1250,7 +1255,11 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         let mut start = self.replay_idx + 1;
         const CHUNK_SIZE: u64 = 1024;
         while start < self.replay_target {
-            debug!("Looking up oplog entries from {} to {}", start, start + CHUNK_SIZE - 1);
+            debug!(
+                "Looking up oplog entries from {} to {}",
+                start,
+                start + CHUNK_SIZE - 1
+            );
             let entries = self
                 .oplog_service
                 .read(&self.worker_id, start, CHUNK_SIZE)

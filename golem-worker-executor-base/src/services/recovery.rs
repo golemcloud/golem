@@ -20,7 +20,7 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{info, Instrument, warn};
 
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::WorkerError;
@@ -426,7 +426,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                             }
                         }
                     }
-                });
+                }.in_current_span());
                 self.cancel_scheduled_recovery(worker_id).await;
                 self.scheduled_recoveries
                     .lock()
@@ -456,7 +456,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                             }
                         }
                     }
-                });
+                }.in_current_span());
                 self.cancel_scheduled_recovery(worker_id).await;
                 self.scheduled_recoveries
                     .lock()

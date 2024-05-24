@@ -76,7 +76,7 @@ impl DefaultWorkerService {
 
         for worker_id in value {
             let metadata = self.get(&worker_id).await.unwrap_or_else(|| {
-                panic!("failed to get worker metadata for {worker_id} from KV storage")
+                panic!("failed to get worker metadata from KV storage")
             });
             workers.push(metadata);
         }
@@ -120,14 +120,14 @@ impl WorkerService for DefaultWorkerService {
             )
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to set worker status for {worker_id} in KV storage: {err}")
+                panic!("failed to set worker status in KV storage: {err}")
             });
 
         if worker_metadata.last_known_status.status == WorkerStatus::Running {
             let shard_assignment = self.shard_service.current_assignment();
             let shard_id = ShardId::from_worker_id(worker_id, shard_assignment.number_of_shards);
 
-            debug!("Adding worker id {worker_id} to the list of running workers for shard {shard_id} in KV storage");
+            debug!("Adding worker to the list of running workers for shard {shard_id} in KV storage");
 
             self
                 .key_value_storage
@@ -136,7 +136,7 @@ impl WorkerService for DefaultWorkerService {
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
-                        "failed to add worker id {worker_id} to the set of running workers per shard ids in KV storage: {err}"
+                        "failed to add worker to the set of running workers per shard ids in KV storage: {err}"
                     )
                 });
         }
@@ -149,7 +149,7 @@ impl WorkerService for DefaultWorkerService {
         record_worker_call("get");
 
         let wid = worker_id;
-        debug!("Reading initial oplog entry for {worker_id}");
+        debug!("Reading initial oplog entry");
         let initial_oplog_entry = self
             .oplog_service
             .read(worker_id, 1, 1)
@@ -198,7 +198,7 @@ impl WorkerService for DefaultWorkerService {
                 Some(details)
             }
             Some((_, entry)) => {
-                panic!("Unexpected initial oplog entry for worker {worker_id}: {entry:?}")
+                panic!("Unexpected initial oplog entry for worker: {entry:?}")
             }
         }
     }
@@ -227,7 +227,7 @@ impl WorkerService for DefaultWorkerService {
             )
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to remove worker status for {worker_id} in the KV storage: {err}")
+                panic!("failed to remove worker status in the KV storage: {err}")
             });
 
         let shard_assignment = self.shard_service.current_assignment();
@@ -240,7 +240,7 @@ impl WorkerService for DefaultWorkerService {
             .await
             .unwrap_or_else(|err| {
                 panic!(
-                    "failed to remove worker id {worker_id} from the set of running worker ids per shard in KV storage: {err}"
+                    "failed to remove worker from the set of running worker ids per shard in KV storage: {err}"
                 )
             });
     }
@@ -248,7 +248,7 @@ impl WorkerService for DefaultWorkerService {
     async fn update_status(&self, worker_id: &WorkerId, status_value: &WorkerStatusRecord) {
         record_worker_call("update_status");
 
-        debug!("updating worker status for {worker_id} to {status_value:?}");
+        debug!("updating worker status to {status_value:?}");
         self.key_value_storage
             .with_entity("worker", "update_status", "worker_status")
             .set(
@@ -258,14 +258,14 @@ impl WorkerService for DefaultWorkerService {
             )
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to set worker status for {worker_id} in KV storage: {err}")
+                panic!("failed to set worker status in KV storage: {err}")
             });
 
         let shard_assignment = self.shard_service.current_assignment();
         let shard_id = ShardId::from_worker_id(worker_id, shard_assignment.number_of_shards);
 
         if status_value.status == WorkerStatus::Running {
-            debug!("adding worker {worker_id} to the set of running workers in shard {shard_id}");
+            debug!("adding worker to the set of running workers in shard {shard_id}");
 
             self
                 .key_value_storage
@@ -274,12 +274,12 @@ impl WorkerService for DefaultWorkerService {
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
-                        "failed to add worker id {worker_id} from the set of running workers per shard ids on KV storage: {err}"
+                        "failed to add worker to the set of running workers per shard ids on KV storage: {err}"
                     )
                 });
         } else {
             debug!(
-                "removing instance {worker_id} from the set of running workers in shard {shard_id}"
+                "removing worker from the set of running workers in shard {shard_id}"
             );
 
             self
@@ -289,7 +289,7 @@ impl WorkerService for DefaultWorkerService {
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
-                        "failed to remove worker id {worker_id} from the set of running worker ids per shard on KV storage: {err}"
+                        "failed to remove worker from the set of running worker ids per shard on KV storage: {err}"
                     )
                 });
         }

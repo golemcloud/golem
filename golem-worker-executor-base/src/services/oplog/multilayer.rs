@@ -22,7 +22,7 @@ use bytes::Bytes;
 use nonempty_collections::{NEVec, NonEmptyIterator};
 use prometheus::core::{Atomic, AtomicU64};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, Instrument, warn};
 
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{AccountId, WorkerId};
@@ -320,7 +320,7 @@ impl MultiLayerOplog {
             lower.clone(),
             multi_layer_oplog_service.clone(),
             rx,
-        ));
+        ).in_current_span());
 
         let initial_primary_length = primary.length().await;
 

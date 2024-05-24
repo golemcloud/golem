@@ -48,7 +48,6 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
 
     let worker_id = store.data().worker_id().clone();
-    debug!("invoke_worker: {worker_id}/{full_function_name}");
 
     let result = invoke_or_fail(
         &worker_id,
@@ -61,10 +60,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     )
     .await;
 
-    debug!(
-        "invoke_or_fail: {worker_id}/{full_function_name} resulted in {:?}",
-        result
-    );
+    debug!("resulted in {:?}", result);
 
     match result {
         Err(err) => {

@@ -31,7 +31,7 @@ use golem_common::model::{
 };
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::Receiver;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, Instrument};
 use wasmtime::{Store, UpdateDeadline};
 
 use crate::error::GolemError;
@@ -108,13 +108,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         worker_metadata.last_known_status.component_version,
                         |update| {
                             let target_version = *update.description.target_version();
-                            info!("Attempting {} update for {worker_id} from {} to version {target_version}",
+                            info!(
+                                "Attempting {} update from {} to version {target_version}",
                                 match update.description {
                                     UpdateDescription::Automatic { .. } => "automatic",
-                                    UpdateDescription::SnapshotBased { .. } => "snapshot based"
+                                    UpdateDescription::SnapshotBased { .. } => "snapshot based",
                                 },
-                            worker_metadata.last_known_status.component_version
-                        );
+                                worker_metadata.last_known_status.component_version
+                            );
                             target_version
                         },
                     );
@@ -279,6 +280,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 component_version,
                 account_id,
             )
+            .in_current_span()
             .await;
             if let Err(err) = result {
                 error!("Failed to activate worker {worker_id_clone}: {err}");
@@ -816,7 +818,6 @@ pub async fn invoke_and_await<Ctx: WorkerCtx>(
     full_function_name: String,
     function_input: Vec<Value>,
 ) -> Result<Vec<Value>, GolemError> {
-    let worker_id = worker.metadata.worker_id.clone();
     match invoke(
         worker.clone(),
         idempotency_key.clone(),
@@ -829,7 +830,7 @@ pub async fn invoke_and_await<Ctx: WorkerCtx>(
         Some(Ok(output)) => Ok(output),
         Some(Err(err)) => Err(err),
         None => {
-            debug!("Waiting for idempotency key {idempotency_key} to complete for {worker_id}",);
+            debug!("Waiting for idempotency key to complete",);
 
             let invocation_queue = worker.public_state.invocation_queue().clone();
             drop(worker); // we must not hold reference to the worker while waiting
@@ -838,10 +839,7 @@ pub async fn invoke_and_await<Ctx: WorkerCtx>(
                 .wait_for_invocation_result(&idempotency_key)
                 .await;
 
-            debug!(
-                "Invocation key {} lookup result for {worker_id}: {:?}",
-                idempotency_key, result
-            );
+            debug!("Idempotency key lookup result: {:?}", result);
             match result {
                 LookupResult::Complete(Ok(output)) => Ok(output),
                 LookupResult::Complete(Err(err)) => Err(err),
@@ -875,7 +873,10 @@ where
     if last_known.oplog_idx == last_oplog_index {
         Ok(last_known)
     } else {
-        debug!("Calculating new worker status for {worker_id} from {} to {}", last_known.oplog_idx, last_oplog_index);
+        debug!(
+            "Calculating new worker status from {} to {}",
+            last_known.oplog_idx, last_oplog_index
+        );
         let new_entries: Vec<OplogEntry> = this
             .oplog_service()
             .read(
@@ -934,7 +935,9 @@ where
             &new_entries,
         );
 
-        debug!("calculate_last_known_status using last oplog index {last_oplog_index} as reference");
+        debug!(
+            "calculate_last_known_status using last oplog index {last_oplog_index} as reference"
+        );
         Ok(WorkerStatusRecord {
             oplog_idx: last_oplog_index,
             status,
