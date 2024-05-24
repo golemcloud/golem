@@ -101,23 +101,5 @@ impl ServerConfig {
 
 #[test]
 fn config_load() {
-    std::env::set_var("GOLEM__COMPONENT_SERVICE__HOST", "0.0.0.0");
-    std::env::set_var("GOLEM__COMPONENT_SERVICE__PORT", "9001");
-    std::env::set_var(
-        "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
-        "6778f06f-43ac-4e45-b501-6adb3253edf2",
-    );
-
-    std::env::set_var("GOLEM__BLOB_STORAGE__CONFIG__REGION", "us-east-1");
-    std::env::set_var(
-        "GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET",
-        "golem-compiled-components",
-    );
-    std::env::set_var(
-        "GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET",
-        "golem-custom-data",
-    );
-    std::env::set_var("GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX", "");
-
     let _ = ServerConfig::new();
 }

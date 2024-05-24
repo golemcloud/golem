@@ -1,0 +1,21 @@
+package golem:it;
+
+interface api {
+
+  record data {
+    id: string,
+    name: string,
+    desc: string,
+    timestamp: u64
+  }
+
+  echo: func(input: string) -> string;
+
+  calculate: func(input: u64) -> u64;
+
+  process: func(input: list<data>) -> list<data>;
+}
+
+world rust-component-service {
+  export api;
+}

@@ -70,8 +70,6 @@ struct RouteView {
     pub component_id: String,
     #[table(title = "WorkerName")]
     pub worker_name: String,
-    #[table(title = "Function")]
-    pub function_name: String,
 }
 
 impl From<&Route> for RouteView {
@@ -83,7 +81,6 @@ impl From<&Route> for RouteView {
             path: value.path.to_string(),
             component_id: format!("*{component_end}"),
             worker_name: value.binding.worker_name.to_string(),
-            function_name: value.binding.function_name.to_string(),
         }
     }
 }
@@ -402,10 +399,12 @@ impl TextFormat for ApiDeployment {
     fn print(&self) {
         printdoc!(
             "
-            API deployment on {}.{} with definition {}/{}
+            API deployment on {} with definition {}/{}
             ",
-            self.site.subdomain,
-            self.site.host,
+            match &self.site.subdomain {
+                Some(subdomain) => format!("{}.{}", subdomain, self.site.host),
+                None => self.site.host.to_string(),
+            },
             self.api_definition_id,
             self.version,
         );
@@ -425,7 +424,10 @@ struct ApiDeploymentView {
 impl From<&ApiDeployment> for ApiDeploymentView {
     fn from(value: &ApiDeployment) -> Self {
         ApiDeploymentView {
-            site: format!("{}.{}", value.site.subdomain, value.site.host),
+            site: match &value.site.subdomain {
+                Some(subdomain) => format!("{}.{}", subdomain, value.site.host),
+                None => value.site.host.to_string(),
+            },
             id: value.api_definition_id.to_string(),
             version: value.version.to_string(),
         }

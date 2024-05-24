@@ -57,7 +57,8 @@ impl<W: Write> Writer<W> {
                 self.write_str(string)?;
                 self.write_display(Token::Quote)
             }
-            Expr::Request() => self.write_display(Token::MultiChar(MultiCharTokens::Request)),
+            Expr::Identifier(identifier) => self.write_str(identifier),
+
             Expr::Let(let_variable, expr) => {
                 self.write_str("let ")?;
                 self.write_str(let_variable)?;
@@ -65,7 +66,6 @@ impl<W: Write> Writer<W> {
                 self.write_expr(expr)?;
                 self.write_display(Token::SemiColon)
             }
-            Expr::Worker() => self.write_display(Token::MultiChar(MultiCharTokens::Worker)),
             Expr::SelectField(expr, field_name) => {
                 self.write_expr(expr)?;
                 self.write_str(".")?;
@@ -124,11 +124,6 @@ impl<W: Write> Writer<W> {
                     self.write_str(flag)?;
                 }
                 self.write_display(Token::RCurly)
-            }
-            Expr::Variable(variable) => {
-                // self.write_display(Token::MultiChar(MultiCharTokens::InterpolationStart))?;
-                self.write_str(variable)
-                // self.write_display(Token::RCurly)
             }
             Expr::Boolean(bool) => self.write_display(bool),
             Expr::Concat(concatenated) => {
@@ -218,6 +213,19 @@ impl<W: Write> Writer<W> {
                     self.write_str(")")
                 }
             },
+
+            Expr::Call(string, params) => {
+                self.write_str(string)?;
+                self.write_display(Token::LParen)?;
+                for (idx, param) in params.iter().enumerate() {
+                    if idx != 0 {
+                        self.write_display(Token::Comma)?;
+                        self.write_display(Token::Space)?;
+                    }
+                    self.write_expr(param)?;
+                }
+                self.write_display(Token::RParen)
+            }
         }
     }
 
@@ -294,20 +302,25 @@ mod internal {
                 write_constructor(pattern, writer)
             }
             ArmPattern::Constructor(constructor_type, variables) => {
-                writer.write_display(constructor_type)?;
-                writer.write_str("(")?;
+                if !variables.is_empty() {
+                    writer.write_display(constructor_type)?;
 
-                for (idx, pattern) in variables.iter().enumerate() {
-                    if idx != 0 {
-                        writer.write_str(",")?;
+                    writer.write_str("(")?;
+
+                    for (idx, pattern) in variables.iter().enumerate() {
+                        if idx != 0 {
+                            writer.write_str(",")?;
+                        }
+                        write_constructor(pattern, writer)?;
                     }
-                    write_constructor(pattern, writer)?;
-                }
 
-                writer.write_str(")")
+                    writer.write_str(")")
+                } else {
+                    writer.write_display(constructor_type)
+                }
             }
             ArmPattern::Literal(expr) => match *expr.clone() {
-                Expr::Variable(s) => writer.write_str(s),
+                Expr::Identifier(s) => writer.write_str(s),
                 any_expr => writer.write_expr(&any_expr),
             },
         }

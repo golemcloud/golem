@@ -14,6 +14,7 @@
 # - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI)
 # - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
 # - `cargo make publish`: publishes packages to crates.io
+# - `cargo make run`: runs all services locally, requires redis, lnav and nginx
 
 [config]
 default_to_workspace = false # by default, we run cargo commands on top level instead of per member
@@ -451,3 +452,69 @@ condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
 env = { "PLATFORM_TARGET" = "aarch64-unknown-linux-gnu" }
 extend = "package-release-base"
 dependencies = ["build-release-override-linux-arm64"]
+
+[tasks.run]
+description = "Runs all the services locally"
+dependencies = ["build"]
+
+condition = { fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager." }
+condition_script = ["nginx -v", "lnav --version", "redis-server --version"]
+
+script = '''
+mkdir -pv logs
+
+redis-server --port 6380 --save "" --appendonly no &> logs/redis.log &
+redis_pid=$!
+
+export RUST_BACKTRACE=1
+
+pushd golem-shard-manager || exit
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn GOLEM_SHARD_MANAGER_PORT=9002 ../target/debug/golem-shard-manager &> ../logs/shard-manager.log &
+shard_manager_pid=$!
+popd || exit
+
+pushd golem-component-compilation-service || exit
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-compilation-service &> ../logs/component-compilation-service.log &
+component_compilation_service_pid=$!
+popd || exit
+
+pushd golem-component-service || exit
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-service &> ../logs/component-service.log &
+component_service_pid=$!
+popd || exit
+
+pushd golem-worker-service || exit
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-worker-service &> ../logs/worker-service.log &
+worker_service_pid=$!
+popd || exit
+
+pushd golem-worker-executor || exit
+RUST_LOG=info ../target/debug/worker-executor &> ../logs/worker-executor.log &
+worker_executor_pid=$!
+popd || exit
+
+nginx -c $CARGO_MAKE_WORKING_DIRECTORY/golem-router/golem-services.local.conf &> logs/nginx.log &
+router_pid=$!
+
+echo "Started services"
+echo " - worker executor:               $worker_executor_pid"
+echo " - worker service:                $worker_service_pid"
+echo " - component service:             $component_service_pid"
+echo " - component compilation service: $component_compilation_service_pid"
+echo " - shard manager:                 $shard_manager_pid"
+echo " - router:                        $router_pid"
+echo " - redis:                         $redis_pid"
+echo ""
+echo "Kill all manually:"
+echo "kill -9 $worker_executor_pid $worker_service_pid $component_service_pid $component_compilation_service_pid $shard_manager_pid $router_pid $redis_pid"
+
+lnav logs
+
+kill $worker_executor_pid || true
+kill $worker_service_pid || true
+kill $component_service_pid || true
+kill $component_compilation_service_pid || true
+kill $shard_manager_pid || true
+kill $router_pid || true
+kill $redis_pid || true
+'''

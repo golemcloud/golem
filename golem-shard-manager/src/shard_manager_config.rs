@@ -72,14 +72,6 @@ pub enum HealthCheckMode {
 mod tests {
     #[test]
     pub fn config_is_loadable() {
-        // The following settings are always coming through environment variables:
-        std::env::set_var("GOLEM__REDIS__HOST", "localhost");
-        std::env::set_var("GOLEM__REDIS__PORT", "1234");
-        std::env::set_var("GOLEM__REDIS__DATABASE", "1");
-        std::env::set_var("GOLEM__ENABLE_JSON_LOG", "true");
-        std::env::set_var("GOLEM__HTTP_PORT", "8080");
-
-        // The rest can be loaded from the toml
         let _ = super::ShardManagerConfig::new();
     }
 }

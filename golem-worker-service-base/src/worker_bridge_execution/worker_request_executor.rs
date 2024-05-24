@@ -1,7 +1,9 @@
 use crate::service::worker::TypedResult;
-use crate::worker_bridge_execution::WorkerRequest;
+use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
 use async_trait::async_trait;
+
 use golem_service_base::model::FunctionResult;
+
 use golem_wasm_rpc::TypeAnnotatedValue;
 use std::fmt::Display;
 
@@ -30,6 +32,12 @@ impl WorkerResponse {
     }
 }
 
+impl WorkerResponse {
+    pub fn refined(&self) -> Result<RefinedWorkerResponse, String> {
+        RefinedWorkerResponse::from_worker_response(self)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WorkerRequestExecutorError(String);
 
@@ -42,5 +50,19 @@ impl Display for WorkerRequestExecutorError {
 impl<T: AsRef<str>> From<T> for WorkerRequestExecutorError {
     fn from(err: T) -> Self {
         WorkerRequestExecutorError(err.as_ref().to_string())
+    }
+}
+
+pub struct NoopWorkerRequestExecutor;
+
+#[async_trait]
+impl WorkerRequestExecutor for NoopWorkerRequestExecutor {
+    async fn execute(
+        &self,
+        _worker_request_params: WorkerRequest,
+    ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
+        Err(WorkerRequestExecutorError(
+            "NoopWorkerRequestExecutor".to_string(),
+        ))
     }
 }

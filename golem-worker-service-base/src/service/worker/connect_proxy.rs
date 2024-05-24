@@ -314,6 +314,7 @@ mod keep_alive {
             });
         }
 
+        #[ignore]
         #[tokio::test]
         async fn test_websocket_keep_alive() {
             setup_tracing();

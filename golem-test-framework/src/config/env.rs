@@ -57,200 +57,245 @@ pub struct EnvBasedTestDependencies {
 
 impl EnvBasedTestDependencies {
     pub fn blocking_new(worker_executor_cluster_size: usize) -> Self {
-        tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap()
             .block_on(async move { Self::new(worker_executor_cluster_size).await })
     }
 
-    pub async fn new(worker_executor_cluster_size: usize) -> Self {
-        let rdb = match Self::db_type() {
+    async fn make_rdb() -> Arc<dyn Rdb + Send + Sync + 'static> {
+        match Self::db_type() {
             DbType::Sqlite => {
                 let sqlite_path = Path::new("../target/golem_test_db");
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(SqliteRdb::new(sqlite_path));
-                rdb
+                Arc::new(SqliteRdb::new(sqlite_path))
             }
-            DbType::Postgres => {
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new(!Self::use_docker()).await);
-                rdb
-            }
-        };
-        let redis = {
-            let prefix = Self::redis_prefix().unwrap_or("".to_string());
-            let redis: Arc<dyn Redis + Send + Sync + 'static> = if Self::use_docker() {
-                Arc::new(DockerRedis::new(prefix))
-            } else {
-                let host = Self::redis_host().unwrap_or("localhost".to_string());
-                let port = Self::redis_port().unwrap_or(6379);
+            DbType::Postgres => Arc::new(DockerPostgresRdb::new(!Self::use_docker()).await),
+        }
+    }
 
-                if components::redis::check_if_running(&host, port) {
-                    Arc::new(ProvidedRedis::new(host, port, prefix))
-                } else {
-                    Arc::new(SpawnedRedis::new(
-                        port,
-                        prefix,
-                        Self::default_stdout_level(),
-                        Self::default_stderr_level(),
-                    ))
-                }
-            };
-            redis
-        };
-        let redis_monitor = {
-            let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> =
-                Arc::new(SpawnedRedisMonitor::new(
-                    redis.clone(),
+    async fn make_redis() -> Arc<dyn Redis + Send + Sync + 'static> {
+        let prefix = Self::redis_prefix().unwrap_or("".to_string());
+        if Self::use_docker() {
+            Arc::new(DockerRedis::new(prefix))
+        } else {
+            let host = Self::redis_host().unwrap_or("localhost".to_string());
+            let port = Self::redis_port().unwrap_or(6379);
+
+            if components::redis::check_if_running(&host, port) {
+                Arc::new(ProvidedRedis::new(host, port, prefix))
+            } else {
+                Arc::new(SpawnedRedis::new(
+                    port,
+                    prefix,
                     Self::default_stdout_level(),
                     Self::default_stderr_level(),
-                ));
-            redis_monitor
-        };
-        let shard_manager = {
-            let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = if Self::use_docker()
-            {
-                Arc::new(DockerShardManager::new(
-                    redis.clone(),
-                    Self::default_verbosity(),
                 ))
-            } else {
-                Arc::new(
-                    SpawnedShardManager::new(
-                        Path::new("../target/debug/golem-shard-manager"),
-                        Path::new("../golem-shard-manager"),
-                        9021,
-                        9020,
-                        redis.clone(),
-                        Self::default_verbosity(),
-                        Self::default_stdout_level(),
-                        Self::default_stderr_level(),
-                    )
-                    .await,
-                )
-            };
-            shard_manager
-        };
-        let component_service = {
-            let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
-                if Self::use_docker() {
-                    Arc::new(DockerComponentService::new(
-                        Some((
-                            DockerComponentCompilationService::NAME,
-                            DockerComponentCompilationService::GRPC_PORT,
-                        )),
-                        rdb.clone(),
-                        Self::default_verbosity(),
-                    ))
-                } else {
-                    Arc::new(
-                        SpawnedComponentService::new(
-                            Path::new("../target/debug/golem-component-service"),
-                            Path::new("../golem-component-service"),
-                            8081,
-                            9091,
-                            Some(9094),
-                            rdb.clone(),
-                            Self::default_verbosity(),
-                            Self::default_stdout_level(),
-                            Self::default_stderr_level(),
-                        )
-                        .await,
-                    )
-                };
-            component_service
-        };
-        let component_compilation_service = {
-            let component_compilation_service: Arc<
-                dyn ComponentCompilationService + Send + Sync + 'static,
-            > = if Self::use_docker() {
-                Arc::new(DockerComponentCompilationService::new(
-                    component_service.clone(),
+            }
+        }
+    }
+
+    async fn make_redis_monitor(
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+    ) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+        Arc::new(SpawnedRedisMonitor::new(
+            redis,
+            Self::default_stdout_level(),
+            Self::default_stderr_level(),
+        ))
+    }
+
+    async fn make_shard_manager(
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+    ) -> Arc<dyn ShardManager + Send + Sync + 'static> {
+        if Self::use_docker() {
+            Arc::new(DockerShardManager::new(redis, Self::default_verbosity()))
+        } else {
+            Arc::new(
+                SpawnedShardManager::new(
+                    Path::new("../target/debug/golem-shard-manager"),
+                    Path::new("../golem-shard-manager"),
+                    9021,
+                    9020,
+                    redis,
                     Self::default_verbosity(),
-                ))
-            } else {
-                Arc::new(
-                    SpawnedComponentCompilationService::new(
-                        Path::new("../target/debug/golem-component-compilation-service"),
-                        Path::new("../golem-component-compilation-service"),
-                        8083,
-                        9094,
-                        component_service.clone(),
-                        Self::default_verbosity(),
-                        Self::default_stdout_level(),
-                        Self::default_stderr_level(),
-                    )
-                    .await,
+                    Self::default_stdout_level(),
+                    Self::default_stderr_level(),
                 )
-            };
-            component_compilation_service
-        };
-        let worker_service = {
-            let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
-                if Self::use_docker() {
-                    Arc::new(DockerWorkerService::new(
-                        component_service.clone(),
-                        shard_manager.clone(),
-                        rdb.clone(),
-                        redis.clone(),
-                        Self::default_verbosity(),
-                    ))
-                } else {
-                    Arc::new(
-                        SpawnedWorkerService::new(
-                            Path::new("../target/debug/golem-worker-service"),
-                            Path::new("../golem-worker-service"),
-                            8082,
-                            9092,
-                            9093,
-                            component_service.clone(),
-                            shard_manager.clone(),
-                            rdb.clone(),
-                            redis.clone(),
-                            Self::default_verbosity(),
-                            Self::default_stdout_level(),
-                            Self::default_stderr_level(),
-                        )
-                        .await,
-                    )
-                };
-            worker_service
-        };
-        let worker_executor_cluster = {
-            let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> =
-                if Self::use_docker() {
-                    Arc::new(DockerWorkerExecutorCluster::new(
-                        worker_executor_cluster_size,
-                        9000,
-                        9100,
-                        redis.clone(),
-                        component_service.clone(),
-                        shard_manager.clone(),
-                        worker_service.clone(),
-                        Self::default_verbosity(),
-                    ))
-                } else {
-                    Arc::new(
-                        SpawnedWorkerExecutorCluster::new(
-                            worker_executor_cluster_size,
-                            9000,
-                            9100,
-                            Path::new("../target/debug/worker-executor"),
-                            Path::new("../golem-worker-executor"),
-                            redis.clone(),
-                            component_service.clone(),
-                            shard_manager.clone(),
-                            worker_service.clone(),
-                            Self::default_verbosity(),
-                            Self::default_stdout_level(),
-                            Self::default_stderr_level(),
-                        )
-                        .await,
-                    )
-                };
-            worker_executor_cluster
-        };
+                .await,
+            )
+        }
+    }
+
+    async fn make_component_service(
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+    ) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+        if Self::use_docker() {
+            Arc::new(DockerComponentService::new(
+                Some((
+                    DockerComponentCompilationService::NAME,
+                    DockerComponentCompilationService::GRPC_PORT,
+                )),
+                rdb,
+                Self::default_verbosity(),
+            ))
+        } else {
+            Arc::new(
+                SpawnedComponentService::new(
+                    Path::new("../target/debug/golem-component-service"),
+                    Path::new("../golem-component-service"),
+                    8081,
+                    9091,
+                    Some(9094),
+                    rdb,
+                    Self::default_verbosity(),
+                    Self::default_stdout_level(),
+                    Self::default_stderr_level(),
+                )
+                .await,
+            )
+        }
+    }
+
+    async fn make_component_compilation_service(
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+        if Self::use_docker() {
+            Arc::new(DockerComponentCompilationService::new(
+                component_service,
+                Self::default_verbosity(),
+            ))
+        } else {
+            Arc::new(
+                SpawnedComponentCompilationService::new(
+                    Path::new("../target/debug/golem-component-compilation-service"),
+                    Path::new("../golem-component-compilation-service"),
+                    8083,
+                    9094,
+                    component_service,
+                    Self::default_verbosity(),
+                    Self::default_stdout_level(),
+                    Self::default_stderr_level(),
+                )
+                .await,
+            )
+        }
+    }
+
+    async fn make_worker_service(
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+    ) -> Arc<dyn WorkerService + Send + Sync + 'static> {
+        if Self::use_docker() {
+            Arc::new(DockerWorkerService::new(
+                component_service,
+                shard_manager,
+                rdb,
+                redis,
+                Self::default_verbosity(),
+            ))
+        } else {
+            Arc::new(
+                SpawnedWorkerService::new(
+                    Path::new("../target/debug/golem-worker-service"),
+                    Path::new("../golem-worker-service"),
+                    8082,
+                    9092,
+                    9093,
+                    component_service,
+                    shard_manager,
+                    rdb,
+                    redis,
+                    Self::default_verbosity(),
+                    Self::default_stdout_level(),
+                    Self::default_stderr_level(),
+                )
+                .await,
+            )
+        }
+    }
+
+    async fn make_worker_executor_cluster(
+        worker_executor_cluster_size: usize,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+    ) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
+        if Self::use_docker() {
+            Arc::new(
+                DockerWorkerExecutorCluster::new(
+                    worker_executor_cluster_size,
+                    9000,
+                    9100,
+                    redis,
+                    component_service,
+                    shard_manager,
+                    worker_service,
+                    Self::default_verbosity(),
+                )
+                .await,
+            )
+        } else {
+            Arc::new(
+                SpawnedWorkerExecutorCluster::new(
+                    worker_executor_cluster_size,
+                    9000,
+                    9100,
+                    Path::new("../target/debug/worker-executor"),
+                    Path::new("../golem-worker-executor"),
+                    redis,
+                    component_service,
+                    shard_manager,
+                    worker_service,
+                    Self::default_verbosity(),
+                    Self::default_stdout_level(),
+                    Self::default_stderr_level(),
+                )
+                .await,
+            )
+        }
+    }
+
+    pub async fn new(worker_executor_cluster_size: usize) -> Self {
+        let rdb_and_component_service_join = tokio::spawn(async {
+            let rdb = Self::make_rdb().await;
+            let component_service = Self::make_component_service(rdb.clone()).await;
+            let component_compilation_service =
+                Self::make_component_compilation_service(component_service.clone()).await;
+            (rdb, component_service, component_compilation_service)
+        });
+
+        let redis = Self::make_redis().await;
+        let redis_monitor_join = tokio::spawn(Self::make_redis_monitor(redis.clone()));
+        let shard_manager_join = tokio::spawn(Self::make_shard_manager(redis.clone()));
+
+        let (rdb, component_service, component_compilation_service) =
+            rdb_and_component_service_join
+                .await
+                .expect("Failed to join.");
+
+        let shard_manager = shard_manager_join.await.expect("Failed to join");
+
+        let worker_service = Self::make_worker_service(
+            component_service.clone(),
+            shard_manager.clone(),
+            rdb.clone(),
+            redis.clone(),
+        )
+        .await;
+        let worker_executor_cluster = Self::make_worker_executor_cluster(
+            worker_executor_cluster_size,
+            component_service.clone(),
+            shard_manager.clone(),
+            worker_service.clone(),
+            redis.clone(),
+        )
+        .await;
+
+        let redis_monitor = redis_monitor_join.await.expect("Failed to join");
 
         Self {
             rdb,

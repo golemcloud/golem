@@ -10,10 +10,8 @@ use crate::expression::Expr;
 pub struct GolemWorkerBinding {
     pub component_id: ComponentId,
     pub worker_name: Expr,
-    pub function_name: String,
-    pub function_params: Vec<Expr>,
     pub idempotency_key: Option<Expr>,
-    pub response: Option<ResponseMapping>,
+    pub response: ResponseMapping,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]

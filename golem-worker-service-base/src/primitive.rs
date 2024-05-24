@@ -91,6 +91,7 @@ fn get_number(type_annotated_value: &TypeAnnotatedValue) -> Option<Number> {
         TypeAnnotatedValue::U64(value) => Some(Number::PosInt(*value)),
         TypeAnnotatedValue::F32(value) => Some(Number::Float(*value as f64)),
         TypeAnnotatedValue::F64(value) => Some(Number::Float(*value)),
+        TypeAnnotatedValue::U8(value) => Some(Number::PosInt(*value as u64)),
         _ => None,
     }
 }
