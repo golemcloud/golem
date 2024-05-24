@@ -875,6 +875,7 @@ where
     if last_known.oplog_idx == last_oplog_index {
         Ok(last_known)
     } else {
+        debug!("Calculating new worker status for {worker_id} from {} to {}", last_known.oplog_idx, last_oplog_index);
         let new_entries: Vec<OplogEntry> = this
             .oplog_service()
             .read(
@@ -933,6 +934,7 @@ where
             &new_entries,
         );
 
+        debug!("calculate_last_known_status using last oplog index {last_oplog_index} as reference");
         Ok(WorkerStatusRecord {
             oplog_idx: last_oplog_index,
             status,

@@ -147,6 +147,8 @@ impl OplogService for PrimaryOplogService {
     async fn get_last_index(&self, worker_id: &WorkerId) -> OplogIndex {
         record_oplog_call("get_last_index");
 
+        debug!("Getting the last index in the oplog");
+
         self.indexed_storage
             .with_entity("oplog", "get_last_index", "entry")
             .last_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))

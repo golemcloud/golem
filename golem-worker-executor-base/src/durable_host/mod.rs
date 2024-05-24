@@ -153,7 +153,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stdout = ManagedStdOut::from_standard_io(stdio.clone());
         let stderr = ManagedStdErr::from_stderr(Stderr);
 
-        let oplog_size = oplog.current_oplog_index().await;
+        let last_oplog_index = oplog.current_oplog_index().await;
 
         wasi_host::create_context(
             &worker_config.args,
@@ -207,7 +207,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         assume_idempotence: true,
                         open_function_table: HashMap::new(),
                         replay_idx: 1,
-                        replay_target: oplog_size - 1,
+                        replay_target: last_oplog_index,
                         snapshotting_mode: None,
                     },
                     temp_dir,
@@ -729,7 +729,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
                     output.iter().map(|value| value.clone().into()).collect();
 
-                let oplog_idx = self.state.oplog.current_oplog_index().await;
                 self.state
                     .oplog
                     .add_exported_function_completed(&proto_output, consumed_fuel)
@@ -738,6 +737,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         panic!("could not encode function result for {full_function_name}: {err}")
                     });
                 self.state.oplog.commit().await;
+                let oplog_idx = self.state.oplog.current_oplog_index().await;
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
@@ -1048,6 +1048,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
     } else {
         let mut first_error = None;
         loop {
+            debug!("Reading oplog entry at index {} to determine last error and retry count", idx);
             let oplog_entry = this.oplog_service().read(worker_id, idx, 1).await;
             match oplog_entry.first_key_value()
                 .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", worker_id)) {
@@ -1105,6 +1106,8 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     assume_idempotence: bool,
     open_function_table: HashMap<u32, u64>,
     replay_target: u64,
+
+    /// The oplog index of the last replayed entry
     replay_idx: u64,
     snapshotting_mode: Option<PersistenceLevel>,
 }
@@ -1167,8 +1170,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
-    /// In live mode it returns the last oplog index.
-    /// In replay mode it returns the current replay index.
+    /// In live mode it returns the last oplog index (idnex of the entry last added).
+    /// In replay mode it returns the current replay index (index of the entry last read).
     pub async fn current_oplog_index(&self) -> u64 {
         if self.is_live() {
             self.oplog.current_oplog_index().await
@@ -1178,6 +1181,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     }
 
     pub async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<OplogEntry> {
+        debug!("Reading oplog entries from {} to {}", idx, idx + n - 1);
         self.oplog_service
             .read(&self.worker_id, idx, n)
             .await
@@ -1225,7 +1229,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     async fn get_oplog_entry(&mut self) -> OplogEntry {
         assert!(self.is_replay());
 
-        let oplog_entries = self.read_oplog(self.replay_idx, 1).await;
+        debug!("get_oplog_entry reading {}", self.replay_idx + 1);
+
+        let oplog_entries = self.read_oplog(self.replay_idx + 1, 1).await;
         let oplog_entry = oplog_entries[0].clone();
 
         if !self.get_out_of_deleted_region() {
@@ -1241,9 +1247,10 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         begin_idx: u64,
         check: impl Fn(&OplogEntry, u64) -> bool,
     ) -> Option<u64> {
-        let mut start = self.replay_idx;
+        let mut start = self.replay_idx + 1;
         const CHUNK_SIZE: u64 = 1024;
         while start < self.replay_target {
+            debug!("Looking up oplog entries from {} to {}", start, start + CHUNK_SIZE - 1);
             let entries = self
                 .oplog_service
                 .read(&self.worker_id, start, CHUNK_SIZE)

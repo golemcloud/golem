@@ -189,7 +189,7 @@ impl DefaultWorkerEnumerationService {
     }
 
     fn key_pattern(component_id: &ComponentId) -> String {
-        format!("worker:oplog:{}*", component_id.0)
+        format!("{}*", component_id.0)
     }
 
     fn get_worker_id_from_key(

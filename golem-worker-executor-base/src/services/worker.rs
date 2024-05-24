@@ -149,6 +149,7 @@ impl WorkerService for DefaultWorkerService {
         record_worker_call("get");
 
         let wid = worker_id;
+        debug!("Reading initial oplog entry for {worker_id}");
         let initial_oplog_entry = self
             .oplog_service
             .read(worker_id, 1, 1)
