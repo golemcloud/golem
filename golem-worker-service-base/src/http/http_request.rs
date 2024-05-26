@@ -111,7 +111,7 @@ mod tests {
     use std::sync::Arc;
 
     use golem_common::model::IdempotencyKey;
-    use golem_service_base::model::{FunctionResult, WorkerId};
+    use golem_service_base::model::{ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId};
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;
@@ -228,12 +228,17 @@ mod tests {
         async fn get_worker_component_metadata(
             &self,
             _worker_id: &WorkerId,
-        ) -> Result<Vec<AnalysedFunction>, MetadataFetchError> {
-            Ok(vec![AnalysedFunction {
+        ) -> Result<ComponentMetadata, MetadataFetchError> {
+            let export = Export::Function(ExportFunction {
                 name: self.function_name.clone(),
-                params: vec![],
-                results: vec![],
-            }])
+                parameters: vec![],
+                results: vec![]
+            });
+
+            Ok(ComponentMetadata{
+                exports: vec![export],
+                producers: vec![]
+            })
         }
     }
 
