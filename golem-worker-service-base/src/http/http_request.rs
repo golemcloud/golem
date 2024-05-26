@@ -225,7 +225,7 @@ mod tests {
 
     #[async_trait]
     impl WorkerMetadataFetcher for TestMetadataFetcher {
-        async fn get_worker_metadata(
+        async fn get_worker_component_metadata(
             &self,
             _worker_id: &WorkerId,
         ) -> Result<Vec<AnalysedFunction>, MetadataFetchError> {

@@ -123,11 +123,14 @@ impl ResolvedWorkerBinding {
         };
 
         let functions_available = worker_metadata_fetcher
-            .get_worker_metadata(&worker_id)
+            .get_worker_component_metadata(&worker_id)
             .await;
+
+        dbg!(&worker_id);
 
         match functions_available {
             Ok(functions) => {
+                dbg!(&functions);
                 let runtime = EvaluationContext::from_all(
                     &self.worker_detail,
                     &self.request_details,
