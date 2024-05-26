@@ -111,7 +111,9 @@ mod tests {
     use std::sync::Arc;
 
     use golem_common::model::IdempotencyKey;
-    use golem_service_base::model::{ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId};
+    use golem_service_base::model::{
+        ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId,
+    };
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;
@@ -232,12 +234,12 @@ mod tests {
             let export = Export::Function(ExportFunction {
                 name: self.function_name.clone(),
                 parameters: vec![],
-                results: vec![]
+                results: vec![],
             });
 
-            Ok(ComponentMetadata{
+            Ok(ComponentMetadata {
                 exports: vec![export],
-                producers: vec![]
+                producers: vec![],
             })
         }
     }
