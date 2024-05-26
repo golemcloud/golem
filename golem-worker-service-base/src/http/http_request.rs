@@ -103,7 +103,7 @@ pub mod router {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::{AnalysedFunction, AnalysedType};
+    use golem_wasm_ast::analysis::{AnalysedType};
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
@@ -112,7 +112,7 @@ mod tests {
 
     use golem_common::model::IdempotencyKey;
     use golem_service_base::model::{
-        ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId,
+        ComponentMetadata, Export, ExportFunction, FunctionResult, WorkerId,
     };
 
     use crate::api_definition::http::HttpApiDefinition;
