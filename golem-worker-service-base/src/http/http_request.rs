@@ -103,7 +103,7 @@ pub mod router {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::{AnalysedType};
+    use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
@@ -111,15 +111,12 @@ mod tests {
     use std::sync::Arc;
 
     use golem_common::model::IdempotencyKey;
-    use golem_service_base::model::{ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId};
+    use golem_service_base::model::FunctionResult;
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
-    use crate::evaluator::{
-        DefaultEvaluator, EvaluationError, EvaluationResult, Evaluator, MetadataFetchError,
-        WorkerMetadataFetcher,
-    };
+    use crate::evaluator::{DefaultEvaluator, EvaluationError, EvaluationResult, Evaluator};
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
     use crate::primitive::GetPrimitive;
@@ -219,33 +216,6 @@ mod tests {
         )))
     }
 
-    struct TestMetadataFetcher {
-        interface_name: String,
-        function_name: String,
-    }
-
-    #[async_trait]
-    impl WorkerMetadataFetcher for TestMetadataFetcher {
-        async fn get_worker_component_metadata(
-            &self,
-            _worker_id: &WorkerId,
-        ) -> Result<ComponentMetadata, MetadataFetchError> {
-            let export = Export::Instance(ExportInstance {
-                name: self.interface_name.clone(),
-                functions: vec![ExportFunction {
-                    name: self.function_name.clone(),
-                    parameters: vec![],
-                    results: vec![],
-                }],
-            });
-
-            Ok(ComponentMetadata {
-                exports: vec![export],
-                producers: vec![],
-            })
-        }
-    }
-
     #[derive(Debug)]
     struct TestResponse {
         worker_name: String,
@@ -293,12 +263,6 @@ mod tests {
         }
     }
 
-    impl ToResponse<TestResponse> for MetadataFetchError {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
-            panic!("{}", self.to_string())
-        }
-    }
-
     async fn execute(
         api_request: &InputHttpRequest,
         api_specification: &HttpApiDefinition,
@@ -307,9 +271,7 @@ mod tests {
 
         let resolved_route = api_request.resolve(api_specification).await.unwrap();
 
-        resolved_route
-            .execute_with(&evaluator)
-            .await
+        resolved_route.execute_with(&evaluator).await
     }
 
     #[tokio::test]

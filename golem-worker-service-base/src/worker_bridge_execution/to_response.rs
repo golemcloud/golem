@@ -1,4 +1,4 @@
-use crate::evaluator::{EvaluationError, EvaluationResult, MetadataFetchError};
+use crate::evaluator::{EvaluationError, EvaluationResult};
 use crate::worker_binding::RequestDetails;
 
 use http::StatusCode;
@@ -27,16 +27,6 @@ impl ToResponse<poem::Response> for EvaluationError {
         poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::from_string(format!("Error {}", self).to_string()))
-    }
-}
-
-impl ToResponse<poem::Response> for MetadataFetchError {
-    fn to_response(&self, _request_details: &RequestDetails) -> poem::Response {
-        poem::Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::from_string(
-                format!("Worker metadata fetch error {}", self).to_string(),
-            ))
     }
 }
 

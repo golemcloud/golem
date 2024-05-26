@@ -5,52 +5,16 @@ use crate::evaluator::Getter;
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::RefinedWorkerResponse;
-use async_trait::async_trait;
-
-use golem_service_base::model::{ComponentMetadata, WorkerId};
 use golem_wasm_rpc::TypeAnnotatedValue;
-use std::fmt::Display;
 
 #[derive(Clone)]
 pub struct EvaluationContext {
     pub variables: Option<TypeAnnotatedValue>,
 }
 
-#[async_trait]
-pub trait WorkerMetadataFetcher {
-    async fn get_worker_component_metadata(
-        &self,
-        worker_id: &WorkerId,
-    ) -> Result<ComponentMetadata, MetadataFetchError>;
-}
-
-pub struct MetadataFetchError(pub String);
-
-impl Display for MetadataFetchError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Worker component metadata fetch error: {}", self.0)
-    }
-}
-
-pub struct NoopWorkerMetadataFetcher;
-
-#[async_trait]
-impl WorkerMetadataFetcher for NoopWorkerMetadataFetcher {
-    async fn get_worker_component_metadata(
-        &self,
-        _worker_id: &WorkerId,
-    ) -> Result<ComponentMetadata, MetadataFetchError> {
-        Err(MetadataFetchError(
-            "Unable to fetch component details using a Noop metadata fetcher".to_string(),
-        ))
-    }
-}
-
 impl EvaluationContext {
     pub fn empty() -> Self {
-        EvaluationContext {
-            variables: None,
-        }
+        EvaluationContext { variables: None }
     }
 
     pub fn merge(&mut self, that: &EvaluationContext) -> EvaluationContext {
@@ -79,10 +43,7 @@ impl EvaluationContext {
         }
     }
 
-    pub fn from_all(
-        worker_detail: &WorkerDetail,
-        request: &RequestDetails,
-    ) -> Self {
+    pub fn from_all(worker_detail: &WorkerDetail, request: &RequestDetails) -> Self {
         let mut request_data = internal::request_type_annotated_value(request);
         let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
         let merged = request_data.merge(&worker_data);

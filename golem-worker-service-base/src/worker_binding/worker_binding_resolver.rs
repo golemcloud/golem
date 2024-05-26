@@ -1,8 +1,6 @@
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
-use crate::evaluator::{
-    DefaultEvaluator, EvaluationContext, EvaluationError, EvaluationResult, MetadataFetchError,
-};
-use crate::evaluator::{Evaluator, WorkerMetadataFetcher};
+use crate::evaluator::Evaluator;
+use crate::evaluator::{DefaultEvaluator, EvaluationContext, EvaluationError, EvaluationResult};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
@@ -15,8 +13,6 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
-
-use golem_service_base::model::{Id, WorkerId};
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::to_response::ToResponse;
@@ -100,29 +96,16 @@ impl WorkerDetail {
 }
 
 impl ResolvedWorkerBinding {
-    pub async fn execute_with<R>(
-        &self,
-        evaluator: &Arc<dyn Evaluator + Sync + Send>,
-    ) -> R
+    pub async fn execute_with<R>(&self, evaluator: &Arc<dyn Evaluator + Sync + Send>) -> R
     where
         EvaluationResult: ToResponse<R>,
         EvaluationError: ToResponse<R>,
-        MetadataFetchError: ToResponse<R>,
     {
-        let worker_name = match Id::try_from(self.worker_detail.worker_name.clone()) {
-            Ok(worker_name) => worker_name,
-            Err(err) => {
-                return EvaluationError::Message(err.to_string()).to_response(&self.request_details)
-            }
-        };
-
-        let runtime = EvaluationContext::from_all(
-            &self.worker_detail,
-            &self.request_details,
-        );
+        let evaluation_context =
+            EvaluationContext::from_all(&self.worker_detail, &self.request_details);
 
         let result = evaluator
-            .evaluate(&self.response_mapping.clone().0, &runtime)
+            .evaluate(&self.response_mapping.clone().0, &evaluation_context)
             .await;
 
         match result {

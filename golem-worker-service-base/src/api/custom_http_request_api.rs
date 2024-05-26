@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::api_definition::http::HttpApiDefinition;
-use crate::evaluator::{DefaultEvaluator, Evaluator, WorkerMetadataFetcher};
+use crate::evaluator::{DefaultEvaluator, Evaluator};
 use async_trait::async_trait;
 use hyper::header::HOST;
 use poem::http::StatusCode;
@@ -96,9 +96,7 @@ impl CustomHttpRequestApi {
 
         match api_request.resolve(&api_definition).await {
             Ok(resolved_worker_request) => {
-                resolved_worker_request
-                    .execute_with::<poem::Response>(&self.evaluator)
-                    .await
+                resolved_worker_request.execute_with(&self.evaluator).await
             }
 
             Err(msg) => {

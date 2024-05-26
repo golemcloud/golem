@@ -28,8 +28,6 @@ use golem_worker_service_base::service::worker::{
 };
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 
-use crate::worker_component_metadata_fetcher::DefaultWorkerComponentMetadataFetcher;
-use golem_worker_service_base::evaluator::WorkerMetadataFetcher;
 use golem_worker_service_base::repo::api_deployment_repo::{
     ApiDeploymentRepo, InMemoryDeployment, RedisApiDeploy,
 };
