@@ -14,9 +14,8 @@ use std::fmt::Display;
 #[derive(Clone)]
 pub struct EvaluationContext {
     pub variables: Option<TypeAnnotatedValue>,
-    pub component_metadata: Option<ComponentMetadata>
+    pub component_metadata: Option<ComponentMetadata>,
 }
-
 
 #[async_trait]
 pub trait WorkerMetadataFetcher {
@@ -42,7 +41,9 @@ impl WorkerMetadataFetcher for NoopWorkerMetadataFetcher {
         &self,
         _worker_id: &WorkerId,
     ) -> Result<ComponentMetadata, MetadataFetchError> {
-        Err(MetadataFetchError("Unable to fetch component details using a Noop metadata fetcher".to_string()))
+        Err(MetadataFetchError(
+            "Unable to fetch component details using a Noop metadata fetcher".to_string(),
+        ))
     }
 }
 
@@ -50,7 +51,7 @@ impl EvaluationContext {
     pub fn empty() -> Self {
         EvaluationContext {
             variables: None,
-            component_metadata: None
+            component_metadata: None,
         }
     }
 
@@ -83,7 +84,7 @@ impl EvaluationContext {
     pub fn from_all(
         worker_detail: &WorkerDetail,
         request: &RequestDetails,
-        component_metadata: ComponentMetadata
+        component_metadata: ComponentMetadata,
     ) -> Self {
         let mut request_data = internal::request_type_annotated_value(request);
         let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
@@ -91,7 +92,7 @@ impl EvaluationContext {
 
         EvaluationContext {
             variables: Some(merged.clone()),
-            component_metadata: Some(component_metadata)
+            component_metadata: Some(component_metadata),
         }
     }
 
@@ -101,7 +102,7 @@ impl EvaluationContext {
 
         EvaluationContext {
             variables: Some(worker_data),
-            component_metadata: None
+            component_metadata: None,
         }
     }
 
@@ -110,7 +111,7 @@ impl EvaluationContext {
 
         EvaluationContext {
             variables: Some(variables),
-            component_metadata: None
+            component_metadata: None,
         }
     }
 
@@ -124,7 +125,7 @@ impl EvaluationContext {
 
             EvaluationContext {
                 variables: Some(worker_data),
-                component_metadata: None
+                component_metadata: None,
             }
         } else {
             EvaluationContext::empty()
