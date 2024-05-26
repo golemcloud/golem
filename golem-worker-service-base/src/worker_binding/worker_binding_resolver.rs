@@ -122,30 +122,17 @@ impl ResolvedWorkerBinding {
             worker_name,
         };
 
-        let functions_available = worker_metadata_fetcher
-            .get_worker_component_metadata(&worker_id)
+        let runtime = EvaluationContext::from_all(
+            &self.worker_detail,
+            &self.request_details,
+        );
+
+        let result = evaluator
+            .evaluate(&self.response_mapping.clone().0, &runtime)
             .await;
 
-        dbg!(&worker_id);
-
-        match functions_available {
-            Ok(functions) => {
-                dbg!(&functions);
-                let runtime = EvaluationContext::from_all(
-                    &self.worker_detail,
-                    &self.request_details,
-                    functions,
-                );
-
-                let result = evaluator
-                    .evaluate(&self.response_mapping.clone().0, &runtime)
-                    .await;
-
-                match result {
-                    Ok(worker_response) => worker_response.to_response(&self.request_details),
-                    Err(err) => err.to_response(&self.request_details),
-                }
-            }
+        match result {
+            Ok(worker_response) => worker_response.to_response(&self.request_details),
             Err(err) => err.to_response(&self.request_details),
         }
     }

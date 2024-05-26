@@ -111,9 +111,7 @@ mod tests {
     use std::sync::Arc;
 
     use golem_common::model::IdempotencyKey;
-    use golem_service_base::model::{
-        ComponentMetadata, Export, ExportFunction, FunctionResult, WorkerId,
-    };
+    use golem_service_base::model::{ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId};
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;
@@ -222,6 +220,7 @@ mod tests {
     }
 
     struct TestMetadataFetcher {
+        interface_name: String,
         function_name: String,
     }
 
@@ -231,10 +230,13 @@ mod tests {
             &self,
             _worker_id: &WorkerId,
         ) -> Result<ComponentMetadata, MetadataFetchError> {
-            let export = Export::Function(ExportFunction {
-                name: self.function_name.clone(),
-                parameters: vec![],
-                results: vec![],
+            let export = Export::Instance(ExportInstance {
+                name: self.interface_name.clone(),
+                functions: vec![ExportFunction {
+                    name: self.function_name.clone(),
+                    parameters: vec![],
+                    results: vec![],
+                }],
             });
 
             Ok(ComponentMetadata {
@@ -245,9 +247,11 @@ mod tests {
     }
 
     fn get_test_metadata_fetcher(
+        interface_name: &str,
         function_name: &str,
     ) -> Arc<dyn WorkerMetadataFetcher + Sync + Send> {
         Arc::new(TestMetadataFetcher {
+            interface_name: interface_name.to_string(),
             function_name: function_name.to_string(),
         })
     }
@@ -310,7 +314,7 @@ mod tests {
         api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api", "get-cart-contents");
 
         let resolved_route = api_request.resolve(api_specification).await.unwrap();
 

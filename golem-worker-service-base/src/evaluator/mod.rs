@@ -506,23 +506,6 @@ mod internal {
             "No variables found in the context".to_string(),
         ))?;
 
-        let component_metadata =
-            runtime
-                .component_metadata
-                .clone()
-                .ok_or(EvaluationError::Message(format!(
-                    "No component metadata found in the runtime context {}",
-                    function_name
-                )))?;
-
-        let function =
-            component_metadata
-                .function_by_name(function_name)
-                .ok_or(EvaluationError::Message(format!(
-                    "The function {} is not found at Runtime",
-                    function_name
-                )))?;
-
         let worker_variables = variables.get(&Path::from_key("worker")).map_err(|_| {
             EvaluationError::Message("No worker variables found in the context".to_string())
         })?;
@@ -563,7 +546,7 @@ mod internal {
         let worker_request = WorkerRequest {
             component_id,
             worker_name,
-            function_name: function.name.clone(),
+            function_name: function_name.to_string(),
             function_params: json_params,
             idempotency_key,
         };

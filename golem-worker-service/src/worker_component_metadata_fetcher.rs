@@ -1,6 +1,5 @@
 use async_trait::async_trait;
-use golem_service_base::model::{Component, ComponentMetadata, Export, WorkerId};
-use golem_wasm_ast::analysis::AnalysedFunction;
+use golem_service_base::model::{ComponentMetadata, WorkerId};
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::evaluator::{MetadataFetchError, WorkerMetadataFetcher};
 use golem_worker_service_base::service::worker::WorkerService;
