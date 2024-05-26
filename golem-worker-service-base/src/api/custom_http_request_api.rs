@@ -19,7 +19,6 @@ use crate::worker_bridge_execution::WorkerRequestExecutor;
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
     pub evaluator: Arc<dyn Evaluator + Sync + Send>,
-    pub worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     pub api_definition_lookup_service:
         Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
 }
@@ -27,7 +26,6 @@ pub struct CustomHttpRequestApi {
 impl CustomHttpRequestApi {
     pub fn new(
         worker_request_executor_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
-        worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send>,
         api_definition_lookup_service: Arc<
             dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         >,
@@ -38,7 +36,6 @@ impl CustomHttpRequestApi {
 
         Self {
             evaluator,
-            worker_metadata_fetcher,
             api_definition_lookup_service,
         }
     }
@@ -100,7 +97,7 @@ impl CustomHttpRequestApi {
         match api_request.resolve(&api_definition).await {
             Ok(resolved_worker_request) => {
                 resolved_worker_request
-                    .execute_with::<poem::Response>(&self.evaluator, &self.worker_metadata_fetcher)
+                    .execute_with::<poem::Response>(&self.evaluator)
                     .await
             }
 

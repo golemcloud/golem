@@ -56,7 +56,6 @@ pub struct Services {
     pub http_definition_lookup_service:
         Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
-    pub worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     pub api_definition_validator_service: Arc<
         dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
     >,
@@ -97,10 +96,6 @@ impl Services {
 
         let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
-        );
-
-        let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> = Arc::new(
-            DefaultWorkerComponentMetadataFetcher::new(worker_service.clone()),
         );
 
         let definition_repo: Arc<
@@ -150,7 +145,6 @@ impl Services {
             http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
             component_service,
-            worker_metadata_fetcher,
             api_definition_validator_service,
         })
     }
@@ -201,10 +195,6 @@ impl Services {
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
         );
 
-        let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> = Arc::new(
-            DefaultWorkerComponentMetadataFetcher::new(worker_service.clone()),
-        );
-
         Services {
             worker_service,
             definition_service,
@@ -212,7 +202,6 @@ impl Services {
             http_definition_lookup_service: definition_lookup_service,
             worker_to_http_service,
             component_service,
-            worker_metadata_fetcher,
             api_definition_validator_service,
         }
     }

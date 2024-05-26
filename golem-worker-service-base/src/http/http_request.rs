@@ -246,16 +246,6 @@ mod tests {
         }
     }
 
-    fn get_test_metadata_fetcher(
-        interface_name: &str,
-        function_name: &str,
-    ) -> Arc<dyn WorkerMetadataFetcher + Sync + Send> {
-        Arc::new(TestMetadataFetcher {
-            interface_name: interface_name.to_string(),
-            function_name: function_name.to_string(),
-        })
-    }
-
     #[derive(Debug)]
     struct TestResponse {
         worker_name: String,
@@ -314,12 +304,11 @@ mod tests {
         api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api", "get-cart-contents");
 
         let resolved_route = api_request.resolve(api_specification).await.unwrap();
 
         resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .execute_with(&evaluator)
             .await
     }
 

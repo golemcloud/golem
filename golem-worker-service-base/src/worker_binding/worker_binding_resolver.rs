@@ -103,7 +103,6 @@ impl ResolvedWorkerBinding {
     pub async fn execute_with<R>(
         &self,
         evaluator: &Arc<dyn Evaluator + Sync + Send>,
-        worker_metadata_fetcher: &Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     ) -> R
     where
         EvaluationResult: ToResponse<R>,
@@ -115,11 +114,6 @@ impl ResolvedWorkerBinding {
             Err(err) => {
                 return EvaluationError::Message(err.to_string()).to_response(&self.request_details)
             }
-        };
-
-        let worker_id = WorkerId {
-            component_id: self.worker_detail.component_id.clone(),
-            worker_name,
         };
 
         let runtime = EvaluationContext::from_all(
