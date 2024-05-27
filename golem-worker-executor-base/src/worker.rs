@@ -879,7 +879,7 @@ where
         );
         let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
             .oplog_service()
-            .read_range(worker_id, last_known.oplog_idx, last_oplog_index)
+            .read_range(worker_id, last_known.oplog_idx.next(), last_oplog_index)
             .await;
 
         let overridden_retry_config = calculate_overridden_retry_policy(
