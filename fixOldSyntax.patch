@@ -1,0 +1,15 @@
+diff --git a/golem-client/build.rs b/golem-client/build.rs
+index e93bafa..16eb4c1 100644
+--- a/golem-client/build.rs
++++ b/golem-client/build.rs
+@@ -27,8 +27,8 @@ fn main() {
+         )
+         .unwrap();
+ 
+-        println!("cargo::rerun-if-changed=build.rs");
+-        println!("cargo::rerun-if-changed=openapi/golem-service.yaml");
++        println!("cargo:rerun-if-changed=build.rs");
++        println!("cargo:rerun-if-changed=openapi/golem-service.yaml");
+     } else {
+         let crate_yaml_path = Path::new(&manifest_dir).join("openapi/golem-service.yaml");
+         generate(crate_yaml_path, out_dir);

@@ -1,0 +1,51 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index ee1945a..b33d791 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3130,6 +3130,7 @@ dependencies = [
+ name = "golem-cli"
+ version = "0.0.0"
+ dependencies = [
++ "Inflector",
+  "async-recursion",
+  "async-trait",
+  "chrono",
+@@ -3320,12 +3321,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "golem-examples"
+-version = "0.2.1"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "d97faf7aba9d41c971f625762fa95a993586b7d9389b7ec0ae85c8fdc512bda4"
++version = "0.0.0"
+ dependencies = [
+  "Inflector",
+  "cargo_metadata",
++ "clap 4.5.4",
+  "copy_dir",
+  "derive_more",
+  "dir-diff",
+diff --git a/golem-cli/Cargo.toml b/golem-cli/Cargo.toml
+index 3a5e0bc..7feb504 100644
+--- a/golem-cli/Cargo.toml
++++ b/golem-cli/Cargo.toml
+@@ -23,9 +23,9 @@ chrono = { workspace = true }
+ clap = { version = "4.4.12", features = ["derive"] }
+ clap-verbosity-flag = "2.1.1"
+ derive_more = "0.99.17"
+-dirs = "5.0.1"
++dirs ="5.0.1"
+ futures-util = { workspace = true }
+-golem-examples = "0.2.1"
++golem-examples = { path = "../golem-examples" }
+ golem-wasm-ast = { workspace = true }
+ golem-wasm-rpc = { workspace = true, features = ["text"] }
+ golem-wasm-rpc-stubgen = { version = "0.0.22", optional = true }
+@@ -59,6 +59,7 @@ textwrap = "0.16.1"
+ 
+ [dev-dependencies]
+ golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
++Inflector = "0.11.4"
+ 
+ async-recursion = "1.0.5"
+ env_logger = "0.11.1"

@@ -21,10 +21,11 @@ pkgs.rustPlatform.buildRustPackage {
        "cranelift-bforest-0.104.0" = "sha256-veZc4s+OitjBv4ohzzgFdAxLm/J/B5NVy+RXU0hgfwQ=";
      };
   };
-  patchPhase = ''
+  patches = [ ./nixDeps.patch ./fixOldSyntax.patch ];
+  postPatch = ''
     cp -r ${golem-examples} golem-examples
-    mv Cargo.lock.nix Cargo.lock
-    mv golem-cli/Cargo.toml.nix golem-cli/Cargo.toml
+    # mv Cargo.lock.nix Cargo.lock
+    # mv golem-cli/Cargo.toml.nix golem-cli/Cargo.toml
   '';
 
   cargoBuildFlags = [ "-p" "golem-cli" ];
