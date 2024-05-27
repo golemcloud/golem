@@ -1,6 +1,6 @@
 { pkgs ? import <nixpkgs> {}
 , prefix ? "glm"
-# this default fetch is for nix-build but we will pass here the golem-examples
+# this default "fetch" is for nix-build but we will pass here the golem-examples
 # from flake to make it easier to update
 , golem-examples ? pkgs.fetchFromGitHub { 
             owner = "golemcloud";
@@ -13,37 +13,49 @@ let
 
   commands = pkgs.lib.fix (self: pkgs.lib.mapAttrs pkgs.writeShellScript
   {
-    sd = ''${pkgs.sd}/bin/sd "$@"'';
-
     welcome = ''
       ${pkgs.figlet}/bin/figlet 'golem dev shell'
       echo 'press ${prefix}-<TAB><TAB> to see all the commands'
     '';
+    git = ''${pkgs.git}/bin/git "$@"'';
 
-    git-project-path = ''${pkgs.git}/bin/git rev-parse --show-toplevel'';
+    git-project-path = ''${self.git} rev-parse --show-toplevel'';
 
-    replace-nix-deps-in-tomls-info = ''
-        echo 'this command will replace golem-examples in Cargo.toml to come from nix.'
+    add-golem-examples-symlink-info = ''
+        echo 'this command will symlink the golem-example project into the current folder.'
         echo 'we have to do this due to issue with nix not being able to load correctly custom build script dependencies'
     '';
-    replace-nix-deps-in-tomls = ''
-        ${self.sd} '(golem-examples\s*=).*' '$1 { path = "${golem-examples}" }' golem-cli/Cargo.toml
+    add-golem-examples-symlink = ''
+        ln -sf ${golem-examples} golem-examples
+    '';
+    update-golem-examples-from-lock =''
+        nix flake update golem-examples
     '';
 
-    backup-lock = ''cp Cargo.lock Cargo.lock.backup'';
-    backup-toml = ''cp Cargo.toml Cargo.toml.backup'';
+    create-patches = ''
+     ${self.git} diff $(${self.git-project-path})/golem-client/build.rs > fixOldSyntax.patch
+    '';
+    apply-patches = ''
+       ${self.git} am *.patch 
+    '';
+    revert-patches = ''
+       ${self.git} am -R *.patch 
+    '';
 
     build-with-nix-deps-golem-cli = ''
         nix shell -c "cargo build -p golem-cli"
     '';
-    create-nix-cargo-lock = ''
-        
+    
+    update-deps = ''
+        ${self.update-golem-examples-from-lock} && \
+        ${self.apply-patches} && \
+        ${self.add-golem-examples-symlink} && \
+        ${self.build-with-nix-deps-golem-cli} && \
+        ${self.create-patches} && \
+        ${self.revert-patches} 
     '';
+    default = self.update-deps;
 
-
-
-
-    # default = "ls commands.nix | ${self.entr} -r nix run .#start";
   });
 in pkgs.symlinkJoin rec {
   name = prefix;
