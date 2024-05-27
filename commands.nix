@@ -33,6 +33,7 @@ let
     '';
 
     create-patches = ''
+     ${self.git} diff $(${self.git-project-path})/Cargo.lock $(${self.git-project-path})/golem-cli/Cargo.toml > nixDeps.patch
      ${self.git} diff $(${self.git-project-path})/golem-client/build.rs > fixOldSyntax.patch
     '';
     apply-patches = ''
