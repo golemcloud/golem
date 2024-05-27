@@ -209,6 +209,7 @@ impl Tracing {
         //     EnvFilter::try_new("trace").unwrap()
         //);
         let ansi_layer = tracing_subscriber::fmt::layer()
+            .event_format(tracing_subscriber::fmt::format().without_time().pretty())
             .with_ansi(true)
             .with_filter(
                 EnvFilter::builder()

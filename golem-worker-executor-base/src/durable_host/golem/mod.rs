@@ -129,10 +129,11 @@ impl GetWorkersEntry {
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     async fn golem_create_promise(&mut self) -> Result<golem::api::host::PromiseId, anyhow::Error> {
         record_host_function_call("golem::api", "golem_create_promise");
+        let oplog_idx = self.get_oplog_index().await?;
         Ok(self
             .public_state
             .promise_service
-            .create(&self.worker_id, self.state.current_oplog_index().await)
+            .create(&self.worker_id, oplog_idx)
             .await
             .into())
     }
@@ -218,15 +219,16 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         record_host_function_call("golem::api", "get_oplog_index");
         if self.state.is_live() {
             self.state.oplog.add(OplogEntry::nop()).await;
+            Ok(self.state.current_oplog_index().await)
         } else {
-            let _ = get_oplog_entry!(self.state, OplogEntry::NoOp);
+            let (oplog_index, _) = get_oplog_entry!(self.state, OplogEntry::NoOp)?;
+            Ok(oplog_index)
         }
-        Ok(self.state.current_oplog_index().await)
     }
 
     async fn set_oplog_index(&mut self, oplog_idx: OplogIndex) -> anyhow::Result<()> {
         record_host_function_call("golem::api", "set_oplog_index");
-        let jump_source = self.state.current_oplog_index().await + 1;
+        let jump_source = self.state.current_oplog_index().await + 1; // index of the Jump instruction that we will add
         let jump_target = oplog_idx;
         if jump_target > jump_source {
             Err(anyhow!(
@@ -294,16 +296,16 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
     async fn mark_begin_operation(&mut self) -> anyhow::Result<OplogIndex> {
         record_host_function_call("golem::api", "mark_begin_operation");
-        let begin_index = self.state.current_oplog_index().await;
 
-        self.state.consume_hint_entries().await;
         if self.state.is_live() {
             self.state
                 .oplog
                 .add(OplogEntry::begin_atomic_region())
                 .await;
+            let begin_index = self.state.current_oplog_index().await;
+            Ok(begin_index)
         } else {
-            let _ = get_oplog_entry!(self.state, OplogEntry::BeginAtomicRegion)?;
+            let (begin_index, _) = get_oplog_entry!(self.state, OplogEntry::BeginAtomicRegion)?;
 
             match self
                 .state
@@ -326,8 +328,8 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                     // and later we replay it, we need to skip the first attempt and only replay the second.
                     // Se we add a Jump entry to the oplog that registers a deleted region.
                     let deleted_region = OplogRegion {
-                        start: begin_index,                // need to keep the BeginAtomicRegion entry
-                        end: self.state.replay_target + 2, // skipping the Jump entry too
+                        start: begin_index + 1,            // need to keep the BeginAtomicRegion entry
+                        end: self.state.replay_target + 1, // skipping the Jump entry too
                     };
                     self.state.deleted_regions.add(deleted_region.clone());
                     self.state
@@ -336,20 +338,20 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                         .await;
                 }
             }
+
+            Ok(begin_index)
         }
-        Ok(begin_index)
     }
 
     async fn mark_end_operation(&mut self, begin: OplogIndex) -> anyhow::Result<()> {
         record_host_function_call("golem::api", "mark_end_operation");
-        self.state.consume_hint_entries().await;
         if self.state.is_live() {
             self.state
                 .oplog
                 .add(OplogEntry::end_atomic_region(begin))
                 .await;
         } else {
-            let _ = get_oplog_entry!(self.state, OplogEntry::EndAtomicRegion)?;
+            let (_, _) = get_oplog_entry!(self.state, OplogEntry::EndAtomicRegion)?;
         }
 
         Ok(())
@@ -368,14 +370,13 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         let new_retry_policy: RetryConfig = new_retry_policy.into();
         self.state.overridden_retry_policy = Some(new_retry_policy.clone());
 
-        self.state.consume_hint_entries().await;
         if self.state.is_live() {
             self.state
                 .oplog
                 .add(OplogEntry::change_retry_policy(new_retry_policy))
                 .await;
         } else {
-            let _ = get_oplog_entry!(self.state, OplogEntry::ChangeRetryPolicy)?;
+            let (_, _) = get_oplog_entry!(self.state, OplogEntry::ChangeRetryPolicy)?;
         }
         Ok(())
     }

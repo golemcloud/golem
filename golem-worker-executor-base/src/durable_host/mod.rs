@@ -56,6 +56,7 @@ use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
+use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::AsContextMut;
 use wasmtime_wasi::preview2::{I32Exit, ResourceTable, Stderr, Subscribe, WasiCtx, WasiView};
@@ -209,6 +210,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         replay_idx: 1,
                         replay_target: last_oplog_index,
                         snapshotting_mode: None,
+                        debug_id: Uuid::new_v4(),
                     },
                     temp_dir,
                     execution_status,
@@ -638,8 +640,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         trap_type: &TrapType,
     ) -> Result<Option<OplogIndex>, anyhow::Error> {
-        self.state.consume_hint_entries().await;
-
         if self.state.is_live() {
             let needs_commit = match trap_type {
                 TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
@@ -653,16 +653,20 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
             if let Some((entry, store)) = needs_commit {
                 let oplog_idx = self.state.oplog.add_and_commit(entry).await;
+                debug!("Added invocation failure to oplog at index {oplog_idx}");
 
                 if store {
                     Ok(Some(oplog_idx))
                 } else {
+                    debug!("on_invocation_failure: no need to store result");
                     Ok(None)
                 }
             } else {
+                debug!("on_invocation_failure: no trap");
                 Ok(None)
             }
         } else {
+            debug!("on_invocation_failure: replay mode");
             Ok(None)
         }
     }
@@ -721,7 +725,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         consumed_fuel: i64,
         output: Vec<Value>,
     ) -> Result<Option<Vec<Value>>, anyhow::Error> {
-        self.state.consume_hint_entries().await;
         let is_live_after = self.state.is_live();
 
         if is_live_after {
@@ -1049,7 +1052,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
         None
     } else {
         let mut first_error = None;
-        loop {
+        let result = loop {
             debug!(
                 "Reading oplog entry at index {} to determine last error and retry count",
                 idx
@@ -1081,7 +1084,12 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                     }
                 }
             }
-        }
+        };
+        debug!(
+            "Last retry count: {:?}",
+            result.as_ref().map(|r| r.retry_count)
+        );
+        result
     }
 }
 
@@ -1115,6 +1123,8 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     /// The oplog index of the last replayed entry
     replay_idx: u64,
     snapshotting_mode: Option<PersistenceLevel>,
+
+    debug_id: Uuid, // TODO: remove
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -1122,7 +1132,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
     ) -> Result<u64, GolemError> {
-        let begin_index = self.oplog.current_oplog_index().await;
         if !self.assume_idempotence
             && *wrapped_function_type == WrappedFunctionType::WriteRemote
             && self.persistence_level != PersistenceLevel::PersistNothing
@@ -1131,15 +1140,17 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 self.oplog
                     .add_and_commit(OplogEntry::begin_remote_write())
                     .await;
+                let begin_index = self.oplog.current_oplog_index().await;
                 Ok(begin_index)
             } else {
-                let _ = crate::get_oplog_entry!(self, OplogEntry::BeginRemoteWrite)?;
+                let (begin_index, _) = crate::get_oplog_entry!(self, OplogEntry::BeginRemoteWrite)?;
                 let end_index = self
                     .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
                     .await;
                 if end_index.is_none() {
                     // Must switch to live mode before failing to be able to commit an Error entry
                     self.replay_idx = self.replay_target;
+                    debug!("[4] REPLAY_IDX = {}", self.replay_idx);
                     Err(GolemError::runtime(
                         "Non-idempotent remote write operation was not completed, cannot retry",
                     ))
@@ -1148,6 +1159,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 }
             }
         } else {
+            let begin_index = self.oplog.current_oplog_index().await;
             Ok(begin_index)
         }
     }
@@ -1167,7 +1179,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     .await;
                 Ok(())
             } else {
-                let _ = crate::get_oplog_entry!(self, OplogEntry::EndRemoteWrite)?;
+                let (_, _) = crate::get_oplog_entry!(self, OplogEntry::EndRemoteWrite)?;
                 Ok(())
             }
         } else {
@@ -1185,7 +1197,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
-    pub async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<OplogEntry> {
+    async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<OplogEntry> {
         debug!("Reading oplog entries from {} to {}", idx, idx + n - 1);
         self.oplog_service
             .read(&self.worker_id, idx, n)
@@ -1207,13 +1219,16 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     fn get_out_of_deleted_region(&mut self) -> bool {
         if self.is_replay() {
             let update_next_deleted_region = match &self.next_deleted_region {
-                Some(region) if region.start == self.replay_idx => {
-                    let target = region.end;
+                Some(region) if region.start == (self.replay_idx + 1) => {
+                    let target = region.end + 1; // we want to continue reading _after_ the region
                     debug!(
                         "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
-                        self.worker_id, self.replay_idx, target, self.replay_target
+                        self.worker_id, region.start, target, self.replay_target
                     );
-                    self.replay_idx = target + 1;
+                    self.replay_idx = target - 1; // so we set the last replayed index to the end of the region
+
+                    debug!("[1] [{}], REPLAY_IDX = {}", self.debug_id, self.replay_idx);
+
                     true
                 }
                 _ => false,
@@ -1231,13 +1246,37 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
-    async fn get_oplog_entry(&mut self) -> OplogEntry {
+    /// Reads the next oplog entry, and skips every hint entry following it.
+    /// Returns the oplog index of the entry read, no matter how many more hint entries
+    /// were read.
+    async fn get_oplog_entry(&mut self) -> (OplogIndex, OplogEntry) {
+        let read_idx = self.replay_idx + 1;
+        let entry = self.internal_get_next_oplog_entry().await;
+
+        // Skipping hint entries
+        while self.is_replay() {
+            let saved_replay_idx = self.replay_idx;
+            let saved_next_deleted_region = self.next_deleted_region.clone();
+            let entry = self.internal_get_next_oplog_entry().await;
+            if !entry.is_hint() {
+                self.replay_idx = saved_replay_idx;
+                self.next_deleted_region = saved_next_deleted_region;
+                break;
+            }
+        }
+
+        (read_idx, entry)
+    }
+
+    /// Gets the next oplog entry, no matter if it is hint or not, following jumps
+    async fn internal_get_next_oplog_entry(&mut self) -> OplogEntry {
         assert!(self.is_replay());
 
-        debug!("get_oplog_entry reading {}", self.replay_idx + 1);
+        let read_idx = self.replay_idx + 1;
+        debug!("get_oplog_entry reading {}", read_idx);
 
-        let oplog_entries = self.read_oplog(self.replay_idx + 1, 1).await;
-        let oplog_entry = oplog_entries[0].clone();
+        let oplog_entries = self.read_oplog(read_idx, 1).await;
+        let oplog_entry = oplog_entries.into_iter().next().unwrap();
 
         if !self.get_out_of_deleted_region() {
             // No jump happened, increment replay index
@@ -1288,7 +1327,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     > {
         loop {
             if self.is_replay() {
-                let oplog_entry = self.get_oplog_entry().await;
+                let (_, oplog_entry) = self.get_oplog_entry().await;
                 match &oplog_entry {
                     OplogEntry::ExportedFunctionInvoked {
                         function_name,
@@ -1335,7 +1374,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     ) -> Result<Option<Vec<Value>>, GolemError> {
         loop {
             if self.is_replay() {
-                let oplog_entry = self.get_oplog_entry().await;
+                let (_, oplog_entry) = self.get_oplog_entry().await;
                 match &oplog_entry {
                     OplogEntry::ExportedFunctionCompleted { .. } => {
                         let response: Vec<golem_wasm_rpc::protobuf::Val> = self
@@ -1363,26 +1402,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 }
             } else {
                 break Ok(None);
-            }
-        }
-    }
-
-    /// Consumes Suspend, Error and Interrupt entries which are hints for the server to decide whether to
-    /// keep workers in memory or allow them to rerun etc., but contain no actionable information
-    /// during replay
-    async fn consume_hint_entries(&mut self) {
-        loop {
-            if self.is_replay() {
-                let oplog_entry = self.get_oplog_entry().await;
-                match oplog_entry {
-                    entry if entry.is_hint() => {}
-                    _ => {
-                        self.replay_idx -= 1;
-                        break;
-                    }
-                }
-            } else {
-                break;
             }
         }
     }
@@ -1587,10 +1606,10 @@ impl Subscribe for Ready {
 macro_rules! get_oplog_entry {
     ($private_state:expr, $case:path) => {
         loop {
-            let oplog_entry = $private_state.get_oplog_entry().await;
+            let (oplog_index, oplog_entry) = $private_state.get_oplog_entry().await;
             match oplog_entry {
                 $case { .. } => {
-                    break Ok(oplog_entry);
+                    break Ok((oplog_index, oplog_entry));
                 }
                 entry if entry.is_hint() => {}
                 _ => {

@@ -127,7 +127,6 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         SerializedErr:
             Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send,
     {
-        self.state.consume_hint_entries().await;
         let begin_index = self
             .state
             .begin_function(&wrapped_function_type.clone())
@@ -149,7 +148,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             .await?;
             result
         } else {
-            let oplog_entry =
+            let (_, oplog_entry) =
                 crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
             Self::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = self
@@ -194,7 +193,6 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         SerializedErr:
             Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send,
     {
-        self.state.consume_hint_entries().await;
         let begin_index = self
             .state
             .begin_function(&wrapped_function_type.clone())
@@ -216,7 +214,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             .await?;
             result
         } else {
-            let oplog_entry =
+            let (_, oplog_entry) =
                 crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
             Self::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = self
