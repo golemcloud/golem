@@ -29,7 +29,7 @@ let
         ln -sf ${golem-examples} golem-examples
     '';
     update-golem-examples-from-lock =''
-        nix flake update golem-examples
+        nix flake lock --update-input golem-examples
     '';
 
     create-patches = ''
@@ -37,14 +37,14 @@ let
      ${self.git} diff $(${self.git-project-path})/golem-client/build.rs > fixOldSyntax.patch
     '';
     apply-patches = ''
-       ${self.git} am *.patch 
+       ${self.git} apply *.patch 
     '';
     revert-patches = ''
-       ${self.git} am -R *.patch 
+       ${self.git} apply -R *.patch 
     '';
 
     build-with-nix-deps-golem-cli = ''
-        nix shell -c "cargo build -p golem-cli"
+        ${pkgs.cargo}/bin/cargo build -p golem-cli
     '';
     
     update-deps = ''
