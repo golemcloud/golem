@@ -56,7 +56,6 @@ use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
-use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::AsContextMut;
 use wasmtime_wasi::preview2::{I32Exit, ResourceTable, Stderr, Subscribe, WasiCtx, WasiView};
@@ -210,7 +209,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         replay_idx: 1,
                         replay_target: last_oplog_index,
                         snapshotting_mode: None,
-                        debug_id: Uuid::new_v4(),
                     },
                     temp_dir,
                     execution_status,
@@ -1123,8 +1121,6 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     /// The oplog index of the last replayed entry
     replay_idx: u64,
     snapshotting_mode: Option<PersistenceLevel>,
-
-    debug_id: Uuid, // TODO: remove
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -1187,7 +1183,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
-    /// In live mode it returns the last oplog index (idnex of the entry last added).
+    /// In live mode it returns the last oplog index (index of the entry last added).
     /// In replay mode it returns the current replay index (index of the entry last read).
     pub async fn current_oplog_index(&self) -> u64 {
         if self.is_live() {
@@ -1219,15 +1215,13 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     fn get_out_of_deleted_region(&mut self) -> bool {
         if self.is_replay() {
             let update_next_deleted_region = match &self.next_deleted_region {
-                Some(region) if region.start == (self.replay_idx + 1) => {
+                Some(region) if region.start == (self.replay_idx + 2) => {
                     let target = region.end + 1; // we want to continue reading _after_ the region
                     debug!(
                         "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
                         self.worker_id, region.start, target, self.replay_target
                     );
                     self.replay_idx = target - 1; // so we set the last replayed index to the end of the region
-
-                    debug!("[1] [{}], REPLAY_IDX = {}", self.debug_id, self.replay_idx);
 
                     true
                 }
@@ -1259,11 +1253,18 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             let saved_next_deleted_region = self.next_deleted_region.clone();
             let entry = self.internal_get_next_oplog_entry().await;
             if !entry.is_hint() {
+                // TODO: cache the last hint entry to avoid reading it again
                 self.replay_idx = saved_replay_idx;
                 self.next_deleted_region = saved_next_deleted_region;
                 break;
+            } else {
+                debug!("Skipped entry {:?} at {}", entry, self.replay_idx);
             }
         }
+        debug!(
+            "get_oplog_entry read {}, replay idx is {}",
+            read_idx, self.replay_idx
+        );
 
         (read_idx, entry)
     }
@@ -1273,7 +1274,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         assert!(self.is_replay());
 
         let read_idx = self.replay_idx + 1;
-        debug!("get_oplog_entry reading {}", read_idx);
+        debug!("internal_get_next_oplog_entry reading {}", read_idx);
 
         let oplog_entries = self.read_oplog(read_idx, 1).await;
         let oplog_entry = oplog_entries.into_iter().next().unwrap();
@@ -1304,6 +1305,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 .read(&self.worker_id, start, CHUNK_SIZE)
                 .await;
             for (idx, entry) in &entries {
+                // TODO: handle deleted regions
                 if check(entry, begin_idx) {
                     return Some(*idx);
                 }

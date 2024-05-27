@@ -229,7 +229,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     async fn set_oplog_index(&mut self, oplog_idx: OplogIndex) -> anyhow::Result<()> {
         record_host_function_call("golem::api", "set_oplog_index");
         let jump_source = self.state.current_oplog_index().await + 1; // index of the Jump instruction that we will add
-        let jump_target = oplog_idx;
+        let jump_target = oplog_idx + 1; // we want to jump _after_ reaching the target index
         if jump_target > jump_source {
             Err(anyhow!(
                 "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"

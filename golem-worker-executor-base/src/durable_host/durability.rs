@@ -9,6 +9,7 @@ use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
+use tracing::error;
 
 #[async_trait]
 pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
@@ -283,6 +284,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> Result<(), GolemError> {
         if let OplogEntry::ImportedFunctionInvoked { function_name, .. } = oplog_entry {
             if function_name != expected_function_name {
+                error!(
+                    "Unexpected imported function call entry in oplog: expected {}, got {}",
+                    expected_function_name, function_name
+                );
                 Err(GolemError::unexpected_oplog_entry(
                     expected_function_name,
                     function_name,
