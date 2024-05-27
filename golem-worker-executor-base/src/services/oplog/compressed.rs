@@ -40,6 +40,7 @@ impl CompressedOplogArchiveService {
     const CACHE_SIZE: usize = 4096;
     const ZSTD_LEVEL: i32 = 0;
 
+    #[allow(unused)]
     pub fn new(indexed_storage: Arc<dyn IndexedStorage + Send + Sync>, level: u8) -> Self {
         Self {
             indexed_storage,

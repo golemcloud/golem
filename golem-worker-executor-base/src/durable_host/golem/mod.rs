@@ -216,18 +216,17 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<OplogIndex> {
         record_host_function_call("golem::api", "get_oplog_index");
-        let result = self.state.current_oplog_index().await;
         if self.state.is_live() {
             self.state.oplog.add(OplogEntry::nop()).await;
         } else {
             let _ = get_oplog_entry!(self.state, OplogEntry::NoOp);
         }
-        Ok(result)
+        Ok(self.state.current_oplog_index().await)
     }
 
     async fn set_oplog_index(&mut self, oplog_idx: OplogIndex) -> anyhow::Result<()> {
         record_host_function_call("golem::api", "set_oplog_index");
-        let jump_source = self.state.current_oplog_index().await;
+        let jump_source = self.state.current_oplog_index().await + 1;
         let jump_target = oplog_idx;
         if jump_target > jump_source {
             Err(anyhow!(
@@ -327,8 +326,8 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                     // and later we replay it, we need to skip the first attempt and only replay the second.
                     // Se we add a Jump entry to the oplog that registers a deleted region.
                     let deleted_region = OplogRegion {
-                        start: begin_index + 1,            // need to keep the BeginAtomicRegion entry
-                        end: self.state.replay_target + 1, // skipping the Jump entry too
+                        start: begin_index,                // need to keep the BeginAtomicRegion entry
+                        end: self.state.replay_target + 2, // skipping the Jump entry too
                     };
                     self.state.deleted_regions.add(deleted_region.clone());
                     self.state

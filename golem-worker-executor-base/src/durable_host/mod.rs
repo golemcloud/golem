@@ -1213,7 +1213,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
                         self.worker_id, self.replay_idx, target, self.replay_target
                     );
-                    self.replay_idx = target;
+                    self.replay_idx = target + 1;
                     true
                 }
                 _ => false,
