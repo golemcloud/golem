@@ -259,6 +259,7 @@ mod tests {
 
     use uuid::Uuid;
 
+    use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{ComponentId, PromiseId, WorkerId};
 
     use crate::services::promise::PromiseServiceMock;
@@ -288,15 +289,15 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
@@ -363,15 +364,15 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
@@ -442,15 +443,15 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
@@ -528,15 +529,15 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
@@ -611,19 +612,19 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
         let p4: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 111,
+            oplog_idx: OplogIndex::from_u64(111),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
@@ -705,15 +706,15 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());

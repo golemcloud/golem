@@ -6,6 +6,7 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::config::RetryConfig;
@@ -15,7 +16,59 @@ use crate::model::{
     WorkerInvocation,
 };
 
-pub type OplogIndex = u64;
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    Default,
+)]
+pub struct OplogIndex(u64);
+
+impl OplogIndex {
+    pub const NONE: OplogIndex = OplogIndex(0);
+    pub const INITIAL: OplogIndex = OplogIndex(1);
+
+    pub const fn from_u64(value: u64) -> OplogIndex {
+        OplogIndex(value)
+    }
+
+    /// Gets the previous oplog index
+    pub fn previous(&self) -> OplogIndex {
+        OplogIndex(self.0 - 1)
+    }
+
+    /// Gets the next oplog index
+    pub fn next(&self) -> OplogIndex {
+        OplogIndex(self.0 + 1)
+    }
+
+    /// Gets the last oplog index belonging to an inclusive range starting at this oplog index,
+    /// having `count` elements.
+    pub fn range_end(&self, count: u64) -> OplogIndex {
+        OplogIndex(self.0 + count - 1)
+    }
+}
+
+impl Display for OplogIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<OplogIndex> for u64 {
+    fn from(value: OplogIndex) -> Self {
+        value.0
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PayloadId(pub Uuid);
@@ -230,7 +283,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn end_atomic_region(begin_index: u64) -> OplogEntry {
+    pub fn end_atomic_region(begin_index: OplogIndex) -> OplogEntry {
         OplogEntry::EndAtomicRegion {
             timestamp: Timestamp::now_utc(),
             begin_index,

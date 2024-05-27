@@ -114,7 +114,7 @@ impl OplogService for PrimaryOplogService {
         record_oplog_call("open");
 
         let key = Self::oplog_key(worker_id);
-        let last_oplog_index: u64 = self.get_last_index(worker_id).await;
+        let last_oplog_index = self.get_last_index(worker_id).await;
 
         Arc::new(PrimaryOplog::new(
             self.indexed_storage.clone(),
@@ -132,16 +132,18 @@ impl OplogService for PrimaryOplogService {
     async fn get_first_index(&self, worker_id: &WorkerId) -> OplogIndex {
         record_oplog_call("get_first_index");
 
-        self.indexed_storage
-            .with_entity("oplog", "get_first_index", "entry")
-            .first_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
-            .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to get first oplog index for worker {worker_id} from indexed storage: {err}"
-                )
-            })
-            .unwrap_or_default()
+        OplogIndex::from_u64(
+            self.indexed_storage
+                .with_entity("oplog", "get_first_index", "entry")
+                .first_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to get first oplog index for worker {worker_id} from indexed storage: {err}"
+                    )
+                })
+                .unwrap_or_default()
+        )
     }
 
     async fn get_last_index(&self, worker_id: &WorkerId) -> OplogIndex {
@@ -149,6 +151,7 @@ impl OplogService for PrimaryOplogService {
 
         debug!("Getting the last index in the oplog");
 
+        OplogIndex::from_u64(
         self.indexed_storage
             .with_entity("oplog", "get_last_index", "entry")
             .last_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
@@ -159,6 +162,7 @@ impl OplogService for PrimaryOplogService {
                 )
             })
             .unwrap_or_default()
+        )
     }
 
     async fn delete(&self, worker_id: &WorkerId) {
@@ -186,14 +190,15 @@ impl OplogService for PrimaryOplogService {
             .read(
                 IndexedStorageNamespace::OpLog,
                 &Self::oplog_key(worker_id),
-                idx,
-                idx + n - 1,
+                idx.into(),
+                idx.range_end(n).into(),
             )
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to read oplog for worker {worker_id} from indexed storage: {err}")
             })
             .into_iter()
+            .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
             .collect()
     }
 }
@@ -211,7 +216,7 @@ impl PrimaryOplog {
         max_operations_before_commit: u64,
         max_payload_size: usize,
         key: String,
-        last_oplog_idx: u64,
+        last_oplog_idx: OplogIndex,
         worker_id: WorkerId,
         account_id: AccountId,
     ) -> Self {
@@ -244,8 +249,8 @@ struct PrimaryOplogState {
     max_payload_size: usize,
     key: String,
     buffer: VecDeque<OplogEntry>,
-    last_oplog_idx: u64,
-    last_committed_idx: u64,
+    last_oplog_idx: OplogIndex,
+    last_committed_idx: OplogIndex,
     worker_id: WorkerId,
     account_id: AccountId,
 }
@@ -255,10 +260,15 @@ impl PrimaryOplogState {
         record_oplog_call("append");
 
         for entry in arrays {
-            let oplog_idx = self.last_committed_idx + 1;
+            let oplog_idx = self.last_committed_idx.next();
             self.indexed_storage
                 .with_entity("oplog", "append", "entry")
-                .append(IndexedStorageNamespace::OpLog, &self.key, oplog_idx, entry)
+                .append(
+                    IndexedStorageNamespace::OpLog,
+                    &self.key,
+                    oplog_idx.into(),
+                    entry,
+                )
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -266,7 +276,7 @@ impl PrimaryOplogState {
                         self.key
                     )
                 });
-            self.last_committed_idx += 1;
+            self.last_committed_idx = oplog_idx;
         }
     }
 
@@ -277,7 +287,7 @@ impl PrimaryOplogState {
         if self.buffer.len() > self.max_operations_before_commit as usize {
             self.commit().await;
         }
-        self.last_oplog_idx += 1;
+        self.last_oplog_idx = self.last_oplog_idx.next();
     }
 
     async fn commit(&mut self) {
@@ -314,8 +324,8 @@ impl PrimaryOplogState {
             .read(
                 IndexedStorageNamespace::OpLog,
                 &self.key,
-                oplog_index,
-                oplog_index,
+                oplog_index.into(),
+                oplog_index.into(),
             )
             .await
             .unwrap_or_else(|err| {
@@ -342,7 +352,11 @@ impl PrimaryOplogState {
 
         self.indexed_storage
             .with("oplog", "drop_prefix")
-            .drop_prefix(IndexedStorageNamespace::OpLog, &self.key, last_dropped_id)
+            .drop_prefix(
+                IndexedStorageNamespace::OpLog,
+                &self.key,
+                last_dropped_id.into(),
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!(

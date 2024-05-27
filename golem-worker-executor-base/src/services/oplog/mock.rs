@@ -72,7 +72,7 @@ impl OplogService for OplogServiceMock {
     async fn read(
         &self,
         _worker_id: &WorkerId,
-        _idx: u64,
+        _idx: OplogIndex,
         _n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         unimplemented!()

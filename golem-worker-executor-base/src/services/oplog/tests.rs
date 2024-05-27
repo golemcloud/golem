@@ -179,7 +179,10 @@ async fn open_add_and_read_back() {
     };
     let oplog = oplog_service.open(&account_id, &worker_id).await;
 
-    let entry1 = rounded(OplogEntry::jump(OplogRegion { start: 5, end: 12 }));
+    let entry1 = rounded(OplogEntry::jump(OplogRegion {
+        start: OplogIndex::from_u64(5),
+        end: OplogIndex::from_u64(12),
+    }));
     let entry2 = rounded(OplogEntry::suspend());
     let entry3 = rounded(OplogEntry::exited());
 
@@ -189,15 +192,17 @@ async fn open_add_and_read_back() {
     oplog.add(entry3.clone()).await;
     oplog.commit().await;
 
-    let r1 = oplog.read(last_oplog_idx + 1).await;
-    let r2 = oplog.read(last_oplog_idx + 2).await;
-    let r3 = oplog.read(last_oplog_idx + 3).await;
+    let r1 = oplog.read(last_oplog_idx.next()).await;
+    let r2 = oplog.read(last_oplog_idx.next().next()).await;
+    let r3 = oplog.read(last_oplog_idx.next().next().next()).await;
 
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
 
-    let entries = oplog_service.read(&worker_id, last_oplog_idx + 1, 3).await;
+    let entries = oplog_service
+        .read(&worker_id, last_oplog_idx.next(), 3)
+        .await;
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
         vec![entry1, entry2, entry3]
@@ -259,17 +264,19 @@ async fn entries_with_small_payload() {
 
     oplog.commit().await;
 
-    let r1 = oplog.read(last_oplog_idx + 1).await;
-    let r2 = oplog.read(last_oplog_idx + 2).await;
-    let r3 = oplog.read(last_oplog_idx + 3).await;
-    let r4 = oplog.read(last_oplog_idx + 4).await;
+    let r1 = oplog.read(last_oplog_idx.next()).await;
+    let r2 = oplog.read(last_oplog_idx.next().next()).await;
+    let r3 = oplog.read(last_oplog_idx.next().next().next()).await;
+    let r4 = oplog.read(last_oplog_idx.next().next().next().next()).await;
 
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
     assert_eq!(r4, entry4);
 
-    let entries = oplog_service.read(&worker_id, last_oplog_idx + 1, 4).await;
+    let entries = oplog_service
+        .read(&worker_id, last_oplog_idx.next(), 4)
+        .await;
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
         vec![
@@ -367,17 +374,19 @@ async fn entries_with_large_payload() {
 
     oplog.commit().await;
 
-    let r1 = oplog.read(last_oplog_idx + 1).await;
-    let r2 = oplog.read(last_oplog_idx + 2).await;
-    let r3 = oplog.read(last_oplog_idx + 3).await;
-    let r4 = oplog.read(last_oplog_idx + 4).await;
+    let r1 = oplog.read(last_oplog_idx.next()).await;
+    let r2 = oplog.read(last_oplog_idx.next().next()).await;
+    let r3 = oplog.read(last_oplog_idx.next().next().next()).await;
+    let r4 = oplog.read(last_oplog_idx.next().next().next().next()).await;
 
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
     assert_eq!(r4, entry4);
 
-    let entries = oplog_service.read(&worker_id, last_oplog_idx + 1, 4).await;
+    let entries = oplog_service
+        .read(&worker_id, last_oplog_idx.next(), 4)
+        .await;
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
         vec![
@@ -508,7 +517,9 @@ async fn multilayer_transfers_entries_after_limit_reached(
     let secondary_length = secondary_layer.open(&worker_id).await.length().await;
     let tertiary_length = tertiary_layer.open(&worker_id).await.length().await;
 
-    let all_entries = oplog_service.read(&worker_id, 0, n + 100).await;
+    let all_entries = oplog_service
+        .read(&worker_id, OplogIndex::NONE, n + 100)
+        .await;
 
     assert_eq!(all_entries.len(), entries.len());
     assert_eq!(primary_length, expected_1);
@@ -516,7 +527,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
     assert_eq!(tertiary_length, expected_3);
     assert_eq!(
         all_entries.keys().cloned().collect::<Vec<_>>(),
-        (1..=n).collect::<Vec<_>>()
+        (1..=n).map(OplogIndex::from_u64).collect::<Vec<_>>()
     );
     check!(all_entries.values().cloned().collect::<Vec<_>>() == entries);
 }

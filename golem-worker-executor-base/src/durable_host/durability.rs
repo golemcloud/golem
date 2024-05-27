@@ -5,7 +5,7 @@ use crate::services::oplog::OplogOps;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
@@ -244,7 +244,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
         function_name: &str,
-        begin_index: u64,
+        begin_index: OplogIndex,
         serializable_result: &Result<SerializedSuccess, SerializedErr>,
     ) -> Result<(), Err>
     where

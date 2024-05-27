@@ -22,11 +22,10 @@ use evicting_cache_map::EvictingCacheMap;
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use golem_common::model::oplog::OplogEntry;
+use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::WorkerId;
 use golem_common::serialization::{deserialize, serialize};
 
-use crate::preview2::golem::api::host::OplogIndex;
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 
@@ -122,7 +121,7 @@ impl CompressedOplogArchive {
             .closest::<CompressedOplogChunk>(
                 IndexedStorageNamespace::CompressedOpLog { level: self.level },
                 &CompressedOplogArchiveService::compressed_oplog_key(&self.worker_id),
-                idx,
+                idx.into(),
             )
             .await?
         {
@@ -137,11 +136,11 @@ impl CompressedOplogArchive {
 
             let mut idx = last_idx - chunk.count + 1;
             for entry in entries {
-                cache.insert(idx, entry);
+                cache.insert(OplogIndex::from_u64(idx), entry);
                 idx += 1;
             }
 
-            Ok(Some(last_idx))
+            Ok(Some(OplogIndex::from_u64(last_idx)))
         } else {
             debug!("no compressed entries found for idx {idx}");
             Ok(None)
@@ -158,8 +157,8 @@ impl OplogArchive for CompressedOplogArchive {
     ) -> BTreeMap<golem_common::model::oplog::OplogIndex, OplogEntry> {
         let worker_id = &self.worker_id;
         let mut result = BTreeMap::new();
-        let mut last_idx = idx + n - 1;
-        let mut before = u64::MAX;
+        let mut last_idx = idx.range_end(n);
+        let mut before = OplogIndex::from_u64(u64::MAX);
 
         debug!("starting read {n} compressed entries for worker {worker_id} from {idx}");
 
@@ -174,7 +173,7 @@ impl OplogArchive for CompressedOplogArchive {
                     if last_idx == idx {
                         break;
                     } else {
-                        last_idx -= 1;
+                        last_idx = last_idx.previous();
                     }
                 }
                 debug!("=> finished reading cache, last_idx: {last_idx}");
@@ -203,7 +202,7 @@ impl OplogArchive for CompressedOplogArchive {
                     .unwrap_or_else(|err| {
                         panic!("failed to get first entry from compressed oplog for worker {worker_id} in indexed storage: {err}")
                     }) {
-                    last_idx = min(last_idx, idx);
+                    last_idx = min(last_idx, OplogIndex::from_u64(idx));
                 } else {
                     debug!("no compressed entries found for worker {worker_id}, finishing read");
                     break;
@@ -238,7 +237,7 @@ impl OplogArchive for CompressedOplogArchive {
                 .append(
                     IndexedStorageNamespace::CompressedOpLog { level: self.level },
                     &CompressedOplogArchiveService::compressed_oplog_key(&self.worker_id),
-                    last_id,
+                    last_id.into(),
                     &compressed_chunk,
                 )
                 .await
@@ -248,10 +247,10 @@ impl OplogArchive for CompressedOplogArchive {
         }
     }
 
-    async fn drop_prefix(&self, last_dropped_id: golem_common::model::oplog::OplogIndex) {
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         let worker_id = &self.worker_id;
         self.indexed_storage.with("compressed_oplog", "drop_prefix")
-            .drop_prefix(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &CompressedOplogArchiveService::compressed_oplog_key(&self.worker_id), last_dropped_id)
+            .drop_prefix(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &CompressedOplogArchiveService::compressed_oplog_key(&self.worker_id), last_dropped_id.into())
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to drop prefix from compressed oplog for worker {worker_id} in indexed storage: {err}")

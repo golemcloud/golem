@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -877,16 +877,10 @@ where
             "Calculating new worker status from {} to {}",
             last_known.oplog_idx, last_oplog_index
         );
-        let new_entries: Vec<OplogEntry> = this
+        let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
             .oplog_service()
-            .read(
-                worker_id,
-                last_known.oplog_idx + 1,
-                last_oplog_index - last_known.oplog_idx,
-            )
-            .await
-            .into_values()
-            .collect();
+            .read_range(worker_id, last_known.oplog_idx, last_oplog_index)
+            .await;
 
         let overridden_retry_config = calculate_overridden_retry_policy(
             last_known.overridden_retry_config.clone(),
@@ -913,7 +907,6 @@ where
                 last_known.failed_updates,
                 last_known.successful_updates,
                 last_known.component_version,
-                last_known.oplog_idx,
                 &new_entries,
             );
 
@@ -924,14 +917,13 @@ where
         }) = pending_updates.front()
         {
             deleted_regions.set_override(DeletedRegions::from_regions(vec![
-                OplogRegion::from_range(2..=*oplog_index),
+                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=*oplog_index),
             ]));
         }
 
         let (invocation_results, current_idempotency_key) = calculate_invocation_results(
             last_known.invocation_results,
             last_known.current_idempotency_key,
-            last_known.oplog_idx,
             &new_entries,
         );
 
@@ -958,12 +950,12 @@ fn calculate_latest_worker_status(
     initial: &WorkerStatus,
     default_retry_policy: &RetryConfig,
     initial_retry_policy: Option<RetryConfig>,
-    entries: &[OplogEntry],
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> WorkerStatus {
     let mut result = initial.clone();
     let mut last_error_count = 0;
     let mut current_retry_policy = initial_retry_policy;
-    for entry in entries {
+    for entry in entries.values() {
         if !matches!(entry, OplogEntry::Error { .. }) {
             last_error_count = 0;
         }
@@ -1040,9 +1032,12 @@ fn calculate_latest_worker_status(
     result
 }
 
-fn calculate_deleted_regions(initial: DeletedRegions, entries: &[OplogEntry]) -> DeletedRegions {
+fn calculate_deleted_regions(
+    initial: DeletedRegions,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> DeletedRegions {
     let mut builder = DeletedRegionsBuilder::from_regions(initial.into_regions());
-    for entry in entries {
+    for entry in entries.values() {
         if let OplogEntry::Jump { jump, .. } = entry {
             builder.add(jump.clone());
         }
@@ -1073,10 +1068,10 @@ pub fn calculate_worker_status(
 
 fn calculate_overridden_retry_policy(
     initial: Option<RetryConfig>,
-    entries: &[OplogEntry],
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Option<RetryConfig> {
     let mut result = initial;
-    for entry in entries {
+    for entry in entries.values() {
         if let OplogEntry::ChangeRetryPolicy { new_policy, .. } = entry {
             result = Some(new_policy.clone());
         }
@@ -1086,10 +1081,10 @@ fn calculate_overridden_retry_policy(
 
 fn calculate_pending_invocations(
     initial: Vec<TimestampedWorkerInvocation>,
-    entries: &[OplogEntry],
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<TimestampedWorkerInvocation> {
     let mut result = initial;
-    for entry in entries {
+    for entry in entries.values() {
         match entry {
             OplogEntry::PendingWorkerInvocation {
                 timestamp,
@@ -1141,8 +1136,7 @@ fn calculate_update_fields(
     initial_failed_updates: Vec<FailedUpdateRecord>,
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
     initial_version: u64,
-    start_index: OplogIndex,
-    entries: &[OplogEntry],
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
     VecDeque<TimestampedUpdateDescription>,
     Vec<FailedUpdateRecord>,
@@ -1153,7 +1147,7 @@ fn calculate_update_fields(
     let mut failed_updates = initial_failed_updates;
     let mut successful_updates = initial_successful_updates;
     let mut version = initial_version;
-    for (n, entry) in entries.iter().enumerate() {
+    for (oplog_idx, entry) in entries {
         match entry {
             OplogEntry::Create {
                 component_version, ..
@@ -1167,7 +1161,7 @@ fn calculate_update_fields(
             } => {
                 pending_updates.push_back(TimestampedUpdateDescription {
                     timestamp: *timestamp,
-                    oplog_index: start_index + (n as OplogIndex),
+                    oplog_index: *oplog_idx,
                     description: description.clone(),
                 });
             }
@@ -1203,14 +1197,12 @@ fn calculate_update_fields(
 fn calculate_invocation_results(
     invocation_results: HashMap<IdempotencyKey, OplogIndex>,
     current_idempotency_key: Option<IdempotencyKey>,
-    start_index: OplogIndex,
-    entries: &[OplogEntry],
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (HashMap<IdempotencyKey, OplogIndex>, Option<IdempotencyKey>) {
     let mut invocation_results = invocation_results;
     let mut current_idempotency_key = current_idempotency_key;
 
-    for (n, entry) in entries.iter().enumerate() {
-        let oplog_idx = start_index + (n as OplogIndex);
+    for (oplog_idx, entry) in entries {
         match entry {
             OplogEntry::ExportedFunctionInvoked {
                 idempotency_key, ..
@@ -1222,12 +1214,12 @@ fn calculate_invocation_results(
             }
             OplogEntry::Error { .. } => {
                 if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), oplog_idx);
+                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
                 }
             }
             OplogEntry::Exited { .. } => {
                 if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), oplog_idx);
+                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
                 }
             }
             _ => {}

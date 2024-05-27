@@ -180,7 +180,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         let entry = OplogEntry::pending_update(update_description.clone());
         let timestamped_update = TimestampedUpdateDescription {
             timestamp: entry.timestamp(),
-            oplog_index: self.oplog.current_oplog_index().await + 1,
+            oplog_index: self.oplog.current_oplog_index().await.next(),
             description: update_description,
         };
         self.pending_updates
@@ -229,7 +229,9 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
             ..
         }) = pending_updates.front()
         {
-            deleted_regions.add(OplogRegion::from_range(2..=*oplog_index));
+            deleted_regions.add(OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=*oplog_index,
+            ));
         }
 
         (pending_updates, deleted_regions.build())

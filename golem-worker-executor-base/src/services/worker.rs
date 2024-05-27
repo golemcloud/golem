@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use golem_common::model::oplog::OplogEntry;
+use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord};
 use tracing::debug;
 
@@ -153,7 +153,7 @@ impl WorkerService for DefaultWorkerService {
         debug!("Reading initial oplog entry");
         let initial_oplog_entry = self
             .oplog_service
-            .read(worker_id, 1, 1)
+            .read(worker_id, OplogIndex::INITIAL, 1)
             .await
             .into_iter()
             .next();

@@ -1034,7 +1034,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
 ) -> Option<LastError> {
     let mut idx = this.oplog_service().get_last_index(worker_id).await;
     let mut retry_count = 0;
-    if idx == 0 {
+    if idx == OplogIndex::NONE {
         None
     } else {
         let mut first_error = None;
@@ -1051,8 +1051,8 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                     if first_error.is_none() {
                         first_error = Some(error.clone());
                     }
-                    if idx > 0 {
-                        idx -= 1;
+                    if idx > OplogIndex::INITIAL {
+                        idx = idx.previous();
                         continue;
                     } else {
                         break Some(
@@ -1103,11 +1103,11 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     overridden_retry_policy: Option<RetryConfig>,
     persistence_level: PersistenceLevel,
     assume_idempotence: bool,
-    open_function_table: HashMap<u32, u64>,
-    replay_target: u64,
+    open_function_table: HashMap<u32, OplogIndex>,
+    replay_target: OplogIndex,
 
     /// The oplog index of the last replayed entry
-    replay_idx: u64,
+    last_replayed_index: OplogIndex,
     snapshotting_mode: Option<PersistenceLevel>,
 }
 
@@ -1153,23 +1153,23 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             resources: HashMap::new(),
             last_resource_id: 0,
             deleted_regions: deleted_regions.clone(),
-            next_deleted_region: deleted_regions.find_next_deleted_region(0),
+            next_deleted_region: deleted_regions.find_next_deleted_region(OplogIndex::NONE),
             overridden_retry_policy: None,
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_function_table: HashMap::new(),
-            replay_idx: 0,
+            last_replayed_index: OplogIndex::NONE,
             replay_target: last_oplog_index,
             snapshotting_mode: None,
         };
-        result.move_replay_idx(1); // By this we handle initial deleted regions applied by manual updates correctly
+        result.move_replay_idx(OplogIndex::INITIAL); // By this we handle initial deleted regions applied by manual updates correctly
         result
     }
 
     pub async fn begin_function(
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
-    ) -> Result<u64, GolemError> {
+    ) -> Result<OplogIndex, GolemError> {
         if !self.assume_idempotence
             && *wrapped_function_type == WrappedFunctionType::WriteRemote
             && self.persistence_level != PersistenceLevel::PersistNothing
@@ -1187,8 +1187,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     .await;
                 if end_index.is_none() {
                     // Must switch to live mode before failing to be able to commit an Error entry
-                    self.replay_idx = self.replay_target;
-                    debug!("[4] REPLAY_IDX = {}", self.replay_idx);
+                    self.last_replayed_index = self.replay_target;
+                    debug!("[4] REPLAY_IDX = {}", self.last_replayed_index);
                     Err(GolemError::runtime(
                         "Non-idempotent remote write operation was not completed, cannot retry",
                     ))
@@ -1205,7 +1205,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     pub async fn end_function(
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
-        begin_index: u64,
+        begin_index: OplogIndex,
     ) -> Result<(), GolemError> {
         if !self.assume_idempotence
             && *wrapped_function_type == WrappedFunctionType::WriteRemote
@@ -1227,16 +1227,16 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     /// In live mode it returns the last oplog index (index of the entry last added).
     /// In replay mode it returns the current replay index (index of the entry last read).
-    pub async fn current_oplog_index(&self) -> u64 {
+    pub async fn current_oplog_index(&self) -> OplogIndex {
         if self.is_live() {
             self.oplog.current_oplog_index().await
         } else {
-            self.replay_idx
+            self.last_replayed_index
         }
     }
 
     async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<OplogEntry> {
-        debug!("Reading oplog entries from {} to {}", idx, idx + n - 1);
+        debug!("Reading oplog entries from {} to {}", idx, idx.range_end(n));
         self.oplog_service
             .read(&self.worker_id, idx, n)
             .await
@@ -1246,7 +1246,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        self.replay_idx == self.replay_target
+        self.last_replayed_index == self.replay_target
     }
 
     /// Returns whether we are in replay mode where we are replaying old calls.
@@ -1257,13 +1257,13 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     fn get_out_of_deleted_region(&mut self) {
         if self.is_replay() {
             let update_next_deleted_region = match &self.next_deleted_region {
-                Some(region) if region.start == (self.replay_idx + 1) => {
-                    let target = region.end + 1; // we want to continue reading _after_ the region
+                Some(region) if region.start == (self.last_replayed_index.next()) => {
+                    let target = region.end.next(); // we want to continue reading _after_ the region
                     debug!(
                         "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
                         self.worker_id, region.start, target, self.replay_target
                     );
-                    self.replay_idx = target - 1; // so we set the last replayed index to the end of the region
+                    self.last_replayed_index = target.previous(); // so we set the last replayed index to the end of the region
 
                     true
                 }
@@ -1273,7 +1273,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             if update_next_deleted_region {
                 self.next_deleted_region = self
                     .deleted_regions
-                    .find_next_deleted_region(self.replay_idx);
+                    .find_next_deleted_region(self.last_replayed_index);
             }
         }
     }
@@ -1282,26 +1282,26 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     /// Returns the oplog index of the entry read, no matter how many more hint entries
     /// were read.
     async fn get_oplog_entry(&mut self) -> (OplogIndex, OplogEntry) {
-        let read_idx = self.replay_idx + 1;
+        let read_idx = self.last_replayed_index.next();
         let entry = self.internal_get_next_oplog_entry().await;
 
         // Skipping hint entries
         while self.is_replay() {
-            let saved_replay_idx = self.replay_idx;
+            let saved_replay_idx = self.last_replayed_index;
             let saved_next_deleted_region = self.next_deleted_region.clone();
             let entry = self.internal_get_next_oplog_entry().await;
             if !entry.is_hint() {
                 // TODO: cache the last hint entry to avoid reading it again
-                self.replay_idx = saved_replay_idx;
+                self.last_replayed_index = saved_replay_idx;
                 self.next_deleted_region = saved_next_deleted_region;
                 break;
             } else {
-                debug!("Skipped entry {:?} at {}", entry, self.replay_idx);
+                debug!("Skipped entry {:?} at {}", entry, self.last_replayed_index);
             }
         }
         debug!(
             "get_oplog_entry read {}, replay idx is {}",
-            read_idx, self.replay_idx
+            read_idx, self.last_replayed_index
         );
 
         (read_idx, entry)
@@ -1311,7 +1311,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     async fn internal_get_next_oplog_entry(&mut self) -> OplogEntry {
         assert!(self.is_replay());
 
-        let read_idx = self.replay_idx + 1;
+        let read_idx = self.last_replayed_index.next();
         debug!("internal_get_next_oplog_entry reading {}", read_idx);
 
         let oplog_entries = self.read_oplog(read_idx, 1).await;
@@ -1321,27 +1321,27 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         oplog_entry
     }
 
-    fn move_replay_idx(&mut self, new_idx: u64) {
+    fn move_replay_idx(&mut self, new_idx: OplogIndex) {
         debug!(
             "Moving replay index from {} to {}",
-            self.replay_idx, new_idx
+            self.last_replayed_index, new_idx
         );
-        self.replay_idx = new_idx;
+        self.last_replayed_index = new_idx;
         self.get_out_of_deleted_region();
     }
 
     async fn lookup_oplog_entry(
         &mut self,
-        begin_idx: u64,
-        check: impl Fn(&OplogEntry, u64) -> bool,
-    ) -> Option<u64> {
-        let mut start = self.replay_idx + 1;
+        begin_idx: OplogIndex,
+        check: impl Fn(&OplogEntry, OplogIndex) -> bool,
+    ) -> Option<OplogIndex> {
+        let mut start = self.last_replayed_index.next();
         const CHUNK_SIZE: u64 = 1024;
         while start < self.replay_target {
             debug!(
                 "Looking up oplog entries from {} to {}",
                 start,
-                start + CHUNK_SIZE - 1
+                start.range_end(CHUNK_SIZE)
             );
             let entries = self
                 .oplog_service
@@ -1353,7 +1353,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     return Some(*idx);
                 }
             }
-            start += entries.len() as u64;
+            start = start.range_end(entries.len() as u64).next();
         }
 
         None

@@ -544,6 +544,7 @@ mod tests {
     };
     use crate::error::GolemError;
     use crate::model::InterruptKind;
+    use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
     use proptest::collection::vec;
     use proptest::prelude::*;
@@ -645,7 +646,7 @@ mod tests {
     fn promiseid_strat() -> impl Strategy<Value = PromiseId> {
         (workerid_strat(), any::<u64>()).prop_map(|(worker_id, oplog_idx)| PromiseId {
             worker_id,
-            oplog_idx,
+            oplog_idx: OplogIndex::from_u64(oplog_idx),
         })
     }
 

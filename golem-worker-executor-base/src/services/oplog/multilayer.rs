@@ -57,9 +57,22 @@ pub trait OplogArchive: Debug {
     /// Read an arbitrary section of the oplog archive
     async fn read(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry>;
 
+    /// Reads an inclusive range of entries from the oplog archive
+    async fn read_range(
+        &self,
+        start_idx: OplogIndex,
+        last_idx: OplogIndex,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.read(
+            start_idx,
+            Into::<u64>::into(last_idx) - Into::<u64>::into(start_idx) + 1,
+        )
+        .await
+    }
+
     /// Reads a prefix up to and including the given index
     async fn read_prefix(&self, last_idx: OplogIndex) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.read(1, last_idx).await
+        self.read_range(OplogIndex::INITIAL, last_idx).await
     }
 
     /// Append a new chunk of entries to the oplog
@@ -229,7 +242,7 @@ impl OplogService for MultiLayerOplogService {
                     // so we cannot just decrease n by the number of entries read. Instead,
                     // we want to read from the next layer only up to the first index that was
                     // read from the primary oplog.s
-                    n = (*first_idx as i64) - (idx as i64);
+                    n = (Into::<u64>::into(*first_idx) as i64) - (Into::<u64>::into(idx) as i64);
                     *first_idx == idx
                 }
             };
@@ -250,7 +263,8 @@ impl OplogService for MultiLayerOplogService {
                         None => false,
                         Some((first_idx, _)) => {
                             debug!("first_idx: {first_idx}, n: {n}");
-                            n = (*first_idx as i64) - (idx as i64);
+                            n = (Into::<u64>::into(*first_idx) as i64)
+                                - (Into::<u64>::into(idx) as i64);
                             *first_idx == idx
                         }
                     };

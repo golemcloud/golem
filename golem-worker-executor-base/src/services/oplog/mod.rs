@@ -83,12 +83,28 @@ pub trait OplogService: Debug {
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry>;
 
+    /// Reads an inclusive range of entries from the oplog
+    async fn read_range(
+        &self,
+        worker_id: &WorkerId,
+        start_idx: OplogIndex,
+        last_idx: OplogIndex,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.read(
+            worker_id,
+            start_idx,
+            Into::<u64>::into(last_idx) - Into::<u64>::into(start_idx) + 1,
+        )
+        .await
+    }
+
     async fn read_prefix(
         &self,
         worker_id: &WorkerId,
         last_idx: OplogIndex,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.read(worker_id, 1, last_idx).await
+        self.read_range(worker_id, OplogIndex::INITIAL, last_idx)
+            .await
     }
 }
 

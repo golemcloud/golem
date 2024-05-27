@@ -319,7 +319,7 @@ impl From<PromiseId> for golem_api_grpc::proto::golem::worker::PromiseId {
     fn from(value: PromiseId) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
-            oplog_idx: value.oplog_idx,
+            oplog_idx: value.oplog_idx.into(),
         }
     }
 }
@@ -332,7 +332,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PromiseId> for PromiseId {
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            oplog_idx: value.oplog_idx,
+            oplog_idx: OplogIndex::from_u64(value.oplog_idx),
         })
     }
 }
@@ -663,7 +663,7 @@ impl Default for WorkerStatusRecord {
             invocation_results: HashMap::new(),
             current_idempotency_key: None,
             component_version: 0,
-            oplog_idx: 0,
+            oplog_idx: OplogIndex::default(),
         }
     }
 }

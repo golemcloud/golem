@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::worker::{
     ResumeWorkerRequest, StdErrLog, StdOutLog, UpdateMode, UpdateWorkerRequest,
     UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
-use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+use golem_common::model::oplog::{OplogIndex, TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey, SuccessfulUpdateRecord,
@@ -903,7 +903,7 @@ pub fn to_worker_metadata(
             .clone()
             .into(),
         last_known_status: WorkerStatusRecord {
-            oplog_idx: 0,
+            oplog_idx: OplogIndex::default(),
             status: metadata.status.try_into().expect("invalid status"),
             overridden_retry_config: None, // not passed through gRPC
             deleted_regions: DeletedRegions::new(),
@@ -919,7 +919,7 @@ pub fn to_worker_metadata(
                             .expect("no timestamp on update record")
                             .clone()
                             .into(),
-                        oplog_index: 0,
+                        oplog_index: OplogIndex::from_u64(0),
                         description: UpdateDescription::Automatic {
                             target_version: u.target_version,
                         },
