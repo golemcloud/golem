@@ -14,7 +14,6 @@ pkgs.rustPlatform.buildRustPackage {
 
   cargoLock = {
     lockFileContents = builtins.readFile ./Cargo.lock.nix;
-    # lockFile = ./Cargo.lock.nix;
     allowBuiltinFetchGit = false;
      outputHashes = {
        "libtest-mimic-0.7.0" = "sha256-xUAyZbti96ky6TFtUjyT6Jx1g0N1gkDPjCMcto5SzxE=";
@@ -24,8 +23,6 @@ pkgs.rustPlatform.buildRustPackage {
   patches = [ ./nixDeps.patch ./fixOldSyntax.patch ];
   postPatch = ''
     cp -r ${golem-examples} golem-examples
-    # mv Cargo.lock.nix Cargo.lock
-    # mv golem-cli/Cargo.toml.nix golem-cli/Cargo.toml
   '';
 
   cargoBuildFlags = [ "-p" "golem-cli" ];
