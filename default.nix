@@ -14,14 +14,14 @@ pkgs.rustPlatform.buildRustPackage {
 
   cargoLock = {
     lockFileContents = builtins.readFile ./Cargo.lock.nix;
-    # lockFile = ./Cargo.lock;
+    # lockFile = ./Cargo.lock.nix;
     allowBuiltinFetchGit = false;
      outputHashes = {
        "libtest-mimic-0.7.0" = "sha256-xUAyZbti96ky6TFtUjyT6Jx1g0N1gkDPjCMcto5SzxE=";
        "cranelift-bforest-0.104.0" = "sha256-veZc4s+OitjBv4ohzzgFdAxLm/J/B5NVy+RXU0hgfwQ=";
      };
   };
-  preBuild = ''
+  patchPhase = ''
     cp -r ${golem-examples} golem-examples
     mv Cargo.lock.nix Cargo.lock
     mv golem-cli/Cargo.toml.nix golem-cli/Cargo.toml
