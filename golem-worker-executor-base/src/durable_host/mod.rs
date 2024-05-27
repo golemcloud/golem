@@ -179,7 +179,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         invocation_queue,
                         oplog: oplog.clone(),
                     },
-                    state: PrivateDurableWorkerState {
+                    state: PrivateDurableWorkerState::new(
                         oplog_service,
                         oplog,
                         promise_service,
@@ -188,28 +188,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         worker_enumeration_service,
                         key_value_service,
                         blob_store_service,
-                        config: config.clone(),
-                        worker_id: worker_id.clone(),
-                        account_id: account_id.clone(),
-                        current_idempotency_key: None,
-                        active_workers: active_workers.clone(),
+                        config.clone(),
+                        worker_id.clone(),
+                        account_id.clone(),
+                        active_workers.clone(),
                         recovery_management,
                         rpc,
                         worker_proxy,
-                        resources: HashMap::new(),
-                        last_resource_id: 0,
-                        deleted_regions: worker_config.deleted_regions.clone(),
-                        next_deleted_region: worker_config
-                            .deleted_regions
-                            .find_next_deleted_region(0),
-                        overridden_retry_policy: None,
-                        persistence_level: PersistenceLevel::Smart,
-                        assume_idempotence: true,
-                        open_function_table: HashMap::new(),
-                        replay_idx: 1,
-                        replay_target: last_oplog_index,
-                        snapshotting_mode: None,
-                    },
+                        worker_config.deleted_regions.clone(),
+                        last_oplog_index,
+                    ),
                     temp_dir,
                     execution_status,
                 }
@@ -1124,6 +1112,60 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
+    pub fn new(
+        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        oplog: Arc<dyn Oplog + Send + Sync>,
+        promise_service: Arc<dyn PromiseService + Send + Sync>,
+        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
+        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
+        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        config: Arc<GolemConfig>,
+        worker_id: WorkerId,
+        account_id: AccountId,
+        active_workers: Arc<ActiveWorkers<Ctx>>,
+        recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        deleted_regions: DeletedRegions,
+        last_oplog_index: OplogIndex,
+    ) -> Self {
+        let mut result = Self {
+            oplog_service,
+            oplog,
+            promise_service,
+            scheduler_service,
+            worker_service,
+            worker_enumeration_service,
+            key_value_service,
+            blob_store_service,
+            config,
+            worker_id,
+            account_id,
+            current_idempotency_key: None,
+            active_workers,
+            recovery_management,
+            rpc,
+            worker_proxy,
+            resources: HashMap::new(),
+            last_resource_id: 0,
+            deleted_regions: deleted_regions.clone(),
+            next_deleted_region: deleted_regions.find_next_deleted_region(0),
+            overridden_retry_policy: None,
+            persistence_level: PersistenceLevel::Smart,
+            assume_idempotence: true,
+            open_function_table: HashMap::new(),
+            replay_idx: 0,
+            replay_target: last_oplog_index,
+            snapshotting_mode: None,
+        };
+        result.move_replay_idx(1); // By this we handle initial deleted regions applied by manual updates correctly
+        result
+    }
+
     pub async fn begin_function(
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
@@ -1212,10 +1254,10 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         !self.is_live()
     }
 
-    fn get_out_of_deleted_region(&mut self) -> bool {
+    fn get_out_of_deleted_region(&mut self) {
         if self.is_replay() {
             let update_next_deleted_region = match &self.next_deleted_region {
-                Some(region) if region.start == (self.replay_idx + 2) => {
+                Some(region) if region.start == (self.replay_idx + 1) => {
                     let target = region.end + 1; // we want to continue reading _after_ the region
                     debug!(
                         "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
@@ -1233,10 +1275,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     .deleted_regions
                     .find_next_deleted_region(self.replay_idx);
             }
-
-            update_next_deleted_region
-        } else {
-            false
         }
     }
 
@@ -1278,13 +1316,18 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
         let oplog_entries = self.read_oplog(read_idx, 1).await;
         let oplog_entry = oplog_entries.into_iter().next().unwrap();
-
-        if !self.get_out_of_deleted_region() {
-            // No jump happened, increment replay index
-            self.replay_idx += 1;
-        }
+        self.move_replay_idx(read_idx);
 
         oplog_entry
+    }
+
+    fn move_replay_idx(&mut self, new_idx: u64) {
+        debug!(
+            "Moving replay index from {} to {}",
+            self.replay_idx, new_idx
+        );
+        self.replay_idx = new_idx;
+        self.get_out_of_deleted_region();
     }
 
     async fn lookup_oplog_entry(

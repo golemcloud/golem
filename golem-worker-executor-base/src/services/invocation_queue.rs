@@ -229,7 +229,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
             ..
         }) = pending_updates.front()
         {
-            deleted_regions.add(OplogRegion::from_range(1..=*oplog_index));
+            deleted_regions.add(OplogRegion::from_range(2..=*oplog_index));
         }
 
         (pending_updates, deleted_regions.build())

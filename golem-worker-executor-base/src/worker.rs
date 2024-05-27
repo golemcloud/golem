@@ -924,7 +924,7 @@ where
         }) = pending_updates.front()
         {
             deleted_regions.set_override(DeletedRegions::from_regions(vec![
-                OplogRegion::from_range(1..=*oplog_index),
+                OplogRegion::from_range(2..=*oplog_index),
             ]));
         }
 
