@@ -1,0 +1,40 @@
+{
+  "nodes": {
+    "golem-examples": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1715199010,
+        "narHash": "sha256-7uWvvrRpIo4euFgP0TG4PEXENl4+Wgd8ckPpYnAwQbw=",
+        "owner": "golemcloud",
+        "repo": "golem-examples",
+        "rev": "5165dcc7e3cbfa09f752caa96a869d284ec169aa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "golemcloud",
+        "repo": "golem-examples",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 0,
+        "narHash": "sha256-zPmwQyQlEugEkJ7Subm/AgXoKt7YIhU2Oi6O8qe8q/E=",
+        "path": "/nix/store/4fvp92iazfdj73g03wvnk8451mihhai5-source",
+        "type": "path"
+      },
+      "original": {
+        "id": "nixpkgs",
+        "type": "indirect"
+      }
+    },
+    "root": {
+      "inputs": {
+        "golem-examples": "golem-examples",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
