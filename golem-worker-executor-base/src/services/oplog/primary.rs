@@ -26,7 +26,7 @@ use std::fmt::{Debug, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error};
+use tracing::error;
 
 /// The primary oplog service implementation, suitable for direct use (top level of a multi-layered setup).
 ///
@@ -149,8 +149,6 @@ impl OplogService for PrimaryOplogService {
     async fn get_last_index(&self, worker_id: &WorkerId) -> OplogIndex {
         record_oplog_call("get_last_index");
 
-        debug!("Getting the last index in the oplog");
-
         OplogIndex::from_u64(
         self.indexed_storage
             .with_entity("oplog", "get_last_index", "entry")
@@ -220,8 +218,6 @@ impl PrimaryOplog {
         worker_id: WorkerId,
         account_id: AccountId,
     ) -> Self {
-        debug!("Opened oplog for worker {worker_id} with last index {last_oplog_idx}");
-
         Self {
             state: Arc::new(Mutex::new(PrimaryOplogState {
                 indexed_storage,

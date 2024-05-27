@@ -639,20 +639,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
             if let Some((entry, store)) = needs_commit {
                 let oplog_idx = self.state.oplog.add_and_commit(entry).await;
-                debug!("Added invocation failure to oplog at index {oplog_idx}");
 
                 if store {
                     Ok(Some(oplog_idx))
                 } else {
-                    debug!("on_invocation_failure: no need to store result");
                     Ok(None)
                 }
             } else {
-                debug!("on_invocation_failure: no trap");
                 Ok(None)
             }
         } else {
-            debug!("on_invocation_failure: replay mode");
             Ok(None)
         }
     }
@@ -1039,10 +1035,6 @@ async fn last_error_and_retry_count<T: HasOplogService>(
     } else {
         let mut first_error = None;
         let result = loop {
-            debug!(
-                "Reading oplog entry at index {} to determine last error and retry count",
-                idx
-            );
             let oplog_entry = this.oplog_service().read(worker_id, idx, 1).await;
             match oplog_entry.first_key_value()
                 .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", worker_id)) {
@@ -1071,10 +1063,6 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                 }
             }
         };
-        debug!(
-            "Last retry count: {:?}",
-            result.as_ref().map(|r| r.retry_count)
-        );
         result
     }
 }
@@ -1236,7 +1224,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     }
 
     async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<OplogEntry> {
-        debug!("Reading oplog entries from {} to {}", idx, idx.range_end(n));
         self.oplog_service
             .read(&self.worker_id, idx, n)
             .await
@@ -1295,14 +1282,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 self.last_replayed_index = saved_replay_idx;
                 self.next_deleted_region = saved_next_deleted_region;
                 break;
-            } else {
-                debug!("Skipped entry {:?} at {}", entry, self.last_replayed_index);
             }
         }
-        debug!(
-            "get_oplog_entry read {}, replay idx is {}",
-            read_idx, self.last_replayed_index
-        );
 
         (read_idx, entry)
     }
@@ -1312,7 +1293,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         assert!(self.is_replay());
 
         let read_idx = self.last_replayed_index.next();
-        debug!("internal_get_next_oplog_entry reading {}", read_idx);
 
         let oplog_entries = self.read_oplog(read_idx, 1).await;
         let oplog_entry = oplog_entries.into_iter().next().unwrap();
@@ -1322,10 +1302,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     }
 
     fn move_replay_idx(&mut self, new_idx: OplogIndex) {
-        debug!(
-            "Moving replay index from {} to {}",
-            self.last_replayed_index, new_idx
-        );
         self.last_replayed_index = new_idx;
         self.get_out_of_deleted_region();
     }
@@ -1338,11 +1314,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         let mut start = self.last_replayed_index.next();
         const CHUNK_SIZE: u64 = 1024;
         while start < self.replay_target {
-            debug!(
-                "Looking up oplog entries from {} to {}",
-                start,
-                start.range_end(CHUNK_SIZE)
-            );
             let entries = self
                 .oplog_service
                 .read(&self.worker_id, start, CHUNK_SIZE)

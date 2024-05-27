@@ -265,8 +265,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::CompletePromiseRequest,
     ) -> Result<golem::workerexecutor::CompletePromiseSuccess, GolemError> {
-        debug!("complete_promise: {:?}", request);
-
         let promise_id = request
             .promise_id
             .ok_or(GolemError::invalid_request("promise_id not found"))?;

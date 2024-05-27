@@ -237,7 +237,6 @@ impl OplogService for MultiLayerOplogService {
             let full_match = match partial_result.first_key_value() {
                 None => false,
                 Some((first_idx, _)) => {
-                    debug!("first_idx: {first_idx}, n: {n}, idx: {idx}");
                     // It is possible that n is bigger than the available number of entries,
                     // so we cannot just decrease n by the number of entries read. Instead,
                     // we want to read from the next layer only up to the first index that was
@@ -247,13 +246,6 @@ impl OplogService for MultiLayerOplogService {
                 }
             };
 
-            debug!(
-                "Read {} entries from the primary oplog, full match: {}, n = {}",
-                partial_result.len(),
-                full_match,
-                n
-            );
-
             result.extend(partial_result.into_iter());
 
             if !full_match {
@@ -262,19 +254,11 @@ impl OplogService for MultiLayerOplogService {
                     let full_match = match partial_result.first_key_value() {
                         None => false,
                         Some((first_idx, _)) => {
-                            debug!("first_idx: {first_idx}, n: {n}");
                             n = (Into::<u64>::into(*first_idx) as i64)
                                 - (Into::<u64>::into(idx) as i64);
                             *first_idx == idx
                         }
                     };
-
-                    debug!(
-                        "Read {} entries from the next oplog layer, full match: {}, n = {}",
-                        partial_result.len(),
-                        full_match,
-                        n
-                    );
 
                     result.extend(partial_result.into_iter());
 

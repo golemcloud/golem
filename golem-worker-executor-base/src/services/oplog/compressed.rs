@@ -163,11 +163,9 @@ impl OplogArchive for CompressedOplogArchive {
         debug!("starting read {n} compressed entries for worker {worker_id} from {idx}");
 
         while last_idx > idx {
-            debug!("last_idx: {last_idx}");
             {
                 let mut cache = self.cache.write().await;
 
-                debug!("=> start reading cache, last_idx: {last_idx}");
                 while let Some(entry) = cache.get(&last_idx) {
                     result.insert(last_idx, entry.clone());
                     if last_idx == idx {
@@ -176,12 +174,10 @@ impl OplogArchive for CompressedOplogArchive {
                         last_idx = last_idx.previous();
                     }
                 }
-                debug!("=> finished reading cache, last_idx: {last_idx}");
                 drop(cache);
             }
 
             if before == last_idx {
-                debug!("before: {before} == last_idx: {last_idx}");
                 // No entries found in cache, even though fetch returned true. This means we reached the beginning of the stream
                 break;
             }
@@ -189,8 +185,7 @@ impl OplogArchive for CompressedOplogArchive {
             let fetched_last_idx = self.read_and_cache_chunk(last_idx).await.unwrap_or_else(|err| {
                 panic!("failed to read compressed oplog for worker {worker_id} in indexed storage: {err}")
             });
-            if let Some(fetched_last_idx) = fetched_last_idx {
-                debug!("fetched_last_idx: {fetched_last_idx}");
+            if fetched_last_idx.is_some() {
                 before = last_idx;
             } else if result.is_empty() {
                 // We allow to have a gap on the right side of the query - as we cannot guarantee
@@ -204,11 +199,11 @@ impl OplogArchive for CompressedOplogArchive {
                     }) {
                     last_idx = min(last_idx, OplogIndex::from_u64(idx));
                 } else {
-                    debug!("no compressed entries found for worker {worker_id}, finishing read");
+                    debug!("No compressed entries found for worker {worker_id}, finishing read");
                     break;
                 }
             } else {
-                debug!("no more compressed entries found for worker {worker_id}, finishing read");
+                debug!("No more compressed entries found for worker {worker_id}, finishing read");
                 // We go newer towards older entries so if we didn't fetch the chunk we reached the
                 // boundary of this layer
                 break;

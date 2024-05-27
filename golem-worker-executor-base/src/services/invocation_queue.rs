@@ -265,7 +265,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
                 oplog_idx: oplog_index,
             },
         );
-        debug!("stored invocation success for {key}");
+        debug!("Stored invocation success for {key}");
         self.events.publish(Event::InvocationCompleted {
             worker_id: self.worker_id.clone(),
             idempotency_key: key.clone(),

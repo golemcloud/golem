@@ -20,7 +20,6 @@ use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_
 use golem_common::redis::RedisPool;
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::debug;
 
 #[derive(Debug)]
 pub struct RedisIndexedStorage {
@@ -266,8 +265,6 @@ impl IndexedStorage for RedisIndexedStorage {
             .xrange(Self::composite_key(namespace, key), id, "+", Some(1))
             .await
             .map_err(|e| e.to_string())?;
-
-        debug!("closest: {:?}", items);
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())

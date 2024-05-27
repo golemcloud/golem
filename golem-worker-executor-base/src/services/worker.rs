@@ -249,7 +249,7 @@ impl WorkerService for DefaultWorkerService {
     async fn update_status(&self, worker_id: &WorkerId, status_value: &WorkerStatusRecord) {
         record_worker_call("update_status");
 
-        debug!("updating worker status to {status_value:?}");
+        debug!("Updating worker status to {status_value:?}");
         self.key_value_storage
             .with_entity("worker", "update_status", "worker_status")
             .set(
@@ -264,7 +264,7 @@ impl WorkerService for DefaultWorkerService {
         let shard_id = ShardId::from_worker_id(worker_id, shard_assignment.number_of_shards);
 
         if status_value.status == WorkerStatus::Running {
-            debug!("adding worker to the set of running workers in shard {shard_id}");
+            debug!("Adding worker to the set of running workers in shard {shard_id}");
 
             self
                 .key_value_storage
@@ -277,7 +277,7 @@ impl WorkerService for DefaultWorkerService {
                     )
                 });
         } else {
-            debug!("removing worker from the set of running workers in shard {shard_id}");
+            debug!("Removing worker from the set of running workers in shard {shard_id}");
 
             self
                 .key_value_storage
