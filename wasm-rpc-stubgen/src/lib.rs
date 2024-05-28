@@ -35,6 +35,7 @@ use std::fs;
 use std::path::PathBuf;
 use tempdir::TempDir;
 use wasm_compose::config::Dependency;
+use wit_parser::UnresolvedPackage;
 
 #[derive(Parser, Debug)]
 #[command(name = "wasm-rpc-stubgen", version)]
@@ -238,16 +239,44 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn find_if_same_package(
+    dep_dir: &PathBuf,
+    target_wit: &UnresolvedPackage,
+) -> anyhow::Result<bool> {
+    let dep_package_name = UnresolvedPackage::parse_dir(dep_dir)?.name;
+    let dest_package = target_wit.name.clone();
+
+    if dep_package_name != dest_package {
+        Ok(true)
+    } else {
+        dbg!("Skipping the copy of cyclic dependencies {} to te the same as {}", dep_package_name, dest_package);
+        Ok(false)
+    }
+
+}
+
 pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
+    // The destination's WIT's package details
+    let destination_wit_root = UnresolvedPackage::parse_dir(&args.dest_wit_root)?;
+
+    // Dependencies of stub as directories
     let source_deps = wit::get_dep_dirs(&args.stub_wit_root)?;
 
+    let filtered_source_deps = source_deps.into_iter().filter(|dep| {
+        find_if_same_package(&dep, &destination_wit_root).unwrap()
+    }).collect::<Vec<_>>();
+
+    // Main Stub wit
     let main_wit = args.stub_wit_root.join("_stub.wit");
+
     let main_wit_package_name = wit::get_package_name(&main_wit)?;
 
     let mut actions = Vec::new();
-    for source_dir in source_deps {
+    for source_dir in filtered_source_deps {
         actions.push(WitAction::CopyDepDir { source_dir })
     }
+
+    // Copying the stub itself
     actions.push(WitAction::CopyDepWit {
         source_wit: main_wit,
         dir_name: format!(
