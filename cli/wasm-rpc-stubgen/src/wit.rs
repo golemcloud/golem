@@ -21,17 +21,16 @@ use std::path::{Path, PathBuf};
 use wit_parser::{Field, Handle, PackageName, Resolve, Type, TypeDefKind, UnresolvedPackage};
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
-    let wit_str = get_stub_wit(def, false)?;
+    let out = get_stub_wit(def, true)?;
     println!(
         "Generating stub WIT to {}",
         def.target_wit_path().to_string_lossy()
     );
     fs::create_dir_all(def.target_wit_root())?;
-    fs::write(def.target_wit_path(), wit_str)?;
+    fs::write(def.target_wit_path(), out)?;
     Ok(())
 }
-
-pub fn get_stub_wit(def: &StubDefinition, inline_root_types: bool) -> anyhow::Result<String> {
+pub fn get_stub_wit(def: &StubDefinition, bool: bool) -> anyhow::Result<String> {
     let world = def.resolve.worlds.get(def.world_id).unwrap();
 
     let mut out = String::new();
@@ -44,25 +43,31 @@ pub fn get_stub_wit(def: &StubDefinition, inline_root_types: bool) -> anyhow::Re
         .interfaces
         .iter()
         .flat_map(|i| i.imports.iter())
-        .collect::<Vec<_>>(); // TODO; Change to IndexSet, hash not available for TypeDef
+        .collect::<Vec<_>>();
 
     writeln!(out, "  use golem:rpc/types@0.1.0.{{uri}};")?;
 
-    if inline_root_types {
+    if bool {
+        for import in all_imports {
+            writeln!(out, "  use {}.{{{}}};", import.path, import.name)?;
+        }
+        writeln!(out)?;
+    } else {
         let mut inline_types: Vec<InterfaceStubTypeDef> = vec![];
 
         for import in all_imports {
             match &import.package_name {
-                Some(package) if package == &def.root_package_name => {
+                Some(package) if package == &def.root_package_name =>{
                     inline_types.push(import.clone());
                 }
-                _ => writeln!(out, "  use {}.{{{}}};", import.path, import.name)?
+                _ =>   writeln!(out, "  use {}.{{{}}};", import.path, import.name)?
             }
         }
 
         writeln!(out)?;
 
         for typ in inline_types {
+
             let typ_kind = typ.clone().type_def.kind;
             let kind_str = typ_kind.as_str();
             let name = typ.clone().name;
@@ -92,15 +97,9 @@ pub fn get_stub_wit(def: &StubDefinition, inline_root_types: bool) -> anyhow::Re
                 TypeDefKind::Type(_) => {}
                 TypeDefKind::Unknown => {}
             }
-        }
-    } else {
-        for import in all_imports {
-            writeln!(out, "  use {}.{};", import.path, import.name)?;
-        }
 
-        writeln!(out)?;
+        }
     }
-
 
     for interface in &def.interfaces {
         writeln!(out, "  resource {} {{", &interface.name)?;
@@ -185,6 +184,7 @@ pub fn get_stub_wit(def: &StubDefinition, inline_root_types: bool) -> anyhow::Re
 
     Ok(out)
 }
+
 
 fn write_field_list(
     out: &mut String,

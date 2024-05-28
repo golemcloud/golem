@@ -281,7 +281,9 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
 
 
     let new_stub =
-        get_stub_wit(&stub_dependency, true).context("Failed to regenerate inlined stub")?;
+        get_stub_wit(&stub_dependency, false).context("Failed to regenerate inlined stub")?;
+
+    dbg!(new_stub);
 
     println!(
         "Generating stub WIT to {}",
@@ -290,20 +292,19 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
 
     let main_wit_package_name = wit::get_package_name(&main_wit)?;
 
-    let stub_file = format!(
-        "{}_{}",
-        main_wit_package_name.namespace, main_wit_package_name.name
-    );
-
-    // Copying the stub itself
-    fs::create_dir_all(args.stub_wit_root.clone())?;
-    fs::write(args.stub_wit_root.join(stub_file), new_stub)?;
-
     let mut actions = Vec::new();
     for source_dir in filtered_source_deps {
         actions.push(WitAction::CopyDepDir { source_dir })
     }
 
+    // Copying the stub itself
+    actions.push(WitAction::CopyDepWit {
+        source_wit: main_wit,
+        dir_name: format!(
+            "{}_{}",
+            main_wit_package_name.namespace, main_wit_package_name.name
+        ),
+    });
 
     let mut proceed = true;
     for action in &actions {
