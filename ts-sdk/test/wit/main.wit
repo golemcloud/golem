@@ -6,7 +6,7 @@ interface api {
   create-promise: func() -> promise-id;
 }
 
-world js4 {
+world test {
   import golem:api/host@0.2.0;
   export api;
 }

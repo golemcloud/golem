@@ -1,6 +1,6 @@
-package golem:rust;
+package golem:ts;
 
-world golem-rust {
+world golem-ts{
   import golem:api/host@0.2.0;
 
   import wasi:blobstore/blobstore;
