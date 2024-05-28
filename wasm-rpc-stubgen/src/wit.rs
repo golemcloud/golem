@@ -12,15 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::stub::{FunctionParamStub, FunctionResultStub, StubDefinition};
+use crate::stub::{FunctionParamStub, FunctionResultStub, InterfaceStubTypeDef, StubDefinition};
 use anyhow::{anyhow, bail, Context};
 use indexmap::IndexSet;
 use std::fmt::{Display, Formatter, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
-use wit_parser::{Handle, PackageName, Resolve, Type, TypeDefKind, UnresolvedPackage};
+use wit_parser::{Field, Handle, PackageName, Resolve, Type, TypeDefKind, UnresolvedPackage};
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
+    let wit_str = get_stub_wit(def, false)?;
+    println!(
+        "Generating stub WIT to {}",
+        def.target_wit_path().to_string_lossy()
+    );
+    fs::create_dir_all(def.target_wit_root())?;
+    fs::write(def.target_wit_path(), wit_str)?;
+    Ok(())
+}
+
+pub fn get_stub_wit(def: &StubDefinition, inline_root_types: bool) -> anyhow::Result<String> {
     let world = def.resolve.worlds.get(def.world_id).unwrap();
 
     let mut out = String::new();
@@ -33,13 +44,63 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
         .interfaces
         .iter()
         .flat_map(|i| i.imports.iter())
-        .collect::<IndexSet<_>>();
+        .collect::<Vec<_>>(); // TODO; Change to IndexSet, hash not available for TypeDef
 
     writeln!(out, "  use golem:rpc/types@0.1.0.{{uri}};")?;
-    for import in all_imports {
-        writeln!(out, "  use {}.{{{}}};", import.path, import.name)?;
+
+    if inline_root_types {
+        let mut inline_types: Vec<InterfaceStubTypeDef> = vec![];
+
+        for import in all_imports {
+            match &import.package_name {
+                Some(package) if package == &def.root_package_name => {
+                    inline_types.push(import.clone());
+                }
+                _ => writeln!(out, "  use {}.{{{}}};", import.path, import.name)?
+            }
+        }
+
+        writeln!(out)?;
+
+        for typ in inline_types {
+            let typ_kind = typ.clone().type_def.kind;
+            let kind_str = typ_kind.as_str();
+            let name = typ.clone().name;
+
+            write!(out, "  {}", kind_str)?;
+            write!(out, " {}", name)?;
+
+            match typ_kind {
+                TypeDefKind::Record(record) => {
+                    write!(out, " {{")?;
+                    writeln!(out)?;
+                    write_field_list(&mut out, record.fields, def)?;
+                    writeln!(out)?;
+                    writeln!(out, "  }}")?;
+                }
+                TypeDefKind::Resource => {}
+                TypeDefKind::Handle(_) => {}
+                TypeDefKind::Flags(_) => {}
+                TypeDefKind::Tuple(_) => {}
+                TypeDefKind::Variant(_) => {}
+                TypeDefKind::Enum(_) => {}
+                TypeDefKind::Option(_) => {}
+                TypeDefKind::Result(_) => {}
+                TypeDefKind::List(_) => {}
+                TypeDefKind::Future(_) => {}
+                TypeDefKind::Stream(_) => {}
+                TypeDefKind::Type(_) => {}
+                TypeDefKind::Unknown => {}
+            }
+        }
+    } else {
+        for import in all_imports {
+            writeln!(out, "  use {}.{};", import.path, import.name)?;
+        }
+
+        writeln!(out)?;
     }
-    writeln!(out)?;
+
 
     for interface in &def.interfaces {
         writeln!(out, "  resource {} {{", &interface.name)?;
@@ -122,13 +183,27 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     writeln!(out, "  export stub-{};", world.name)?;
     writeln!(out, "}}")?;
 
-    println!(
-        "Generating stub WIT to {}",
-        def.target_wit_path().to_string_lossy()
-    );
-    fs::create_dir_all(def.target_wit_root())?;
-    fs::write(def.target_wit_path(), out)?;
+    Ok(out)
+}
+
+fn write_field_list(
+    out: &mut String,
+    fields: Vec<Field>,
+    def: &StubDefinition,
+) -> anyhow::Result<()> {
+    for (idx, field) in fields.iter().enumerate() {
+        write!(
+            out,
+            "    {}: {}",
+            field.name,
+            field.ty.wit_type_string(&def.resolve)?
+        )?;
+        if idx < fields.len() - 1 {
+            write!(out, ", ")?;
+        }
+    }
     Ok(())
+
 }
 
 fn write_param_list(

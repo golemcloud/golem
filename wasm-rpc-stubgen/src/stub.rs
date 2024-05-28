@@ -17,10 +17,7 @@ use indexmap::IndexSet;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use wit_parser::{
-    Function, FunctionKind, PackageName, Resolve, Results, Type, TypeDefKind, TypeId, TypeOwner,
-    UnresolvedPackage, World, WorldId, WorldItem,
-};
+use wit_parser::{Function, FunctionKind, PackageName, Resolve, Results, Type, TypeDef, TypeDefKind, TypeId, TypeOwner, UnresolvedPackage, World, WorldId, WorldItem};
 
 /// All the gathered information for generating the stub crate.
 pub struct StubDefinition {
@@ -127,7 +124,7 @@ pub struct InterfaceStub {
     pub constructor_params: Option<Vec<FunctionParamStub>>,
     pub functions: Vec<FunctionStub>,
     pub static_functions: Vec<FunctionStub>,
-    pub imports: Vec<InterfaceStubImport>,
+    pub imports: Vec<InterfaceStubTypeDef>,
     pub global: bool,
     pub owner_interface: Option<String>,
 }
@@ -136,6 +133,14 @@ impl InterfaceStub {
     pub fn is_resource(&self) -> bool {
         self.constructor_params.is_some()
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InterfaceStubTypeDef {
+    pub name: String,
+    pub path: String,
+    pub package_name: Option<PackageName>,
+    pub type_def: TypeDef
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -219,7 +224,7 @@ impl FunctionResultStub {
 fn collect_stub_imports<'a>(
     types: impl Iterator<Item = (&'a String, &'a TypeId)>,
     resolve: &Resolve,
-) -> anyhow::Result<Vec<InterfaceStubImport>> {
+) -> anyhow::Result<Vec<InterfaceStubTypeDef>> {
     let mut imports = Vec::new();
 
     for (name, typ) in types {
@@ -246,9 +251,12 @@ fn collect_stub_imports<'a>(
                     let interface_path = package
                         .map(|p| p.name.interface_id(&interface_name))
                         .unwrap_or(interface_name);
-                    imports.push(InterfaceStubImport {
+
+                    imports.push(InterfaceStubTypeDef {
                         name: name.clone(),
                         path: interface_path,
+                        package_name: package.map(|p| p.name.clone()),
+                        type_def: typ.clone(),
                     });
                 }
                 TypeOwner::None => {}
@@ -477,7 +485,7 @@ fn visit<'a>(
 }
 
 // Copied and modified from `wit-parser` crate
-fn get_unresolved_packages(
+pub fn get_unresolved_packages(
     root_path: &Path,
 ) -> anyhow::Result<(UnresolvedPackage, Vec<UnresolvedPackage>)> {
     let root = UnresolvedPackage::parse_dir(root_path)?;
