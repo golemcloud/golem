@@ -207,9 +207,7 @@ impl OplogArchive for CompressedOplogArchive {
         let mut last_idx = idx.range_end(n);
         let mut before = OplogIndex::from_u64(u64::MAX);
 
-        debug!("starting read {n} compressed entries for worker {worker_id} from {idx}");
-
-        while last_idx > idx {
+        while last_idx >= idx {
             {
                 let mut cache = self.cache.write().await;
 

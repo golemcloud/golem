@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -280,7 +280,7 @@ impl<O: Oplog + ?Sized> OplogOps for O {}
 
 #[derive(Debug, Clone)]
 struct OpenOplogs {
-    oplogs: Arc<DashMap<WorkerId, Arc<dyn Oplog + Send + Sync>>>,
+    oplogs: Arc<DashMap<WorkerId, Weak<dyn Oplog + Send + Sync>>>,
 }
 
 impl OpenOplogs {
@@ -299,13 +299,23 @@ impl OpenOplogs {
         let worker_id_clone = worker_id.clone();
         let entry = self.oplogs.entry(worker_id.clone());
         match entry {
-            Entry::Occupied(existing) => existing.get().clone(),
+            Entry::Occupied(existing) => match existing.get().upgrade() {
+                Some(oplog) => oplog,
+                None => {
+                    let close = Box::new(move || {
+                        oplogs_clone.remove(&worker_id_clone);
+                    });
+                    let oplog = constructor.create_oplog(close).await;
+                    existing.replace_entry(Arc::downgrade(&oplog));
+                    oplog
+                }
+            },
             Entry::Vacant(entry) => {
                 let close = Box::new(move || {
                     oplogs_clone.remove(&worker_id_clone);
                 });
                 let oplog = constructor.create_oplog(close).await;
-                entry.insert(oplog.clone());
+                entry.insert(Arc::downgrade(&oplog));
                 oplog
             }
         }

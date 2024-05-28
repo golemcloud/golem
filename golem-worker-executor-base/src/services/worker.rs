@@ -145,12 +145,10 @@ impl WorkerService for DefaultWorkerService {
         Ok(())
     }
 
-    // TODO: needs to support multi-layer oplogs
     async fn get(&self, worker_id: &WorkerId) -> Option<WorkerMetadata> {
         record_worker_call("get");
 
         let wid = worker_id;
-        debug!("Reading initial oplog entry");
         let initial_oplog_entry = self
             .oplog_service
             .read(worker_id, OplogIndex::INITIAL, 1)
