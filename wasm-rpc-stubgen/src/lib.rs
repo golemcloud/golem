@@ -270,25 +270,16 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
 
     let main_wit = args.stub_wit_root.join("_stub.wit");
 
-
     let stub_dependency = StubDefinition::new(
         &args.dest_wit_root,
         &args.stub_wit_root.parent().unwrap(),
         &None,  // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
-        &"0.0.1".to_string(),
-        &None
+        &"0.0.1".to_string(), // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
+        &None // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
     )?;
-
 
     let new_stub =
         get_stub_wit(&stub_dependency, false).context("Failed to regenerate inlined stub")?;
-
-    dbg!(new_stub);
-
-    println!(
-        "Generating stub WIT to {}",
-        main_wit.to_string_lossy()
-    );
 
     let main_wit_package_name = wit::get_package_name(&main_wit)?;
 
@@ -297,13 +288,13 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
         actions.push(WitAction::CopyDepDir { source_dir })
     }
 
-    // Copying the stub itself
-    actions.push(WitAction::CopyDepWit {
-        source_wit: main_wit,
+    actions.push(WitAction::CopyWitStr {
+        source_wit: new_stub,
         dir_name: format!(
             "{}_{}",
             main_wit_package_name.namespace, main_wit_package_name.name
         ),
+        file_name: "_stub.wit".to_string(),
     });
 
     let mut proceed = true;

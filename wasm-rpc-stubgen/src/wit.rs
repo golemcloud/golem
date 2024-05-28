@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ffi::OsStr;
 use crate::stub::{FunctionParamStub, FunctionResultStub, InterfaceStubTypeDef, StubDefinition};
 use anyhow::{anyhow, bail, Context};
 use indexmap::IndexSet;
@@ -30,6 +31,7 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     fs::write(def.target_wit_path(), out)?;
     Ok(())
 }
+
 pub fn get_stub_wit(def: &StubDefinition, bool: bool) -> anyhow::Result<String> {
     let world = def.resolve.worlds.get(def.world_id).unwrap();
 
@@ -392,11 +394,25 @@ pub enum WitAction {
         source_wit: PathBuf,
         dir_name: String,
     },
+
+    CopyWitStr {
+        source_wit: String,
+        dir_name: String,
+        file_name: String
+    },
 }
 
 impl Display for WitAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            WitAction::CopyWitStr { source_wit, dir_name, file_name } => {
+                write!(
+                    f,
+                    "copy stub WIT string to relative path {}/{}",
+                    dir_name,
+                    file_name
+                )
+            },
             WitAction::CopyDepDir { source_dir } => {
                 write!(
                     f,
@@ -422,6 +438,15 @@ impl Display for WitAction {
 impl WitAction {
     pub fn perform(&self, target_wit_root: &Path) -> anyhow::Result<()> {
         match self {
+            WitAction::CopyWitStr { source_wit, dir_name, file_name } => {
+                let target_dir = target_wit_root.join("deps").join(dir_name);
+                if !target_dir.exists() {
+                    fs::create_dir_all(&target_dir).context("Create target directory")?;
+                }
+                fs::write(target_dir.join(OsStr::new(file_name)), source_wit)
+                    .context("Copy the WIT string")?;
+            }
+
             WitAction::CopyDepDir { source_dir } => {
                 let dep_name = source_dir
                     .file_name()
@@ -464,6 +489,7 @@ impl WitAction {
                 .to_string_lossy()
                 .to_string()),
             WitAction::CopyDepWit { dir_name, .. } => Ok(dir_name.clone()),
+            WitAction::CopyWitStr { dir_name, .. } => Ok(dir_name.clone())
         }
     }
 }
@@ -474,6 +500,24 @@ pub fn verify_action(
     overwrite: bool,
 ) -> anyhow::Result<bool> {
     match action {
+        WitAction::CopyWitStr { source_wit, dir_name, file_name } => {
+            let target_dir = target_wit_root.join("deps").join(dir_name);
+            let target_wit = target_dir.join(file_name);
+            if target_dir.exists() && target_dir.is_dir() {
+                let target_contents = fs::read_to_string(&target_wit)?;
+                if source_wit == &target_contents {
+                    Ok(true)
+                } else if overwrite {
+                    println!("Overwriting {}", target_wit.to_string_lossy());
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            } else {
+                Ok(true)
+            }
+        }
+
         WitAction::CopyDepDir { source_dir } => {
             let dep_name = source_dir
                 .file_name()
