@@ -34,15 +34,14 @@ use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, Indexed
 #[derive(Debug)]
 pub struct CompressedOplogArchiveService {
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
-    level: u8,
+    level: usize,
 }
 
 impl CompressedOplogArchiveService {
     const CACHE_SIZE: usize = 4096;
     const ZSTD_LEVEL: i32 = 0;
 
-    #[allow(unused)]
-    pub fn new(indexed_storage: Arc<dyn IndexedStorage + Send + Sync>, level: u8) -> Self {
+    pub fn new(indexed_storage: Arc<dyn IndexedStorage + Send + Sync>, level: usize) -> Self {
         Self {
             indexed_storage,
             level,
@@ -129,7 +128,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
 #[derive(Debug)]
 pub struct CompressedOplogArchive {
     worker_id: WorkerId,
-    // TODO: store key
+    key: String,
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     #[allow(clippy::type_complexity)]
     cache: RwLock<
@@ -140,17 +139,19 @@ pub struct CompressedOplogArchive {
             fn(OplogIndex, OplogEntry) -> (),
         >,
     >,
-    level: u8,
+    level: usize,
 }
 
 impl CompressedOplogArchive {
     pub fn new(
         worker_id: WorkerId,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
-        level: u8,
+        level: usize,
     ) -> Self {
+        let key = CompressedOplogArchiveService::compressed_oplog_key(&worker_id);
         Self {
             worker_id,
+            key,
             indexed_storage,
             cache: RwLock::new(EvictingCacheMap::new()),
             level,
@@ -163,7 +164,7 @@ impl CompressedOplogArchive {
             .with_entity("compressed_oplog", "create", "compressed_entry")
             .closest::<CompressedOplogChunk>(
                 IndexedStorageNamespace::CompressedOpLog { level: self.level },
-                &CompressedOplogArchiveService::compressed_oplog_key(&self.worker_id),
+                &self.key,
                 idx.into(),
             )
             .await?
@@ -243,7 +244,7 @@ impl OplogArchive for CompressedOplogArchive {
                 // that the 'n' parameter is exactly matches the available number of elements. However,
                 // there must not be any gaps in the middle.
                 if let Some(idx) = self.indexed_storage.with_entity("compressed_oplog", "get_first_index", "compressed_entry")
-                    .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &CompressedOplogArchiveService::compressed_oplog_key(&self.worker_id))
+                    .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key)
                     .await
                     .unwrap_or_else(|err| {
                         panic!("failed to get first entry from compressed oplog for worker {worker_id} in indexed storage: {err}")
@@ -282,7 +283,7 @@ impl OplogArchive for CompressedOplogArchive {
                 .with_entity("compressed_oplog", "append", "compressed_entry")
                 .append(
                     IndexedStorageNamespace::CompressedOpLog { level: self.level },
-                    &CompressedOplogArchiveService::compressed_oplog_key(&self.worker_id),
+                    &self.key,
                     last_id.into(),
                     &compressed_chunk,
                 )
@@ -296,7 +297,7 @@ impl OplogArchive for CompressedOplogArchive {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         let worker_id = &self.worker_id;
         self.indexed_storage.with("compressed_oplog", "drop_prefix")
-            .drop_prefix(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &CompressedOplogArchiveService::compressed_oplog_key(&self.worker_id), last_dropped_id.into())
+            .drop_prefix(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key, last_dropped_id.into())
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to drop prefix from compressed oplog for worker {worker_id} in indexed storage: {err}")
@@ -304,7 +305,7 @@ impl OplogArchive for CompressedOplogArchive {
         let remaining = self.length().await;
         if remaining == 0 {
             self.indexed_storage.with("compressed_oplog", "drop_prefix")
-                .delete(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &CompressedOplogArchiveService::compressed_oplog_key(&self.worker_id))
+                .delete(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key)
                 .await
                 .unwrap_or_else(|err| {
                     panic!("failed to drop compressed oplog for worker {worker_id} in indexed storage: {err}")
@@ -317,7 +318,7 @@ impl OplogArchive for CompressedOplogArchive {
             .with("compressed_oplog", "length")
             .length(
                 IndexedStorageNamespace::CompressedOpLog { level: self.level },
-                &CompressedOplogArchiveService::compressed_oplog_key(&self.worker_id),
+                &self.key,
             )
             .await
             .unwrap_or_else(|err| {

@@ -548,5 +548,5 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum IndexedStorageNamespace {
     OpLog,
-    CompressedOpLog { level: u8 },
+    CompressedOpLog { level: usize },
 }

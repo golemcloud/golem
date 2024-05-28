@@ -32,7 +32,9 @@ use golem_common::model::{
     Timestamp, WorkerId,
 };
 use golem_common::serialization::{serialize, try_deserialize};
-pub use multilayer::MultiLayerOplogService;
+
+pub use compressed::CompressedOplogArchiveService;
+pub use multilayer::{MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 
 use crate::error::GolemError;

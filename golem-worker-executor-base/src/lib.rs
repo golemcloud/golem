@@ -31,6 +31,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutorServer;
 use golem_common::redis::RedisPool;
+use nonempty_collections::NEVec;
 use prometheus::Registry;
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -50,7 +51,10 @@ use crate::services::golem_config::{
     BlobStorageConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
-use crate::services::oplog::{OplogService, PrimaryOplogService};
+use crate::services::oplog::{
+    CompressedOplogArchiveService, MultiLayerOplogService, OplogArchiveService, OplogService,
+    PrimaryOplogService,
+};
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
@@ -222,15 +226,44 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let shard_service = Arc::new(ShardServiceDefault::new());
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
 
-        let oplog_service = Arc::new(
-            PrimaryOplogService::new(
-                indexed_storage.clone(),
-                blob_storage.clone(),
-                golem_config.oplog.max_operations_before_commit,
-                golem_config.oplog.max_payload_size,
-            )
-            .await,
-        );
+        let oplog_service: Arc<dyn OplogService + Send + Sync> =
+            match golem_config.oplog.indexed_storage_layers {
+                0 => panic!("At least one indexed storage based oplog layer must be configured"),
+                1 => Arc::new(
+                    PrimaryOplogService::new(
+                        indexed_storage.clone(),
+                        blob_storage.clone(),
+                        golem_config.oplog.max_operations_before_commit,
+                        golem_config.oplog.max_payload_size,
+                    )
+                    .await,
+                ),
+                n => {
+                    let primary = Arc::new(
+                        PrimaryOplogService::new(
+                            indexed_storage.clone(),
+                            blob_storage.clone(),
+                            golem_config.oplog.max_operations_before_commit,
+                            golem_config.oplog.max_payload_size,
+                        )
+                        .await,
+                    );
+                    let lower = (1..n)
+                        .map(|idx| {
+                            let svc: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+                                CompressedOplogArchiveService::new(indexed_storage.clone(), idx),
+                            );
+                            svc
+                        })
+                        .collect::<Vec<_>>();
+
+                    Arc::new(MultiLayerOplogService::new(
+                        primary,
+                        NEVec::from_vec(lower).unwrap(),
+                        golem_config.oplog.entry_count_limit,
+                    ))
+                }
+            };
 
         let worker_service = Arc::new(DefaultWorkerService::new(
             key_value_storage.clone(),
