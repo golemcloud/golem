@@ -163,17 +163,16 @@ impl IndexedStorage for InMemoryIndexedStorage {
         end_id: u64,
     ) -> Result<Vec<(u64, Bytes)>, String> {
         let composite_key = Self::composite_key(namespace, key);
-        let entry = self
-            .data
-            .get(&composite_key)
-            .ok_or_else(|| "Key not found".to_string())?;
+        if let Some(entry) = self.data.get(&composite_key) {
+            let mut result = Vec::new();
+            for (id, value) in entry.range((Included(start_id), Included(end_id))) {
+                result.push((*id, Bytes::from(value.clone())));
+            }
 
-        let mut result = Vec::new();
-        for (id, value) in entry.range((Included(start_id), Included(end_id))) {
-            result.push((*id, Bytes::from(value.clone())));
+            Ok(result)
+        } else {
+            Ok(Vec::new())
         }
-
-        Ok(result)
     }
 
     async fn first(

@@ -106,6 +106,9 @@ pub trait OplogService: Debug {
         self.read_range(worker_id, OplogIndex::INITIAL, last_idx)
             .await
     }
+
+    /// Checks whether the oplog exists in the oplog, without opening it
+    async fn exists(&self, worker_id: &WorkerId) -> bool;
 }
 
 /// An open oplog providing write access

@@ -77,4 +77,8 @@ impl OplogService for OplogServiceMock {
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         unimplemented!()
     }
+
+    async fn exists(&self, _worker_id: &WorkerId) -> bool {
+        unimplemented!()
+    }
 }

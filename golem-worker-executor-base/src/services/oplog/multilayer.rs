@@ -32,8 +32,6 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
 };
 use crate::services::oplog::{OpenOplogs, Oplog, OplogConstructor, OplogService};
 
-// TODO: need a "global" background thread that transfers things from closed old oplogs
-
 #[async_trait]
 pub trait OplogArchiveService: Debug {
     /// Opens an oplog archive for writing
@@ -49,6 +47,9 @@ pub trait OplogArchiveService: Debug {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry>;
+
+    /// Checks if an oplog archive exists for a worker
+    async fn exists(&self, worker_id: &WorkerId) -> bool;
 }
 
 /// Interface for secondary oplog archives - requires less functionality than the primary archive
@@ -269,6 +270,20 @@ impl OplogService for MultiLayerOplogService {
             }
         }
         result
+    }
+
+    async fn exists(&self, worker_id: &WorkerId) -> bool {
+        if self.primary.exists(worker_id).await {
+            return true;
+        }
+
+        for layer in &self.lower {
+            if layer.exists(worker_id).await {
+                return true;
+            }
+        }
+
+        false
     }
 }
 

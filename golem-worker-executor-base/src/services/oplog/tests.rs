@@ -21,11 +21,12 @@ use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::ComponentId;
 use golem_common::redis::RedisPool;
 use nonempty_collections::nev;
-use tracing::debug;
+use tracing::{debug, info};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
@@ -446,14 +447,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
     expected_2: u64,
     expected_3: u64,
 ) {
-    let ansi_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(true)
-        .with_filter(
-            EnvFilter::builder()
-                .with_default_directive("debug".parse().unwrap())
-                .from_env_lossy(),
-        );
-    let _ = tracing_subscriber::registry().with(ansi_layer).try_init();
+    init_logging();
 
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = if use_redis {
         let pool = RedisPool::configured(&RedisConfig::default())
@@ -531,3 +525,160 @@ async fn multilayer_transfers_entries_after_limit_reached(
     );
     check!(all_entries.values().cloned().collect::<Vec<_>>() == entries);
 }
+
+fn init_logging() {
+    let ansi_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(true)
+        .with_filter(
+            EnvFilter::builder()
+                .with_default_directive("debug".parse().unwrap())
+                .from_env_lossy(),
+        );
+    let _ = tracing_subscriber::registry().with(ansi_layer).try_init();
+}
+
+#[tokio::test]
+async fn read_from_archive() {
+    init_logging();
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service =
+        Arc::new(PrimaryOplogService::new(indexed_storage.clone(), blob_storage, 1, 100).await);
+    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 2),
+    );
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+    ));
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let worker_id = WorkerId {
+        component_id: ComponentId(Uuid::new_v4()),
+        worker_name: "test".to_string(),
+    };
+    let oplog = oplog_service.open(&account_id, &worker_id).await;
+
+    let timestamp = Timestamp::now_utc();
+    let entries: Vec<OplogEntry> = (0..100)
+        .map(|i| {
+            rounded(OplogEntry::Error {
+                timestamp,
+                error: WorkerError::Unknown(i.to_string()),
+            })
+        })
+        .collect();
+
+    let initial_oplog_idx = oplog.current_oplog_index().await;
+
+    for entry in &entries {
+        oplog.add(entry.clone()).await;
+    }
+    oplog.commit().await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let primary_length = primary_oplog_service
+        .open(&account_id, &worker_id)
+        .await
+        .length()
+        .await;
+    let secondary_length = secondary_layer.open(&worker_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&worker_id).await.length().await;
+
+    info!("primary_length: {}", primary_length);
+    info!("secondary_length: {}", secondary_length);
+    info!("tertiary_length: {}", tertiary_length);
+
+    let first10 = oplog_service
+        .read(&worker_id, initial_oplog_idx.next(), 10)
+        .await;
+    let original_first10 = entries.into_iter().take(10).collect::<Vec<_>>();
+
+    assert_eq!(first10.into_values().collect::<Vec<_>>(), original_first10);
+}
+
+#[tokio::test]
+async fn empty_layer_gets_deleted() {
+    init_logging();
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service =
+        Arc::new(PrimaryOplogService::new(indexed_storage.clone(), blob_storage, 1, 100).await);
+    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 2),
+    );
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+    ));
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let worker_id = WorkerId {
+        component_id: ComponentId(Uuid::new_v4()),
+        worker_name: "test".to_string(),
+    };
+    let oplog = oplog_service.open(&account_id, &worker_id).await;
+
+    // As we add 100 entries at once, and that exceeds the limit, we expect that all entries have
+    // been moved to the secondary layer. By doing this 10 more times, we end up having all entries
+    // in the tertiary layer.
+
+    for _ in 0..10 {
+        let timestamp = Timestamp::now_utc();
+        let entries: Vec<OplogEntry> = (0..100)
+            .map(|i| {
+                rounded(OplogEntry::Error {
+                    timestamp,
+                    error: WorkerError::Unknown(i.to_string()),
+                })
+            })
+            .collect();
+
+        for entry in &entries {
+            oplog.add(entry.clone()).await;
+        }
+        oplog.commit().await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let primary_length = primary_oplog_service
+        .open(&account_id, &worker_id)
+        .await
+        .length()
+        .await;
+    let secondary_length = secondary_layer.open(&worker_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&worker_id).await.length().await;
+
+    info!("primary_length: {}", primary_length);
+    info!("secondary_length: {}", secondary_length);
+    info!("tertiary_length: {}", tertiary_length);
+
+    assert_eq!(primary_length, 0);
+    assert_eq!(secondary_length, 0);
+    assert_eq!(tertiary_length, 1);
+
+    let primary_exists = primary_oplog_service.exists(&worker_id).await;
+    let secondary_exists = secondary_layer.exists(&worker_id).await;
+    let tertiary_exists = tertiary_layer.exists(&worker_id).await;
+
+    assert!(!primary_exists);
+    assert!(!secondary_exists);
+    assert!(tertiary_exists);
+}
+
+// TODO: implement scan through all layers, and use it from worker enumeration
+// TODO: set up multi-layer oplog based on configuration

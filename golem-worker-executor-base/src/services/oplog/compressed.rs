@@ -81,6 +81,19 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         let archive = self.open(worker_id).await;
         archive.read(idx, n).await
     }
+
+    async fn exists(&self, worker_id: &WorkerId) -> bool {
+        self.indexed_storage
+            .with("compressed_oplog", "exists")
+            .exists(
+                IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                &Self::compressed_oplog_key(worker_id),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to check if compressed oplog exists for worker {worker_id} in indexed storage: {err}")
+            })
+    }
 }
 
 #[derive(Debug)]
@@ -148,6 +161,9 @@ impl CompressedOplogArchive {
     }
 }
 
+/// Currently only the background-transfer fiber calls `append` and `drop_prefix` on oplog archives,
+/// so here it is not protected by a lock. If this changes, we need to add a lock here, similar
+/// to the `PrimaryOplog` implementation.
 #[async_trait]
 impl OplogArchive for CompressedOplogArchive {
     async fn read(
@@ -179,6 +195,11 @@ impl OplogArchive for CompressedOplogArchive {
 
             if before == last_idx {
                 // No entries found in cache, even though fetch returned true. This means we reached the beginning of the stream
+                break;
+            }
+
+            if result.len() == (n as usize) {
+                // We are done fetching all the results
                 break;
             }
 
@@ -250,6 +271,15 @@ impl OplogArchive for CompressedOplogArchive {
             .unwrap_or_else(|err| {
                 panic!("failed to drop prefix from compressed oplog for worker {worker_id} in indexed storage: {err}")
             });
+        let remaining = self.length().await;
+        if remaining == 0 {
+            self.indexed_storage.with("compressed_oplog", "drop_prefix")
+                .delete(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &CompressedOplogArchiveService::compressed_oplog_key(&self.worker_id))
+                .await
+                .unwrap_or_else(|err| {
+                    panic!("failed to drop compressed oplog for worker {worker_id} in indexed storage: {err}")
+                });
+        }
     }
 
     async fn length(&self) -> u64 {

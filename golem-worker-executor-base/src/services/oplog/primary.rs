@@ -199,6 +199,18 @@ impl OplogService for PrimaryOplogService {
             .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
             .collect()
     }
+
+    async fn exists(&self, worker_id: &WorkerId) -> bool {
+        record_oplog_call("exists");
+
+        self.indexed_storage
+            .with("oplog", "exists")
+            .exists(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to check if oplog exists for worker {worker_id} in indexed storage: {err}")
+            })
+    }
 }
 
 struct PrimaryOplog {
@@ -376,6 +388,21 @@ impl PrimaryOplogState {
                 )
             })
     }
+
+    async fn delete(&self) {
+        record_oplog_call("delete");
+
+        self.indexed_storage
+            .with("oplog", "delete")
+            .delete(IndexedStorageNamespace::OpLog, &self.key)
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to delete oplog for {} from indexed storage: {err}",
+                    self.key
+                )
+            });
+    }
 }
 
 impl Debug for PrimaryOplog {
@@ -394,6 +421,10 @@ impl Oplog for PrimaryOplog {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         let state = self.state.lock().await;
         state.drop_prefix(last_dropped_id).await;
+        let remaining = state.length().await;
+        if remaining == 0 {
+            state.delete().await;
+        }
     }
 
     async fn commit(&self) {
