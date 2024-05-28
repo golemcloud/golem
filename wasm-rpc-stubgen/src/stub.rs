@@ -17,7 +17,10 @@ use indexmap::IndexSet;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use wit_parser::{Function, FunctionKind, PackageName, Resolve, Results, Type, TypeDef, TypeDefKind, TypeId, TypeOwner, UnresolvedPackage, World, WorldId, WorldItem};
+use wit_parser::{
+    Function, FunctionKind, PackageName, Resolve, Results, Type, TypeDef, TypeDefKind, TypeId,
+    TypeOwner, UnresolvedPackage, World, WorldId, WorldItem,
+};
 
 /// All the gathered information for generating the stub crate.
 pub struct StubDefinition {
@@ -140,7 +143,7 @@ pub struct InterfaceStubTypeDef {
     pub name: String,
     pub path: String,
     pub package_name: Option<PackageName>,
-    pub type_def: TypeDef
+    pub type_def: TypeDef,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
