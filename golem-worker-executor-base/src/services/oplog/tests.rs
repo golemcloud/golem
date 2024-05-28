@@ -680,5 +680,5 @@ async fn empty_layer_gets_deleted() {
     assert!(tertiary_exists);
 }
 
-// TODO: implement scan through all layers, and use it from worker enumeration
 // TODO: set up multi-layer oplog based on configuration
+// TODO: schedule transfer

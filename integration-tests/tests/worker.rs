@@ -22,8 +22,8 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use golem_common::model::{
-    ComponentId, FilterComparator, StringFilterComparator, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerStatus,
+    ComponentId, FilterComparator, ScanCursor, StringFilterComparator, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus,
 };
 use rand::seq::IteratorRandom;
 use std::time::{Duration, SystemTime};
@@ -235,7 +235,7 @@ async fn get_workers() {
                         ),
                     ),
                 ),
-                0,
+                ScanCursor::default(),
                 20,
                 true,
             )
@@ -250,7 +250,7 @@ async fn get_workers() {
     }
 
     let mut found_worker_ids = HashSet::new();
-    let mut cursor = Some(0);
+    let mut cursor = Some(ScanCursor::default());
 
     let count = workers_count / 5;
 
@@ -383,7 +383,7 @@ async fn get_running_workers() {
                         WorkerStatus::Running,
                     )),
                 ),
-                0,
+                ScanCursor::default(),
                 workers_count as u64,
                 true,
             )
@@ -399,7 +399,7 @@ async fn get_running_workers() {
                 FilterComparator::Equal,
                 WorkerStatus::Running,
             )),
-            0,
+            ScanCursor::default(),
             workers_count as u64,
             true,
         )

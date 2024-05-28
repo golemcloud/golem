@@ -32,8 +32,8 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_common::model::oplog::{OplogIndex, TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey, SuccessfulUpdateRecord,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey, ScanCursor,
+    SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_wasm_ast::analysis::AnalysisContext;
 use golem_wasm_ast::component::Component;
@@ -78,10 +78,10 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: u64,
+        cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> (Option<u64>, Vec<WorkerMetadata>);
+    ) -> (Option<ScanCursor>, Vec<WorkerMetadata>);
     async fn delete_worker(&self, worker_id: &WorkerId);
 
     async fn invoke(
@@ -279,10 +279,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: u64,
+        cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> (Option<u64>, Vec<WorkerMetadata>) {
+    ) -> (Option<ScanCursor>, Vec<WorkerMetadata>) {
         let component_id: golem_api_grpc::proto::golem::component::ComponentId =
             component_id.clone().into();
         let response = self
@@ -290,7 +290,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .get_workers_metadata(GetWorkersMetadataRequest {
                 component_id: Some(component_id),
                 filter: filter.map(|f| f.into()),
-                cursor,
+                cursor: Some(cursor.into()),
                 count,
                 precise,
             })
@@ -299,7 +299,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             None => panic!("No response from get_workers_metadata"),
             Some(get_workers_metadata_response::Result::Success(
                 GetWorkersMetadataSuccessResponse { workers, cursor },
-            )) => (cursor, workers.iter().map(to_worker_metadata).collect()),
+            )) => (
+                cursor.map(|c| c.into()),
+                workers.iter().map(to_worker_metadata).collect(),
+            ),
             Some(get_workers_metadata_response::Result::Error(error)) => {
                 panic!("Failed to get workers metadata: {error:?}")
             }

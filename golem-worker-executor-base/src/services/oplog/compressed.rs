@@ -22,11 +22,13 @@ use evicting_cache_map::EvictingCacheMap;
 use tokio::sync::RwLock;
 use tracing::debug;
 
+use crate::error::GolemError;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::WorkerId;
+use golem_common::model::{ComponentId, ScanCursor, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
+use crate::services::oplog::PrimaryOplogService;
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 
 #[derive(Debug)]
@@ -93,6 +95,34 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             .unwrap_or_else(|err| {
                 panic!("failed to check if compressed oplog exists for worker {worker_id} in indexed storage: {err}")
             })
+    }
+
+    async fn scan_for_component(
+        &self,
+        component_id: &ComponentId,
+        cursor: ScanCursor,
+        count: u64,
+    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError> {
+        let (cursor, keys) = self
+            .indexed_storage
+            .with("compressed_oplog", "scan")
+            .scan(
+                IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                &PrimaryOplogService::key_pattern(component_id),
+                cursor.cursor,
+                count,
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to scan for component {component_id} in indexed storage: {err}")
+            });
+
+        Ok((
+            ScanCursor { cursor, layer: 0 },
+            keys.into_iter()
+                .map(|key| PrimaryOplogService::get_worker_id_from_key(&key, component_id))
+                .collect(),
+        ))
     }
 }
 

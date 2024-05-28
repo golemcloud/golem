@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::GolemError;
 use crate::services::oplog::{Oplog, OplogService};
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AccountId, WorkerId};
+use golem_common::model::{AccountId, ComponentId, ScanCursor, WorkerId};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -79,6 +80,15 @@ impl OplogService for OplogServiceMock {
     }
 
     async fn exists(&self, _worker_id: &WorkerId) -> bool {
+        unimplemented!()
+    }
+
+    async fn scan_for_component(
+        &self,
+        _component_id: &ComponentId,
+        _cursor: ScanCursor,
+        _count: u64,
+    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError> {
         unimplemented!()
     }
 }

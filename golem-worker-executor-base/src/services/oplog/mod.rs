@@ -28,11 +28,14 @@ use golem_common::model::oplog::{
     OplogEntry, OplogIndex, OplogPayload, UpdateDescription, WrappedFunctionType,
 };
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, Timestamp, WorkerId,
+    AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, ScanCursor,
+    Timestamp, WorkerId,
 };
 use golem_common::serialization::{serialize, try_deserialize};
 pub use multilayer::MultiLayerOplogService;
 pub use primary::PrimaryOplogService;
+
+use crate::error::GolemError;
 
 mod compressed;
 mod multilayer;
@@ -109,6 +112,16 @@ pub trait OplogService: Debug {
 
     /// Checks whether the oplog exists in the oplog, without opening it
     async fn exists(&self, worker_id: &WorkerId) -> bool;
+
+    /// Scans the oplog for all workers belonging to the given component, in a paginated way.
+    ///
+    /// Pages can be empty. This operation is slow and is not locking the oplog.
+    async fn scan_for_component(
+        &self,
+        component_id: &ComponentId,
+        cursor: ScanCursor,
+        count: u64,
+    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError>;
 }
 
 /// An open oplog providing write access

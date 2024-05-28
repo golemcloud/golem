@@ -9,6 +9,7 @@ import public "golem/worker/promise_id.proto";
 import public "golem/common/resource_limits.proto";
 import public "golem/shardmanager/shard_id.proto";
 import public "golem/component/component_id.proto";
+import public "golem/worker/cursor.proto";
 import public "golem/worker/update_mode.proto";
 import public "golem/worker/worker_id.proto";
 import public "golem/worker/worker_metadata.proto";
@@ -190,11 +191,10 @@ message GetRunningWorkersMetadataSuccessResponse {
 message GetWorkersMetadataRequest {
   golem.component.ComponentId component_id = 1;
   golem.worker.WorkerFilter filter = 2;
-  uint64 cursor = 3;
+  golem.worker.Cursor cursor = 3;
   uint64 count = 4;
   bool precise = 5;
 }
-
 
 message GetWorkersMetadataResponse {
   oneof result {
@@ -205,7 +205,7 @@ message GetWorkersMetadataResponse {
 
 message GetWorkersMetadataSuccessResponse {
   repeated golem.worker.WorkerMetadata workers = 1;
-  optional uint64 cursor = 2;
+  optional golem.worker.Cursor cursor = 2;
 }
 
 message UpdateWorkerRequest {

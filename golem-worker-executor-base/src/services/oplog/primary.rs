@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::GolemError;
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
@@ -20,7 +21,7 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId};
-use golem_common::model::{AccountId, WorkerId};
+use golem_common::model::{AccountId, ComponentId, ScanCursor, WorkerId};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::path::Path;
@@ -66,6 +67,23 @@ impl PrimaryOplogService {
 
     fn oplog_key(worker_id: &WorkerId) -> String {
         worker_id.to_redis_key()
+    }
+
+    pub fn key_pattern(component_id: &ComponentId) -> String {
+        format!("{}*", component_id.0)
+    }
+
+    pub fn get_worker_id_from_key(key: &str, component_id: &ComponentId) -> WorkerId {
+        let redis_prefix = format!("worker:oplog:{}:", component_id.0);
+        if key.starts_with(&redis_prefix) {
+            let worker_name = &key[redis_prefix.len()..];
+            WorkerId {
+                worker_name: worker_name.to_string(),
+                component_id: component_id.clone(),
+            }
+        } else {
+            panic!("Failed to get worker id from indexed storage key: {key}")
+        }
     }
 }
 
@@ -210,6 +228,36 @@ impl OplogService for PrimaryOplogService {
             .unwrap_or_else(|err| {
                 panic!("failed to check if oplog exists for worker {worker_id} in indexed storage: {err}")
             })
+    }
+
+    async fn scan_for_component(
+        &self,
+        component_id: &ComponentId,
+        cursor: ScanCursor,
+        count: u64,
+    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError> {
+        record_oplog_call("scan");
+
+        let (cursor, keys) = self
+            .indexed_storage
+            .with("oplog", "scan")
+            .scan(
+                IndexedStorageNamespace::OpLog,
+                &Self::key_pattern(component_id),
+                cursor.cursor,
+                count,
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to scan for component {component_id} in indexed storage: {err}")
+            });
+
+        Ok((
+            ScanCursor { cursor, layer: 0 },
+            keys.into_iter()
+                .map(|key| Self::get_worker_id_from_key(&key, component_id))
+                .collect(),
+        ))
     }
 }
 

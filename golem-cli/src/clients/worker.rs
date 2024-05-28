@@ -17,8 +17,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::model::{
-    CallingConvention, InvokeParameters, InvokeResult, UpdateWorkerRequest, WorkerCreationRequest,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkersMetadataRequest, WorkersMetadataResponse,
+    CallingConvention, InvokeParameters, InvokeResult, ScanCursor, UpdateWorkerRequest,
+    WorkerCreationRequest, WorkerFilter, WorkerId, WorkerMetadata, WorkersMetadataRequest,
+    WorkersMetadataResponse,
 };
 use golem_client::Context;
 use native_tls::TlsConnector;
@@ -80,7 +81,7 @@ pub trait WorkerClient {
         &self,
         component_id: ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: Option<u64>,
+        cursor: Option<ScanCursor>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError>;
@@ -88,7 +89,7 @@ pub trait WorkerClient {
         &self,
         component_id: ComponentId,
         filter: Option<Vec<String>>,
-        cursor: Option<u64>,
+        cursor: Option<ScanCursor>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError>;
@@ -246,7 +247,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         &self,
         component_id: ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: Option<u64>,
+        cursor: Option<ScanCursor>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError> {
@@ -274,7 +275,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         &self,
         component_id: ComponentId,
         filter: Option<Vec<String>>,
-        cursor: Option<u64>,
+        cursor: Option<ScanCursor>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError> {
@@ -289,10 +290,19 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         let filter: Option<&[String]> = filter.as_deref();
 
-        Ok(self
-            .client
-            .get_workers_metadata(&component_id.0, filter, cursor, count, precise)
-            .await?)
+        match cursor {
+            None => Ok(self
+                .client
+                .get_workers_metadata(&component_id.0, filter, None, count, precise)
+                .await?),
+            Some(cursor) => {
+                let cursor = format!("{}/{}", cursor.layer, cursor.cursor);
+                Ok(self
+                    .client
+                    .get_workers_metadata(&component_id.0, filter, Some(&cursor), count, precise)
+                    .await?)
+            }
+        }
     }
 
     async fn connect(&self, name: WorkerName, component_id: ComponentId) -> Result<(), GolemError> {

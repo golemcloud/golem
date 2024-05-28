@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
-use golem_api_grpc::proto::golem::worker::UpdateMode;
+use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::{
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
@@ -31,7 +31,7 @@ use golem_common::cache::PendingOrFinal;
 use golem_common::model as common_model;
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, IdempotencyKey, PromiseId, ShardId,
+    AccountId, CallingConvention, ComponentId, IdempotencyKey, PromiseId, ScanCursor, ShardId,
     TimestampedWorkerInvocation, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
@@ -732,7 +732,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_workers_metadata_internal(
         &self,
         request: golem::workerexecutor::GetWorkersMetadataRequest,
-    ) -> Result<(Option<u64>, Vec<golem::worker::WorkerMetadata>), GolemError> {
+    ) -> Result<
+        (
+            Option<golem::worker::Cursor>,
+            Vec<golem::worker::WorkerMetadata>,
+        ),
+        GolemError,
+    > {
         let component_id: common_model::ComponentId = request
             .component_id
             .and_then(|t| t.try_into().ok())
@@ -748,7 +754,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .get(
                 &component_id,
                 filter,
-                request.cursor,
+                request
+                    .cursor
+                    .map(|cursor| ScanCursor {
+                        cursor: cursor.cursor,
+                        layer: cursor.layer as usize,
+                    })
+                    .unwrap_or_default(),
                 request.count,
                 request.precise,
             )
@@ -762,7 +774,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })
             .collect();
 
-        Ok((new_cursor, result))
+        Ok((
+            new_cursor.map(|cursor| Cursor {
+                layer: cursor.layer as u64,
+                cursor: cursor.cursor,
+            }),
+            result,
+        ))
     }
 
     async fn update_worker_internal(

@@ -16,7 +16,7 @@ use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, IdempotencyKey, WorkerFilter, WorkerId,
+    AccountId, ComponentId, ComponentVersion, IdempotencyKey, ScanCursor, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
@@ -136,10 +136,10 @@ impl TestWorkerExecutor {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: u64,
+        cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> (Option<u64>, Vec<WorkerMetadata>) {
+    ) -> (Option<ScanCursor>, Vec<WorkerMetadata>) {
         let component_id: golem_api_grpc::proto::golem::component::ComponentId =
             component_id.clone().into();
         let response = self
@@ -148,7 +148,7 @@ impl TestWorkerExecutor {
             .get_workers_metadata(GetWorkersMetadataRequest {
                 component_id: Some(component_id),
                 filter: filter.map(|f| f.into()),
-                cursor,
+                cursor: Some(cursor.into()),
                 count,
                 precise,
             })
@@ -160,7 +160,10 @@ impl TestWorkerExecutor {
             None => panic!("No response from get_workers_metadata"),
             Some(get_workers_metadata_response::Result::Success(
                 GetWorkersMetadataSuccessResponse { workers, cursor },
-            )) => (cursor, workers.iter().map(to_worker_metadata).collect()),
+            )) => (
+                cursor.map(|c| c.into()),
+                workers.iter().map(to_worker_metadata).collect(),
+            ),
             Some(get_workers_metadata_response::Result::Failure(error)) => {
                 panic!("Failed to get workers metadata: {error:?}")
             }

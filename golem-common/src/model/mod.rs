@@ -27,6 +27,7 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
+use golem_api_grpc::proto::golem::worker::Cursor;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use poem_openapi::{Enum, Object, Union};
@@ -1685,6 +1686,62 @@ impl From<FilterComparator> for i32 {
             FilterComparator::LessEqual => 3,
             FilterComparator::Greater => 4,
             FilterComparator::GreaterEqual => 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Object, Default)]
+pub struct ScanCursor {
+    pub cursor: u64,
+    pub layer: usize,
+}
+
+impl ScanCursor {
+    pub fn is_finished(&self) -> bool {
+        self.cursor == 0
+    }
+}
+
+impl Display for ScanCursor {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.layer, self.cursor)
+    }
+}
+
+impl FromStr for ScanCursor {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts = s.split('/').collect::<Vec<&str>>();
+        if parts.len() == 2 {
+            Ok(ScanCursor {
+                layer: parts[0]
+                    .parse()
+                    .map_err(|e| format!("Invalid layer part: {}", e))?,
+                cursor: parts[1]
+                    .parse()
+                    .map_err(|e| format!("Invalid cursor part: {}", e))?,
+            })
+        } else {
+            Err("Invalid cursor, must have 'layer/cursor' format".to_string())
+        }
+    }
+}
+
+impl From<Cursor> for ScanCursor {
+    fn from(value: Cursor) -> Self {
+        Self {
+            cursor: value.cursor,
+            layer: value.layer as usize,
+        }
+    }
+}
+
+impl From<ScanCursor> for Cursor {
+    fn from(value: ScanCursor) -> Self {
+        Self {
+            cursor: value.cursor,
+            layer: value.layer as u64,
         }
     }
 }

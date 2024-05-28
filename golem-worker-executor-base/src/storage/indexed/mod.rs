@@ -24,7 +24,7 @@ use golem_common::serialization::{deserialize, serialize};
 pub mod memory;
 pub mod redis;
 
-type ScanCursor = u64;
+pub type ScanCursor = u64;
 
 /// Generic indexed storage interface
 ///

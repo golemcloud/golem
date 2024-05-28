@@ -49,8 +49,8 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription, Wrap
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
-    IdempotencyKey, SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    IdempotencyKey, ScanCursor, SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -1459,10 +1459,10 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: u64,
+        cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
         self.worker_enumeration_service
             .get(component_id, filter, cursor, count, precise)
             .await

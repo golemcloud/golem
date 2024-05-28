@@ -238,7 +238,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             oplog_service.clone(),
         ));
         let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
-            indexed_storage.clone(),
             worker_service.clone(),
             oplog_service.clone(),
             golem_config.clone(),

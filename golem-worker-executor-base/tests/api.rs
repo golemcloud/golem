@@ -16,8 +16,8 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
 use golem_common::model::{
-    AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, StringFilterComparator,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
+    StringFilterComparator, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use golem_wasm_rpc::Value;
 
@@ -707,7 +707,7 @@ async fn delete_worker() {
                 StringFilterComparator::Equal,
                 worker_id.worker_name.clone(),
             )),
-            0,
+            ScanCursor::default(),
             10,
             true,
         )
@@ -733,7 +733,7 @@ async fn get_workers() {
         executor: &mut TestWorkerExecutor,
     ) -> Vec<WorkerMetadata> {
         let (cursor, values) = executor
-            .get_workers_metadata(component_id, filter, 0, 20, true)
+            .get_workers_metadata(component_id, filter, ScanCursor::default(), 20, true)
             .await;
 
         check!(values.len() == expected_count);
@@ -820,7 +820,13 @@ async fn get_workers() {
     get_check(&component_id, None, workers_count, &mut executor).await;
 
     let (cursor1, values1) = executor
-        .get_workers_metadata(&component_id, None, 0, (workers_count / 2) as u64, true)
+        .get_workers_metadata(
+            &component_id,
+            None,
+            ScanCursor::default(),
+            (workers_count / 2) as u64,
+            true,
+        )
         .await;
 
     check!(cursor1.is_some());

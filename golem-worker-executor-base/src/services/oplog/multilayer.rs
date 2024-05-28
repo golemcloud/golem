@@ -24,8 +24,9 @@ use prometheus::core::{Atomic, AtomicU64};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, warn, Instrument};
 
+use crate::error::GolemError;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::{AccountId, WorkerId};
+use golem_common::model::{AccountId, ComponentId, ScanCursor, WorkerId};
 
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
@@ -50,6 +51,13 @@ pub trait OplogArchiveService: Debug {
 
     /// Checks if an oplog archive exists for a worker
     async fn exists(&self, worker_id: &WorkerId) -> bool;
+
+    async fn scan_for_component(
+        &self,
+        component_id: &ComponentId,
+        cursor: ScanCursor,
+        count: u64,
+    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError>;
 }
 
 /// Interface for secondary oplog archives - requires less functionality than the primary archive
@@ -284,6 +292,58 @@ impl OplogService for MultiLayerOplogService {
         }
 
         false
+    }
+
+    async fn scan_for_component(
+        &self,
+        component_id: &ComponentId,
+        cursor: ScanCursor,
+        count: u64,
+    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError> {
+        match cursor.layer {
+            0 => {
+                let (new_cursor, ids) = self
+                    .primary
+                    .scan_for_component(component_id, cursor, count)
+                    .await?;
+                if new_cursor.is_finished() {
+                    // Continuing with the first lower layer
+                    Ok((
+                        ScanCursor {
+                            cursor: 0,
+                            layer: 1,
+                        },
+                        ids,
+                    ))
+                } else {
+                    // Still scanning the primary layer
+                    return Ok((new_cursor, ids));
+                }
+            }
+            layer if layer < self.lower.len().get() => {
+                let (new_cursor, ids) = self.lower[layer]
+                    .scan_for_component(component_id, cursor, count)
+                    .await?;
+                if new_cursor.is_finished() && (layer + 1) < self.lower.len().get() {
+                    // Continuing with the next lower layer
+                    Ok((
+                        ScanCursor {
+                            cursor: 0,
+                            layer: layer + 1,
+                        },
+                        ids,
+                    ))
+                } else {
+                    // Still scanning the current layer
+                    return Ok((new_cursor, ids));
+                }
+            }
+            layer => {
+                return Err(GolemError::unknown(format!(
+                    "Invalid oplog layer in scan cursor: {layer}"
+                )));
+            }
+        }
     }
 }
 

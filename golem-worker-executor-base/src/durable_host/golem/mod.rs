@@ -35,7 +35,7 @@ use crate::preview2::golem::api::host::{
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{ComponentId, PromiseId, WorkerId};
+use golem_common::model::{ComponentId, PromiseId, ScanCursor, WorkerId};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
@@ -66,7 +66,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
                     e.filter.clone(),
                     e.count,
                     e.precise,
-                    e.next_cursor,
+                    e.next_cursor.clone(),
                 )
             })?;
 
@@ -102,7 +102,7 @@ pub struct GetWorkersEntry {
     filter: Option<golem_common::model::WorkerFilter>,
     precise: bool,
     count: u64,
-    next_cursor: Option<u64>,
+    next_cursor: Option<ScanCursor>,
 }
 
 impl GetWorkersEntry {
@@ -116,11 +116,11 @@ impl GetWorkersEntry {
             filter,
             precise,
             count: 50,
-            next_cursor: Some(0),
+            next_cursor: Some(ScanCursor::default()),
         }
     }
 
-    fn set_next_cursor(&mut self, cursor: Option<u64>) {
+    fn set_next_cursor(&mut self, cursor: Option<ScanCursor>) {
         self.next_cursor = cursor;
     }
 }
