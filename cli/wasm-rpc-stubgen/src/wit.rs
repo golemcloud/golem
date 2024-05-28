@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ffi::OsStr;
 use crate::stub::{FunctionParamStub, FunctionResultStub, InterfaceStubTypeDef, StubDefinition};
 use anyhow::{anyhow, bail, Context};
+use std::ffi::OsStr;
 use std::fmt::{Display, Formatter, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,17 +58,16 @@ pub fn get_stub_wit(def: &StubDefinition, bool: bool) -> anyhow::Result<String> 
 
         for import in all_imports {
             match &import.package_name {
-                Some(package) if package == &def.root_package_name =>{
+                Some(package) if package == &def.root_package_name => {
                     inline_types.push(import.clone());
                 }
-                _ =>   writeln!(out, "  use {}.{{{}}};", import.path, import.name)?
+                _ => writeln!(out, "  use {}.{{{}}};", import.path, import.name)?,
             }
         }
 
         writeln!(out)?;
 
         for typ in inline_types {
-
             let typ_kind = typ.clone().type_def.kind;
             let kind_str = typ_kind.as_str();
             let name = typ.clone().name;
@@ -98,7 +97,6 @@ pub fn get_stub_wit(def: &StubDefinition, bool: bool) -> anyhow::Result<String> 
                 TypeDefKind::Type(_) => {}
                 TypeDefKind::Unknown => {}
             }
-
         }
     }
 
@@ -186,7 +184,6 @@ pub fn get_stub_wit(def: &StubDefinition, bool: bool) -> anyhow::Result<String> 
     Ok(out)
 }
 
-
 fn write_field_list(
     out: &mut String,
     fields: Vec<Field>,
@@ -204,7 +201,6 @@ fn write_field_list(
         }
     }
     Ok(())
-
 }
 
 fn write_param_list(
@@ -263,7 +259,7 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
             for source in unresolved.source_files() {
                 let parsed = UnresolvedPackage::parse_path(&source)?;
                 let stub_package_name = format!("{}-stub", def.root_package_name);
-                
+
                 if parsed.name.to_string() == stub_package_name {
                     println!("Skipping copying stub package {}", stub_package_name);
                 } else {
@@ -404,21 +400,24 @@ pub enum WitAction {
     CopyWitStr {
         source_wit: String,
         dir_name: String,
-        file_name: String
+        file_name: String,
     },
 }
 
 impl Display for WitAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            WitAction::CopyWitStr { source_wit, dir_name, file_name } => {
+            WitAction::CopyWitStr {
+                source_wit,
+                dir_name,
+                file_name,
+            } => {
                 write!(
                     f,
                     "copy stub WIT string to relative path {}/{}",
-                    dir_name,
-                    file_name
+                    dir_name, file_name
                 )
-            },
+            }
             WitAction::CopyDepDir { source_dir } => {
                 write!(
                     f,
@@ -444,7 +443,11 @@ impl Display for WitAction {
 impl WitAction {
     pub fn perform(&self, target_wit_root: &Path) -> anyhow::Result<()> {
         match self {
-            WitAction::CopyWitStr { source_wit, dir_name, file_name } => {
+            WitAction::CopyWitStr {
+                source_wit,
+                dir_name,
+                file_name,
+            } => {
                 let target_dir = target_wit_root.join("deps").join(dir_name);
                 if !target_dir.exists() {
                     fs::create_dir_all(&target_dir).context("Create target directory")?;
@@ -495,7 +498,7 @@ impl WitAction {
                 .to_string_lossy()
                 .to_string()),
             WitAction::CopyDepWit { dir_name, .. } => Ok(dir_name.clone()),
-            WitAction::CopyWitStr { dir_name, .. } => Ok(dir_name.clone())
+            WitAction::CopyWitStr { dir_name, .. } => Ok(dir_name.clone()),
         }
     }
 }
@@ -506,7 +509,11 @@ pub fn verify_action(
     overwrite: bool,
 ) -> anyhow::Result<bool> {
     match action {
-        WitAction::CopyWitStr { source_wit, dir_name, file_name } => {
+        WitAction::CopyWitStr {
+            source_wit,
+            dir_name,
+            file_name,
+        } => {
             let target_dir = target_wit_root.join("deps").join(dir_name);
             let target_wit = target_dir.join(file_name);
             if target_dir.exists() && target_dir.is_dir() {

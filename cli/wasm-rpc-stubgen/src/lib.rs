@@ -239,20 +239,20 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn find_if_same_package(
-    dep_dir: &PathBuf,
-    target_wit: &UnresolvedPackage,
-) -> anyhow::Result<bool> {
+fn find_if_same_package(dep_dir: &PathBuf, target_wit: &UnresolvedPackage) -> anyhow::Result<bool> {
     let dep_package_name = UnresolvedPackage::parse_dir(dep_dir)?.name;
     let dest_package = target_wit.name.clone();
 
     if dep_package_name != dest_package {
         Ok(true)
     } else {
-        dbg!("Skipping the copy of cyclic dependencies {} to te the same as {}", dep_package_name, dest_package);
+        dbg!(
+            "Skipping the copy of cyclic dependencies {} to te the same as {}",
+            dep_package_name,
+            dest_package
+        );
         Ok(false)
     }
-
 }
 
 pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
@@ -263,19 +263,19 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     let source_deps = wit::get_dep_dirs(&args.stub_wit_root)?;
 
     // We filter the dependencies of stub that's already existing in dest_wit_root
-    let filtered_source_deps = source_deps.into_iter().filter(|dep| {
-        find_if_same_package(&dep, &destination_wit_root).unwrap()
-    }).collect::<Vec<_>>();
-
+    let filtered_source_deps = source_deps
+        .into_iter()
+        .filter(|dep| find_if_same_package(&dep, &destination_wit_root).unwrap())
+        .collect::<Vec<_>>();
 
     let main_wit = args.stub_wit_root.join("_stub.wit");
 
     let stub_dependency = StubDefinition::new(
         &args.dest_wit_root,
         &args.stub_wit_root.parent().unwrap(),
-        &None,  // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
+        &None, // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
         &"0.0.1".to_string(), // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
-        &None // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
+        &None, // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
     )?;
 
     let new_stub =
