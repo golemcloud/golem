@@ -19,10 +19,7 @@ use std::ffi::OsStr;
 use std::fmt::{Display, Formatter, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
-use wit_parser::{
-    Field, Flags, Handle, PackageName, Resolve, Tuple, Type, TypeDef, TypeDefKind,
-    UnresolvedPackage,
-};
+use wit_parser::{Enum, Field, Flags, Handle, PackageName, Resolve, Tuple, Type, TypeDef, TypeDefKind, UnresolvedPackage, Variant};
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     let out = get_stub_wit(def, StubTypeGen::ImportRootTypes)?;
@@ -189,25 +186,25 @@ fn write_type_def(
 
     match typ_kind {
         TypeDefKind::Record(record) => {
-            write!(out, " {{")?;
-            writeln!(out)?;
-            write_field_list(out, record.fields, def)?;
-            writeln!(out)?;
-            writeln!(out, "  }}")?;
+            write_record(out, record.fields, def)?;
         }
 
         TypeDefKind::Flags(flags) => {
             write_flags(out, &flags)?;
         }
         TypeDefKind::Tuple(tuple) => {
-            write!(out, " <")?;
-            write_tuple_list(out, &tuple, def)?;
-            writeln!(out)?;
-            writeln!(out, "  >")?;
+            write_tuple(out, &tuple, def)?;
         }
-        TypeDefKind::Variant(_) => {}
-        TypeDefKind::Enum(_) => {}
-        TypeDefKind::Option(_) => {}
+        TypeDefKind::Variant(variant) => {
+            write_variant(out, &variant, def)?;
+        }
+        TypeDefKind::Enum(enum_ty) => {
+            write_enum(out, enum_ty)?;
+        }
+        TypeDefKind::Option(option) => {
+            write_option(out, &option, def)?;
+        }
+
         TypeDefKind::Result(_) => {}
         TypeDefKind::List(_) => {}
         TypeDefKind::Future(_) => {}
@@ -221,22 +218,75 @@ fn write_type_def(
     Ok(())
 }
 
-fn write_tuple_list(out: &mut String, tuple: &Tuple, def: &StubDefinition) -> anyhow::Result<()> {
+
+fn write_option(out: &mut String, option: &Type, def: &StubDefinition) -> anyhow::Result<()> {
+    write!(out, "option<")?;
+    write!(out, "{}", option.wit_type_string(&def.resolve)?)?;
+    write!(out, ">")?;
+    Ok(())
+}
+
+fn write_variant(out: &mut String, variant: &Variant, def: &StubDefinition) -> anyhow::Result<()> {
+    let cases_length = variant.cases.len();
+    write!(out, " {{")?;
+    writeln!(out)?;
+
+    for (idx, case) in variant.cases.iter().enumerate() {
+        let case_name = case.name.clone();
+        write!(out, "    {}", case_name)?;
+
+        if let Some(ty) = case.ty {
+            write!(out, "(")?;
+            write!(out, "{}", ty.wit_type_string(&def.resolve)?)?;
+            write!(out, ")")?;
+        }
+
+        if idx < cases_length - 1 {
+            writeln!(out, ", ")?;
+        }
+    }
+
+    writeln!(out, "  }}")?;
+    Ok(())
+
+}
+
+fn write_enum(out: &mut String, enum_ty: Enum) -> anyhow::Result<()> {
+    let length = enum_ty.cases.len();
+    write!(out, " {{")?;
+    writeln!(out)?;
+    for (idx, case) in enum_ty.cases.iter().enumerate() {
+        write!(out, "    {}", case.name)?;
+        if idx < length - 1 {
+            writeln!(out, ",")?;
+        }
+        writeln!(out)?;
+    }
+    writeln!(out, "  }}")?;
+    Ok(())
+}
+
+fn write_tuple(out: &mut String, tuple: &Tuple, def: &StubDefinition) -> anyhow::Result<()> {
     let tuple_length = tuple.types.len();
+    write!(out, " <")?;
     for (idx, typ) in tuple.types.iter().enumerate() {
         write!(out, "{}", typ.wit_type_string(&def.resolve)?)?;
         if idx < tuple_length - 1 {
             write!(out, ", ")?;
         }
     }
+    writeln!(out, "  >")?;
     Ok(())
 }
 
-fn write_field_list(
+fn write_record(
     out: &mut String,
     fields: Vec<Field>,
     def: &StubDefinition,
 ) -> anyhow::Result<()> {
+    write!(out, " {{")?;
+    writeln!(out)?;
+
     for (idx, field) in fields.iter().enumerate() {
         write!(
             out,
@@ -248,6 +298,10 @@ fn write_field_list(
             write!(out, ", ")?;
         }
     }
+
+    writeln!(out)?;
+    writeln!(out, "  }}")?;
+
     Ok(())
 }
 
