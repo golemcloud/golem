@@ -600,6 +600,7 @@ pub fn get_package_name(wit: &Path) -> anyhow::Result<PackageName> {
     Ok(pkg.name)
 }
 
+#[allow(clippy::enum_variant_names)]
 pub enum WitAction {
     CopyDepDir {
         source_dir: PathBuf,
@@ -608,6 +609,10 @@ pub enum WitAction {
         source_wit: String,
         dir_name: String,
         file_name: String,
+    },
+    CopyDepWit {
+        source_wit: PathBuf,
+        dir_name: String,
     },
 }
 
@@ -630,6 +635,17 @@ impl Display for WitAction {
                     f,
                     "copy WIT dependency from {}",
                     source_dir.to_string_lossy()
+                )
+            }
+            WitAction::CopyDepWit {
+                source_wit,
+                dir_name,
+            } => {
+                write!(
+                    f,
+                    "copy stub WIT from {} as dependency {}",
+                    source_wit.to_string_lossy(),
+                    dir_name
                 )
             }
         }
@@ -670,6 +686,17 @@ impl WitAction {
                 )
                 .context("Failed to copy the dependency directory")?;
             }
+            WitAction::CopyDepWit {
+                source_wit,
+                dir_name,
+            } => {
+                let target_dir = target_wit_root.join("deps").join(dir_name);
+                if !target_dir.exists() {
+                    fs::create_dir_all(&target_dir).context("Create target directory")?;
+                }
+                fs::copy(source_wit, target_dir.join(source_wit.file_name().unwrap()))
+                    .context("Copy the WIT file")?;
+            }
         }
 
         Ok(())
@@ -683,6 +710,7 @@ impl WitAction {
                 .to_string_lossy()
                 .to_string()),
             WitAction::CopyWitStr { dir_name, .. } => Ok(dir_name.clone()),
+            WitAction::CopyDepWit { dir_name, .. } => Ok(dir_name.clone()),
         }
     }
 }
@@ -728,6 +756,43 @@ pub fn verify_action(
                     Ok(true)
                 } else {
                     Ok(false)
+                }
+            } else {
+                Ok(true)
+            }
+        }
+        WitAction::CopyDepWit {
+            source_wit,
+            dir_name,
+        } => {
+            let target_dir = target_wit_root.join("deps").join(dir_name);
+            let source_file_name = source_wit.file_name().context("Get source wit file name")?;
+            let target_wit = target_dir.join(source_file_name);
+            if target_dir.exists() && target_dir.is_dir() {
+                let mut existing_entries = Vec::new();
+                for entry in fs::read_dir(&target_dir)? {
+                    let entry = entry?;
+                    let name = entry
+                        .path()
+                        .file_name()
+                        .context("Get existing wit directory's name")?
+                        .to_string_lossy()
+                        .to_string();
+                    existing_entries.push(name);
+                }
+                if existing_entries.contains(&source_file_name.to_string_lossy().to_string()) {
+                    let source_contents = fs::read_to_string(source_wit)?;
+                    let target_contents = fs::read_to_string(&target_wit)?;
+                    if source_contents == target_contents {
+                        Ok(true)
+                    } else if overwrite {
+                        println!("Overwriting {}", target_wit.to_string_lossy());
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                } else {
+                    Ok(true)
                 }
             } else {
                 Ok(true)
