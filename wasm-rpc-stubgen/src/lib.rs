@@ -23,7 +23,9 @@ use crate::cargo::generate_cargo_toml;
 use crate::compilation::compile;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
-use crate::wit::{copy_wit_files, generate_stub_wit, get_stub_wit, verify_action, WitAction};
+use crate::wit::{
+    copy_wit_files, generate_stub_wit, get_stub_wit, verify_action, StubTypeGen, WitAction,
+};
 use anyhow::{anyhow, Context};
 use clap::Parser;
 use fs_extra::dir::CopyOptions;
@@ -32,10 +34,10 @@ use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use heck::ToSnakeCase;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempdir::TempDir;
 use wasm_compose::config::Dependency;
-use wit_parser::{Resolve, UnresolvedPackage};
+use wit_parser::UnresolvedPackage;
 
 #[derive(Parser, Debug)]
 #[command(name = "wasm-rpc-stubgen", version)]
@@ -239,7 +241,7 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn find_if_same_package(dep_dir: &PathBuf, target_wit: &UnresolvedPackage) -> anyhow::Result<bool> {
+fn find_if_same_package(dep_dir: &Path, target_wit: &UnresolvedPackage) -> anyhow::Result<bool> {
     let dep_package_name = UnresolvedPackage::parse_dir(dep_dir)?.name;
     let dest_package = target_wit.name.clone();
 
@@ -248,8 +250,7 @@ fn find_if_same_package(dep_dir: &PathBuf, target_wit: &UnresolvedPackage) -> an
     } else {
         println!(
             "Skipping the copy of cyclic dependencies {} to the the same as {}",
-            dep_package_name,
-            dest_package
+            dep_package_name, dest_package
         );
         Ok(false)
     }
@@ -265,21 +266,21 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     // We filter the dependencies of stub that's already existing in dest_wit_root
     let filtered_source_deps = source_deps
         .into_iter()
-        .filter(|dep| find_if_same_package(&dep, &destination_wit_root).unwrap())
+        .filter(|dep| find_if_same_package(dep, &destination_wit_root).unwrap())
         .collect::<Vec<_>>();
 
     let main_wit = args.stub_wit_root.join("_stub.wit");
 
     let stub_dependency = StubDefinition::new(
         &args.dest_wit_root,
-        &args.stub_wit_root.parent().unwrap(),
+        args.stub_wit_root.parent().unwrap(),
         &None, // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
-        &"0.0.1".to_string(), // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
+        "0.0.1", // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
         &None, // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
     )?;
 
-    let new_stub =
-        get_stub_wit(&stub_dependency, false).context("Failed to regenerate inlined stub")?;
+    let new_stub = get_stub_wit(&stub_dependency, StubTypeGen::InlineRootTypes)
+        .context("Failed to regenerate inlined stub")?;
 
     let main_wit_package_name = wit::get_package_name(&main_wit)?;
 

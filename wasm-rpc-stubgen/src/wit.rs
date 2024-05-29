@@ -14,16 +14,15 @@
 
 use crate::stub::{FunctionParamStub, FunctionResultStub, InterfaceStubTypeDef, StubDefinition};
 use anyhow::{anyhow, bail, Context};
+use regex::Regex;
 use std::ffi::OsStr;
 use std::fmt::{Display, Formatter, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
 use wit_parser::{Field, Handle, PackageName, Resolve, Type, TypeDefKind, UnresolvedPackage};
-use regex::Regex;
-use crate::stub;
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
-    let out = get_stub_wit(def, true)?;
+    let out = get_stub_wit(def, StubTypeGen::ImportRootTypes)?;
     println!(
         "Generating stub WIT to {}",
         def.target_wit_path().to_string_lossy()
@@ -33,7 +32,15 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn get_stub_wit(def: &StubDefinition, bool: bool) -> anyhow::Result<String> {
+pub enum StubTypeGen {
+    InlineRootTypes,
+    ImportRootTypes,
+}
+
+pub fn get_stub_wit(
+    def: &StubDefinition,
+    type_gen_strategy: StubTypeGen,
+) -> anyhow::Result<String> {
     let world = def.resolve.worlds.get(def.world_id).unwrap();
 
     let mut out = String::new();
@@ -50,54 +57,57 @@ pub fn get_stub_wit(def: &StubDefinition, bool: bool) -> anyhow::Result<String> 
 
     writeln!(out, "  use golem:rpc/types@0.1.0.{{uri}};")?;
 
-    if bool {
-        for import in all_imports {
-            writeln!(out, "  use {}.{{{}}};", import.path, import.name)?;
-        }
-        writeln!(out)?;
-    } else {
-        let mut inline_types: Vec<InterfaceStubTypeDef> = vec![];
-
-        for import in all_imports {
-            match &import.package_name {
-                Some(package) if package == &def.root_package_name => {
-                    inline_types.push(import.clone());
-                }
-                _ => writeln!(out, "  use {}.{{{}}};", import.path, import.name)?,
+    match type_gen_strategy {
+        StubTypeGen::ImportRootTypes => {
+            for import in all_imports {
+                writeln!(out, "  use {}.{{{}}};", import.path, import.name)?;
             }
+            writeln!(out)?;
         }
+        StubTypeGen::InlineRootTypes => {
+            let mut inline_types: Vec<InterfaceStubTypeDef> = vec![];
 
-        writeln!(out)?;
-
-        for typ in inline_types {
-            let typ_kind = typ.clone().type_def.kind;
-            let kind_str = typ_kind.as_str();
-            let name = typ.clone().name;
-
-            write!(out, "  {}", kind_str)?;
-            write!(out, " {}", name)?;
-
-            match typ_kind {
-                TypeDefKind::Record(record) => {
-                    write!(out, " {{")?;
-                    writeln!(out)?;
-                    write_field_list(&mut out, record.fields, def)?;
-                    writeln!(out)?;
-                    writeln!(out, "  }}")?;
+            for import in all_imports {
+                match &import.package_name {
+                    Some(package) if package == &def.root_package_name => {
+                        inline_types.push(import.clone());
+                    }
+                    _ => writeln!(out, "  use {}.{{{}}};", import.path, import.name)?,
                 }
-                TypeDefKind::Resource => {}
-                TypeDefKind::Handle(_) => {}
-                TypeDefKind::Flags(_) => {}
-                TypeDefKind::Tuple(_) => {}
-                TypeDefKind::Variant(_) => {}
-                TypeDefKind::Enum(_) => {}
-                TypeDefKind::Option(_) => {}
-                TypeDefKind::Result(_) => {}
-                TypeDefKind::List(_) => {}
-                TypeDefKind::Future(_) => {}
-                TypeDefKind::Stream(_) => {}
-                TypeDefKind::Type(_) => {}
-                TypeDefKind::Unknown => {}
+            }
+
+            writeln!(out)?;
+
+            for typ in inline_types {
+                let typ_kind = typ.clone().type_def.kind;
+                let kind_str = typ_kind.as_str();
+                let name = typ.clone().name;
+
+                write!(out, "  {}", kind_str)?;
+                write!(out, " {}", name)?;
+
+                match typ_kind {
+                    TypeDefKind::Record(record) => {
+                        write!(out, " {{")?;
+                        writeln!(out)?;
+                        write_field_list(&mut out, record.fields, def)?;
+                        writeln!(out)?;
+                        writeln!(out, "  }}")?;
+                    }
+                    TypeDefKind::Resource => {}
+                    TypeDefKind::Handle(_) => {}
+                    TypeDefKind::Flags(_) => {}
+                    TypeDefKind::Tuple(_) => {}
+                    TypeDefKind::Variant(_) => {}
+                    TypeDefKind::Enum(_) => {}
+                    TypeDefKind::Option(_) => {}
+                    TypeDefKind::Result(_) => {}
+                    TypeDefKind::List(_) => {}
+                    TypeDefKind::Future(_) => {}
+                    TypeDefKind::Stream(_) => {}
+                    TypeDefKind::Type(_) => {}
+                    TypeDefKind::Unknown => {}
+                }
             }
         }
     }
@@ -227,7 +237,7 @@ fn write_param_list(
 pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
     let mut all = def.unresolved_deps.clone();
     all.push(def.unresolved_root.clone());
-    let stub_package_name =  format!("{}-stub", def.root_package_name);
+    let stub_package_name = format!("{}-stub", def.root_package_name);
 
     let dest_wit_root = def.target_wit_root();
     fs::create_dir_all(&dest_wit_root)?;
@@ -245,19 +255,26 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
 
             fs::create_dir_all(&dep_dir)?;
             for source in unresolved.source_files() {
-                 // While copying this root WIT (from which the stub is generated) to the deps directory
-                 // of the stub, we ensure there is no import of the same stub's types. This happens
-                 // when you regenerate a stub from a WIT, which the user may have manually modified to refer to the same stub.
-                 // This occurs only when there is a cyclic dependency. That's when the package from which the stub is generated is using the stub itself.
-                 //
-                 // Replacing this import with `none` is closer to being the right thing to do at this stage,
-                 // because there is no reason a stub WIT needs to cyclically depend on its own types to generate the stub.
-                 // Now the question is whether we need to parse this WIT to Resolved and then have our own Display
-                 // for it, or just use regex replace. The latter is chosen because we hardly refer to the same stub without
-                 // `import`, and the actual stub package name.
-                 // The former may look cleaner, but slower, and may not bring about anymore significant correctness or reliability.
-                let read_data = fs::read_to_string(&source)?;
-                let re = Regex::new(format!(r"import\s+{}(/[^;]*)?;", regex::escape(stub_package_name.as_str())).as_str()).unwrap();
+                // While copying this root WIT (from which the stub is generated) to the deps directory
+                // of the stub, we ensure there is no import of the same stub's types. This happens
+                // when you regenerate a stub from a WIT, which the user may have manually modified to refer to the same stub.
+                // This occurs only when there is a cyclic dependency. That's when the package from which the stub is generated is using the stub itself.
+                //
+                // Replacing this import with `none` is closer to being the right thing to do at this stage,
+                // because there is no reason a stub WIT needs to cyclically depend on its own types to generate the stub.
+                // Now the question is whether we need to parse this WIT to Resolved and then have our own Display
+                // for it, or just use regex replace. The latter is chosen because we hardly refer to the same stub without
+                // `import`, and the actual stub package name.
+                // The former may look cleaner, but slower, and may not bring about anymore significant correctness or reliability.
+                let read_data = fs::read_to_string(source)?;
+                let re = Regex::new(
+                    format!(
+                        r"import\s+{}(/[^;]*)?;",
+                        regex::escape(stub_package_name.as_str())
+                    )
+                    .as_str(),
+                )
+                .unwrap();
                 let new_data = re.replace_all(&read_data, "");
 
                 let dest = dep_dir.join(source.file_name().unwrap());
@@ -274,7 +291,7 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
             println!("Copying package {}", unresolved.name);
 
             for source in unresolved.source_files() {
-                let parsed = UnresolvedPackage::parse_path(&source)?;
+                let parsed = UnresolvedPackage::parse_path(source)?;
                 let stub_package_name = format!("{}-stub", def.root_package_name);
 
                 if parsed.name.to_string() == stub_package_name {
@@ -409,11 +426,6 @@ pub enum WitAction {
     CopyDepDir {
         source_dir: PathBuf,
     },
-    CopyDepWit {
-        source_wit: PathBuf,
-        dir_name: String,
-    },
-
     CopyWitStr {
         source_wit: String,
         dir_name: String,
@@ -425,9 +437,9 @@ impl Display for WitAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             WitAction::CopyWitStr {
-                source_wit,
                 dir_name,
                 file_name,
+                ..
             } => {
                 write!(
                     f,
@@ -440,17 +452,6 @@ impl Display for WitAction {
                     f,
                     "copy WIT dependency from {}",
                     source_dir.to_string_lossy()
-                )
-            }
-            WitAction::CopyDepWit {
-                source_wit,
-                dir_name,
-            } => {
-                write!(
-                    f,
-                    "copy stub WIT from {} as dependency {}",
-                    source_wit.to_string_lossy(),
-                    dir_name
                 )
             }
         }
@@ -491,17 +492,6 @@ impl WitAction {
                 )
                 .context("Failed to copy the dependency directory")?;
             }
-            WitAction::CopyDepWit {
-                source_wit,
-                dir_name,
-            } => {
-                let target_dir = target_wit_root.join("deps").join(dir_name);
-                if !target_dir.exists() {
-                    fs::create_dir_all(&target_dir).context("Create target directory")?;
-                }
-                fs::copy(source_wit, target_dir.join(source_wit.file_name().unwrap()))
-                    .context("Copy the WIT file")?;
-            }
         }
 
         Ok(())
@@ -514,7 +504,6 @@ impl WitAction {
                 .context("Get wit dependency directory name")?
                 .to_string_lossy()
                 .to_string()),
-            WitAction::CopyDepWit { dir_name, .. } => Ok(dir_name.clone()),
             WitAction::CopyWitStr { dir_name, .. } => Ok(dir_name.clone()),
         }
     }
@@ -561,43 +550,6 @@ pub fn verify_action(
                     Ok(true)
                 } else {
                     Ok(false)
-                }
-            } else {
-                Ok(true)
-            }
-        }
-        WitAction::CopyDepWit {
-            source_wit,
-            dir_name,
-        } => {
-            let target_dir = target_wit_root.join("deps").join(dir_name);
-            let source_file_name = source_wit.file_name().context("Get source wit file name")?;
-            let target_wit = target_dir.join(source_file_name);
-            if target_dir.exists() && target_dir.is_dir() {
-                let mut existing_entries = Vec::new();
-                for entry in fs::read_dir(&target_dir)? {
-                    let entry = entry?;
-                    let name = entry
-                        .path()
-                        .file_name()
-                        .context("Get existing wit directory's name")?
-                        .to_string_lossy()
-                        .to_string();
-                    existing_entries.push(name);
-                }
-                if existing_entries.contains(&source_file_name.to_string_lossy().to_string()) {
-                    let source_contents = fs::read_to_string(source_wit)?;
-                    let target_contents = fs::read_to_string(&target_wit)?;
-                    if source_contents == target_contents {
-                        Ok(true)
-                    } else if overwrite {
-                        println!("Overwriting {}", target_wit.to_string_lossy());
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
-                } else {
-                    Ok(true)
                 }
             } else {
                 Ok(true)
