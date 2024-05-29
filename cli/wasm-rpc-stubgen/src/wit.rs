@@ -19,7 +19,10 @@ use std::ffi::OsStr;
 use std::fmt::{Display, Formatter, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
-use wit_parser::{Field, Handle, PackageName, Resolve, Type, TypeDefKind, UnresolvedPackage};
+use wit_parser::{
+    Field, Flags, Handle, PackageName, Resolve, Tuple, Type, TypeDef, TypeDefKind,
+    UnresolvedPackage,
+};
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     let out = get_stub_wit(def, StubTypeGen::ImportRootTypes)?;
@@ -79,35 +82,7 @@ pub fn get_stub_wit(
             writeln!(out)?;
 
             for typ in inline_types {
-                let typ_kind = typ.clone().type_def.kind;
-                let kind_str = typ_kind.as_str();
-                let name = typ.clone().name;
-
-                write!(out, "  {}", kind_str)?;
-                write!(out, " {}", name)?;
-
-                match typ_kind {
-                    TypeDefKind::Record(record) => {
-                        write!(out, " {{")?;
-                        writeln!(out)?;
-                        write_field_list(&mut out, record.fields, def)?;
-                        writeln!(out)?;
-                        writeln!(out, "  }}")?;
-                    }
-                    TypeDefKind::Resource => {}
-                    TypeDefKind::Handle(_) => {}
-                    TypeDefKind::Flags(_) => {}
-                    TypeDefKind::Tuple(_) => {}
-                    TypeDefKind::Variant(_) => {}
-                    TypeDefKind::Enum(_) => {}
-                    TypeDefKind::Option(_) => {}
-                    TypeDefKind::Result(_) => {}
-                    TypeDefKind::List(_) => {}
-                    TypeDefKind::Future(_) => {}
-                    TypeDefKind::Stream(_) => {}
-                    TypeDefKind::Type(_) => {}
-                    TypeDefKind::Unknown => {}
-                }
+                write_type_def(&mut out, &typ.type_def, typ.name.as_str(), def)?;
             }
         }
     }
@@ -200,6 +175,63 @@ pub fn get_stub_wit(
     Ok(out)
 }
 
+fn write_type_def(
+    out: &mut String,
+    typ: &TypeDef,
+    typ_name: &str,
+    def: &StubDefinition,
+) -> anyhow::Result<()> {
+    let typ_kind = typ.clone().kind;
+    let kind_str = typ_kind.as_str();
+
+    write!(out, "  {}", kind_str)?;
+    write!(out, " {}", typ_name)?;
+
+    match typ_kind {
+        TypeDefKind::Record(record) => {
+            write!(out, " {{")?;
+            writeln!(out)?;
+            write_field_list(out, record.fields, def)?;
+            writeln!(out)?;
+            writeln!(out, "  }}")?;
+        }
+
+        TypeDefKind::Flags(flags) => {
+            write_flags(out, &flags)?;
+        }
+        TypeDefKind::Tuple(tuple) => {
+            write!(out, " <")?;
+            write_tuple_list(out, &tuple, def)?;
+            writeln!(out)?;
+            writeln!(out, "  >")?;
+        }
+        TypeDefKind::Variant(_) => {}
+        TypeDefKind::Enum(_) => {}
+        TypeDefKind::Option(_) => {}
+        TypeDefKind::Result(_) => {}
+        TypeDefKind::List(_) => {}
+        TypeDefKind::Future(_) => {}
+        TypeDefKind::Stream(_) => {}
+        TypeDefKind::Type(_) => {}
+        TypeDefKind::Unknown => {}
+        TypeDefKind::Resource => {}
+        TypeDefKind::Handle(_) => {}
+    }
+
+    Ok(())
+}
+
+fn write_tuple_list(out: &mut String, tuple: &Tuple, def: &StubDefinition) -> anyhow::Result<()> {
+    let tuple_length = tuple.types.len();
+    for (idx, typ) in tuple.types.iter().enumerate() {
+        write!(out, "{}", typ.wit_type_string(&def.resolve)?)?;
+        if idx < tuple_length - 1 {
+            write!(out, ", ")?;
+        }
+    }
+    Ok(())
+}
+
 fn write_field_list(
     out: &mut String,
     fields: Vec<Field>,
@@ -216,6 +248,21 @@ fn write_field_list(
             write!(out, ", ")?;
         }
     }
+    Ok(())
+}
+
+fn write_flags(out: &mut String, flags: &Flags) -> anyhow::Result<()> {
+    write!(out, " {{")?;
+    writeln!(out)?;
+    let flags_len = flags.flags.len();
+    for (idx, flag) in flags.flags.iter().enumerate() {
+        write!(out, "    {}", flag.name)?;
+        if idx < flags_len - 1 {
+            writeln!(out, ",")?;
+        }
+        writeln!(out)?;
+    }
+    writeln!(out, "  }}")?;
     Ok(())
 }
 
