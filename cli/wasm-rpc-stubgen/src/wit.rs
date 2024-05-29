@@ -190,6 +190,10 @@ pub fn get_stub_wit(
     writeln!(out)?;
 
     writeln!(out, "world {} {{", def.target_world_name()?)?;
+    dbg!(
+        "The exported world is the selected world for the stub {}.",
+        world.name.clone()
+    );
     writeln!(out, "  export stub-{};", world.name)?;
     writeln!(out, "}}")?;
 
