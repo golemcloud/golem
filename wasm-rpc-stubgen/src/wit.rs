@@ -19,6 +19,8 @@ use std::fmt::{Display, Formatter, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
 use wit_parser::{Field, Handle, PackageName, Resolve, Type, TypeDefKind, UnresolvedPackage};
+use regex::Regex;
+use crate::stub;
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     let out = get_stub_wit(def, true)?;
@@ -225,6 +227,7 @@ fn write_param_list(
 pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
     let mut all = def.unresolved_deps.clone();
     all.push(def.unresolved_root.clone());
+    let stub_package_name =  format!("{}-stub", def.root_package_name);
 
     let dest_wit_root = def.target_wit_root();
     fs::create_dir_all(&dest_wit_root)?;
@@ -232,7 +235,6 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
     for unresolved in all {
         if unresolved.name == def.root_package_name {
             println!("Copying root package {}", unresolved.name);
-
             let dep_dir = dest_wit_root
                 .clone()
                 .join(Path::new("deps"))
@@ -243,6 +245,21 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
 
             fs::create_dir_all(&dep_dir)?;
             for source in unresolved.source_files() {
+                 // While copying this root WIT (from which the stub is generated) to the deps directory
+                 // of the stub, we ensure there is no import of the same stub's types. This happens
+                 // when you regenerate a stub from a WIT, which the user may have manually modified to refer to the same stub.
+                 // This occurs only when there is a cyclic dependency. That's when the package from which the stub is generated is using the stub itself.
+                 //
+                 // Replacing this import with `none` is closer to being the right thing to do at this stage,
+                 // because there is no reason a stub WIT needs to cyclically depend on its own types to generate the stub.
+                 // Now the question is whether we need to parse this WIT to Resolved and then have our own Display
+                 // for it, or just use regex replace. The latter is chosen because we hardly refer to the same stub without
+                 // `import`, and the actual stub package name.
+                 // The former may look cleaner, but slower, and may not bring about anymore significant correctness or reliability.
+                let read_data = fs::read_to_string(&source)?;
+                let re = Regex::new(format!(r"import\s+{}(/[^;]*)?;", regex::escape(stub_package_name.as_str())).as_str()).unwrap();
+                let new_data = re.replace_all(&read_data, "");
+
                 let dest = dep_dir.join(source.file_name().unwrap());
                 println!(
                     "  .. {} to {}",
@@ -251,7 +268,7 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
                 );
 
                 fs::create_dir_all(dest.parent().unwrap())?;
-                fs::copy(source, &dest)?;
+                fs::write(&dest, new_data.to_string())?;
             }
         } else {
             println!("Copying package {}", unresolved.name);

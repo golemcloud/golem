@@ -246,8 +246,8 @@ fn find_if_same_package(dep_dir: &PathBuf, target_wit: &UnresolvedPackage) -> an
     if dep_package_name != dest_package {
         Ok(true)
     } else {
-        dbg!(
-            "Skipping the copy of cyclic dependencies {} to te the same as {}",
+        println!(
+            "Skipping the copy of cyclic dependencies {} to the the same as {}",
             dep_package_name,
             dest_package
         );
