@@ -13,17 +13,19 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::ops::Add;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use tokio::task::JoinHandle;
-use tracing::error;
+use tracing::{error, span, Instrument, Level};
 
-use golem_common::model::{PromiseId, ScheduleId};
+use golem_common::model::{ScheduleId, ScheduledAction};
 
 use crate::metrics::promises::record_scheduled_promise_completed;
+use crate::services::oplog::{MultiLayerOplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -33,7 +35,7 @@ use crate::storage::keyvalue::{
 
 #[async_trait]
 pub trait SchedulerService {
-    async fn schedule(&self, time: DateTime<Utc>, promise_id: PromiseId) -> ScheduleId;
+    async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId;
 
     async fn cancel(&self, id: ScheduleId);
 }
@@ -45,6 +47,7 @@ pub struct SchedulerServiceDefault {
     shard_service: Arc<dyn ShardService + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+    oplog_service: Arc<dyn OplogService + Send + Sync>,
 }
 
 impl SchedulerServiceDefault {
@@ -53,6 +56,7 @@ impl SchedulerServiceDefault {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        oplog_service: Arc<dyn OplogService + Send + Sync>,
         process_interval: Duration,
     ) -> Arc<Self> {
         let svc = Self {
@@ -60,6 +64,7 @@ impl SchedulerServiceDefault {
             background_handle: Arc::new(Mutex::new(None)),
             shard_service,
             promise_service,
+            oplog_service,
             worker_activator,
         };
         let svc = Arc::new(svc);
@@ -85,20 +90,20 @@ impl SchedulerServiceDefault {
         let previous_hour_key = Self::schedule_key_from_timestamp(previous_hours_since_epoch);
         let current_hour_key = Self::schedule_key_from_timestamp(hours_since_epoch);
 
-        let all_from_prev_hour: Vec<(f64, PromiseId)> = self
+        let all_from_prev_hour: Vec<(f64, ScheduledAction)> = self
             .key_value_storage
-            .with_entity("scheduler", "process", "promise_id")
+            .with_entity("scheduler", "process", "scheduled_action")
             .get_sorted_set(KeyValueStorageNamespace::Schedule, &previous_hour_key)
             .await?;
 
-        let mut all: Vec<(&str, PromiseId)> = all_from_prev_hour
+        let mut all: Vec<(&str, ScheduledAction)> = all_from_prev_hour
             .into_iter()
-            .map(|(_score, promise_id)| (previous_hour_key.as_str(), promise_id))
+            .map(|(_score, action)| (previous_hour_key.as_str(), action))
             .collect();
 
-        let all_from_this_hour: Vec<(f64, PromiseId)> = self
+        let all_from_this_hour: Vec<(f64, ScheduledAction)> = self
             .key_value_storage
-            .with_entity("scheduler", "process", "promise_id")
+            .with_entity("scheduler", "process", "scheduled_action")
             .query_sorted_set(
                 KeyValueStorageNamespace::Schedule,
                 &current_hour_key,
@@ -110,35 +115,70 @@ impl SchedulerServiceDefault {
         all.extend(
             all_from_this_hour
                 .into_iter()
-                .map(|(_score, promise_id)| (current_hour_key.as_str(), promise_id)),
+                .map(|(_score, action)| (current_hour_key.as_str(), action)),
         );
 
-        let matching: Vec<(&str, PromiseId)> = all
+        let matching: Vec<(&str, ScheduledAction)> = all
             .into_iter()
-            .filter(|(_, promise_id)| {
-                self.shard_service
-                    .check_worker(&promise_id.worker_id)
-                    .is_ok()
-            })
+            .filter(|(_, action)| self.shard_service.check_worker(action.worker_id()).is_ok())
             .collect::<Vec<_>>();
 
         let mut worker_ids = HashSet::new();
-        for (key, promise_id) in matching {
-            worker_ids.insert(promise_id.worker_id.clone());
+        for (key, action) in matching {
+            worker_ids.insert(action.worker_id().clone());
             self.key_value_storage
-                .with_entity("scheduler", "process", "promise_id")
-                .remove_from_sorted_set(KeyValueStorageNamespace::Schedule, key, &promise_id)
+                .with_entity("scheduler", "process", "scheduled_action")
+                .remove_from_sorted_set(KeyValueStorageNamespace::Schedule, key, &action)
                 .await?;
-            self.promise_service
-                .complete(promise_id, vec![])
-                .await
-                .map_err(|golem_err| format!("{golem_err}"))?;
 
-            record_scheduled_promise_completed();
+            match action {
+                ScheduledAction::CompletePromise { promise_id } => {
+                    self.promise_service
+                        .complete(promise_id, vec![])
+                        .await
+                        .map_err(|golem_err| format!("{golem_err}"))?;
+
+                    record_scheduled_promise_completed();
+                }
+                ScheduledAction::ArchiveOplog {
+                    account_id,
+                    worker_id,
+                    last_oplog_index,
+                    next_after,
+                } => {
+                    if self.oplog_service.exists(&worker_id).await {
+                        let current_last_index =
+                            self.oplog_service.get_last_index(&worker_id).await;
+                        if current_last_index == last_oplog_index {
+                            let oplog = self.oplog_service.open(&account_id, &worker_id).await;
+                            if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
+                                if more {
+                                    self.schedule(
+                                        now.add(next_after),
+                                        ScheduledAction::ArchiveOplog {
+                                            account_id,
+                                            worker_id,
+                                            last_oplog_index,
+                                            next_after,
+                                        },
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+
+                        // TODO: metrics
+                    }
+                }
+            }
         }
 
         for worker_id in worker_ids {
-            self.worker_activator.activate_worker(&worker_id).await;
+            let span = span!(Level::INFO, "scheduler", worker_id = worker_id.to_string());
+            self.worker_activator
+                .activate_worker(&worker_id)
+                .instrument(span)
+                .await;
         }
 
         Ok(())
@@ -172,24 +212,25 @@ impl Drop for SchedulerServiceDefault {
 
 #[async_trait]
 impl SchedulerService for SchedulerServiceDefault {
-    async fn schedule(&self, time: DateTime<Utc>, promise_id: PromiseId) -> ScheduleId {
+    async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId {
         let (hours_since_epoch, remainder) = Self::split_time(time);
+
         let id = ScheduleId {
             timestamp: hours_since_epoch,
-            promise_id: promise_id.clone(),
+            action: action.clone(),
         };
 
         self.key_value_storage
-            .with_entity("scheduler", "schedule", "promise_id")
+            .with_entity("scheduler", "schedule", "scheduled_action")
             .add_to_sorted_set(
                 KeyValueStorageNamespace::Schedule,
                 &Self::schedule_key(&id),
                 remainder,
-                &promise_id,
+                &action,
             )
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to add schedule for promise id {promise_id} in KV storage: {err}")
+                panic!("failed to add schedule for action {action} in KV storage: {err}")
             });
 
         id
@@ -197,17 +238,17 @@ impl SchedulerService for SchedulerServiceDefault {
 
     async fn cancel(&self, id: ScheduleId) {
         self.key_value_storage
-            .with_entity("scheduler", "cancel", "promise_id")
+            .with_entity("scheduler", "cancel", "scheduled_action")
             .remove_from_sorted_set(
                 KeyValueStorageNamespace::Schedule,
                 &Self::schedule_key(&id),
-                &id.promise_id,
+                &id.action,
             )
             .await
             .unwrap_or_else(|err| {
                 panic!(
-                    "failed to remove schedule for promise id {} from KV storage: {err}",
-                    id.promise_id
+                    "failed to remove schedule for action {} from KV storage: {err}",
+                    id.action
                 )
             });
     }
@@ -233,7 +274,7 @@ impl SchedulerServiceMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl SchedulerService for SchedulerServiceMock {
-    async fn schedule(&self, _time: DateTime<Utc>, _promise_id: PromiseId) -> ScheduleId {
+    async fn schedule(&self, _time: DateTime<Utc>, _action: ScheduledAction) -> ScheduleId {
         unimplemented!()
     }
 
@@ -255,7 +296,9 @@ mod tests {
 
     use uuid::Uuid;
 
-    use golem_common::model::{ComponentId, PromiseId, WorkerId};
+    use crate::services::oplog::mock::OplogServiceMock;
+    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::{ComponentId, PromiseId, ScheduledAction, WorkerId};
 
     use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
@@ -284,15 +327,15 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
@@ -300,31 +343,39 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service,
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // not testing process() here
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p1.clone(),
+                },
             )
             .await;
         let _s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                },
             )
             .await;
         let _s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                },
             )
             .await;
 
@@ -335,13 +386,28 @@ mod tests {
             .collect::<HashMap<_, _>>();
         assert_eq!(
             result,
-                HashMap::from_iter(vec![
-                    ("Schedule/worker:schedule:469329".to_string(), vec![
-                        (3540000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}").to_string())))]),
-                    ("Schedule/worker:schedule:469330".to_string(), vec![
-                        (300000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}").to_string()))),
-                        (301000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}").to_string())))])
-                ])
+            HashMap::from_iter(vec![
+                (
+                    "Schedule/worker:schedule:469329".to_string(),
+                    vec![(
+                        3540000.0,
+                        serialized_bytes(&ScheduledAction::CompletePromise { promise_id: p2 })
+                    )]
+                ),
+                (
+                    "Schedule/worker:schedule:469330".to_string(),
+                    vec![
+                        (
+                            300000.0,
+                            serialized_bytes(&ScheduledAction::CompletePromise { promise_id: p1 })
+                        ),
+                        (
+                            301000.0,
+                            serialized_bytes(&ScheduledAction::CompletePromise { promise_id: p3 })
+                        )
+                    ]
+                )
+            ])
         );
     }
 
@@ -359,15 +425,15 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
@@ -375,38 +441,44 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service,
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // not testing process() here
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p1.clone(),
+                },
             )
             .await;
         let s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                },
             )
             .await;
         let s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                },
             )
             .await;
 
         svc.cancel(s2).await;
         svc.cancel(s3).await;
-
-        let uuid = c1.0.to_string();
 
         let result = kvs
             .sorted_sets()
@@ -415,12 +487,16 @@ mod tests {
             .collect::<HashMap<_, _>>();
         assert_eq!(
             result,
-            HashMap::from(
-                [
-                    ("Schedule/worker:schedule:469329".to_string(), vec![]),
-                    ("Schedule/worker:schedule:469330".to_string(), vec![(300000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}").to_string())))])
-                ]
-            )
+            HashMap::from([
+                ("Schedule/worker:schedule:469329".to_string(), vec![]),
+                (
+                    "Schedule/worker:schedule:469330".to_string(),
+                    vec![(
+                        300000.0,
+                        serialized_bytes(&ScheduledAction::CompletePromise { promise_id: p1 })
+                    )]
+                )
+            ])
         );
     }
 
@@ -438,15 +514,15 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
@@ -454,39 +530,45 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p1.clone(),
+                },
             )
             .await;
         let _s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                },
             )
             .await;
         let _s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                },
             )
             .await;
 
         svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
             .await
             .unwrap();
-
-        let uuid = c1.0.to_string();
 
         let result = kvs
             .sorted_sets()
@@ -496,11 +578,15 @@ mod tests {
         // The only item remaining is the one in the future
         assert_eq!(
             result,
-            HashMap::from(
-                [
-                    ("Schedule/worker:schedule:469330".to_string(), vec![(3540000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}").to_string())))])
-                ]
-            )
+            HashMap::from([(
+                "Schedule/worker:schedule:469330".to_string(),
+                vec![(
+                    3540000.0,
+                    serialized_bytes(&ScheduledAction::CompletePromise {
+                        promise_id: p2.clone()
+                    })
+                )]
+            )])
         );
 
         let completed_promises = promise_service.all_completed().await;
@@ -524,15 +610,15 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
@@ -540,31 +626,39 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p1.clone(),
+                },
             )
             .await;
         let _s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                },
             )
             .await;
         let _s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                },
             )
             .await;
 
@@ -607,19 +701,19 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
         let p4: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 111,
+            oplog_idx: OplogIndex::from_u64(111),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
@@ -627,37 +721,47 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p1.clone(),
+                },
             )
             .await;
         let _s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                },
             )
             .await;
         let _s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                },
             )
             .await;
         let _s4 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
-                p4.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p4.clone(),
+                },
             )
             .await;
 
@@ -701,15 +805,15 @@ mod tests {
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
@@ -717,31 +821,39 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p1.clone(),
+                },
             )
             .await;
         let _s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                },
             )
             .await;
         let _s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                },
             )
             .await;
 

@@ -2546,6 +2546,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "evicting_cache_map"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04ab6fa5dc5a23f701ef9850370ef92526330b50a3a1b29bbb354508df1fc729"
+dependencies = [
+ "ordered_hash_map",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3475,6 +3484,7 @@ dependencies = [
  "console-subscriber",
  "ctor",
  "dashmap",
+ "evicting_cache_map",
  "figment",
  "flume",
  "fred",
@@ -3499,6 +3509,7 @@ dependencies = [
  "log",
  "md5",
  "metrohash",
+ "nonempty-collections",
  "prometheus",
  "proptest",
  "prost 0.12.3",
@@ -3526,6 +3537,7 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "windows-sys 0.52.0",
+ "zstd 0.13.1",
 ]
 
 [[package]]
@@ -4926,6 +4938,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "nonempty-collections"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce843257ad9150ef688ce56753ef461fb2de929fa980fd5692828d1df5fe6f4d"
+
+[[package]]
 name = "normpath"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5240,6 +5258,15 @@ checksum = "9aa2b01e1d916879f73a53d01d1d6cee68adbb31d6d9177a8cfce093cced1d50"
 dependencies = [
  "futures-core",
  "pin-project-lite",
+]
+
+[[package]]
+name = "ordered_hash_map"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab0e5f22bf6dd04abd854a8874247813a8fa2c8c1260eba6fbb150270ce7c176"
+dependencies = [
+ "hashbrown 0.13.2",
 ]
 
 [[package]]
@@ -9032,7 +9059,7 @@ dependencies = [
  "sha2",
  "toml 0.5.11",
  "windows-sys 0.52.0",
- "zstd",
+ "zstd 0.11.2+zstd.1.5.2",
 ]
 
 [[package]]
@@ -10016,7 +10043,16 @@ version = "0.11.2+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20cc960326ece64f010d2d2107537f26dc589a6573a316bd5b1dba685fa5fde4"
 dependencies = [
- "zstd-safe",
+ "zstd-safe 5.0.2+zstd.1.5.2",
+]
+
+[[package]]
+name = "zstd"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d789b1514203a1120ad2429eae43a7bd32b90976a7bb8a05f7ec02fa88cc23a"
+dependencies = [
+ "zstd-safe 7.1.0",
 ]
 
 [[package]]
@@ -10026,6 +10062,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
 dependencies = [
  "libc",
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1cd99b45c6bc03a018c8b8a86025678c87e55526064e38f9df301989dce7ec0a"
+dependencies = [
  "zstd-sys",
 ]
 

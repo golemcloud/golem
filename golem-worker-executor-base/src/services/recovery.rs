@@ -20,7 +20,7 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{info, warn, Instrument};
 
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::WorkerError;
@@ -407,26 +407,29 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                 // NOTE: Even immediate recovery must be spawned to allow the original worker to get dropped first
                 let clone = self.clone();
                 let worker_id_clone = worker_id.clone();
-                let handle = tokio::spawn(async move {
-                    clone
-                        .scheduled_recoveries
-                        .lock()
-                        .await
-                        .remove(&worker_id_clone);
-                    match &clone.recovery_override {
-                        Some(f) => f(worker_id_clone.clone()),
-                        None => {
-                            let interrupted =
-                                clone.is_marked_as_interrupted(&worker_id_clone).await;
-                            if !interrupted {
-                                info!(
+                let handle = tokio::spawn(
+                    async move {
+                        clone
+                            .scheduled_recoveries
+                            .lock()
+                            .await
+                            .remove(&worker_id_clone);
+                        match &clone.recovery_override {
+                            Some(f) => f(worker_id_clone.clone()),
+                            None => {
+                                let interrupted =
+                                    clone.is_marked_as_interrupted(&worker_id_clone).await;
+                                if !interrupted {
+                                    info!(
                                     "Initiating immediate recovery for worker: {worker_id_clone}"
                                 );
-                                recover_worker(&clone, &worker_id_clone).await;
+                                    recover_worker(&clone, &worker_id_clone).await;
+                                }
                             }
                         }
                     }
-                });
+                    .in_current_span(),
+                );
                 self.cancel_scheduled_recovery(worker_id).await;
                 self.scheduled_recoveries
                     .lock()
@@ -436,27 +439,30 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
             RecoveryDecision::Delayed(duration) => {
                 let clone = self.clone();
                 let worker_id_clone = worker_id.clone();
-                let handle = tokio::spawn(async move {
-                    tokio::time::sleep(duration).await;
-                    clone
-                        .scheduled_recoveries
-                        .lock()
-                        .await
-                        .remove(&worker_id_clone);
-                    match &clone.recovery_override {
-                        Some(f) => f(worker_id_clone.clone()),
-                        None => {
-                            let interrupted =
-                                clone.is_marked_as_interrupted(&worker_id_clone).await;
-                            if !interrupted {
-                                info!(
+                let handle = tokio::spawn(
+                    async move {
+                        tokio::time::sleep(duration).await;
+                        clone
+                            .scheduled_recoveries
+                            .lock()
+                            .await
+                            .remove(&worker_id_clone);
+                        match &clone.recovery_override {
+                            Some(f) => f(worker_id_clone.clone()),
+                            None => {
+                                let interrupted =
+                                    clone.is_marked_as_interrupted(&worker_id_clone).await;
+                                if !interrupted {
+                                    info!(
                                     "Initiating scheduled recovery for worker: {worker_id_clone}"
                                 );
-                                recover_worker(&clone, &worker_id_clone).await;
+                                    recover_worker(&clone, &worker_id_clone).await;
+                                }
                             }
                         }
                     }
-                });
+                    .in_current_span(),
+                );
                 self.cancel_scheduled_recovery(worker_id).await;
                 self.scheduled_recoveries
                     .lock()
@@ -627,7 +633,8 @@ mod tests {
     use crate::services::golem_config::GolemConfig;
     use crate::services::invocation_queue::InvocationQueue;
     use crate::services::key_value::KeyValueService;
-    use crate::services::oplog::{Oplog, OplogService, OplogServiceMock};
+    use crate::services::oplog::mock::OplogServiceMock;
+    use crate::services::oplog::{Oplog, OplogService};
     use crate::services::promise::PromiseService;
     use crate::services::recovery::{RecoveryManagement, RecoveryManagementDefault, TrapType};
     use crate::services::rpc::Rpc;

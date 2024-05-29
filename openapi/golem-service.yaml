@@ -31,8 +31,7 @@ paths:
         name: cursor
         deprecated: false
         schema:
-          type: integer
-          format: uint64
+          type: string
         explode: true
         style: form
       - in: query
@@ -2511,6 +2510,18 @@ components:
       - path
       - component
       - detail
+    ScanCursor:
+      type: object
+      properties:
+        cursor:
+          type: integer
+          format: uint64
+        layer:
+          type: integer
+          format: uint64
+      required:
+      - cursor
+      - layer
     ShardId:
       type: object
       properties:
@@ -2941,8 +2952,7 @@ components:
         filter:
           $ref: '#/components/schemas/WorkerFilter'
         cursor:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ScanCursor'
         count:
           type: integer
           format: uint64
@@ -2956,8 +2966,7 @@ components:
           items:
             $ref: '#/components/schemas/WorkerMetadata'
         cursor:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ScanCursor'
       required:
       - workers
     Component:

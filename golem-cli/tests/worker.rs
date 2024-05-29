@@ -639,6 +639,11 @@ fn worker_list(
     assert!(result.workers.len() >= workers_count / 2);
     assert!(result.cursor.is_some());
 
+    let cursor = format!(
+        "{}/{}",
+        result.cursor.as_ref().unwrap().layer,
+        result.cursor.as_ref().unwrap().cursor
+    );
     let result2: WorkersMetadataResponse = cli.run(&[
         "worker",
         "list",
@@ -651,12 +656,13 @@ fn worker_list(
         &cfg.arg('n', "count"),
         (workers_count - result.workers.len()).to_string().as_str(),
         &cfg.arg('P', "cursor"),
-        result.cursor.unwrap().to_string().as_str(),
+        &cursor,
     ])?;
 
     assert_eq!(result2.workers.len(), workers_count - result.workers.len());
 
     if let Some(cursor2) = result2.cursor {
+        let cursor2 = format!("{}/{}", cursor2.layer, cursor2.cursor);
         let result3: WorkersMetadataResponse = cli.run(&[
             "worker",
             "list",
@@ -669,7 +675,7 @@ fn worker_list(
             &cfg.arg('n', "count"),
             workers_count.to_string().as_str(),
             &cfg.arg('P', "cursor"),
-            cursor2.to_string().as_str(),
+            &cursor2,
         ])?;
         assert_eq!(result3.workers.len(), 0);
     }

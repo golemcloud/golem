@@ -137,66 +137,6 @@ pub fn configured(
     }
 }
 
-//
-// pub struct CompiledComponentServiceLocalFileSystem {
-//     root: PathBuf,
-// }
-//
-// impl CompiledComponentServiceLocalFileSystem {
-//     pub fn new(root: &Path) -> Self {
-//         if !root.exists() {
-//             std::fs::create_dir_all(root).expect("Failed to create local compiled component store");
-//         }
-//         Self {
-//             root: root.to_path_buf(),
-//         }
-//     }
-//
-//     fn path_of(&self, component_id: &ComponentId, component_version: u64) -> PathBuf {
-//         self.root
-//             .join(format!("{}-{}.cwasm", component_id, component_version))
-//     }
-// }
-//
-// #[async_trait]
-// impl CompiledComponentService for CompiledComponentServiceLocalFileSystem {
-//     async fn get(
-//         &self,
-//         component_id: &ComponentId,
-//         component_version: u64,
-//         engine: &Engine,
-//     ) -> Result<Option<Component>, GolemError> {
-//         let path = self.path_of(component_id, component_version);
-//         if tokio::fs::try_exists(&path).await? {
-//             let bytes = tokio::fs::read(&path).await?;
-//             let component = unsafe {
-//                 Component::deserialize(engine, bytes).map_err(|err| {
-//                     GolemError::component_download_failed(
-//                         component_id.clone(),
-//                         component_version,
-//                         format!("Could not deserialize compiled component: {}", err),
-//                     )
-//                 })?
-//             };
-//             Ok(Some(component))
-//         } else {
-//             Ok(None)
-//         }
-//     }
-//
-//     async fn put(
-//         &self,
-//         component_id: &ComponentId,
-//         component_version: u64,
-//         component: &Component,
-//     ) -> Result<(), GolemError> {
-//         let bytes = component.serialize().unwrap();
-//         let path = self.path_of(component_id, component_version);
-//         tokio::fs::write(&path, &bytes).await?;
-//         Ok(())
-//     }
-// }
-
 pub struct CompiledComponentServiceDisabled {}
 
 impl Default for CompiledComponentServiceDisabled {

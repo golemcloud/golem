@@ -5,6 +5,7 @@ package golem.worker;
 import public "golem/common/empty.proto";
 import public "golem/worker/calling_convention.proto";
 import public "golem/worker/complete_parameters.proto";
+import public "golem/worker/cursor.proto";
 import public "golem/worker/idempotency_key.proto";
 import public "golem/worker/invoke_parameters.proto";
 import public "golem/worker/invoke_result.proto";
@@ -145,7 +146,7 @@ message ConnectWorkerRequest {
 message GetWorkersMetadataRequest {
   golem.component.ComponentId component_id = 1;
   golem.worker.WorkerFilter filter = 2;
-  uint64 cursor = 3;
+  golem.worker.Cursor cursor = 3;
   uint64 count = 4;
   bool precise = 5;
 }
@@ -160,7 +161,7 @@ message GetWorkersMetadataResponse {
 
 message GetWorkersMetadataSuccessResponse {
   repeated golem.worker.WorkerMetadata workers = 1;
-  optional uint64 cursor = 2;
+  optional golem.worker.Cursor cursor = 2;
 }
 
 

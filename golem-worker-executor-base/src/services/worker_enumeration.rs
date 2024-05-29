@@ -4,11 +4,10 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
 use crate::services::worker::WorkerService;
 use crate::services::{HasConfig, HasOplogService, HasWorkerService};
-use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use crate::worker::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::{ComponentId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus};
+use golem_common::model::{ComponentId, ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus};
 use std::sync::Arc;
 use tracing::info;
 
@@ -102,15 +101,14 @@ pub trait WorkerEnumerationService {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: u64,
+        cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError>;
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError>;
 }
 
 #[derive(Clone)]
 pub struct DefaultWorkerEnumerationService {
-    indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     worker_service: Arc<dyn WorkerService + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     golem_config: Arc<GolemConfig>,
@@ -118,13 +116,11 @@ pub struct DefaultWorkerEnumerationService {
 
 impl DefaultWorkerEnumerationService {
     pub fn new(
-        indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         golem_config: Arc<GolemConfig>,
     ) -> Self {
         Self {
-            indexed_storage,
             worker_service,
             oplog_service,
             golem_config,
@@ -135,27 +131,19 @@ impl DefaultWorkerEnumerationService {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: u64,
+        cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
-        let mut new_cursor: Option<u64> = None;
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
+        let mut new_cursor: Option<ScanCursor> = None;
         let mut workers: Vec<WorkerMetadata> = vec![];
 
         let (new_scan_cursor, keys) = self
-            .indexed_storage
-            .with("worker_enumeration", "scan")
-            .scan(
-                IndexedStorageNamespace::OpLog,
-                &Self::key_pattern(component_id),
-                cursor,
-                count,
-            )
-            .await
-            .map_err(GolemError::unknown)?;
+            .oplog_service
+            .scan_for_component(component_id, cursor, count)
+            .await?;
 
-        for key in keys {
-            let worker_id = Self::get_worker_id_from_key(&key, component_id)?;
+        for worker_id in keys {
             let worker_metadata = self.worker_service.get(&worker_id).await;
 
             if let Some(worker_metadata) = worker_metadata {
@@ -180,33 +168,11 @@ impl DefaultWorkerEnumerationService {
             }
         }
 
-        if new_scan_cursor > 0 {
+        if !new_scan_cursor.is_finished() {
             new_cursor = Some(new_scan_cursor);
         }
 
         Ok((new_cursor, workers))
-    }
-
-    fn key_pattern(component_id: &ComponentId) -> String {
-        format!("worker:oplog:{}*", component_id.0)
-    }
-
-    fn get_worker_id_from_key(
-        key: &str,
-        component_id: &ComponentId,
-    ) -> Result<WorkerId, GolemError> {
-        let redis_prefix = format!("worker:oplog:{}:", component_id.0);
-        if key.starts_with(&redis_prefix) {
-            let worker_name = &key[redis_prefix.len()..];
-            Ok(WorkerId {
-                worker_name: worker_name.to_string(),
-                component_id: component_id.clone(),
-            })
-        } else {
-            Err(GolemError::unknown(
-                "Failed to get worker id from indexed storage key",
-            ))
-        }
     }
 }
 
@@ -234,10 +200,10 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: u64,
+        cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
         info!(
             "Get workers for component: {}, filter: {}, cursor: {}, count: {}, precise: {}",
             component_id,
@@ -249,7 +215,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
             count,
             precise
         );
-        let mut new_cursor: Option<u64> = Some(cursor);
+        let mut new_cursor: Option<ScanCursor> = Some(cursor);
         let mut workers: Vec<WorkerMetadata> = vec![];
 
         while new_cursor.is_some() && (workers.len() as u64) < count {
@@ -259,7 +225,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
                 .get_internal(
                     component_id,
                     filter.clone(),
-                    new_cursor.unwrap_or(0),
+                    new_cursor.unwrap_or_default(),
                     new_count,
                     precise,
                 )
@@ -298,10 +264,10 @@ impl WorkerEnumerationService for WorkerEnumerationServiceMock {
         &self,
         _component_id: &ComponentId,
         _filter: Option<WorkerFilter>,
-        _cursor: u64,
+        _cursor: ScanCursor,
         _count: u64,
         _precise: bool,
-    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
         unimplemented!()
     }
 }

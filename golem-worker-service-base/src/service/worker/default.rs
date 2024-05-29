@@ -23,7 +23,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
 
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
-    Timestamp, WorkerFilter, WorkerStatus,
+    ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
     FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
@@ -140,11 +140,11 @@ pub trait WorkerService<AuthCtx> {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: u64,
+        cursor: ScanCursor,
         count: u64,
         precise: bool,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)>;
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)>;
 
     async fn resume(&self, worker_id: &WorkerId, auth_ctx: &AuthCtx) -> WorkerResult<()>;
 
@@ -750,11 +750,11 @@ where
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: u64,
+        cursor: ScanCursor,
         count: u64,
         precise: bool,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         if filter.clone().is_some_and(is_filter_with_running_status) {
             let result = self
                 .find_running_metadata_internal(component_id, filter, auth_ctx)
@@ -1226,11 +1226,11 @@ where
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: u64,
+        cursor: ScanCursor,
         count: u64,
         precise: bool,
         _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         let result = self.execute_with_random_client(
             &(component_id.clone(), filter.clone(), cursor, count, precise),
             |worker_executor_client, (component_id, filter, cursor, count, precise)| {
@@ -1241,7 +1241,7 @@ where
                         golem_api_grpc::proto::golem::workerexecutor::GetWorkersMetadataRequest {
                             component_id: Some(component_id),
                             filter: filter.clone().map(|f| f.into()),
-                            cursor: *cursor,
+                            cursor: Some(cursor.clone().into()),
                             count: *count,
                             precise: *precise,
                         }
@@ -1260,7 +1260,7 @@ where
                             let workers = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::Unknown(GolemErrorUnknown {
                                 details: "Convert response error".to_string(),
                             }))?;
-                            Ok((cursor, workers))
+                            Ok((cursor.map(|c| c.into()), workers))
                         }
                         workerexecutor::GetWorkersMetadataResponse {
                             result:
@@ -1459,11 +1459,11 @@ where
         &self,
         _component_id: &ComponentId,
         _filter: Option<WorkerFilter>,
-        _cursor: u64,
+        _cursor: ScanCursor,
         _count: u64,
         _precise: bool,
         _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<(Option<u64>, Vec<WorkerMetadata>)> {
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         Ok((None, vec![]))
     }
 

@@ -21,6 +21,7 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use dashmap::DashMap;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{PromiseId, WorkerId};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -35,7 +36,7 @@ use crate::storage::keyvalue::{
 /// Service implementing creation, completion and polling of promises
 #[async_trait]
 pub trait PromiseService {
-    async fn create(&self, worker_id: &WorkerId, oplog_idx: u64) -> PromiseId;
+    async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId;
 
     async fn wait_for(&self, promise_id: PromiseId) -> Result<Vec<u8>, GolemError>;
 
@@ -91,7 +92,7 @@ impl DefaultPromiseService {
 
 #[async_trait]
 impl PromiseService for DefaultPromiseService {
-    async fn create(&self, worker_id: &WorkerId, oplog_idx: u64) -> PromiseId {
+    async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId {
         let promise_id = PromiseId {
             worker_id: worker_id.clone(),
             oplog_idx,
@@ -300,7 +301,7 @@ impl PromiseServiceMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl PromiseService for PromiseServiceMock {
-    async fn create(&self, _worker_id: &WorkerId, _oplog_idx: u64) -> PromiseId {
+    async fn create(&self, _worker_id: &WorkerId, _oplog_idx: OplogIndex) -> PromiseId {
         unimplemented!()
     }
 

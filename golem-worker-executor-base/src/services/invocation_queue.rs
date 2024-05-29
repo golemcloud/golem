@@ -20,7 +20,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::{debug, warn};
+use tracing::{debug, span, warn, Instrument, Level};
 use wasmtime::Store;
 
 use crate::error::GolemError;
@@ -180,7 +180,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         let entry = OplogEntry::pending_update(update_description.clone());
         let timestamped_update = TimestampedUpdateDescription {
             timestamp: entry.timestamp(),
-            oplog_index: self.oplog.current_oplog_index().await,
+            oplog_index: self.oplog.current_oplog_index().await.next(),
             description: update_description,
         };
         self.pending_updates
@@ -200,10 +200,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
                 running.enqueue_manual_update(target_version).await;
             }
             None => {
-                debug!(
-                    "Worker {} is initializing, persisting manual update request",
-                    self.worker_id
-                );
+                debug!("Worker is initializing, persisting manual update request");
                 let invocation = WorkerInvocation::ManualUpdate { target_version };
                 let entry = OplogEntry::pending_worker_invocation(invocation.clone());
                 let timestamped_invocation = TimestampedWorkerInvocation {
@@ -232,7 +229,9 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
             ..
         }) = pending_updates.front()
         {
-            deleted_regions.add(OplogRegion::from_range(1..=*oplog_index));
+            deleted_regions.add(OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=*oplog_index,
+            ));
         }
 
         (pending_updates, deleted_regions.build())
@@ -266,7 +265,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
                 oplog_idx: oplog_index,
             },
         );
-        debug!("stored invocation success for {key}");
+        debug!("Stored invocation success for {key}");
         self.events.publish(Event::InvocationCompleted {
             worker_id: self.worker_id.clone(),
             idempotency_key: key.clone(),
@@ -487,106 +486,129 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                         function_input,
                         calling_convention,
                     } => {
-                        store
-                            .data_mut()
-                            .set_current_idempotency_key(invocation_key)
-                            .await;
-
-                        if let Some(idempotency_key) =
-                            &store.data().get_current_idempotency_key().await
-                        {
+                        let span = span!(
+                            Level::INFO,
+                            "invocation",
+                            worker_id = worker_id.to_string(),
+                            idempotency_key = invocation_key.to_string(),
+                            function = full_function_name
+                        );
+                        async {
                             store
                                 .data_mut()
-                                .get_public_state()
-                                .invocation_queue()
-                                .store_invocation_resuming(idempotency_key)
+                                .set_current_idempotency_key(invocation_key)
                                 .await;
+
+                            if let Some(idempotency_key) =
+                                &store.data().get_current_idempotency_key().await
+                            {
+                                store
+                                    .data_mut()
+                                    .get_public_state()
+                                    .invocation_queue()
+                                    .store_invocation_resuming(idempotency_key)
+                                    .await;
+                            }
+
+                            // Make sure to update the pending invocation queue in the status record before
+                            // the invocation writes the invocation start oplog entry
+                            store.data_mut().update_pending_invocations().await;
+
+                            let _ = invoke_worker(
+                                full_function_name,
+                                function_input,
+                                store,
+                                instance,
+                                calling_convention,
+                                true, // Invocation queue is always initialized _after_ the worker recovery
+                            )
+                            .await;
                         }
-
-                        // Make sure to update the pending invocation queue in the status record before
-                        // the invocation writes the invocation start oplog entry
-                        store.data_mut().update_pending_invocations().await;
-
-                        let _ = invoke_worker(
-                            full_function_name,
-                            function_input,
-                            store,
-                            instance,
-                            calling_convention,
-                            true, // Invocation queue is always initialized _after_ the worker recovery
-                        )
-                        .await;
+                        .instrument(span)
+                        .await
                     }
                     WorkerInvocation::ManualUpdate { target_version } => {
-                        let _idempotency_key = {
-                            let ctx = store.data_mut();
-                            let idempotency_key = IdempotencyKey::fresh();
-                            ctx.set_current_idempotency_key(idempotency_key.clone())
+                        let span = span!(
+                            Level::INFO,
+                            "manual_update",
+                            worker_id = worker_id.to_string(),
+                            target_version = target_version.to_string()
+                        );
+                        let do_break = async {
+                            let _idempotency_key = {
+                                let ctx = store.data_mut();
+                                let idempotency_key = IdempotencyKey::fresh();
+                                ctx.set_current_idempotency_key(idempotency_key.clone())
+                                    .await;
+                                idempotency_key
+                            };
+                            store.data_mut().begin_call_snapshotting_function();
+                            let result = invoke_worker(
+                                "golem:api/save-snapshot@0.2.0/save".to_string(),
+                                vec![],
+                                store,
+                                instance,
+                                CallingConvention::Component,
+                                true,
+                            )
                                 .await;
-                            idempotency_key
-                        };
-                        store.data_mut().begin_call_snapshotting_function();
-                        let result = invoke_worker(
-                            "golem:api/save-snapshot@0.2.0/save".to_string(),
-                            vec![],
-                            store,
-                            instance,
-                            CallingConvention::Component,
-                            true,
-                        )
-                        .await;
-                        store.data_mut().end_call_snapshotting_function();
+                            store.data_mut().end_call_snapshotting_function();
 
-                        match result {
-                            None => {}
-                            Some(Ok(result)) => {
-                                if let Some(parent) = parent.upgrade() {
-                                    if let Some(bytes) = Self::decode_snapshot_result(result) {
-                                        match store
-                                            .data_mut()
-                                            .get_public_state()
-                                            .oplog()
-                                            .create_snapshot_based_update_description(
-                                                target_version,
-                                                &bytes,
-                                            )
-                                            .await
-                                        {
-                                            Ok(update_description) => {
-                                                // Enqueue the update
-                                                parent.enqueue_update(update_description).await;
+                            match result {
+                                None => {false}
+                                Some(Ok(result)) => {
+                                    if let Some(parent) = parent.upgrade() {
+                                        if let Some(bytes) = Self::decode_snapshot_result(result) {
+                                            match store
+                                                .data_mut()
+                                                .get_public_state()
+                                                .oplog()
+                                                .create_snapshot_based_update_description(
+                                                    target_version,
+                                                    &bytes,
+                                                )
+                                                .await
+                                            {
+                                                Ok(update_description) => {
+                                                    // Enqueue the update
+                                                    parent.enqueue_update(update_description).await;
 
-                                                // Make sure to update the pending updates queue
-                                                store.data_mut().update_pending_updates().await;
+                                                    // Make sure to update the pending updates queue
+                                                    store.data_mut().update_pending_updates().await;
 
-                                                // Reactivate the worker in the background
-                                                worker_activator
-                                                    .reactivate_worker(&worker_id)
-                                                    .await;
+                                                    // Reactivate the worker in the background
+                                                    worker_activator
+                                                        .reactivate_worker(&worker_id)
+                                                        .await;
 
-                                                // Stop processing the queue to avoid race conditions
-                                                break;
+                                                    // Stop processing the queue to avoid race conditions
+                                                    true
+                                                }
+                                                Err(error) => {
+                                                    Self::fail_update(target_version, format!("failed to store the snapshot for manual update: {error}"), store).await;
+                                                    false
+                                                }
                                             }
-                                            Err(error) => {
-                                                Self::fail_update(target_version, format!("failed to store the snapshot for manual update: {error}"), store).await;
-                                            }
+                                        } else {
+                                            Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store).await;
+                                            false
                                         }
                                     } else {
-                                        Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store)
-                                            .await;
+                                        panic!("Parent invocation queue was unexpectedly dropped")
                                     }
-                                } else {
-                                    panic!("Parent invocation queue was unexpectedly dropped")
+                                }
+                                Some(Err(error)) => {
+                                    Self::fail_update(
+                                        target_version,
+                                        format!("failed to get a snapshot for manual update: {error}"),
+                                        store,
+                                    ).await;
+                                    false
                                 }
                             }
-                            Some(Err(error)) => {
-                                Self::fail_update(
-                                    target_version,
-                                    format!("failed to get a snapshot for manual update: {error}"),
-                                    store,
-                                )
-                                .await;
-                            }
+                        }.instrument(span).await;
+                        if do_break {
+                            break;
                         }
                     }
                 }

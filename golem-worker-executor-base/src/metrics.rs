@@ -111,7 +111,7 @@ pub mod events {
 pub mod grpc {
     use lazy_static::lazy_static;
     use prometheus::*;
-    use tracing::{error, info};
+    use tracing::{error, info, Span};
 
     use crate::error::GolemError;
 
@@ -161,51 +161,45 @@ pub mod grpc {
     pub struct RecordedGrpcRequest {
         api_name: &'static str,
         start_time: Option<std::time::Instant>,
-        details_to_log: String,
+        pub span: Span,
     }
 
     impl RecordedGrpcRequest {
-        pub fn new(api_name: &'static str, details_to_log: String) -> Self {
+        pub fn new(api_name: &'static str, span: Span) -> Self {
             Self {
                 api_name,
                 start_time: Some(std::time::Instant::now()),
-                details_to_log,
+                span,
             }
         }
 
         pub fn succeed<T>(mut self, result: T) -> T {
             match self.start_time.take() {
-                Some(start) => {
+                Some(start) => self.span.in_scope(|| {
                     let elapsed = start.elapsed();
-                    info!(
-                        "{} ({}) succeeded in {}ms",
-                        self.api_name,
-                        self.details_to_log,
-                        elapsed.as_millis()
-                    );
+                    info!("gRPC request succeeded in {}ms", elapsed.as_millis());
 
                     record_grpc_success(self.api_name, elapsed);
                     result
-                }
+                }),
                 None => result,
             }
         }
 
         pub fn fail<T>(mut self, result: T, error: &GolemError) -> T {
             match self.start_time.take() {
-                Some(start) => {
+                Some(start) => self.span.in_scope(|| {
                     let elapsed = start.elapsed();
                     error!(
-                        "{} ({}) failed in {}ms with error {:?}",
-                        self.api_name,
-                        self.details_to_log,
+                        "gRPC request failed in {}ms with error {:?}",
                         elapsed.as_millis(),
                         error
                     );
 
                     record_grpc_failure(self.api_name, error.kind(), elapsed);
                     result
-                }
+                }),
+
                 None => result,
             }
         }
@@ -217,6 +211,16 @@ pub mod grpc {
                 record_grpc_failure(self.api_name, "Drop", start.elapsed());
             }
         }
+    }
+
+    #[macro_export]
+    macro_rules! recorded_grpc_request {
+        ($api_name:expr,  $($fields:tt)*) => {
+            {
+                let span = tracing::span!(tracing::Level::INFO, "grpc_request", api = $api_name, $($fields)*);
+                $crate::metrics::grpc::RecordedGrpcRequest::new($api_name, span)
+            }
+        };
     }
 }
 

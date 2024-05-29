@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use std::ops::Add;
 use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -44,18 +45,19 @@ use crate::workerctx::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use cap_std::ambient_authority;
+use chrono::{DateTime, Utc};
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
-    IdempotencyKey, SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    IdempotencyKey, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::AsContextMut;
 use wasmtime_wasi::preview2::{I32Exit, ResourceTable, Stderr, Subscribe, WasiCtx, WasiView};
@@ -137,7 +139,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
         )?);
         debug!(
-            "Created temporary file system root for {worker_id} at {:?}",
+            "Created temporary file system root at {:?}",
             temp_dir.path()
         );
         let root_dir = cap_std::fs::Dir::open_ambient_dir(temp_dir.path(), ambient_authority())
@@ -153,7 +155,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stdout = ManagedStdOut::from_standard_io(stdio.clone());
         let stderr = ManagedStdErr::from_stderr(Stderr);
 
-        let oplog_size = oplog.current_oplog_index().await;
+        let last_oplog_index = oplog.current_oplog_index().await;
 
         wasi_host::create_context(
             &worker_config.args,
@@ -179,7 +181,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         invocation_queue,
                         oplog: oplog.clone(),
                     },
-                    state: PrivateDurableWorkerState {
+                    state: PrivateDurableWorkerState::new(
                         oplog_service,
                         oplog,
                         promise_service,
@@ -188,28 +190,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         worker_enumeration_service,
                         key_value_service,
                         blob_store_service,
-                        config: config.clone(),
-                        worker_id: worker_id.clone(),
-                        account_id: account_id.clone(),
-                        current_idempotency_key: None,
-                        active_workers: active_workers.clone(),
+                        config.clone(),
+                        worker_id.clone(),
+                        account_id.clone(),
+                        active_workers.clone(),
                         recovery_management,
                         rpc,
                         worker_proxy,
-                        resources: HashMap::new(),
-                        last_resource_id: 0,
-                        deleted_regions: worker_config.deleted_regions.clone(),
-                        next_deleted_region: worker_config
-                            .deleted_regions
-                            .find_next_deleted_region(0),
-                        overridden_retry_policy: None,
-                        persistence_level: PersistenceLevel::Smart,
-                        assume_idempotence: true,
-                        open_function_table: HashMap::new(),
-                        replay_idx: 1,
-                        replay_target: oplog_size,
-                        snapshotting_mode: None,
-                    },
+                        worker_config.deleted_regions.clone(),
+                        last_oplog_index,
+                    ),
                     temp_dir,
                     execution_status,
                 }
@@ -336,7 +326,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn store_worker_status(&self, status: WorkerStatus) {
-        self.update_worker_status(|s| s.status = status).await;
+        self.update_worker_status(|s| s.status = status.clone())
+            .await;
+        if status == WorkerStatus::Idle
+            || status == WorkerStatus::Failed
+            || status == WorkerStatus::Exited
+        {
+            debug!("Scheduling oplog archive");
+            let at = Utc::now().add(self.state.config.oplog.archive_interval);
+            self.state
+                .scheduler_service
+                .schedule(
+                    at,
+                    ScheduledAction::ArchiveOplog {
+                        account_id: self.state.account_id.clone(),
+                        worker_id: self.worker_id.clone(),
+                        last_oplog_index: self.public_state.oplog.current_oplog_index().await,
+                        next_after: self.state.config.oplog.archive_interval,
+                    },
+                )
+                .await;
+        }
     }
 
     pub async fn update_pending_invocations(&self) {
@@ -591,7 +601,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn deactivate(&self) {
-        debug!("deactivating worker {}", self.worker_id);
+        debug!("deactivating worker");
         self.state.active_workers.remove(&self.worker_id);
     }
 }
@@ -638,8 +648,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         trap_type: &TrapType,
     ) -> Result<Option<OplogIndex>, anyhow::Error> {
-        self.state.consume_hint_entries().await;
-
         if self.state.is_live() {
             let needs_commit = match trap_type {
                 TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
@@ -687,8 +695,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .await;
 
         debug!(
-            "Recovery decision for {} because of error {:?} after {} tries: {:?}",
-            self.worker_id, error, previous_tries, decision
+            "Recovery decision because of error {:?} after {} tries: {:?}",
+            error, previous_tries, decision
         );
 
         Ok(calculate_worker_status(
@@ -721,7 +729,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         consumed_fuel: i64,
         output: Vec<Value>,
     ) -> Result<Option<Vec<Value>>, anyhow::Error> {
-        self.state.consume_hint_entries().await;
         let is_live_after = self.state.is_live();
 
         if is_live_after {
@@ -729,7 +736,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
                     output.iter().map(|value| value.clone().into()).collect();
 
-                let oplog_idx = self.state.oplog.current_oplog_index().await;
                 self.state
                     .oplog
                     .add_exported_function_completed(&proto_output, consumed_fuel)
@@ -738,6 +744,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         panic!("could not encode function result for {full_function_name}: {err}")
                     });
                 self.state.oplog.commit().await;
+                let oplog_idx = self.state.oplog.current_oplog_index().await;
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
@@ -899,7 +906,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<bool, GolemError> {
-        debug!("Starting prepare_instance for {worker_id}");
+        debug!("Starting prepare_instance");
         let start = Instant::now();
         let mut count = 0;
 
@@ -932,7 +939,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         idempotency_key,
                         calling_convention,
                     ))) => {
-                        debug!("prepare_instance invoking function {function_name} on {worker_id}");
+                        debug!("prepare_instance invoking function {function_name}");
+                        let span = span!(Level::INFO, "replaying", function = function_name);
                         store
                             .as_context_mut()
                             .data_mut()
@@ -947,6 +955,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             calling_convention.unwrap_or(CallingConvention::Component),
                             false, // we know it was not live before, because cont=true
                         )
+                        .instrument(span)
                         .await;
 
                         if let Some(invoke_result) = invoke_result {
@@ -976,10 +985,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let retry = Self::finalize_pending_update(&result, instance, store).await;
 
         if retry {
-            debug!("Retrying prepare_instance for {worker_id} after failed update attempt");
+            debug!("Retrying prepare_instance after failed update attempt");
             Ok(true)
         } else {
-            debug!("Finished prepare_instance for {worker_id}");
+            debug!("Finished prepare_instance");
             result
                 .map(|_| false)
                 .map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
@@ -1028,7 +1037,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 )
                 .await;
             if let Some(last_error) = last_error {
-                debug!("Recovery decision for {worker_id} after {last_error}: {decision:?}");
+                debug!("Recovery decision after {last_error}: {decision:?}");
             }
         }
 
@@ -1041,23 +1050,23 @@ async fn last_error_and_retry_count<T: HasOplogService>(
     this: &T,
     worker_id: &WorkerId,
 ) -> Option<LastError> {
-    let mut idx = this.oplog_service().get_size(worker_id).await;
+    let mut idx = this.oplog_service().get_last_index(worker_id).await;
     let mut retry_count = 0;
-    if idx == 0 {
+    if idx == OplogIndex::NONE {
         None
     } else {
         let mut first_error = None;
-        loop {
-            let oplog_entry = this.oplog_service().read(worker_id, idx - 1, 1).await;
-            match oplog_entry.first()
+        let result = loop {
+            let oplog_entry = this.oplog_service().read(worker_id, idx, 1).await;
+            match oplog_entry.first_key_value()
                 .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", worker_id)) {
-                OplogEntry::Error { error, .. } => {
+                (_, OplogEntry::Error { error, .. } )=> {
                     retry_count += 1;
                     if first_error.is_none() {
                         first_error = Some(error.clone());
                     }
-                    if idx > 0 {
-                        idx -= 1;
+                    if idx > OplogIndex::INITIAL {
+                        idx = idx.previous();
                         continue;
                     } else {
                         break Some(
@@ -1075,7 +1084,8 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                     }
                 }
             }
-        }
+        };
+        result
     }
 }
 
@@ -1103,18 +1113,73 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     overridden_retry_policy: Option<RetryConfig>,
     persistence_level: PersistenceLevel,
     assume_idempotence: bool,
-    open_function_table: HashMap<u32, u64>,
-    replay_target: u64,
-    replay_idx: u64,
+    open_function_table: HashMap<u32, OplogIndex>,
+    replay_target: OplogIndex,
+
+    /// The oplog index of the last replayed entry
+    last_replayed_index: OplogIndex,
     snapshotting_mode: Option<PersistenceLevel>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
+    pub fn new(
+        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        oplog: Arc<dyn Oplog + Send + Sync>,
+        promise_service: Arc<dyn PromiseService + Send + Sync>,
+        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        worker_enumeration_service: Arc<
+            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+        >,
+        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
+        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        config: Arc<GolemConfig>,
+        worker_id: WorkerId,
+        account_id: AccountId,
+        active_workers: Arc<ActiveWorkers<Ctx>>,
+        recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
+        rpc: Arc<dyn Rpc + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        deleted_regions: DeletedRegions,
+        last_oplog_index: OplogIndex,
+    ) -> Self {
+        let mut result = Self {
+            oplog_service,
+            oplog,
+            promise_service,
+            scheduler_service,
+            worker_service,
+            worker_enumeration_service,
+            key_value_service,
+            blob_store_service,
+            config,
+            worker_id,
+            account_id,
+            current_idempotency_key: None,
+            active_workers,
+            recovery_management,
+            rpc,
+            worker_proxy,
+            resources: HashMap::new(),
+            last_resource_id: 0,
+            deleted_regions: deleted_regions.clone(),
+            next_deleted_region: deleted_regions.find_next_deleted_region(OplogIndex::NONE),
+            overridden_retry_policy: None,
+            persistence_level: PersistenceLevel::Smart,
+            assume_idempotence: true,
+            open_function_table: HashMap::new(),
+            last_replayed_index: OplogIndex::NONE,
+            replay_target: last_oplog_index,
+            snapshotting_mode: None,
+        };
+        result.move_replay_idx(OplogIndex::INITIAL); // By this we handle initial deleted regions applied by manual updates correctly
+        result
+    }
+
     pub async fn begin_function(
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
-    ) -> Result<u64, GolemError> {
-        let begin_index = self.oplog.current_oplog_index().await;
+    ) -> Result<OplogIndex, GolemError> {
         if !self.assume_idempotence
             && *wrapped_function_type == WrappedFunctionType::WriteRemote
             && self.persistence_level != PersistenceLevel::PersistNothing
@@ -1123,15 +1188,17 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 self.oplog
                     .add_and_commit(OplogEntry::begin_remote_write())
                     .await;
+                let begin_index = self.oplog.current_oplog_index().await;
                 Ok(begin_index)
             } else {
-                let _ = crate::get_oplog_entry!(self, OplogEntry::BeginRemoteWrite)?;
+                let (begin_index, _) = crate::get_oplog_entry!(self, OplogEntry::BeginRemoteWrite)?;
                 let end_index = self
                     .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
                     .await;
                 if end_index.is_none() {
                     // Must switch to live mode before failing to be able to commit an Error entry
-                    self.replay_idx = self.replay_target;
+                    self.last_replayed_index = self.replay_target;
+                    debug!("[4] REPLAY_IDX = {}", self.last_replayed_index);
                     Err(GolemError::runtime(
                         "Non-idempotent remote write operation was not completed, cannot retry",
                     ))
@@ -1140,6 +1207,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 }
             }
         } else {
+            let begin_index = self.oplog.current_oplog_index().await;
             Ok(begin_index)
         }
     }
@@ -1147,7 +1215,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     pub async fn end_function(
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
-        begin_index: u64,
+        begin_index: OplogIndex,
     ) -> Result<(), GolemError> {
         if !self.assume_idempotence
             && *wrapped_function_type == WrappedFunctionType::WriteRemote
@@ -1159,7 +1227,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     .await;
                 Ok(())
             } else {
-                let _ = crate::get_oplog_entry!(self, OplogEntry::EndRemoteWrite)?;
+                let (_, _) = crate::get_oplog_entry!(self, OplogEntry::EndRemoteWrite)?;
                 Ok(())
             }
         } else {
@@ -1167,23 +1235,27 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
-    /// In live mode it returns the last oplog index.
-    /// In replay mode it returns the current replay index.
-    pub async fn current_oplog_index(&self) -> u64 {
+    /// In live mode it returns the last oplog index (index of the entry last added).
+    /// In replay mode it returns the current replay index (index of the entry last read).
+    pub async fn current_oplog_index(&self) -> OplogIndex {
         if self.is_live() {
             self.oplog.current_oplog_index().await
         } else {
-            self.replay_idx
+            self.last_replayed_index
         }
     }
 
-    pub async fn read_oplog(&self, idx: u64, n: u64) -> Vec<OplogEntry> {
-        self.oplog_service.read(&self.worker_id, idx, n).await
+    async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<OplogEntry> {
+        self.oplog_service
+            .read(&self.worker_id, idx, n)
+            .await
+            .into_values()
+            .collect()
     }
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        self.replay_idx == self.replay_target
+        self.last_replayed_index == self.replay_target
     }
 
     /// Returns whether we are in replay mode where we are replaying old calls.
@@ -1191,16 +1263,17 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         !self.is_live()
     }
 
-    fn get_out_of_deleted_region(&mut self) -> bool {
+    fn get_out_of_deleted_region(&mut self) {
         if self.is_replay() {
             let update_next_deleted_region = match &self.next_deleted_region {
-                Some(region) if region.start == self.replay_idx => {
-                    let target = region.end + 1;
+                Some(region) if region.start == (self.last_replayed_index.next()) => {
+                    let target = region.end.next(); // we want to continue reading _after_ the region
                     debug!(
                         "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
-                        self.worker_id, self.replay_idx, target, self.replay_target
+                        self.worker_id, region.start, target, self.replay_target
                     );
-                    self.replay_idx = target;
+                    self.last_replayed_index = target.previous(); // so we set the last replayed index to the end of the region
+
                     true
                 }
                 _ => false,
@@ -1209,47 +1282,71 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             if update_next_deleted_region {
                 self.next_deleted_region = self
                     .deleted_regions
-                    .find_next_deleted_region(self.replay_idx);
+                    .find_next_deleted_region(self.last_replayed_index);
             }
-
-            update_next_deleted_region
-        } else {
-            false
         }
     }
 
-    async fn get_oplog_entry(&mut self) -> OplogEntry {
+    /// Reads the next oplog entry, and skips every hint entry following it.
+    /// Returns the oplog index of the entry read, no matter how many more hint entries
+    /// were read.
+    async fn get_oplog_entry(&mut self) -> (OplogIndex, OplogEntry) {
+        let read_idx = self.last_replayed_index.next();
+        let entry = self.internal_get_next_oplog_entry().await;
+
+        // Skipping hint entries
+        while self.is_replay() {
+            let saved_replay_idx = self.last_replayed_index;
+            let saved_next_deleted_region = self.next_deleted_region.clone();
+            let entry = self.internal_get_next_oplog_entry().await;
+            if !entry.is_hint() {
+                // TODO: cache the last hint entry to avoid reading it again
+                self.last_replayed_index = saved_replay_idx;
+                self.next_deleted_region = saved_next_deleted_region;
+                break;
+            }
+        }
+
+        (read_idx, entry)
+    }
+
+    /// Gets the next oplog entry, no matter if it is hint or not, following jumps
+    async fn internal_get_next_oplog_entry(&mut self) -> OplogEntry {
         assert!(self.is_replay());
 
-        let oplog_entries = self.read_oplog(self.replay_idx, 1).await;
-        let oplog_entry = oplog_entries[0].clone();
+        let read_idx = self.last_replayed_index.next();
 
-        if !self.get_out_of_deleted_region() {
-            // No jump happened, increment replay index
-            self.replay_idx += 1;
-        }
+        let oplog_entries = self.read_oplog(read_idx, 1).await;
+        let oplog_entry = oplog_entries.into_iter().next().unwrap();
+        self.move_replay_idx(read_idx);
 
         oplog_entry
     }
 
+    fn move_replay_idx(&mut self, new_idx: OplogIndex) {
+        self.last_replayed_index = new_idx;
+        self.get_out_of_deleted_region();
+    }
+
     async fn lookup_oplog_entry(
         &mut self,
-        begin_idx: u64,
-        check: impl Fn(&OplogEntry, u64) -> bool,
-    ) -> Option<u64> {
-        let mut start = self.replay_idx;
+        begin_idx: OplogIndex,
+        check: impl Fn(&OplogEntry, OplogIndex) -> bool,
+    ) -> Option<OplogIndex> {
+        let mut start = self.last_replayed_index.next();
         const CHUNK_SIZE: u64 = 1024;
         while start < self.replay_target {
             let entries = self
                 .oplog_service
                 .read(&self.worker_id, start, CHUNK_SIZE)
                 .await;
-            for (n, entry) in entries.iter().enumerate() {
+            for (idx, entry) in &entries {
+                // TODO: handle deleted regions
                 if check(entry, begin_idx) {
-                    return Some(start + n as u64);
+                    return Some(*idx);
                 }
             }
-            start += entries.len() as u64;
+            start = start.range_end(entries.len() as u64).next();
         }
 
         None
@@ -1268,7 +1365,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     > {
         loop {
             if self.is_replay() {
-                let oplog_entry = self.get_oplog_entry().await;
+                let (_, oplog_entry) = self.get_oplog_entry().await;
                 match &oplog_entry {
                     OplogEntry::ExportedFunctionInvoked {
                         function_name,
@@ -1315,7 +1412,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     ) -> Result<Option<Vec<Value>>, GolemError> {
         loop {
             if self.is_replay() {
-                let oplog_entry = self.get_oplog_entry().await;
+                let (_, oplog_entry) = self.get_oplog_entry().await;
                 match &oplog_entry {
                     OplogEntry::ExportedFunctionCompleted { .. } => {
                         let response: Vec<golem_wasm_rpc::protobuf::Val> = self
@@ -1347,33 +1444,16 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
-    /// Consumes Suspend, Error and Interrupt entries which are hints for the server to decide whether to
-    /// keep workers in memory or allow them to rerun etc., but contain no actionable information
-    /// during replay
-    async fn consume_hint_entries(&mut self) {
-        loop {
-            if self.is_replay() {
-                let oplog_entry = self.get_oplog_entry().await;
-                match oplog_entry {
-                    entry if entry.is_hint() => {}
-                    _ => {
-                        self.replay_idx -= 1;
-                        break;
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    pub async fn sleep_until(&self, when: chrono::DateTime<chrono::Utc>) -> Result<(), GolemError> {
+    pub async fn sleep_until(&self, when: DateTime<Utc>) -> Result<(), GolemError> {
         let promise_id = self
             .promise_service
             .create(&self.worker_id, self.current_oplog_index().await)
             .await;
 
-        let schedule_id = self.scheduler_service.schedule(when, promise_id).await;
+        let schedule_id = self
+            .scheduler_service
+            .schedule(when, ScheduledAction::CompletePromise { promise_id })
+            .await;
         debug!(
             "Schedule added to awake suspended worker at {} with id {}",
             when.to_rfc3339(),
@@ -1404,10 +1484,10 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        cursor: u64,
+        cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GolemError> {
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
         self.worker_enumeration_service
             .get(component_id, filter, cursor, count, precise)
             .await
@@ -1567,10 +1647,10 @@ impl Subscribe for Ready {
 macro_rules! get_oplog_entry {
     ($private_state:expr, $case:path) => {
         loop {
-            let oplog_entry = $private_state.get_oplog_entry().await;
+            let (oplog_index, oplog_entry) = $private_state.get_oplog_entry().await;
             match oplog_entry {
                 $case { .. } => {
-                    break Ok(oplog_entry);
+                    break Ok((oplog_index, oplog_entry));
                 }
                 entry if entry.is_hint() => {}
                 _ => {

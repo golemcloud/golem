@@ -16,8 +16,8 @@ use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
 use golem_common::model::{
-    parse_function_name, ComponentId, ComponentVersion, ShardId, Timestamp, WorkerFilter,
-    WorkerStatus,
+    parse_function_name, ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp,
+    WorkerFilter, WorkerStatus,
 };
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use http::Uri;
@@ -2667,7 +2667,7 @@ pub struct UpdateWorkerRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkersMetadataRequest {
     pub filter: Option<WorkerFilter>,
-    pub cursor: Option<u64>,
+    pub cursor: Option<ScanCursor>,
     pub count: Option<u64>,
     pub precise: Option<bool>,
 }
@@ -2675,7 +2675,7 @@ pub struct WorkersMetadataRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkersMetadataResponse {
     pub workers: Vec<WorkerMetadata>,
-    pub cursor: Option<u64>,
+    pub cursor: Option<ScanCursor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]

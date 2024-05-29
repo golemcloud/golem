@@ -104,11 +104,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(result) => {
-                debug!("RPC result for {}: {result:?}", self.worker_id);
+                debug!("RPC result: {result:?}");
                 Ok(Ok(result))
             }
             Err(err) => {
-                error!("RPC error for {}: {err}", self.worker_id);
+                error!("RPC error: {err}");
                 Ok(Err(err.into()))
             }
         }

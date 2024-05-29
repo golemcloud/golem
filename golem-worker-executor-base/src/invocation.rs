@@ -48,7 +48,6 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
 
     let worker_id = store.data().worker_id().clone();
-    debug!("invoke_worker: {worker_id}/{full_function_name}");
 
     let result = invoke_or_fail(
         &worker_id,
@@ -61,10 +60,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     )
     .await;
 
-    debug!(
-        "invoke_or_fail: {worker_id}/{full_function_name} resulted in {:?}",
-        result
-    );
+    debug!("Invocation resulted in {:?}", result);
 
     match result {
         Err(err) => {
@@ -274,10 +270,7 @@ async fn invoke<Ctx: WorkerCtx>(
                 call_exported_function(&mut store, function, params, context).await?;
 
             for resource in resources_to_drop {
-                debug!(
-                    "Dropping passed owned resources {:?} in {context}",
-                    resource
-                );
+                debug!("Dropping passed owned resources {:?}", resource);
                 resource.resource_drop_async(&mut store).await?;
             }
 
@@ -415,7 +408,7 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
 
     if consumed_fuel_for_call > 0 {
         debug!(
-            "fuel consumed for call {context}: {}",
+            "Fuel consumed for call {context}: {}",
             consumed_fuel_for_call
         );
     }

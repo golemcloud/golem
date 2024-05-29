@@ -5,10 +5,11 @@ use crate::services::oplog::OplogOps;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
+use tracing::error;
 
 #[async_trait]
 pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
@@ -127,7 +128,6 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         SerializedErr:
             Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send,
     {
-        self.state.consume_hint_entries().await;
         let begin_index = self
             .state
             .begin_function(&wrapped_function_type.clone())
@@ -149,7 +149,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             .await?;
             result
         } else {
-            let oplog_entry =
+            let (_, oplog_entry) =
                 crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
             Self::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = self
@@ -194,7 +194,6 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         SerializedErr:
             Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send,
     {
-        self.state.consume_hint_entries().await;
         let begin_index = self
             .state
             .begin_function(&wrapped_function_type.clone())
@@ -216,7 +215,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             .await?;
             result
         } else {
-            let oplog_entry =
+            let (_, oplog_entry) =
                 crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
             Self::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = self
@@ -245,7 +244,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
         function_name: &str,
-        begin_index: u64,
+        begin_index: OplogIndex,
         serializable_result: &Result<SerializedSuccess, SerializedErr>,
     ) -> Result<(), Err>
     where
@@ -285,6 +284,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> Result<(), GolemError> {
         if let OplogEntry::ImportedFunctionInvoked { function_name, .. } = oplog_entry {
             if function_name != expected_function_name {
+                error!(
+                    "Unexpected imported function call entry in oplog: expected {}, got {}",
+                    expected_function_name, function_name
+                );
                 Err(GolemError::unexpected_oplog_entry(
                     expected_function_name,
                     function_name,

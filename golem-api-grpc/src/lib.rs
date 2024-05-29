@@ -15,6 +15,7 @@
 #[allow(clippy::large_enum_variant)]
 pub mod proto {
     use uuid::Uuid;
+
     tonic::include_proto!("mod");
 
     pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("services");

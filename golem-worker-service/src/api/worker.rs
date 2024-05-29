@@ -1,9 +1,12 @@
-use golem_common::model::{CallingConvention, ComponentId, IdempotencyKey, WorkerFilter};
+use golem_common::model::{
+    CallingConvention, ComponentId, IdempotencyKey, ScanCursor, WorkerFilter,
+};
 use golem_service_base::api_tags::ApiTags;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::str::FromStr;
 use tap::TapFallible;
 
 use golem_service_base::model::*;
@@ -223,7 +226,7 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         filter: Query<Option<Vec<String>>>,
-        cursor: Query<Option<u64>>,
+        cursor: Query<Option<String>>,
         count: Query<Option<u64>>,
         precise: Query<Option<bool>>,
     ) -> Result<Json<WorkersMetadataResponse>> {
@@ -236,12 +239,19 @@ impl WorkerApi {
             _ => None,
         };
 
+        let cursor = match cursor.0 {
+            Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
+                WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+            })?),
+            None => None,
+        };
+
         let (cursor, workers) = self
             .worker_service
             .find_metadata(
                 &component_id.0,
                 filter,
-                cursor.0.unwrap_or(0),
+                cursor.unwrap_or_default(),
                 count.0.unwrap_or(50),
                 precise.0.unwrap_or(false),
                 &EmptyAuthCtx {},
@@ -266,7 +276,7 @@ impl WorkerApi {
             .find_metadata(
                 &component_id.0,
                 params.filter.clone(),
-                params.cursor.unwrap_or(0),
+                params.cursor.clone().unwrap_or_default(),
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),
                 &EmptyAuthCtx {},

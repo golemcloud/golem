@@ -3,7 +3,8 @@ use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::{ExampleDescription, IdempotencyKey};
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use golem_client::model::{
-    ApiDeployment, HttpApiDefinition, Route, WorkerId, WorkerMetadata, WorkersMetadataResponse,
+    ApiDeployment, HttpApiDefinition, Route, ScanCursor, WorkerId, WorkerMetadata,
+    WorkersMetadataResponse,
 };
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier};
 use indoc::{eprintdoc, printdoc};
@@ -383,15 +384,25 @@ impl TextFormat for WorkersMetadataResponse {
         )
         .unwrap();
 
-        if let Some(cursor) = self.cursor {
+        if let Some(cursor) = &self.cursor {
+            let layer = cursor.layer;
+            let cursor = cursor.cursor;
             printdoc!(
                 "
                 There are more workers to display.
-                To fetch next page use cursor {cursor} this way:
-                worker list --cursor {cursor} ...
+                To fetch next page use cursor {layer}/{cursor} this way:
+                worker list --cursor {layer}/{cursor} ...
                 "
             )
         }
+    }
+}
+
+impl TextFormat for ScanCursor {
+    fn print(&self) {
+        let layer = self.layer;
+        let cursor = self.cursor;
+        printdoc!("{layer}/{cursor}")
     }
 }
 

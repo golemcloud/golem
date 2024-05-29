@@ -551,7 +551,6 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         // Note that the response body is streaming, so at this point we don't have it in memory. Each chunk read from
         // the body is stored in the oplog, so we can replay it later. In replay mode we initialize the body with a
         // fake stream which can only be read in the oplog, and fails if we try to read it in live mode.
-        self.state.consume_hint_entries().await;
         let handle = self_.rep();
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
@@ -602,7 +601,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
 
             response
         } else {
-            let oplog_entry = get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
+            let (_, oplog_entry) = get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
 
             let serialized_response = self
                 .state

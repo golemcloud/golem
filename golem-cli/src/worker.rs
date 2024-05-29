@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use clap::builder::ValueParser;
 use clap::Subcommand;
 use golem_client::model::{
-    Component, InvokeParameters, InvokeResult, StringFilterComparator, Type, WorkerFilter,
-    WorkerMetadata, WorkerNameFilter, WorkersMetadataResponse,
+    Component, InvokeParameters, InvokeResult, ScanCursor, StringFilterComparator, Type,
+    WorkerFilter, WorkerMetadata, WorkerNameFilter, WorkersMetadataResponse,
 };
 use golem_client::Context;
 use golem_wasm_rpc::TypeAnnotatedValue;
@@ -216,9 +216,10 @@ pub enum WorkerSubcommand {
 
         /// Position where to start listing, if not provided, starts from the beginning
         ///
-        /// It is used to get the next page of results. To get next page, use the cursor returned in the response
-        #[arg(short = 'P', long)]
-        cursor: Option<u64>,
+        /// It is used to get the next page of results. To get next page, use the cursor returned in the response.
+        /// The cursor has the format 'layer/position' where both layer and position are numbers.
+        #[arg(short = 'P', long, value_parser = parse_cursor)]
+        cursor: Option<ScanCursor>,
 
         /// Count of listed values, if count is not provided, returns all values
         #[arg(short = 'n', long)]
@@ -691,4 +692,17 @@ impl<'r, C: WorkerClient + Send + Sync, R: ComponentHandler + Send + Sync> Worke
             }
         }
     }
+}
+
+fn parse_cursor(s: &str) -> Result<ScanCursor, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let parts = s.split('/').collect::<Vec<_>>();
+
+    if parts.len() != 2 {
+        return Err(format!("Invalid cursor format: {}", s).into());
+    }
+
+    Ok(ScanCursor {
+        layer: parts[0].parse()?,
+        cursor: parts[1].parse()?,
+    })
 }

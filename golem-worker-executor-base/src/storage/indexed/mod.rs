@@ -24,16 +24,26 @@ use golem_common::serialization::{deserialize, serialize};
 pub mod memory;
 pub mod redis;
 
-type ScanCursor = u64;
+pub type ScanCursor = u64;
 
+/// Generic indexed storage interface
+///
+/// The storage holds indexes identified by keys. Each index is a sequence of entries,
+/// where each entry has a numeric identifier and an arbitrary binary payload. The numeric
+/// identifiers are unique and monotonically increasing within each index, but not necessarily
+/// contiguous.
+///
 #[async_trait]
 pub trait IndexedStorage: Debug {
+    /// Gets the number of available replicas in the storage cluster
     async fn number_of_replicas(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
     ) -> Result<u8, String>;
 
+    /// Wait until all write operations are propagated to at least the given number of replicas,
+    /// or the maximum `number_of_replicas` if it is smaller.
     async fn wait_for_replicas(
         &self,
         svc_name: &'static str,
@@ -42,6 +52,7 @@ pub trait IndexedStorage: Debug {
         timeout: Duration,
     ) -> Result<u8, String>;
 
+    /// Checks if a key exists in the storage
     async fn exists(
         &self,
         svc_name: &'static str,
@@ -50,6 +61,7 @@ pub trait IndexedStorage: Debug {
         key: &str,
     ) -> Result<bool, String>;
 
+    /// Returns all the keys matching the given pattern, in a paginated way
     async fn scan(
         &self,
         svc_name: &'static str,
@@ -60,6 +72,7 @@ pub trait IndexedStorage: Debug {
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String>;
 
+    /// Appends an entry to the given key, starting from the given id
     async fn append(
         &self,
         svc_name: &'static str,
@@ -71,6 +84,7 @@ pub trait IndexedStorage: Debug {
         value: &[u8],
     ) -> Result<(), String>;
 
+    /// Gets the number of entries in the index of the given key
     async fn length(
         &self,
         svc_name: &'static str,
@@ -79,6 +93,7 @@ pub trait IndexedStorage: Debug {
         key: &str,
     ) -> Result<u64, String>;
 
+    /// Deletes the index of the given key
     async fn delete(
         &self,
         svc_name: &'static str,
@@ -87,6 +102,7 @@ pub trait IndexedStorage: Debug {
         key: &str,
     ) -> Result<(), String>;
 
+    /// Reads a closed range of entries from the index of the given key
     async fn read(
         &self,
         svc_name: &'static str,
@@ -96,7 +112,48 @@ pub trait IndexedStorage: Debug {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<Bytes>, String>;
+    ) -> Result<Vec<(u64, Bytes)>, String>;
+
+    /// Gets the first entry in the index of the given key
+    async fn first(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String>;
+
+    /// Gets the last entry in the index of the given key
+    async fn last(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String>;
+
+    /// Gets the entry with the closest id to the given id in the index of the given key,
+    /// in a way that `id` is less or equal to the id of the returned entry.
+    async fn closest(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        id: u64,
+    ) -> Result<Option<(u64, Bytes)>, String>;
+
+    async fn drop_prefix(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        last_dropped_id: u64,
+    ) -> Result<(), String>;
 }
 
 pub trait IndexedStorageLabelledApi<T: IndexedStorage + ?Sized> {
@@ -199,6 +256,23 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
             .delete(self.svc_name, self.api_name, namespace, key)
             .await
     }
+
+    pub async fn drop_prefix(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        last_dropped_id: u64,
+    ) -> Result<(), String> {
+        self.storage
+            .drop_prefix(
+                self.svc_name,
+                self.api_name,
+                namespace,
+                key,
+                last_dropped_id,
+            )
+            .await
+    }
 }
 
 pub struct LabelledEntityIndexedStorage<'a, S: IndexedStorage + ?Sized> {
@@ -223,6 +297,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         }
     }
 
+    /// Appends an entry to the given key with the given id, serializing the value first
     pub async fn append<V: Encode>(
         &self,
         namespace: IndexedStorageNamespace,
@@ -243,6 +318,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             .await
     }
 
+    /// Appends an entry to the given key with the given id
     pub async fn append_raw(
         &self,
         namespace: IndexedStorageNamespace,
@@ -263,13 +339,14 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             .await
     }
 
+    /// Reads a closed range of entries from the index of the given key, deserializing each entry
     pub async fn read<V: Decode>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<V>, String> {
+    ) -> Result<Vec<(u64, V)>, String> {
         self.storage
             .read(
                 self.svc_name,
@@ -284,18 +361,19 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             .and_then(|values| {
                 values
                     .into_iter()
-                    .map(|bytes| deserialize::<V>(&bytes))
-                    .collect()
+                    .map(|(idx, bytes)| deserialize::<V>(&bytes).map(|v| (idx, v)))
+                    .collect::<Result<Vec<_>, _>>()
             })
     }
 
+    /// Reads a closed range of entries from the index of the given key, returning the raw bytes
     pub async fn read_raw(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
         from: u64,
         count: u64,
-    ) -> Result<Vec<Bytes>, String> {
+    ) -> Result<Vec<(u64, Bytes)>, String> {
         self.storage
             .read(
                 self.svc_name,
@@ -308,9 +386,167 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             )
             .await
     }
+
+    /// Gets the first entry in the index of the given key, returning as raw bytes
+    pub async fn first_raw(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String> {
+        self.storage
+            .first(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+            )
+            .await
+    }
+
+    /// Gets the first entry in the index of the given key, deserializing the value
+    pub async fn first<V: Decode>(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, V)>, String> {
+        if let Some((id, bytes)) = self
+            .storage
+            .first(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+            )
+            .await?
+        {
+            Ok(Some((id, deserialize::<V>(&bytes)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Gets the first entry in the index of the given key, returning only its id
+    pub async fn first_id(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, String> {
+        self.first_raw(namespace, key).await.map(|r| r.map(|p| p.0))
+    }
+
+    /// Gets the last entry in the index of the given key, returning as raw bytes
+    pub async fn last_raw(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Bytes)>, String> {
+        self.storage
+            .last(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+            )
+            .await
+    }
+
+    /// Gets the last entry in the index of the given key, deserializing the value
+    pub async fn last<V: Decode>(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, V)>, String> {
+        if let Some((id, bytes)) = self
+            .storage
+            .last(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+            )
+            .await?
+        {
+            Ok(Some((id, deserialize::<V>(&bytes)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Gets the last entry in the index of the given key, returning only its id
+    pub async fn last_id(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, String> {
+        self.last_raw(namespace, key).await.map(|r| r.map(|p| p.0))
+    }
+
+    /// Gets the entry with the closest id to the given id in the index of the given key,
+    /// in a way that `id` is less or equal to the id of the returned entry, returning as raw bytes
+    pub async fn closest_raw(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        id: u64,
+    ) -> Result<Option<(u64, Bytes)>, String> {
+        self.storage
+            .closest(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+                id,
+            )
+            .await
+    }
+
+    /// Gets the entry with the closest id to the given id in the index of the given key,
+    /// in a way that `id` is less or equal to the id of the returned entry, deserializing the value
+    pub async fn closest<V: Decode>(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        id: u64,
+    ) -> Result<Option<(u64, V)>, String> {
+        if let Some((id, bytes)) = self
+            .storage
+            .closest(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+                id,
+            )
+            .await?
+        {
+            Ok(Some((id, deserialize::<V>(&bytes)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Gets the entry with the closest id to the given id in the index of the given key,
+    /// in a way that `id` is less or equal to the id of the returned entry, returning only its id
+    pub async fn closest_id(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        id: u64,
+    ) -> Result<Option<u64>, String> {
+        self.closest_raw(namespace, key, id)
+            .await
+            .map(|r| r.map(|p| p.0))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum IndexedStorageNamespace {
     OpLog,
+    CompressedOpLog { level: usize },
 }

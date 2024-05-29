@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
-use golem_api_grpc::proto::golem::worker::UpdateMode;
+use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::{
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
@@ -31,22 +31,22 @@ use golem_common::cache::PendingOrFinal;
 use golem_common::model as common_model;
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
-    AccountId, CallingConvention, IdempotencyKey, ShardId, TimestampedWorkerInvocation,
-    WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, ComponentId, IdempotencyKey, PromiseId, ScanCursor, ShardId,
+    TimestampedWorkerInvocation, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::protobuf::Val;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
 
 use crate::error::*;
-use crate::metrics::grpc::{
-    record_closed_grpc_active_stream, record_new_grpc_active_stream, RecordedGrpcRequest,
-};
+use crate::metrics::grpc::{record_closed_grpc_active_stream, record_new_grpc_active_stream};
 use crate::model::{InterruptKind, LastError};
+use crate::recorded_grpc_request;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{
@@ -265,8 +265,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::CompletePromiseRequest,
     ) -> Result<golem::workerexecutor::CompletePromiseSuccess, GolemError> {
-        debug!("complete_promise: {:?}", request);
-
         let promise_id = request
             .promise_id
             .ok_or(GolemError::invalid_request("promise_id not found"))?;
@@ -399,23 +397,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match &worker_status.status {
             WorkerStatus::Exited => {
-                warn!("Attempted interrupting worker {worker_id} which already exited")
+                warn!("Attempted interrupting worker which already exited")
             }
             WorkerStatus::Idle => {
-                warn!("Attempted interrupting worker {worker_id} which is idle")
+                warn!("Attempted interrupting worker which is idle")
             }
             WorkerStatus::Failed => {
-                warn!("Attempted interrupting worker {worker_id} which is failed")
+                warn!("Attempted interrupting worker which is failed")
             }
             WorkerStatus::Interrupted => {
-                warn!("Attempted interrupting worker {worker_id} which is already interrupted")
+                warn!("Attempted interrupting worker which is already interrupted")
             }
             WorkerStatus::Suspended => {
-                debug!("Marking suspended worker {worker_id} as interrupted");
+                debug!("Marking suspended worker as interrupted");
                 Ctx::set_worker_status(self, &worker_id, WorkerStatus::Interrupted).await?;
             }
             WorkerStatus::Retrying => {
-                debug!("Marking worker {worker_id} scheduled to be retried as interrupted");
+                debug!("Marking worker scheduled to be retried as interrupted");
                 Ctx::set_worker_status(self, &worker_id, WorkerStatus::Interrupted).await?;
             }
             WorkerStatus::Running => {
@@ -734,7 +732,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_workers_metadata_internal(
         &self,
         request: golem::workerexecutor::GetWorkersMetadataRequest,
-    ) -> Result<(Option<u64>, Vec<golem::worker::WorkerMetadata>), GolemError> {
+    ) -> Result<
+        (
+            Option<golem::worker::Cursor>,
+            Vec<golem::worker::WorkerMetadata>,
+        ),
+        GolemError,
+    > {
         let component_id: common_model::ComponentId = request
             .component_id
             .and_then(|t| t.try_into().ok())
@@ -750,7 +754,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .get(
                 &component_id,
                 filter,
-                request.cursor,
+                request
+                    .cursor
+                    .map(|cursor| ScanCursor {
+                        cursor: cursor.cursor,
+                        layer: cursor.layer as usize,
+                    })
+                    .unwrap_or_default(),
                 request.count,
                 request.precise,
             )
@@ -764,7 +774,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })
             .collect();
 
-        Ok((new_cursor, result))
+        Ok((
+            new_cursor.map(|cursor| Cursor {
+                layer: cursor.layer as u64,
+                cursor: cursor.cursor,
+            }),
+            result,
+        ))
     }
 
     async fn update_worker_internal(
@@ -808,7 +824,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
                 match &worker_status.status {
                     WorkerStatus::Exited => {
-                        warn!("Attempted updating worker {worker_id} which already exited")
+                        warn!("Attempted updating worker which already exited")
                     }
                     WorkerStatus::Idle
                     | WorkerStatus::Interrupted
@@ -825,7 +841,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         // Ensuring the previous instance is dropped
                         self.active_workers().remove(&worker_id);
 
-                        debug!("Activating worker {worker_id} for update",);
+                        debug!("Activating worker for update",);
                         let (pending_worker, resume) = Worker::get_or_create_paused_pending(
                             self,
                             &worker_id,
@@ -836,7 +852,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         )
                         .await?;
 
-                        debug!("Enqueuing update for {worker_id}");
+                        debug!("Enqueuing update");
                         pending_worker
                             .invocation_queue
                             .enqueue_update(update_description.clone())
@@ -858,7 +874,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .update_status(&worker_id, &worker_status)
                             .await;
 
-                        debug!("Resuming initialization of {worker_id} to perform the update",);
+                        debug!("Resuming initialization to perform the update",);
                         resume.send(()).unwrap();
                     }
                     WorkerStatus::Running => {
@@ -881,8 +897,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .enqueue_update(update_description.clone())
                             .await;
 
+                        debug!("Enqueued update for running worker");
+
                         worker.set_interrupting(InterruptKind::Restart);
                         self.active_workers().remove(&worker_id);
+
+                        debug!("Interrupted running worker for update");
                     }
                 }
             }
@@ -1015,6 +1035,49 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     }
 }
 
+fn proto_component_id_string(
+    component_id: &Option<golem_api_grpc::proto::golem::component::ComponentId>,
+) -> Option<String> {
+    component_id
+        .clone()
+        .and_then(|v| TryInto::<ComponentId>::try_into(v).ok())
+        .map(|v| v.to_string())
+}
+
+fn proto_worker_id_string(
+    worker_id: &Option<golem_api_grpc::proto::golem::worker::WorkerId>,
+) -> Option<String> {
+    worker_id
+        .clone()
+        .and_then(|v| TryInto::<WorkerId>::try_into(v).ok())
+        .map(|v| v.to_string())
+}
+
+fn proto_idempotency_key_string(
+    idempotency_key: &Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+) -> Option<String> {
+    idempotency_key
+        .clone()
+        .map(|v| Into::<IdempotencyKey>::into(v).to_string())
+}
+
+fn proto_account_id_string(
+    account_id: &Option<golem_api_grpc::proto::golem::common::AccountId>,
+) -> Option<String> {
+    account_id
+        .clone()
+        .map(|v| Into::<AccountId>::into(v).to_string())
+}
+
+fn proto_promise_id_string(
+    promise_id: &Option<golem_api_grpc::proto::golem::worker::PromiseId>,
+) -> Option<String> {
+    promise_id
+        .clone()
+        .and_then(|v| TryInto::<PromiseId>::try_into(v).ok())
+        .map(|v| v.to_string())
+}
+
 #[tonic::async_trait]
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutor for WorkerExecutorImpl<Ctx, Svcs>
@@ -1024,14 +1087,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::CreateWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::CreateWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
+        let record = recorded_grpc_request!(
             "create_worker",
-            format!(
-                "worker_id={:?}, component_version={:?}, account_id={:?}",
-                request.worker_id, request.component_version, request.account_id
-            ),
+            worker_id = proto_worker_id_string(&request.worker_id),
+            component_version = request.component_version,
+            account_id = proto_account_id_string(&request.account_id),
         );
-        match self.create_worker_internal(request).await {
+
+        match self
+            .create_worker_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
             Ok(_) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::CreateWorkerResponse {
                     result: Some(
@@ -1059,14 +1126,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::InvokeAndAwaitWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InvokeAndAwaitWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
+        let record = recorded_grpc_request!(
             "invoke_and_await_worker",
-            format!(
-                "worker_id={:?}, name={:?}, idempotency_key={:?}, calling_convention={:?}, account_id={:?}",
-                request.worker_id, request.name, request.idempotency_key, request.calling_convention, request.account_id
-            ),
+            worker_id = proto_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+            calling_convention = request.calling_convention,
+            account_id = proto_account_id_string(&request.account_id),
         );
-        match self.invoke_and_await_worker_internal(&request).await {
+
+        match self.invoke_and_await_worker_internal(&request).instrument(record.span.clone()).await {
             Ok(result) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::InvokeAndAwaitWorkerResponse {
                     result: Some(
@@ -1094,14 +1162,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::InvokeWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InvokeWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
+        let record = recorded_grpc_request!(
             "invoke_worker",
-            format!(
-                "worker_id={:?}, name={:?}, account_id={:?}",
-                request.worker_id, request.name, request.account_id
-            ),
+            worker_id = proto_worker_id_string(&request.worker_id),
+            function = request.name,
+            account_id = proto_account_id_string(&request.account_id)
         );
-        match self.invoke_worker_internal(&request).await {
+
+        match self
+            .invoke_worker_internal(&request)
+            .instrument(record.span.clone())
+            .await
+        {
             Ok(_) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::InvokeWorkerResponse {
                     result: Some(
@@ -1181,91 +1253,100 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             // the `out_stream` will not be polled after client disconnect
             let (tx, rx) = mpsc::channel(128);
 
-            tokio::spawn(async move {
-                while let Ok(item) = receiver.recv().await {
-                    match item {
-                        worker_event::WorkerEvent::Close => {
-                            break;
-                        }
-                        worker_event::WorkerEvent::StdOut(line) => {
-                            match tx
-                                .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
-                                    event: Some(golem::worker::log_event::Event::Stdout(
-                                        golem::worker::StdOutLog {
-                                            message: String::from_utf8(line).unwrap(),
-                                        },
-                                    )),
-                                }))
-                                .await
-                            {
-                                Ok(_) => {
-                                    // item (server response) was queued to be send to client
-                                }
-                                Err(_item) => {
-                                    // output_stream was build from rx and both are dropped
-                                    break;
-                                }
-                            }
-                        }
-                        worker_event::WorkerEvent::StdErr(line) => {
-                            match tx
-                                .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
-                                    event: Some(golem::worker::log_event::Event::Stderr(
-                                        golem::worker::StdErrLog {
-                                            message: String::from_utf8(line).unwrap(),
-                                        },
-                                    )),
-                                }))
-                                .await
-                            {
-                                Ok(_) => {
-                                    // item (server response) was queued to be send to client
-                                }
-                                Err(_item) => {
-                                    // output_stream was build from rx and both are dropped
-                                    break;
-                                }
-                            }
-                        }
-                        worker_event::WorkerEvent::Log {
-                            level,
-                            context,
-                            message,
-                        } => match tx
-                            .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
-                                event: Some(golem::worker::log_event::Event::Log(
-                                    golem::worker::Log {
-                                        level: match level {
-                                            LogLevel::Trace => golem::worker::Level::Trace.into(),
-                                            LogLevel::Debug => golem::worker::Level::Debug.into(),
-                                            LogLevel::Info => golem::worker::Level::Info.into(),
-                                            LogLevel::Warn => golem::worker::Level::Warn.into(),
-                                            LogLevel::Error => golem::worker::Level::Error.into(),
-                                            LogLevel::Critical => {
-                                                golem::worker::Level::Critical.into()
-                                            }
-                                        },
-                                        context,
-                                        message,
-                                    },
-                                )),
-                            }))
-                            .await
-                        {
-                            Ok(_) => {
-                                // item (server response) was queued to be send to client
-                            }
-                            Err(_item) => {
-                                // output_stream was build from rx and both are dropped
+            tokio::spawn(
+                async move {
+                    while let Ok(item) = receiver.recv().await {
+                        match item {
+                            worker_event::WorkerEvent::Close => {
                                 break;
                             }
-                        },
+                            worker_event::WorkerEvent::StdOut(line) => {
+                                match tx
+                                    .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
+                                        event: Some(golem::worker::log_event::Event::Stdout(
+                                            golem::worker::StdOutLog {
+                                                message: String::from_utf8(line).unwrap(),
+                                            },
+                                        )),
+                                    }))
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        // item (server response) was queued to be send to client
+                                    }
+                                    Err(_item) => {
+                                        // output_stream was build from rx and both are dropped
+                                        break;
+                                    }
+                                }
+                            }
+                            worker_event::WorkerEvent::StdErr(line) => {
+                                match tx
+                                    .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
+                                        event: Some(golem::worker::log_event::Event::Stderr(
+                                            golem::worker::StdErrLog {
+                                                message: String::from_utf8(line).unwrap(),
+                                            },
+                                        )),
+                                    }))
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        // item (server response) was queued to be send to client
+                                    }
+                                    Err(_item) => {
+                                        // output_stream was build from rx and both are dropped
+                                        break;
+                                    }
+                                }
+                            }
+                            worker_event::WorkerEvent::Log {
+                                level,
+                                context,
+                                message,
+                            } => match tx
+                                .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
+                                    event: Some(golem::worker::log_event::Event::Log(
+                                        golem::worker::Log {
+                                            level: match level {
+                                                LogLevel::Trace => {
+                                                    golem::worker::Level::Trace.into()
+                                                }
+                                                LogLevel::Debug => {
+                                                    golem::worker::Level::Debug.into()
+                                                }
+                                                LogLevel::Info => golem::worker::Level::Info.into(),
+                                                LogLevel::Warn => golem::worker::Level::Warn.into(),
+                                                LogLevel::Error => {
+                                                    golem::worker::Level::Error.into()
+                                                }
+                                                LogLevel::Critical => {
+                                                    golem::worker::Level::Critical.into()
+                                                }
+                                            },
+                                            context,
+                                            message,
+                                        },
+                                    )),
+                                }))
+                                .await
+                            {
+                                Ok(_) => {
+                                    // item (server response) was queued to be send to client
+                                }
+                                Err(_item) => {
+                                    // output_stream was build from rx and both are dropped
+                                    break;
+                                }
+                            },
+                        }
                     }
-                }
 
-                record_closed_grpc_active_stream();
-                info!("Client disconnected from {worker_id}");
-            });
+                    record_closed_grpc_active_stream();
+                    info!("Client disconnected from {worker_id}");
+                }
+                .in_current_span(),
+            );
 
             let output_stream = ReceiverStream::new(rx);
             Ok(Response::new(output_stream))
@@ -1283,8 +1364,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::worker::WorkerId>,
     ) -> Result<Response<golem::workerexecutor::DeleteWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new("delete_worker", format!("worker_id={:?}", request));
-        match self.delete_worker_internal(request).await {
+        let record = recorded_grpc_request!(
+            "delete_worker",
+            worker_id = proto_worker_id_string(&Some(request.clone()))
+        );
+
+        match self
+            .delete_worker_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
             Ok(_) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::DeleteWorkerResponse {
                     result: Some(
@@ -1312,11 +1401,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::CompletePromiseRequest>,
     ) -> Result<Response<golem::workerexecutor::CompletePromiseResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
+        let record = recorded_grpc_request!(
             "complete_promise",
-            format!("promise_id={:?}", request.promise_id),
+            promise_id = proto_promise_id_string(&request.promise_id)
         );
-        match self.complete_promise_internal(request).await {
+
+        match self
+            .complete_promise_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
             Ok(success) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::CompletePromiseResponse {
                     result: Some(
@@ -1344,11 +1438,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::InterruptWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InterruptWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
+        let record = recorded_grpc_request!(
             "interrupt_worker",
-            format!("worker_id={:?}", request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
         );
-        match self.interrupt_worker_internal(request).await {
+
+        match self
+            .interrupt_worker_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
             Ok(_) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::InterruptWorkerResponse {
                     result: Some(
@@ -1378,11 +1477,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::RevokeShardsRequest>,
     ) -> Result<Response<golem::workerexecutor::RevokeShardsResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
-            "revoke_shards",
-            format!("shard_ids={:?}", request.shard_ids),
-        );
-        match self.revoke_shards_internal(request).await {
+        let record = recorded_grpc_request!("revoke_shards",);
+
+        match self
+            .revoke_shards_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
             Ok(_) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::RevokeShardsResponse {
                     result: Some(
@@ -1410,11 +1511,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::AssignShardsRequest>,
     ) -> Result<Response<golem::workerexecutor::AssignShardsResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
-            "assign_shards",
-            format!("shard_ids={:?}", request.shard_ids),
-        );
-        match self.assign_shards_internal(request).await {
+        let record = recorded_grpc_request!("assign_shards",);
+
+        match self
+            .assign_shards_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
             Ok(_) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::AssignShardsResponse {
                     result: Some(
@@ -1442,9 +1545,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::worker::WorkerId>,
     ) -> Result<Response<golem::workerexecutor::GetWorkerMetadataResponse>, Status> {
         let worker_id = request.into_inner();
-        let record =
-            RecordedGrpcRequest::new("get_worker_metadata", format!("worker_id={:?}", worker_id));
-        let result = self.get_worker_metadata_internal(&worker_id).await;
+        let record = recorded_grpc_request!(
+            "get_worker_metadata",
+            worker_id = proto_worker_id_string(&Some(worker_id.clone()))
+        );
+
+        let result = self
+            .get_worker_metadata_internal(&worker_id)
+            .instrument(record.span.clone())
+            .await;
         match result {
             Ok(result) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::GetWorkerMetadataResponse {
@@ -1484,11 +1593,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::ResumeWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::ResumeWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
+        let record = recorded_grpc_request!(
             "resume_worker",
-            format!("worker_id={:?}", request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
         );
-        match self.resume_worker_internal(request).await {
+
+        match self
+            .resume_worker_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
             Ok(_) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::ResumeWorkerResponse {
                     result: Some(
@@ -1516,11 +1630,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<GetRunningWorkersMetadataRequest>,
     ) -> Result<Response<GetRunningWorkersMetadataResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
+        let record = recorded_grpc_request!(
             "get_running_workers_metadata",
-            format!("component_id={:?}", request.component_id),
+            component_id = proto_component_id_string(&request.component_id),
         );
-        let result = self.get_running_workers_metadata_internal(request).await;
+
+        let result = self
+            .get_running_workers_metadata_internal(request)
+            .instrument(record.span.clone())
+            .await;
         match result {
             Ok(workers) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::GetRunningWorkersMetadataResponse {
@@ -1553,11 +1671,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<GetWorkersMetadataRequest>,
     ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
+        let record = recorded_grpc_request!(
             "get_workers_metadata",
-            format!("component_id={:?}", request.component_id),
+            component_id = proto_component_id_string(&request.component_id),
         );
-        let result = self.get_workers_metadata_internal(request).await;
+
+        let result = self
+            .get_workers_metadata_internal(request)
+            .instrument(record.span.clone())
+            .await;
         match result {
             Ok((cursor, workers)) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::GetWorkersMetadataResponse {
@@ -1591,11 +1713,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<UpdateWorkerRequest>,
     ) -> Result<Response<UpdateWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = RecordedGrpcRequest::new(
+        let record = recorded_grpc_request!(
             "update_worker",
-            format!("worker_id={:?}", request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
+            target_version = request.target_version,
         );
-        match self.update_worker_internal(request).await {
+
+        match self
+            .update_worker_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
             Ok(_) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::UpdateWorkerResponse {
                     result: Some(

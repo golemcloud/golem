@@ -27,6 +27,7 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
+use golem_api_grpc::proto::golem::worker::Cursor;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use poem_openapi::{Enum, Object, Union};
@@ -319,7 +320,7 @@ impl From<PromiseId> for golem_api_grpc::proto::golem::worker::PromiseId {
     fn from(value: PromiseId) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
-            oplog_idx: value.oplog_idx,
+            oplog_idx: value.oplog_idx.into(),
         }
     }
 }
@@ -332,7 +333,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PromiseId> for PromiseId {
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            oplog_idx: value.oplog_idx,
+            oplog_idx: OplogIndex::from_u64(value.oplog_idx),
         })
     }
 }
@@ -343,15 +344,53 @@ impl Display for PromiseId {
     }
 }
 
+/// Actions that can be scheduled to be executed at a given point in time
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, Encode, Decode)]
+pub enum ScheduledAction {
+    /// Completes a given promise
+    CompletePromise { promise_id: PromiseId },
+    /// Archives all entries from the first non-empty layer of an oplog to the next layer,
+    /// if the last oplog index did not change. If there are more layers below, schedules
+    /// a next action to archive the next layer.
+    ArchiveOplog {
+        account_id: AccountId,
+        worker_id: WorkerId,
+        last_oplog_index: OplogIndex,
+        next_after: Duration,
+    },
+}
+
+impl ScheduledAction {
+    pub fn worker_id(&self) -> &WorkerId {
+        match self {
+            ScheduledAction::CompletePromise { promise_id } => &promise_id.worker_id,
+            ScheduledAction::ArchiveOplog { worker_id, .. } => worker_id,
+        }
+    }
+}
+
+impl Display for ScheduledAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScheduledAction::CompletePromise { promise_id } => {
+                write!(f, "complete[{}]", promise_id)
+            }
+            ScheduledAction::ArchiveOplog { worker_id, .. } => {
+                write!(f, "archive[{}]", worker_id)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct ScheduleId {
     pub timestamp: i64,
-    pub promise_id: PromiseId,
+    pub action: ScheduledAction,
 }
 
 impl Display for ScheduleId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}@{}", self.promise_id, self.timestamp)
+        write!(f, "{}@{}", self.action, self.timestamp)
     }
 }
 
@@ -663,7 +702,7 @@ impl Default for WorkerStatusRecord {
             invocation_results: HashMap::new(),
             current_idempotency_key: None,
             component_version: 0,
-            oplog_idx: 0,
+            oplog_idx: OplogIndex::default(),
         }
     }
 }
@@ -1685,6 +1724,62 @@ impl From<FilterComparator> for i32 {
             FilterComparator::LessEqual => 3,
             FilterComparator::Greater => 4,
             FilterComparator::GreaterEqual => 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Object, Default)]
+pub struct ScanCursor {
+    pub cursor: u64,
+    pub layer: usize,
+}
+
+impl ScanCursor {
+    pub fn is_finished(&self) -> bool {
+        self.cursor == 0
+    }
+}
+
+impl Display for ScanCursor {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.layer, self.cursor)
+    }
+}
+
+impl FromStr for ScanCursor {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts = s.split('/').collect::<Vec<&str>>();
+        if parts.len() == 2 {
+            Ok(ScanCursor {
+                layer: parts[0]
+                    .parse()
+                    .map_err(|e| format!("Invalid layer part: {}", e))?,
+                cursor: parts[1]
+                    .parse()
+                    .map_err(|e| format!("Invalid cursor part: {}", e))?,
+            })
+        } else {
+            Err("Invalid cursor, must have 'layer/cursor' format".to_string())
+        }
+    }
+}
+
+impl From<Cursor> for ScanCursor {
+    fn from(value: Cursor) -> Self {
+        Self {
+            cursor: value.cursor,
+            layer: value.layer as usize,
+        }
+    }
+}
+
+impl From<ScanCursor> for Cursor {
+    fn from(value: ScanCursor) -> Self {
+        Self {
+            cursor: value.cursor,
+            layer: value.layer as u64,
         }
     }
 }

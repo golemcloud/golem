@@ -329,7 +329,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let blob_store_service = Arc::new(blob_store::DefaultBlobStoreService::new(
             blob_storage.clone(),
         ));
-        let oplog_service = Arc::new(oplog::OplogServiceMock::new());
+        let oplog_service = Arc::new(oplog::mock::OplogServiceMock::new());
         let recovery_management = Arc::new(recovery::RecoveryManagementMock::new());
         let rpc = Arc::new(rpc::RpcMock::new());
         let scheduler_service = Arc::new(scheduler::SchedulerServiceMock::new());
