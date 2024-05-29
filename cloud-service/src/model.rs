@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
@@ -19,105 +19,6 @@ use uuid::Uuid;
 )]
 pub struct VersionInfo {
     pub version: String,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    serde::Serialize,
-    serde::Deserialize,
-    Enum,
-    EnumIter,
-)]
-pub enum ProjectAction {
-    ViewComponent,
-    CreateComponent,
-    UpdateComponent,
-    DeleteComponent,
-    ViewWorker,
-    CreateWorker,
-    UpdateWorker,
-    DeleteWorker,
-    ViewProjectGrants,
-    CreateProjectGrants,
-    DeleteProjectGrants,
-    ViewApiDefinition,
-    CreateApiDefinition,
-    UpdateApiDefinition,
-    DeleteApiDefinition,
-}
-
-impl From<ProjectAction> for i32 {
-    fn from(value: ProjectAction) -> Self {
-        match value {
-            ProjectAction::ViewComponent => 0,
-            ProjectAction::CreateComponent => 1,
-            ProjectAction::UpdateComponent => 2,
-            ProjectAction::DeleteComponent => 3,
-            ProjectAction::ViewWorker => 4,
-            ProjectAction::CreateWorker => 5,
-            ProjectAction::UpdateWorker => 6,
-            ProjectAction::DeleteWorker => 7,
-            ProjectAction::ViewProjectGrants => 8,
-            ProjectAction::CreateProjectGrants => 9,
-            ProjectAction::DeleteProjectGrants => 10,
-            ProjectAction::ViewApiDefinition => 11,
-            ProjectAction::CreateApiDefinition => 12,
-            ProjectAction::UpdateApiDefinition => 13,
-            ProjectAction::DeleteApiDefinition => 14,
-        }
-    }
-}
-
-impl TryFrom<i32> for ProjectAction {
-    type Error = String;
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(ProjectAction::ViewComponent),
-            1 => Ok(ProjectAction::CreateComponent),
-            2 => Ok(ProjectAction::UpdateComponent),
-            3 => Ok(ProjectAction::DeleteComponent),
-            4 => Ok(ProjectAction::ViewWorker),
-            5 => Ok(ProjectAction::CreateWorker),
-            6 => Ok(ProjectAction::UpdateWorker),
-            7 => Ok(ProjectAction::DeleteWorker),
-            8 => Ok(ProjectAction::ViewProjectGrants),
-            9 => Ok(ProjectAction::CreateProjectGrants),
-            10 => Ok(ProjectAction::DeleteProjectGrants),
-            11 => Ok(ProjectAction::ViewApiDefinition),
-            12 => Ok(ProjectAction::CreateApiDefinition),
-            13 => Ok(ProjectAction::UpdateApiDefinition),
-            14 => Ok(ProjectAction::DeleteApiDefinition),
-            _ => Err(format!("Invalid project action: {}", value)),
-        }
-    }
-}
-
-impl std::fmt::Display for ProjectAction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            ProjectAction::ViewComponent => write!(f, "ViewComponent"),
-            ProjectAction::CreateComponent => write!(f, "CreateComponent"),
-            ProjectAction::UpdateComponent => write!(f, "UpdateComponent"),
-            ProjectAction::DeleteComponent => write!(f, "DeleteComponent"),
-            ProjectAction::ViewWorker => write!(f, "ViewWorker"),
-            ProjectAction::CreateWorker => write!(f, "CreateWorker"),
-            ProjectAction::UpdateWorker => write!(f, "UpdateWorker"),
-            ProjectAction::DeleteWorker => write!(f, "DeleteWorker"),
-            ProjectAction::ViewProjectGrants => write!(f, "ViewProjectGrants"),
-            ProjectAction::CreateProjectGrants => write!(f, "CreateProjectGrants"),
-            ProjectAction::DeleteProjectGrants => write!(f, "DeleteProjectGrants"),
-            ProjectAction::ViewApiDefinition => write!(f, "ViewApiDefinition"),
-            ProjectAction::CreateApiDefinition => write!(f, "CreateApiDefinition"),
-            ProjectAction::UpdateApiDefinition => write!(f, "UpdateApiDefinition"),
-            ProjectAction::DeleteApiDefinition => write!(f, "DeleteApiDefinition"),
-        }
-    }
 }
 
 #[derive(
@@ -155,55 +56,6 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             available_fuel: value.available_fuel,
             max_memory_per_worker: value.max_memory_per_worker,
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
-pub struct ProjectActions {
-    pub actions: HashSet<ProjectAction>,
-}
-
-impl ProjectActions {
-    pub fn empty() -> ProjectActions {
-        ProjectActions {
-            actions: HashSet::new(),
-        }
-    }
-
-    pub fn all() -> ProjectActions {
-        let actions: HashSet<ProjectAction> =
-            ProjectAction::iter().collect::<HashSet<ProjectAction>>();
-        ProjectActions { actions }
-    }
-}
-
-impl From<ProjectActions> for cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectActions {
-    fn from(value: ProjectActions) -> Self {
-        Self {
-            actions: value
-                .actions
-                .into_iter()
-                .map(|action| action.into())
-                .collect(),
-        }
-    }
-}
-
-impl TryFrom<cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectActions>
-    for ProjectActions
-{
-    type Error = String;
-
-    fn try_from(
-        value: cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectActions,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            actions: value
-                .actions
-                .into_iter()
-                .map(|action| action.try_into())
-                .collect::<Result<_, _>>()?,
-        })
     }
 }
 

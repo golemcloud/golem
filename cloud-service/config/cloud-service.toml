@@ -38,10 +38,6 @@ storage_limit = 500000000
 monthly_gas_limit = 1000000000000
 monthly_upload_limit = 1000000000
 
-[routing_table]
-# host
-# port
-
 [oauth2]
 github_client_id = "c57138f3680c74ab39d4"
 
@@ -59,6 +55,3 @@ role = "MarketingAdmin"
 name = "Marketing User"
 email = "marketing@user"
 
-[worker_executor_client_cache]
-max_capacity = 1000
-time_to_idle = "4h"

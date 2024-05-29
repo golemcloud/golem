@@ -7,6 +7,8 @@ import public "golem/cloud/project/project.proto";
 import public "golem/cloud/project/project_error.proto";
 import public "golem/cloud/project/project_data_request.proto";
 import "golem/common/project_id.proto";
+import "golem/common/account_id.proto";
+import "golem/component/component_id.proto";
 import public "golem/cloud/projectpolicy/project_action.proto";
 
 service CloudProjectService {
@@ -16,6 +18,7 @@ service CloudProjectService {
   rpc DeleteProject (DeleteProjectRequest) returns (DeleteProjectResponse);
   rpc GetProject (GetProjectRequest) returns (GetProjectResponse);
   rpc GetProjectActions (GetProjectActionsRequest) returns (GetProjectActionsResponse);
+  rpc GetComponentProjectActions (GetComponentProjectActionsRequest) returns (GetProjectActionsResponse);
 }
 
 message GetDefaultProjectRequest {
@@ -84,6 +87,10 @@ message GetProjectActionsRequest {
   golem.common.ProjectId projectId = 1;
 }
 
+message GetComponentProjectActionsRequest {
+  golem.component.ComponentId component_id = 1;
+}
+
 message GetProjectActionsResponse {
   oneof result {
       GetProjectActionsSuccessResponse success = 1;
@@ -92,5 +99,7 @@ message GetProjectActionsResponse {
 }
 
 message GetProjectActionsSuccessResponse {
-  repeated golem.cloud.projectpolicy.ProjectAction data = 1;
+  golem.common.ProjectId projectId = 1;
+  golem.common.AccountId owner_account_id = 2;
+  repeated golem.cloud.projectpolicy.ProjectAction actions = 3;
 }

@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use cloud_api_grpc::proto::golem::cloud::limit::cloud_limits_service_server::CloudLimitsService;
 use cloud_api_grpc::proto::golem::cloud::limit::{
-    batch_update_limits_response, get_limits_response, BatchUpdateLimitsRequest,
-    BatchUpdateLimitsResponse, GetLimitsRequest, GetLimitsResponse,
+    batch_update_resource_limits_response, get_resource_limits_response,
+    update_worker_limit_response, BatchUpdateResourceLimitsRequest,
+    BatchUpdateResourceLimitsResponse, GetResourceLimitsRequest, GetResourceLimitsResponse,
+    UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
 };
 use cloud_api_grpc::proto::golem::cloud::limit::{limits_error, LimitsError};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody, ResourceLimits};
@@ -46,11 +48,25 @@ impl From<PlanLimitError> for LimitsError {
             PlanLimitError::Unauthorized(error) => {
                 limits_error::Error::Unauthorized(ErrorBody { error })
             }
+            PlanLimitError::LimitExceeded(error) => {
+                limits_error::Error::LimitExceeded(ErrorBody { error })
+            }
             PlanLimitError::Internal(error) => {
                 limits_error::Error::InternalError(ErrorBody { error })
             }
         };
         LimitsError { error: Some(error) }
+    }
+}
+
+fn bad_request_error<T>(error: T) -> LimitsError
+where
+    T: Into<String>,
+{
+    LimitsError {
+        error: Some(limits_error::Error::BadRequest(ErrorsBody {
+            errors: vec![error.into()],
+        })),
     }
 }
 
@@ -77,7 +93,7 @@ impl LimitsGrpcApi {
 
     async fn get(
         &self,
-        request: GetLimitsRequest,
+        request: GetResourceLimitsRequest,
         metadata: MetadataMap,
     ) -> Result<ResourceLimits, LimitsError> {
         let auth = self.auth(metadata).await?;
@@ -102,12 +118,12 @@ impl LimitsGrpcApi {
 
     async fn update(
         &self,
-        request: BatchUpdateLimitsRequest,
+        request: BatchUpdateResourceLimitsRequest,
         metadata: MetadataMap,
     ) -> Result<(), LimitsError> {
         let auth = self.auth(metadata).await?;
         let mut updates: HashMap<AccountId, i64> = HashMap::new();
-        if let Some(batch_updates) = request.batch_update_resource_limits {
+        if let Some(batch_updates) = request.resource_limits {
             for (k, v) in batch_updates.updates {
                 updates.insert(AccountId::from(k.as_str()), v);
             }
@@ -119,36 +135,104 @@ impl LimitsGrpcApi {
 
         Ok(())
     }
+
+    async fn update_worker_limit(
+        &self,
+        request: UpdateWorkerLimitRequest,
+        metadata: MetadataMap,
+    ) -> Result<(), LimitsError> {
+        let auth = self.auth(metadata).await?;
+        let account_id: AccountId = request
+            .account_id
+            .map(|id| id.into())
+            .ok_or_else(|| bad_request_error("Missing account id"))?;
+
+        self.plan_limit_service
+            .update_worker_limit(&account_id, request.value, &auth)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn update_worker_connection_limit(
+        &self,
+        request: UpdateWorkerLimitRequest,
+        metadata: MetadataMap,
+    ) -> Result<(), LimitsError> {
+        let auth = self.auth(metadata).await?;
+        let account_id: AccountId = request
+            .account_id
+            .map(|id| id.into())
+            .ok_or_else(|| bad_request_error("Missing account id"))?;
+
+        self.plan_limit_service
+            .update_worker_connection_limit(&account_id, request.value, &auth)
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
 impl CloudLimitsService for LimitsGrpcApi {
-    async fn get_limits(
+    async fn update_worker_limit(
         &self,
-        request: Request<GetLimitsRequest>,
-    ) -> Result<Response<GetLimitsResponse>, Status> {
+        request: Request<UpdateWorkerLimitRequest>,
+    ) -> Result<Response<UpdateWorkerLimitResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get(r, m).await {
-            Ok(result) => Ok(Response::new(GetLimitsResponse {
-                result: Some(get_limits_response::Result::Success(result)),
+        match self.update_worker_limit(r, m).await {
+            Ok(_) => Ok(Response::new(UpdateWorkerLimitResponse {
+                result: Some(update_worker_limit_response::Result::Success(Empty {})),
             })),
-            Err(err) => Ok(Response::new(GetLimitsResponse {
-                result: Some(get_limits_response::Result::Error(err)),
+            Err(err) => Ok(Response::new(UpdateWorkerLimitResponse {
+                result: Some(update_worker_limit_response::Result::Error(err)),
             })),
         }
     }
 
-    async fn batch_update_limits(
+    async fn update_worker_connection_limit(
         &self,
-        request: Request<BatchUpdateLimitsRequest>,
-    ) -> Result<Response<BatchUpdateLimitsResponse>, Status> {
+        request: Request<UpdateWorkerLimitRequest>,
+    ) -> Result<Response<UpdateWorkerLimitResponse>, Status> {
+        let (m, _, r) = request.into_parts();
+        match self.update_worker_connection_limit(r, m).await {
+            Ok(_) => Ok(Response::new(UpdateWorkerLimitResponse {
+                result: Some(update_worker_limit_response::Result::Success(Empty {})),
+            })),
+            Err(err) => Ok(Response::new(UpdateWorkerLimitResponse {
+                result: Some(update_worker_limit_response::Result::Error(err)),
+            })),
+        }
+    }
+
+    async fn get_resource_limits(
+        &self,
+        request: Request<GetResourceLimitsRequest>,
+    ) -> Result<Response<GetResourceLimitsResponse>, Status> {
+        let (m, _, r) = request.into_parts();
+        match self.get(r, m).await {
+            Ok(result) => Ok(Response::new(GetResourceLimitsResponse {
+                result: Some(get_resource_limits_response::Result::Success(result)),
+            })),
+            Err(err) => Ok(Response::new(GetResourceLimitsResponse {
+                result: Some(get_resource_limits_response::Result::Error(err)),
+            })),
+        }
+    }
+
+    async fn batch_update_resource_limits(
+        &self,
+        request: Request<BatchUpdateResourceLimitsRequest>,
+    ) -> Result<Response<BatchUpdateResourceLimitsResponse>, Status> {
         let (m, _, r) = request.into_parts();
         match self.update(r, m).await {
-            Ok(_) => Ok(Response::new(BatchUpdateLimitsResponse {
-                result: Some(batch_update_limits_response::Result::Success(Empty {})),
+            Ok(_) => Ok(Response::new(BatchUpdateResourceLimitsResponse {
+                result: Some(batch_update_resource_limits_response::Result::Success(
+                    Empty {},
+                )),
             })),
-            Err(err) => Ok(Response::new(BatchUpdateLimitsResponse {
-                result: Some(batch_update_limits_response::Result::Error(err)),
+            Err(err) => Ok(Response::new(BatchUpdateResourceLimitsResponse {
+                result: Some(batch_update_resource_limits_response::Result::Error(err)),
             })),
         }
     }

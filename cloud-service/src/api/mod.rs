@@ -2,7 +2,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use poem::endpoint::PrometheusExporter;
-use poem::{get, EndpointExt, Route};
+use poem::Route;
 use poem_openapi::{OpenApiService, Tags};
 use prometheus::Registry;
 
@@ -12,7 +12,6 @@ mod account;
 mod account_summary;
 mod auth;
 mod component;
-mod connect;
 mod grant;
 mod healthcheck;
 mod limits;
@@ -21,7 +20,6 @@ mod project;
 mod project_grant;
 mod project_policy;
 mod token;
-mod worker;
 
 #[derive(Tags)]
 enum ApiTags {
@@ -61,8 +59,6 @@ enum ApiTags {
     Component,
     /// The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
     Token,
-    /// The worker API allows to launch new workers, query and manipulate their status, and invoke their exported functions.
-    Worker,
 }
 
 pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
@@ -72,16 +68,8 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
     let spec = api_service.spec_endpoint_yaml();
     let metrics = PrometheusExporter::new(prometheus_registry.deref().clone());
 
-    let connect_services = connect::ConnectService::new(services.worker_service.clone());
-
     Route::new()
         .nest("/", api_service)
-        .at(
-            "/v2/components/:component_id/workers/:worker_name/connect",
-            get(connect::ws)
-                .data(connect_services)
-                .data(services.auth_service.clone()),
-        )
         .nest("/docs", ui)
         .nest("/specs", spec)
         .nest("/metrics", metrics)
@@ -99,7 +87,6 @@ type ApiServices = (
     project_policy::ProjectPolicyApi,
     component::ComponentApi,
     token::TokenApi,
-    worker::WorkerApi,
 );
 
 pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {
@@ -130,6 +117,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             project::ProjectApi {
                 auth_service: services.auth_service.clone(),
                 project_service: services.project_service.clone(),
+                project_auth_service: services.project_auth_service.clone(),
             },
             project_grant::ProjectGrantApi {
                 auth_service: services.auth_service.clone(),
@@ -147,11 +135,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             token::TokenApi {
                 auth_service: services.auth_service.clone(),
                 token_service: services.token_service.clone(),
-            },
-            worker::WorkerApi {
-                auth_service: services.auth_service.clone(),
-                component_service: services.component_service.clone(),
-                worker_service: services.worker_service.clone(),
             },
         ),
         "Golem API",

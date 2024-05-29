@@ -7,7 +7,7 @@ use golem_common::model::ProjectId;
 use tracing::info;
 
 use crate::auth::AccountAuthorisation;
-use crate::model::{Project, ProjectActions, ProjectData, ProjectType, Role};
+use crate::model::{Project, ProjectData, ProjectType, Role};
 use crate::repo::component::ComponentRepo;
 use crate::repo::project::{ProjectRecord, ProjectRepo};
 use crate::repo::RepoError;
@@ -63,6 +63,7 @@ impl From<PlanLimitError> for ProjectError {
             PlanLimitError::ComponentIdNotFound(_) => {
                 ProjectError::Internal("Component not found".to_string())
             }
+            PlanLimitError::LimitExceeded(error) => ProjectError::LimitExceeded(error),
         }
     }
 }
@@ -100,12 +101,6 @@ pub trait ProjectService {
         project_id: &ProjectId,
         auth: &AccountAuthorisation,
     ) -> Result<Option<Project>, ProjectError>;
-
-    async fn get_actions(
-        &self,
-        project_id: &ProjectId,
-        auth: &AccountAuthorisation,
-    ) -> Result<ProjectActions, ProjectError>;
 }
 
 pub struct ProjectServiceDefault {
@@ -267,28 +262,11 @@ impl ProjectService for ProjectServiceDefault {
             .project_auth_service
             .get_by_project(project_id, auth)
             .await?;
-        if actions.actions.is_empty() {
+        if actions.actions.actions.is_empty() {
             Err(ProjectError::unauthorized("Unauthorized"))
         } else {
             let result = self.project_repo.get(&project_id.0).await?;
             Ok(result.map(|p| p.into()))
-        }
-    }
-
-    async fn get_actions(
-        &self,
-        project_id: &ProjectId,
-        auth: &AccountAuthorisation,
-    ) -> Result<ProjectActions, ProjectError> {
-        info!("Getting project actions {}", project_id);
-        let actions = self
-            .project_auth_service
-            .get_by_project(project_id, auth)
-            .await?;
-        if actions.actions.is_empty() {
-            Err(ProjectError::unauthorized("Unauthorized"))
-        } else {
-            Ok(actions)
         }
     }
 }
@@ -364,14 +342,6 @@ impl ProjectService for ProjectServiceNoOp {
         _auth: &AccountAuthorisation,
     ) -> Result<Option<Project>, ProjectError> {
         Ok(None)
-    }
-
-    async fn get_actions(
-        &self,
-        _project_id: &ProjectId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<ProjectActions, ProjectError> {
-        Ok(ProjectActions::empty())
     }
 }
 

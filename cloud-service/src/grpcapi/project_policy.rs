@@ -108,10 +108,10 @@ impl ProjectPolicyGrpcApi {
         let policy: model::ProjectPolicy = request
             .project_policy_data
             .map(|p| {
-                let project_actions: model::ProjectActions = p
+                let project_actions: cloud_common::model::ProjectActions = p
                     .actions
                     .and_then(|a| a.try_into().ok())
-                    .unwrap_or(model::ProjectActions::empty());
+                    .unwrap_or(cloud_common::model::ProjectActions::empty());
                 model::ProjectPolicy {
                     id: ProjectPolicyId::new_v4(),
                     name: p.name,

@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloud_common::model::ProjectPolicyId;
+use cloud_common::model::{ProjectAction, ProjectActions};
 use sqlx::{Database, Pool};
 use uuid::Uuid;
 
-use crate::model::{ProjectAction, ProjectActions, ProjectPolicy};
+use crate::model::ProjectPolicy;
 use crate::repo::RepoError;
 
 #[derive(sqlx::FromRow, Debug, Clone)]

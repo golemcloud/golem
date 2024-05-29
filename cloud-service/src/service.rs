@@ -7,7 +7,6 @@ use golem_service_base::config::ComponentStoreConfig;
 use golem_service_base::service::component_object_store;
 use std::sync::Arc;
 
-use crate::auth::AccountAuthorisation;
 use crate::config::{CloudServiceConfig, DbConfig};
 use crate::db;
 use crate::repo;
@@ -30,7 +29,6 @@ pub mod project_auth;
 pub mod project_grant;
 pub mod project_policy;
 pub mod token;
-pub mod worker;
 
 #[derive(Clone)]
 pub struct Services {
@@ -46,7 +44,6 @@ pub struct Services {
     pub token_service: Arc<dyn token::TokenService + Sync + Send>,
     pub login_service: Arc<dyn login::LoginService + Sync + Send>,
     pub component_service: Arc<dyn component::ComponentService + Sync + Send>,
-    pub worker_service: Arc<dyn worker::WorkerService + Sync + Send>,
     pub project_auth_service: Arc<dyn project_auth::ProjectAuthorisationService + Sync + Send>,
     pub project_service: Arc<dyn project::ProjectService + Sync + Send>,
     pub project_policy_service: Arc<dyn project_policy::ProjectPolicyService + Sync + Send>,
@@ -79,6 +76,7 @@ impl Services {
                 repositories.plan_repo.clone(),
                 repositories.account_repo.clone(),
                 repositories.account_workers_repo.clone(),
+                repositories.account_connections_repo.clone(),
                 repositories.account_uploads_repo.clone(),
                 repositories.project_repo.clone(),
                 repositories.component_repo.clone(),
@@ -202,48 +200,6 @@ impl Services {
                 compilation_service,
             ));
 
-        let routing_table_service: Arc<
-            dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,
-        > = Arc::new(
-            golem_service_base::routing_table::RoutingTableServiceDefault::new(
-                config.routing_table.clone(),
-            ),
-        );
-
-        let worker_executor_clients: Arc<
-            dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
-        > = Arc::new(
-            golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault::new(
-                config.worker_executor_client_cache.max_capacity,
-                config.worker_executor_client_cache.time_to_idle,
-            ),
-        );
-
-        let worker_service: Arc<dyn worker::WorkerService + Sync + Send> = {
-            use golem_worker_service_base::service::component::ComponentService as BaseComponentService;
-            use golem_worker_service_base::service::worker::WorkerServiceDefault;
-
-            let wrapped_component_service: Arc<
-                dyn BaseComponentService<AccountAuthorisation> + Send + Sync,
-            > = Arc::new(worker::ComponentServiceWrapper::new(
-                component_service.clone(),
-            ));
-
-            let base = WorkerServiceDefault::new(
-                worker_executor_clients.clone(),
-                wrapped_component_service,
-                routing_table_service.clone(),
-            );
-
-            Arc::new(worker::WorkerServiceDefault::new(
-                Arc::new(base),
-                project_auth_service.clone(),
-                plan_limit_service.clone(),
-                repositories.account_connections_repo.clone(),
-                repositories.account_workers_repo.clone(),
-            ))
-        };
-
         Ok(Services {
             auth_service,
             account_service,
@@ -261,7 +217,6 @@ impl Services {
             token_service,
             login_service,
             component_service,
-            worker_service,
         })
     }
 
@@ -314,9 +269,6 @@ impl Services {
         let project_service: Arc<dyn project::ProjectService + Sync + Send> =
             Arc::new(project::ProjectServiceNoOp::default());
 
-        let worker_service: Arc<dyn worker::WorkerService + Sync + Send> =
-            Arc::new(worker::WorkerServiceNoOp::default());
-
         Services {
             auth_service,
             account_service,
@@ -334,7 +286,6 @@ impl Services {
             login_service,
             token_service,
             component_service,
-            worker_service,
         }
     }
 }

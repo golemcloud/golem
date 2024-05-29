@@ -1,19 +1,17 @@
 use std::sync::Arc;
 
+use crate::api::common::ApiTags;
+use crate::service::auth::{AuthServiceError, CloudAuthCtx};
+use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
 use cloud_common::auth::GolemSecurityScheme;
 use golem_common::model::{CallingConvention, ComponentId, IdempotencyKey, WorkerFilter};
-use golem_worker_service_base::service::component::ComponentServiceError;
+use golem_service_base::model::*;
+use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tap::TapFallible;
 use tonic::Status;
-
-use crate::api::ApiTags;
-use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::component::{ComponentError, ComponentService};
-use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
-use golem_service_base::model::*;
 
 #[derive(ApiResponse)]
 pub enum WorkerError {
@@ -130,6 +128,13 @@ impl From<WorkerServiceError> for WorkerError {
                     WorkerError::InternalError(Json(GolemErrorBody { golem_error }))
                 }
             },
+            WorkerServiceError::Internal(error) => {
+                WorkerError::InternalError(Json(GolemErrorBody {
+                    golem_error: GolemError::Unknown(GolemErrorUnknown {
+                        details: error.to_string(),
+                    }),
+                }))
+            }
         }
     }
 }
@@ -137,39 +142,13 @@ impl From<WorkerServiceError> for WorkerError {
 impl From<AuthServiceError> for WorkerError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(error) => {
+            AuthServiceError::Unauthorized(error) => {
                 WorkerError::Unauthorized(Json(ErrorBody { error }))
             }
-            AuthServiceError::Unexpected(error) => {
-                WorkerError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
-                }))
-            }
-        }
-    }
-}
-
-impl From<ComponentError> for WorkerError {
-    fn from(error: ComponentError) -> Self {
-        match error {
-            ComponentError::AlreadyExists(_) => WorkerError::AlreadyExists(Json(ErrorBody {
-                error: error.to_string(),
-            })),
-            ComponentError::UnknownComponentId(_)
-            | ComponentError::UnknownVersionedComponentId(_)
-            | ComponentError::UnknownProjectId(_) => WorkerError::NotFound(Json(ErrorBody {
-                error: error.to_string(),
-            })),
-            ComponentError::Unauthorized(error) => {
+            AuthServiceError::Forbidden(error) => {
                 WorkerError::Unauthorized(Json(ErrorBody { error }))
             }
-            ComponentError::LimitExceeded(error) => {
-                WorkerError::LimitExceeded(Json(ErrorBody { error }))
-            }
-            ComponentError::ComponentProcessing(_) => WorkerError::BadRequest(Json(ErrorsBody {
-                errors: vec![error.to_string()],
-            })),
-            ComponentError::Internal(_) => WorkerError::InternalError(Json(GolemErrorBody {
+            AuthServiceError::Internal(error) => WorkerError::InternalError(Json(GolemErrorBody {
                 golem_error: GolemError::Unknown(GolemErrorUnknown {
                     details: error.to_string(),
                 }),
@@ -179,13 +158,22 @@ impl From<ComponentError> for WorkerError {
 }
 
 pub struct WorkerApi {
-    pub component_service: Arc<dyn ComponentService + Sync + Send>,
-    pub worker_service: Arc<dyn WorkerService + Sync + Send>,
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
+    component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send>,
+    worker_service: Arc<dyn WorkerService + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v2/components", tag = ApiTags::Worker)]
 impl WorkerApi {
+    pub fn new(
+        component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send>,
+        worker_service: Arc<dyn WorkerService + Sync + Send>,
+    ) -> Self {
+        Self {
+            component_service,
+            worker_service,
+        }
+    }
+
     /// Launch a new worker.
     ///
     /// Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
@@ -205,19 +193,22 @@ impl WorkerApi {
         request: Json<WorkerCreationRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<WorkerCreationResponse>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
 
         let component_id = component_id.0;
         let latest_component = self
             .component_service
-            .get_latest_version(&component_id, &auth)
+            .get_latest(&component_id, &auth)
             .await
-            .tap_err(|error| {
-                tracing::error!("Error getting latest component version: {:?}", error)
-            })?
-            .ok_or(WorkerError::NotFound(Json(ErrorBody {
-                error: format!("Component not found: {}", &component_id),
-            })))?;
+            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
+            .map_err(|error| {
+                WorkerError::NotFound(Json(ErrorBody {
+                    error: format!(
+                        "Couldn't retrieve the component: {}. error: {}",
+                        &component_id, error
+                    ),
+                }))
+            })?;
 
         let WorkerCreationRequest { name, args, env } = request.0;
 
@@ -254,7 +245,7 @@ impl WorkerApi {
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeleteWorkerResponse>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service.delete(&worker_id, &auth).await?;
@@ -282,7 +273,7 @@ impl WorkerApi {
         params: Json<InvokeParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResult>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         let calling_convention = calling_convention.0.unwrap_or(CallingConvention::Component);
@@ -321,7 +312,7 @@ impl WorkerApi {
         params: Json<InvokeParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResponse>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service
@@ -354,7 +345,7 @@ impl WorkerApi {
         params: Json<CompleteParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<bool>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
         let CompleteParameters { oplog_idx, data } = params.0;
 
@@ -386,7 +377,7 @@ impl WorkerApi {
         recover_immediately: Query<Option<bool>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InterruptResponse>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service
@@ -424,7 +415,7 @@ impl WorkerApi {
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkerMetadata>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
         let result = self.worker_service.get_metadata(&worker_id, &auth).await?;
 
@@ -470,7 +461,7 @@ impl WorkerApi {
         precise: Query<Option<bool>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
 
         let filter = match filter.0 {
             Some(filters) if !filters.is_empty() => Some(
@@ -530,7 +521,7 @@ impl WorkerApi {
         params: Json<WorkersMetadataRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
 
         let (cursor, workers) = self
             .worker_service
@@ -562,7 +553,7 @@ impl WorkerApi {
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ResumeResponse>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service.resume(&worker_id, &auth).await?;
@@ -582,7 +573,7 @@ impl WorkerApi {
         params: Json<UpdateWorkerRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<UpdateWorkerResponse>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service

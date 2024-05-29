@@ -1,29 +1,33 @@
-use std::sync::Arc;
-
+use crate::service::limit::LimitService;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::AccountId;
+use golem_service_base::model::WorkerId;
 use golem_worker_service_base::service::worker::ConnectWorkerStream as BaseWorkerStream;
+use std::sync::Arc;
 use tonic::Status;
 
-use crate::repo::account_connections::AccountConnectionsRepo;
+// use crate::repo::account_connections::AccountConnectionsRepo;
 
 pub struct ConnectWorkerStream {
     stream: BaseWorkerStream,
-    account_connections_repository: Arc<dyn AccountConnectionsRepo + Send + Sync>,
+    worker_id: WorkerId,
     account_id: AccountId,
+    limit_service: Arc<dyn LimitService + Sync + Send>,
 }
 
 impl ConnectWorkerStream {
     pub fn new(
         stream: BaseWorkerStream,
-        account_connections_repository: Arc<dyn AccountConnectionsRepo + Send + Sync>,
+        worker_id: WorkerId,
         account_id: AccountId,
+        limit_service: Arc<dyn LimitService + Sync + Send>,
     ) -> Self {
         Self {
             stream,
-            account_connections_repository,
+            worker_id,
             account_id,
+            limit_service,
         }
     }
 }
@@ -41,10 +45,18 @@ impl Stream for ConnectWorkerStream {
 
 impl Drop for ConnectWorkerStream {
     fn drop(&mut self) {
-        let account_connections_repository = self.account_connections_repository.clone();
+        tracing::info!(
+            "Dropping worker {} connections of account {}",
+            self.worker_id,
+            self.account_id
+        );
+        let limit_service = self.limit_service.clone();
         let account_id = self.account_id.clone();
+        let worker_id = self.worker_id.clone();
         tokio::spawn(async move {
-            let result = account_connections_repository.update(&account_id, -1).await;
+            let result = limit_service
+                .update_worker_connection_limit(&account_id, &worker_id, -1)
+                .await;
             if let Err(error) = result {
                 tracing::error!(
                     "Decrement active connections of account {account_id} failed {error}",

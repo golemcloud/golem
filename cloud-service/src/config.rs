@@ -6,7 +6,6 @@ use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_service_base::config::{ComponentStoreConfig, ComponentStoreLocalConfig};
-use golem_service_base::routing_table::RoutingTableConfig;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -23,11 +22,9 @@ pub struct CloudServiceConfig {
     pub db: DbConfig,
     pub plans: PlansConfig,
     pub components: ComponentsConfig,
-    pub routing_table: RoutingTableConfig,
     pub ed_dsa: EdDsaConfig,
     pub accounts: AccountsConfig,
     pub oauth2: OAuth2Config,
-    pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
 
 impl CloudServiceConfig {
@@ -52,11 +49,9 @@ impl Default for CloudServiceConfig {
             db: DbConfig::default(),
             plans: PlansConfig::default(),
             components: ComponentsConfig::default(),
-            routing_table: RoutingTableConfig::default(),
             ed_dsa: EdDsaConfig::default(),
             accounts: AccountsConfig::default(),
             oauth2: OAuth2Config::default(),
-            worker_executor_client_cache: WorkerExecutorClientCacheConfig::default(),
         }
     }
 }
@@ -229,8 +224,6 @@ mod tests {
         std::env::set_var("GOLEM__DB__CONFIG__PASSWORD", "postgres");
         std::env::set_var("GOLEM__ENVIRONMENT", "dev");
         std::env::set_var("GOLEM__WORKSPACE", "test");
-        std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "localhost");
-        std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
         std::env::set_var(
             "GOLEM__ACCOUNTS__ROOT__TOKEN",
             "c88084af-3741-4946-8b58-fa445d770a26",

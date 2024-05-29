@@ -7,31 +7,46 @@ import public "golem/common/empty.proto";
 import public "golem/cloud/limit/batch_update_resource_limits.proto";
 import public "golem/cloud/limit/limits_error.proto";
 import public "golem/common/resource_limits.proto";
+import public "golem/worker/worker_id.proto";
 
 service CloudLimitsService {
-  rpc GetLimits (GetLimitsRequest) returns (GetLimitsResponse);
-  rpc BatchUpdateLimits (BatchUpdateLimitsRequest) returns (BatchUpdateLimitsResponse);
+  rpc UpdateWorkerLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
+  rpc UpdateWorkerConnectionLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
+  rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
+  rpc BatchUpdateResourceLimits (BatchUpdateResourceLimitsRequest) returns (BatchUpdateResourceLimitsResponse);
 }
 
-message GetLimitsRequest {
+message GetResourceLimitsRequest {
   golem.common.AccountId accountId = 1;
 }
 
-message GetLimitsResponse {
+message GetResourceLimitsResponse {
   oneof result {
     golem.common.ResourceLimits success = 1;
     golem.cloud.limit.LimitsError error = 2;
   }
 }
 
-message BatchUpdateLimitsRequest {
-  golem.cloud.limit.BatchUpdateResourceLimits batchUpdateResourceLimits = 1;
+message BatchUpdateResourceLimitsRequest {
+  golem.cloud.limit.BatchUpdateResourceLimits resourceLimits = 1;
 }
 
-message BatchUpdateLimitsResponse {
+message BatchUpdateResourceLimitsResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.cloud.limit.LimitsError error = 2;
   }
 }
 
+message UpdateWorkerLimitRequest {
+  golem.common.AccountId accountId = 1;
+  golem.worker.WorkerId workerId = 2;
+  int32 value = 3;
+}
+
+message UpdateWorkerLimitResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.cloud.limit.LimitsError error = 2;
+  }
+}

@@ -8,7 +8,6 @@ use crate::grpcapi::project::ProjectGrpcApi;
 use crate::grpcapi::project_grant::ProjectGrantGrpcApi;
 use crate::grpcapi::project_policy::ProjectPolicyGrpcApi;
 use crate::grpcapi::token::TokenGrpcApi;
-use crate::grpcapi::worker::WorkerGrpcApi;
 use crate::service::Services;
 use cloud_api_grpc::proto::golem::cloud::account::cloud_account_service_server::CloudAccountServiceServer;
 use cloud_api_grpc::proto::golem::cloud::accountsummary::cloud_account_summary_service_server::CloudAccountSummaryServiceServer;
@@ -21,7 +20,6 @@ use cloud_api_grpc::proto::golem::cloud::projectpolicy::cloud_project_policy_ser
 use cloud_api_grpc::proto::golem::cloud::token::cloud_token_service_server::CloudTokenServiceServer;
 use cloud_common::model::TokenSecret as ModelTokenSecret;
 use golem_api_grpc::proto::golem::component::component_service_server::ComponentServiceServer;
-use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerServiceServer;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use tonic::metadata::MetadataMap;
@@ -37,7 +35,6 @@ mod project;
 mod project_grant;
 mod project_policy;
 mod token;
-mod worker;
 
 pub fn get_authorisation_token(metadata: MetadataMap) -> Option<ModelTokenSecret> {
     let auth = metadata
@@ -86,9 +83,6 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
     health_reporter
         .set_serving::<CloudTokenServiceServer<TokenGrpcApi>>()
         .await;
-    health_reporter
-        .set_serving::<WorkerServiceServer<WorkerGrpcApi>>()
-        .await;
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(golem_api_grpc::proto::FILE_DESCRIPTOR_SET)
@@ -125,6 +119,7 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         .add_service(CloudProjectServiceServer::new(ProjectGrpcApi {
             auth_service: services.auth_service.clone(),
             project_service: services.project_service.clone(),
+            project_auth_service: services.project_auth_service.clone(),
         }))
         .add_service(CloudProjectGrantServiceServer::new(ProjectGrantGrpcApi {
             auth_service: services.auth_service.clone(),
@@ -142,11 +137,6 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         .add_service(CloudTokenServiceServer::new(TokenGrpcApi {
             auth_service: services.auth_service.clone(),
             token_service: services.token_service.clone(),
-        }))
-        .add_service(WorkerServiceServer::new(WorkerGrpcApi {
-            auth_service: services.auth_service.clone(),
-            component_service: services.component_service.clone(),
-            worker_service: services.worker_service.clone(),
         }))
         .serve(addr)
         .await

@@ -204,7 +204,7 @@ impl ProjectGrantGrpcApi {
         let project_policy_id = match data.project_policy_id.and_then(|id| id.value) {
             Some(policy_id) => ProjectPolicyId(policy_id.into()),
             None => {
-                let actions: HashSet<model::ProjectAction> = data
+                let actions: HashSet<cloud_common::model::ProjectAction> = data
                     .project_actions
                     .into_iter()
                     .map(|action| action.try_into())
@@ -214,7 +214,7 @@ impl ProjectGrantGrpcApi {
                 let policy = model::ProjectPolicy {
                     id: ProjectPolicyId::new_v4(),
                     name: data.project_policy_name,
-                    project_actions: model::ProjectActions { actions },
+                    project_actions: cloud_common::model::ProjectActions { actions },
                 };
                 self.project_policy_service.create(&policy).await?;
                 policy.id

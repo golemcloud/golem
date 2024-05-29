@@ -22,6 +22,8 @@ pub enum LimitsError {
     /// Unauthorized request
     #[oai(status = 401)]
     Unauthorized(Json<ErrorBody>),
+    #[oai(status = 403)]
+    LimitExceeded(Json<ErrorBody>),
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<ErrorBody>),
@@ -46,6 +48,9 @@ impl From<PlanLimitError> for LimitsError {
             }
             PlanLimitError::Unauthorized(error) => {
                 LimitsError::Unauthorized(Json(ErrorBody { error }))
+            }
+            PlanLimitError::LimitExceeded(error) => {
+                LimitsError::LimitExceeded(Json(ErrorBody { error }))
             }
         }
     }

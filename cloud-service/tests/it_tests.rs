@@ -3,13 +3,15 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
-    use cloud_common::model::{PlanId, ProjectGrantId, ProjectPolicyId, TokenId};
+    use cloud_common::model::{
+        PlanId, ProjectActions, ProjectAuthorisedActions, ProjectGrantId, ProjectPolicyId, TokenId,
+    };
     use cloud_service::auth::AccountAuthorisation;
     use cloud_service::config::{CloudServiceConfig, DbConfig};
     use cloud_service::db;
     use cloud_service::model::{
-        Account, AccountData, OAuth2Provider, OAuth2Token, Project, ProjectActions, ProjectData,
-        ProjectGrant, ProjectGrantData, ProjectPolicy, ProjectType, Role, Token,
+        Account, AccountData, OAuth2Provider, OAuth2Token, Project, ProjectData, ProjectGrant,
+        ProjectGrantData, ProjectPolicy, ProjectType, Role, Token,
     };
     use cloud_service::service::account::AccountService;
     use cloud_service::service::oauth2_token::OAuth2TokenService;
@@ -407,7 +409,11 @@ mod tests {
             .await
             .unwrap();
 
-        let all_project_actions = ProjectActions::all();
+        let all_project_actions = ProjectAuthorisedActions {
+            actions: ProjectActions::all(),
+            owner_account_id: account.id.clone(),
+            project_id: project_id.clone(),
+        };
 
         assert!(project_actions == all_project_actions);
 

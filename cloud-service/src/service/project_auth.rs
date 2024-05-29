@@ -3,13 +3,14 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cloud_common::model::ProjectPolicyId;
+use cloud_common::model::{ProjectAction, ProjectActions};
+use cloud_common::model::{ProjectAuthorisedActions, ProjectPolicyId};
 use golem_common::model::ComponentId;
 use golem_common::model::ProjectId;
 use tracing::info;
 
 use crate::auth::AccountAuthorisation;
-use crate::model::{ProjectAction, ProjectActions};
+
 use crate::repo::component::ComponentRepo;
 use crate::repo::project::ProjectRepo;
 use crate::repo::RepoError;
@@ -25,6 +26,10 @@ pub enum ProjectAuthorisationError {
 impl ProjectAuthorisationError {
     pub fn internal<T: Display>(error: T) -> Self {
         ProjectAuthorisationError::Internal(error.to_string())
+    }
+
+    pub fn unauthorized<T: Display>(error: T) -> Self {
+        ProjectAuthorisationError::Unauthorized(error.to_string())
     }
 }
 
@@ -62,13 +67,13 @@ pub trait ProjectAuthorisationService {
         &self,
         project_id: &ProjectId,
         auth: &AccountAuthorisation,
-    ) -> Result<ProjectActions, ProjectAuthorisationError>;
+    ) -> Result<ProjectAuthorisedActions, ProjectAuthorisationError>;
 
     async fn get_by_component(
         &self,
         component_id: &ComponentId,
         auth: &AccountAuthorisation,
-    ) -> Result<ProjectActions, ProjectAuthorisationError>;
+    ) -> Result<ProjectAuthorisedActions, ProjectAuthorisationError>;
 
     async fn get_all(
         &self,
@@ -105,14 +110,18 @@ impl ProjectAuthorisationService for ProjectAuthorisationServiceDefault {
         &self,
         project_id: &ProjectId,
         auth: &AccountAuthorisation,
-    ) -> Result<ProjectActions, ProjectAuthorisationError> {
+    ) -> Result<ProjectAuthorisedActions, ProjectAuthorisationError> {
         info!("Get project authorisations for project: {}", project_id);
 
         let project = self.project_repo.get(&project_id.0).await?;
 
         if let Some(project) = project {
             if project.owner_account_id == auth.token.account_id.value {
-                Ok(ProjectActions::all())
+                Ok(ProjectAuthorisedActions {
+                    project_id: project_id.clone(),
+                    owner_account_id: auth.token.account_id.clone(),
+                    actions: ProjectActions::all(),
+                })
             } else {
                 let grants = self
                     .project_grant_service
@@ -124,7 +133,7 @@ impl ProjectAuthorisationService for ProjectAuthorisationServiceDefault {
                     .map(|p| p.data.project_policy_id.clone())
                     .collect::<Vec<ProjectPolicyId>>();
 
-                if !policy_ids.is_empty() {
+                let actions = if !policy_ids.is_empty() {
                     let policies = self.project_policy_service.get_all(policy_ids).await?;
 
                     let actions = policies
@@ -132,13 +141,19 @@ impl ProjectAuthorisationService for ProjectAuthorisationServiceDefault {
                         .flat_map(|p| p.clone().project_actions.actions)
                         .collect::<HashSet<ProjectAction>>();
 
-                    Ok(ProjectActions { actions })
+                    ProjectActions { actions }
                 } else {
-                    Ok(ProjectActions::empty())
-                }
+                    ProjectActions::empty()
+                };
+
+                Ok(ProjectAuthorisedActions {
+                    project_id: project_id.clone(),
+                    owner_account_id: auth.token.account_id.clone(),
+                    actions,
+                })
             }
         } else {
-            Ok(ProjectActions::empty())
+            Err(ProjectAuthorisationError::unauthorized("Unauthorized"))
         }
     }
 
@@ -146,7 +161,7 @@ impl ProjectAuthorisationService for ProjectAuthorisationServiceDefault {
         &self,
         component_id: &ComponentId,
         auth: &AccountAuthorisation,
-    ) -> Result<ProjectActions, ProjectAuthorisationError> {
+    ) -> Result<ProjectAuthorisedActions, ProjectAuthorisationError> {
         info!("Get project authorisations for component: {}", component_id);
         let component = self
             .component_repo
@@ -157,7 +172,7 @@ impl ProjectAuthorisationService for ProjectAuthorisationServiceDefault {
             let project_id = ProjectId(component.project_id);
             self.get_by_project(&project_id, auth).await
         } else {
-            Ok(ProjectActions::all())
+            Err(ProjectAuthorisationError::unauthorized("Unauthorized"))
         }
     }
 
@@ -214,18 +229,26 @@ pub struct ProjectAuthorisationServiceNoOp {}
 impl ProjectAuthorisationService for ProjectAuthorisationServiceNoOp {
     async fn get_by_project(
         &self,
-        _project_id: &ProjectId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<ProjectActions, ProjectAuthorisationError> {
-        Ok(ProjectActions::empty())
+        project_id: &ProjectId,
+        auth: &AccountAuthorisation,
+    ) -> Result<ProjectAuthorisedActions, ProjectAuthorisationError> {
+        Ok(ProjectAuthorisedActions {
+            project_id: project_id.clone(),
+            owner_account_id: auth.token.account_id.clone(),
+            actions: ProjectActions::empty(),
+        })
     }
 
     async fn get_by_component(
         &self,
-        _component_id: &ComponentId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<ProjectActions, ProjectAuthorisationError> {
-        Ok(ProjectActions::empty())
+        component_id: &ComponentId,
+        auth: &AccountAuthorisation,
+    ) -> Result<ProjectAuthorisedActions, ProjectAuthorisationError> {
+        Ok(ProjectAuthorisedActions {
+            project_id: ProjectId(component_id.0),
+            owner_account_id: auth.token.account_id.clone(),
+            actions: ProjectActions::empty(),
+        })
     }
 
     async fn get_all(

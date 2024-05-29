@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::service::auth::CloudAuthCtx;
+use cloud_common::auth::GolemSecurityScheme;
 use futures_util::StreamExt;
 use golem_common::model::ComponentId;
 use golem_service_base::model::WorkerId;
@@ -9,10 +11,9 @@ use http::StatusCode;
 use poem::web::websocket::WebSocket;
 use poem::web::{Data, Path};
 use poem::*;
+use poem_openapi::{ApiExtractor, ExtractParamOptions};
 use tap::TapFallible;
 
-use crate::api::auth::AuthData;
-use crate::auth::AccountAuthorisation;
 use crate::service::worker::{ConnectWorkerStream, WorkerService};
 
 #[derive(Clone)]
@@ -31,9 +32,21 @@ pub async fn ws(
     Path((component_id, worker_name)): Path<(ComponentId, String)>,
     websocket: WebSocket,
     Data(service): Data<&ConnectService>,
-    auth: AuthData,
+    request: &Request,
 ) -> Response {
-    get_worker_stream(service, component_id, worker_name, auth.auth)
+    // FIXME figure out how to do this better
+    let token = match ApiExtractor::from_request(
+        request,
+        &mut RequestBody::new(Body::empty()),
+        ExtractParamOptions::default(),
+    )
+    .await
+    {
+        Ok(token) => token,
+        Err(err) => return err.into_response(),
+    };
+
+    get_worker_stream(service, component_id, worker_name, token)
         .await
         .map(|(worker_id, worker_stream)| {
             websocket
@@ -60,14 +73,14 @@ async fn get_worker_stream(
     service: &ConnectService,
     component_id: ComponentId,
     worker_name: String,
-    auth: AccountAuthorisation,
+    token: GolemSecurityScheme,
 ) -> Result<(WorkerId, ConnectWorkerStream), Response> {
     let worker_id = WorkerId::new(component_id, worker_name)
         .map_err(|e| single_error(StatusCode::BAD_REQUEST, format!("Invalid worker id: {e}")))?;
 
     let worker_stream = service
         .worker_service
-        .connect(&worker_id, &auth)
+        .connect(&worker_id, &CloudAuthCtx::new(token.secret()))
         .await
         .tap_err(|e| tracing::info!("Error connecting to worker {e}"))
         .map_err(|e| e.into_response())?;
@@ -85,7 +98,7 @@ fn single_error(status: StatusCode, message: impl std::fmt::Display) -> Response
 
     let body = serde_json::to_string(&body).expect("Serialize ErrorBody");
 
-    poem::Response::builder()
+    Response::builder()
         .status(status)
         .content_type("application/json")
         .body(body)
@@ -96,7 +109,7 @@ fn many_errors(status: StatusCode, errors: Vec<String>) -> Response {
 
     let body = serde_json::to_string(&body).expect("Serialize ErrorsBody");
 
-    poem::Response::builder()
+    Response::builder()
         .status(status)
         .content_type("application/json")
         .body(body)
@@ -148,6 +161,9 @@ impl IntoResponse for crate::service::worker::WorkerError {
             }
             crate::service::worker::WorkerError::ProjectNotFound(_) => {
                 single_error(StatusCode::NOT_FOUND, self)
+            }
+            crate::service::worker::WorkerError::Internal(_) => {
+                single_error(StatusCode::INTERNAL_SERVER_ERROR, self)
             }
         }
     }

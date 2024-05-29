@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cloud_common::model::ProjectAction;
 use golem_common::model::ComponentId;
 use golem_common::model::ProjectId;
 use golem_component_service_base::service::component_compilation::ComponentCompilationService;
@@ -81,6 +82,7 @@ impl From<PlanLimitError> for ComponentError {
             PlanLimitError::ComponentIdNotFound(component_id) => {
                 ComponentError::UnknownComponentId(component_id)
             }
+            PlanLimitError::LimitExceeded(error) => ComponentError::LimitExceeded(error),
         }
     }
 }
@@ -665,7 +667,7 @@ impl ComponentServiceDefault {
                 .await
                 .tap_err(|e| error!("Error getting component permissions: {:?}", e))?;
 
-            if permissions.actions.contains(required_action) {
+            if permissions.actions.actions.contains(required_action) {
                 Ok(())
             } else {
                 Err(ComponentError::Unauthorized(format!(
@@ -691,7 +693,7 @@ impl ComponentServiceDefault {
                 .await
                 .tap_err(|e| error!("Error getting component permissions: {:?}", e))?;
 
-            if permissions.actions.contains(required_action) {
+            if permissions.actions.actions.contains(required_action) {
                 Ok(())
             } else {
                 Err(ComponentError::Unauthorized(format!(

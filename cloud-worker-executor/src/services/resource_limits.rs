@@ -6,8 +6,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::limit::cloud_limits_service_client::CloudLimitsServiceClient;
 use cloud_api_grpc::proto::golem::cloud::limit::{
-    batch_update_limits_response, get_limits_response, BatchUpdateLimitsRequest,
-    BatchUpdateResourceLimits, GetLimitsRequest,
+    batch_update_resource_limits_response, get_resource_limits_response, BatchUpdateResourceLimits,
+    BatchUpdateResourceLimitsRequest, GetResourceLimitsRequest,
 };
 use dashmap::DashMap;
 use golem_common::config::RetryConfig;
@@ -91,17 +91,20 @@ impl ResourceLimitsGrpc {
                     let mut client =
                         CloudLimitsServiceClient::connect(endpoint.as_http_02()).await?;
                     let request = authorised_request(
-                        BatchUpdateLimitsRequest {
-                            batch_update_resource_limits: Some(body.clone()),
+                        BatchUpdateResourceLimitsRequest {
+                            resource_limits: Some(body.clone()),
                         },
                         access_token,
                     );
-                    let response = client.batch_update_limits(request).await?.into_inner();
+                    let response = client
+                        .batch_update_resource_limits(request)
+                        .await?
+                        .into_inner();
 
                     match response.result {
                         None => Err("Empty response".to_string().into()),
-                        Some(batch_update_limits_response::Result::Success(_)) => Ok(()),
-                        Some(batch_update_limits_response::Result::Error(error)) => {
+                        Some(batch_update_resource_limits_response::Result::Success(_)) => Ok(()),
+                        Some(batch_update_resource_limits_response::Result::Error(error)) => {
                             Err(GrpcError::Domain(error))
                         }
                     }?;
@@ -130,18 +133,18 @@ impl ResourceLimitsGrpc {
                 Box::pin(async move {
                     let mut client = CloudLimitsServiceClient::connect(url.as_http_02()).await?;
                     let request = authorised_request(
-                        GetLimitsRequest {
+                        GetResourceLimitsRequest {
                             account_id: Some(account_id.clone().into()),
                         },
                         access_token,
                     );
-                    let response = client.get_limits(request).await?.into_inner();
+                    let response = client.get_resource_limits(request).await?.into_inner();
 
                     let len = response.encoded_len();
                     let limits = match response.result {
                         None => Err("Empty response".to_string().into()),
-                        Some(get_limits_response::Result::Success(limits)) => Ok(limits),
-                        Some(get_limits_response::Result::Error(error)) => {
+                        Some(get_resource_limits_response::Result::Success(limits)) => Ok(limits),
+                        Some(get_resource_limits_response::Result::Error(error)) => {
                             Err(GrpcError::Domain(error))
                         }
                     }?;

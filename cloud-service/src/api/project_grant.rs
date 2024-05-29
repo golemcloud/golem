@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cloud_common::auth::GolemSecurityScheme;
-use cloud_common::model::{ProjectGrantId, ProjectPolicyId};
+use cloud_common::model::{ProjectActions, ProjectGrantId, ProjectPolicyId};
 use golem_common::model::ProjectId;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;

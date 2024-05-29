@@ -49,7 +49,7 @@ serde_with = "3.5.0"
 strum = { workspace = true }
 strum_macros = { workspace = true }
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "migrate", "chrono"] }
-tap = "1.0.1"
+tap = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = "0.7.10"

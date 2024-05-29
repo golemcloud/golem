@@ -10,6 +10,8 @@ use crate::api::ApiTags;
 use crate::model::*;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::project::{ProjectError as ProjectServiceError, ProjectService};
+use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisationService};
+use cloud_common::model::ProjectAction;
 use golem_service_base::model::{ErrorBody, ErrorsBody};
 
 #[derive(ApiResponse)]
@@ -62,9 +64,23 @@ impl From<ProjectServiceError> for ProjectError {
     }
 }
 
+impl From<ProjectAuthorisationError> for ProjectError {
+    fn from(value: ProjectAuthorisationError) -> Self {
+        match value {
+            ProjectAuthorisationError::Internal(error) => {
+                ProjectError::InternalError(Json(ErrorBody { error }))
+            }
+            ProjectAuthorisationError::Unauthorized(error) => {
+                ProjectError::Unauthorized(Json(ErrorBody { error }))
+            }
+        }
+    }
+}
+
 pub struct ProjectApi {
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
     pub project_service: Arc<dyn ProjectService + Sync + Send>,
+    pub project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v2/projects", tag = ApiTags::Project)]
@@ -180,10 +196,10 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<ProjectAction>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let actions = self
-            .project_service
-            .get_actions(&project_id.0, &auth)
+        let result = self
+            .project_auth_service
+            .get_by_project(&project_id.0, &auth)
             .await?;
-        Ok(Json(Vec::from_iter(actions.actions)))
+        Ok(Json(Vec::from_iter(result.actions.actions)))
     }
 }

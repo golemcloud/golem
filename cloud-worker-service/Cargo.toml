@@ -1,0 +1,68 @@
+[package]
+name = "cloud-worker-service"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "cloud-worker-service"
+path = "src/main.rs"
+
+[dependencies]
+golem-common = { workspace = true }
+golem-api-grpc = { workspace = true }
+golem-wasm-rpc = { workspace = true }
+golem-worker-service-base = {workspace = true}
+golem-service-base = {workspace = true}
+
+cloud-api-grpc = { path = "../cloud-api-grpc" }
+cloud-common = { path = "../cloud-common" }
+
+async-trait = { workspace = true }
+bincode = { workspace = true }
+bytes = { workspace = true }
+derive_more = { workspace = true }
+figment = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+http = { workspace = true }
+http_02 = { package = "http", version = "0.2.11" }
+hyper = { workspace = true }
+nom = "7.1.3"
+opentelemetry = { workspace = true }
+opentelemetry-prometheus = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+poem = { workspace = true, features = ["prometheus", "opentelemetry"] }
+poem-openapi = { workspace = true }
+prometheus = { workspace = true }
+regex = "1.10.3"
+rusoto_acm = "0.48.0"
+rusoto_core = "0.48.0"
+rusoto_credential = "0.48.0"
+rusoto_elbv2 = "0.48.0"
+rusoto_route53 = "0.48.0"
+rusoto_sts = "0.48.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+tap = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tonic-reflection = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "std", "json"] }
+url = { workspace = true }
+uuid = { workspace = true }
+warp = { workspace = true }
+x509-certificate = "0.23.1"
+headers = "0.3.9"
+thiserror = { workspace = true } 
+anyhow = { workspace = true }
+
+[dev-dependencies]
+reqwest = { workspace = true }

@@ -16,22 +16,15 @@ use golem_worker_service_base::service::worker::{
 };
 use serde_json::Value;
 
-use crate::auth::AccountAuthorisation;
-use crate::model::*;
-use crate::repo::account_connections::AccountConnectionsRepo;
-use crate::repo::account_workers::AccountWorkersRepo;
+use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx};
+use cloud_common::model::ProjectAction;
 use golem_service_base::model::*;
+use golem_wasm_rpc::TypeAnnotatedValue;
 
-mod component;
 mod connect;
 
-pub use component::*;
+use crate::service::limit::{LimitError, LimitService};
 pub use connect::*;
-
-use super::{
-    plan_limit::{CheckLimitResult, LimitResult, PlanLimitError, PlanLimitService},
-    project_auth::{ProjectAuthorisationError, ProjectAuthorisationService},
-};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerError {
@@ -43,6 +36,18 @@ pub enum WorkerError {
     ProjectNotFound(ProjectId),
     #[error(transparent)]
     Base(#[from] BaseWorkerServiceError),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
+}
+
+impl From<AuthServiceError> for WorkerError {
+    fn from(value: AuthServiceError) -> Self {
+        match value {
+            AuthServiceError::Unauthorized(error) => WorkerError::Unauthorized(error),
+            AuthServiceError::Forbidden(error) => WorkerError::Forbidden(error),
+            AuthServiceError::Internal(error) => WorkerError::Internal(error),
+        }
+    }
 }
 
 #[async_trait]
@@ -53,20 +58,16 @@ pub trait WorkerService {
         component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<WorkerId, WorkerError>;
 
     async fn connect(
         &self,
         worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<ConnectWorkerStream, WorkerError>;
 
-    async fn delete(
-        &self,
-        worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
-    ) -> Result<(), WorkerError>;
+    async fn delete(&self, worker_id: &WorkerId, auth: &CloudAuthCtx) -> Result<(), WorkerError>;
 
     async fn invoke_and_await_function(
         &self,
@@ -75,7 +76,7 @@ pub trait WorkerService {
         function_name: String,
         params: Value,
         calling_convention: &CallingConvention,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Value, WorkerError>;
 
     async fn invoke_and_await_function_proto(
@@ -85,8 +86,18 @@ pub trait WorkerService {
         function_name: String,
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<ProtoInvokeResult, WorkerError>;
+
+    async fn invoke_and_await_function_typed_value(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Value,
+        calling_convention: &CallingConvention,
+        auth: &CloudAuthCtx,
+    ) -> Result<TypeAnnotatedValue, WorkerError>;
 
     async fn invoke_function(
         &self,
@@ -94,7 +105,7 @@ pub trait WorkerService {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Value,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError>;
 
     async fn invoke_function_proto(
@@ -103,7 +114,7 @@ pub trait WorkerService {
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError>;
 
     async fn complete_promise(
@@ -111,20 +122,20 @@ pub trait WorkerService {
         worker_id: &WorkerId,
         oplog_id: u64,
         data: Vec<u8>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<bool, WorkerError>;
 
     async fn interrupt(
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError>;
 
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<crate::model::WorkerMetadata, WorkerError>;
 
     async fn find_metadata(
@@ -134,99 +145,60 @@ pub trait WorkerService {
         cursor: u64,
         count: u64,
         precise: bool,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<(Option<u64>, Vec<crate::model::WorkerMetadata>), WorkerError>;
 
-    async fn resume(
-        &self,
-        worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
-    ) -> Result<(), WorkerError>;
+    async fn resume(&self, worker_id: &WorkerId, auth: &CloudAuthCtx) -> Result<(), WorkerError>;
 
     async fn update(
         &self,
         worker_id: &WorkerId,
         update_mode: UpdateMode,
         target_version: ComponentVersion,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError>;
 }
 
 #[derive(Clone)]
 pub struct WorkerServiceDefault {
-    base_worker_service: Arc<dyn BaseWorkerService<AccountAuthorisation> + Send + Sync>,
-
-    project_authorisation_service: Arc<dyn ProjectAuthorisationService + Send + Sync>,
-    plan_limit_service: Arc<dyn PlanLimitService + Send + Sync>,
-
-    account_connections_repository: Arc<dyn AccountConnectionsRepo + Send + Sync>,
-    account_workers_repository: Arc<dyn AccountWorkersRepo + Send + Sync>,
+    auth_service: Arc<dyn AuthService + Sync + Send>,
+    limit_service: Arc<dyn LimitService + Sync + Send>,
+    base_worker_service: Arc<dyn BaseWorkerService<CloudAuthCtx> + Send + Sync>,
 }
 
 impl WorkerServiceDefault {
     pub fn new(
-        base_worker_service: Arc<dyn BaseWorkerService<AccountAuthorisation> + Send + Sync>,
-        project_authorisation_service: Arc<dyn ProjectAuthorisationService + Send + Sync>,
-        plan_limit_service: Arc<dyn PlanLimitService + Send + Sync>,
-        account_connections_repository: Arc<dyn AccountConnectionsRepo + Send + Sync>,
-        account_workers_repository: Arc<dyn AccountWorkersRepo + Send + Sync>,
+        auth_service: Arc<dyn AuthService + Sync + Send>,
+        limit_service: Arc<dyn LimitService + Sync + Send>,
+        base_worker_service: Arc<dyn BaseWorkerService<CloudAuthCtx> + Send + Sync>,
     ) -> Self {
         WorkerServiceDefault {
+            auth_service,
+            limit_service,
             base_worker_service,
-            project_authorisation_service,
-            plan_limit_service,
-            account_connections_repository,
-            account_workers_repository,
         }
     }
 
-    async fn update_account_workers(&self, account_id: &AccountId, value: i32) {
-        let result = self
-            .account_workers_repository
-            .update(account_id, value)
-            .await;
-        if result.is_err() {
-            tracing::error!("Update worker count of {account_id} failed.");
-        }
-    }
-
-    async fn increment_account_connections(
+    async fn authorize(
         &self,
-        account_id: &AccountId,
-    ) -> Result<(), WorkerError> {
-        match self
-            .account_connections_repository
-            .update(account_id, 1)
-            .await
-        {
-            Ok(connections) => {
-                if connections > 10 {
-                    self.decrement_account_connections(account_id).await;
-                    let err =
-                        WorkerError::Forbidden("Worker limit exceeded (limit: 10)".to_string());
-                    Err(err)
-                } else {
-                    Ok(())
-                }
-            }
-            Err(err) => {
-                tracing::error!(
-                    "Increment active connections of account {account_id} failed {err:?}",
-                );
-                // TODO: Should this error propagate?
-                Ok(())
-            }
-        }
-    }
+        component_id: &ComponentId,
+        action: &ProjectAction,
+        auth: &CloudAuthCtx,
+    ) -> Result<WorkerNamespace, WorkerError> {
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(component_id, action.clone(), auth)
+            .await?;
 
-    async fn decrement_account_connections(&self, account_id: &AccountId) {
-        let result = self
-            .account_connections_repository
-            .update(account_id, -1)
-            .await;
-        if result.is_err() {
-            tracing::error!("Decrement worker count of {account_id} failed.");
-        }
+        let resource_limits = self
+            .limit_service
+            .get_resource_limits(&namespace.account_id)
+            .await?;
+
+        Ok(WorkerNamespace {
+            account_id: namespace.account_id.clone(),
+            resource_limits,
+        })
     }
 }
 
@@ -238,7 +210,7 @@ impl WorkerService for WorkerServiceDefault {
         component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<WorkerId, WorkerError> {
         let namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
@@ -256,8 +228,9 @@ impl WorkerService for WorkerServiceDefault {
             )
             .await?;
 
-        self.update_account_workers(&namespace.worker_limit_result.account_id, 1)
-            .await;
+        self.limit_service
+            .update_worker_limit(&namespace.account_id, worker_id, 1)
+            .await?;
 
         Ok(value)
     }
@@ -265,7 +238,7 @@ impl WorkerService for WorkerServiceDefault {
     async fn connect(
         &self,
         worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<ConnectWorkerStream, WorkerError> {
         let namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
@@ -276,29 +249,28 @@ impl WorkerService for WorkerServiceDefault {
             .connect(worker_id, namespace.as_worker_request_metadata(), auth)
             .await?;
 
-        self.increment_account_connections(&namespace.worker_limit_result.account_id)
+        self.limit_service
+            .update_worker_connection_limit(&namespace.account_id, worker_id, 1)
             .await?;
 
         Ok(ConnectWorkerStream::new(
             value,
-            self.account_connections_repository.clone(),
+            worker_id.clone(),
             namespace.account_id,
+            self.limit_service.clone(),
         ))
     }
 
-    async fn delete(
-        &self,
-        worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
-    ) -> Result<(), WorkerError> {
+    async fn delete(&self, worker_id: &WorkerId, auth: &CloudAuthCtx) -> Result<(), WorkerError> {
         let namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::DeleteWorker, auth)
             .await?;
 
         self.base_worker_service.delete(worker_id, auth).await?;
 
-        self.update_account_workers(&namespace.worker_limit_result.account_id, -1)
-            .await;
+        self.limit_service
+            .update_worker_limit(&namespace.account_id, worker_id, -1)
+            .await?;
 
         Ok(())
     }
@@ -310,7 +282,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Value,
         calling_convention: &CallingConvention,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Value, WorkerError> {
         let namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
@@ -339,7 +311,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<ProtoInvokeResult, WorkerError> {
         let namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
@@ -361,13 +333,42 @@ impl WorkerService for WorkerServiceDefault {
         Ok(value)
     }
 
+    async fn invoke_and_await_function_typed_value(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Value,
+        calling_convention: &CallingConvention,
+        auth: &CloudAuthCtx,
+    ) -> Result<TypeAnnotatedValue, WorkerError> {
+        let namespace = self
+            .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
+            .await?;
+
+        let value = self
+            .base_worker_service
+            .invoke_and_await_function_typed_value(
+                worker_id,
+                idempotency_key,
+                function_name,
+                params,
+                calling_convention,
+                namespace.as_worker_request_metadata(),
+                auth,
+            )
+            .await?;
+
+        Ok(value)
+    }
+
     async fn invoke_function(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Value,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         let namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
@@ -393,7 +394,7 @@ impl WorkerService for WorkerServiceDefault {
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         let namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
@@ -418,7 +419,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         oplog_id: u64,
         data: Vec<u8>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<bool, WorkerError> {
         let _ = self
             .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
@@ -436,7 +437,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         let _ = self
             .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
@@ -452,7 +453,7 @@ impl WorkerService for WorkerServiceDefault {
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<crate::model::WorkerMetadata, WorkerError> {
         let namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::ViewWorker, auth)
@@ -475,7 +476,7 @@ impl WorkerService for WorkerServiceDefault {
         cursor: u64,
         count: u64,
         precise: bool,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<(Option<u64>, Vec<crate::model::WorkerMetadata>), WorkerError> {
         let namespace = self
             .authorize(component_id, &ProjectAction::ViewWorker, auth)
@@ -494,11 +495,7 @@ impl WorkerService for WorkerServiceDefault {
         Ok((pagination, metadata))
     }
 
-    async fn resume(
-        &self,
-        worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
-    ) -> Result<(), WorkerError> {
+    async fn resume(&self, worker_id: &WorkerId, auth: &CloudAuthCtx) -> Result<(), WorkerError> {
         let _ = self
             .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
             .await?;
@@ -512,7 +509,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         update_mode: UpdateMode,
         target_version: ComponentVersion,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         let _ = self
             .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
@@ -547,9 +544,9 @@ fn convert_metadata(
 #[derive(Clone)]
 pub struct WorkerNamespace {
     pub account_id: AccountId,
-    pub component_limits: LimitResult,
-    pub resource_limits: golem_service_base::model::ResourceLimits,
-    pub worker_limit_result: CheckLimitResult,
+    // pub component_limits: LimitResult,
+    pub resource_limits: ResourceLimits,
+    // pub worker_limit_result: CheckLimitResult,
 }
 
 impl WorkerNamespace {
@@ -561,151 +558,12 @@ impl WorkerNamespace {
     }
 }
 
-impl WorkerServiceDefault {
-    async fn authorize(
-        &self,
-        component: &ComponentId,
-        action: &ProjectAction,
-        auth: &AccountAuthorisation,
-    ) -> Result<WorkerNamespace, WorkerError> {
-        let (_, component_limits, worker_limit_result) = tokio::try_join!(
-            self.check_authorization(component, action, auth),
-            self.get_component_limits(component),
-            self.check_worker_limit(component)
-        )?;
-
-        let resource_limits = self
-            .get_resource_limits(&component_limits.account_id, auth)
-            .await?;
-
-        Ok(WorkerNamespace {
-            account_id: worker_limit_result.account_id.clone(),
-            component_limits,
-            resource_limits,
-            worker_limit_result,
-        })
-    }
-
-    async fn check_authorization(
-        &self,
-        component_id: &ComponentId,
-        required_action: &ProjectAction,
-        auth: &AccountAuthorisation,
-    ) -> Result<(), WorkerError> {
-        if auth.has_role(&Role::Admin) {
-            Ok(())
-        } else {
-            let project_actions = self
-                .project_authorisation_service
-                .get_by_component(component_id, auth)
-                .await?;
-            if project_actions.actions.contains(required_action) {
-                Ok(())
-            } else {
-                Err(WorkerError::Forbidden(format!(
-                    "Account don't have access to {} project action {:?}, for worker",
-                    component_id, required_action
-                )))
-            }
-        }
-    }
-
-    async fn get_component_limits(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<LimitResult, WorkerError> {
-        match self
-            .plan_limit_service
-            .get_component_limits(component_id)
-            .await
-        {
-            Err(err) => {
-                tracing::error!("Get plan worker limit of component {component_id} failed {err:?}",);
-                Err(err.into())
-            }
-            Ok(limit_result) => Ok(limit_result),
-        }
-    }
-
-    async fn get_resource_limits(
-        &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
-    ) -> Result<golem_service_base::model::ResourceLimits, WorkerError> {
-        match self
-            .plan_limit_service
-            .get_resource_limits(account_id, auth)
-            .await
-        {
-            Err(err) => {
-                tracing::error!(
-                    "Getting current resource limits of account {account_id} failed {err:?}",
-                );
-                Err(err.into())
-            }
-            Ok(resource_limits) => {
-                let limits = golem_service_base::model::ResourceLimits {
-                    available_fuel: resource_limits.available_fuel,
-                    max_memory_per_worker: resource_limits.max_memory_per_worker,
-                };
-
-                Ok(limits)
-            }
-        }
-    }
-
-    async fn check_worker_limit(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<CheckLimitResult, WorkerError> {
-        match self
-            .plan_limit_service
-            .check_worker_limit(component_id)
-            .await
-        {
-            Err(err) => {
-                tracing::error!("Get plan worker limit of component {component_id} failed {err:?}",);
-                Err(err.into())
-            }
-            Ok(check_limit_result) => {
-                if check_limit_result.not_in_limit() {
-                    Err(WorkerError::Forbidden(format!(
-                        "Worker limit exceeded (limit: {})",
-                        check_limit_result.limit
-                    )))
-                } else {
-                    Ok(check_limit_result)
-                }
-            }
-        }
-    }
-}
-
-impl From<ProjectAuthorisationError> for WorkerError {
-    fn from(error: ProjectAuthorisationError) -> Self {
+impl From<LimitError> for WorkerError {
+    fn from(error: LimitError) -> Self {
         match error {
-            ProjectAuthorisationError::Internal(error) => {
-                WorkerError::Base(BaseWorkerServiceError::Internal(anyhow::Error::msg(error)))
-            }
-            ProjectAuthorisationError::Unauthorized(error) => WorkerError::Unauthorized(error),
-        }
-    }
-}
-
-impl From<PlanLimitError> for WorkerError {
-    fn from(error: PlanLimitError) -> Self {
-        match error {
-            PlanLimitError::AccountIdNotFound(account_id) => {
-                WorkerError::Base(BaseWorkerServiceError::AccountIdNotFound(account_id))
-            }
-            PlanLimitError::ProjectIdNotFound(project_id) => {
-                WorkerError::ProjectNotFound(project_id)
-            }
-            PlanLimitError::ComponentIdNotFound(component_id) => {
-                WorkerError::Base(BaseWorkerServiceError::ComponentNotFound(component_id))
-            }
-            PlanLimitError::Unauthorized(string) => WorkerError::Unauthorized(string),
-            PlanLimitError::Internal(e) => {
+            LimitError::Unauthorized(string) => WorkerError::Unauthorized(string),
+            LimitError::LimitExceeded(string) => WorkerError::Forbidden(string),
+            LimitError::Internal(e) => {
                 WorkerError::Base(BaseWorkerServiceError::Internal(anyhow::Error::msg(e)))
             }
         }
@@ -723,7 +581,7 @@ impl WorkerService for WorkerServiceNoOp {
         _component_version: u64,
         _arguments: Vec<String>,
         _environment_variables: HashMap<String, String>,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<WorkerId, WorkerError> {
         Ok(worker_id.clone())
     }
@@ -731,18 +589,14 @@ impl WorkerService for WorkerServiceNoOp {
     async fn connect(
         &self,
         _worker_id: &WorkerId,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<ConnectWorkerStream, WorkerError> {
         Err(WorkerError::Base(BaseWorkerServiceError::Internal(
             anyhow::Error::msg("Not supported"),
         )))
     }
 
-    async fn delete(
-        &self,
-        _worker_id: &WorkerId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), WorkerError> {
+    async fn delete(&self, _worker_id: &WorkerId, _auth: &CloudAuthCtx) -> Result<(), WorkerError> {
         Ok(())
     }
 
@@ -753,7 +607,7 @@ impl WorkerService for WorkerServiceNoOp {
         _function_name: String,
         _params: Value,
         _calling_convention: &CallingConvention,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<Value, WorkerError> {
         Ok(Value::Null)
     }
@@ -765,9 +619,24 @@ impl WorkerService for WorkerServiceNoOp {
         _function_name: String,
         _params: Vec<ProtoVal>,
         _calling_convention: &CallingConvention,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<ProtoInvokeResult, WorkerError> {
         Ok(ProtoInvokeResult { result: vec![] })
+    }
+
+    async fn invoke_and_await_function_typed_value(
+        &self,
+        _worker_id: &WorkerId,
+        _idempotency_key: Option<IdempotencyKey>,
+        _function_name: String,
+        _params: Value,
+        _calling_convention: &CallingConvention,
+        _auth: &CloudAuthCtx,
+    ) -> Result<TypeAnnotatedValue, WorkerError> {
+        Ok(TypeAnnotatedValue::Tuple {
+            value: vec![],
+            typ: vec![],
+        })
     }
 
     async fn invoke_function(
@@ -776,7 +645,7 @@ impl WorkerService for WorkerServiceNoOp {
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _params: Value,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         Ok(())
     }
@@ -787,7 +656,7 @@ impl WorkerService for WorkerServiceNoOp {
         _idempotency_key: Option<ProtoIdempotencyKey>,
         _function_name: String,
         _params: Vec<ProtoVal>,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         Ok(())
     }
@@ -797,7 +666,7 @@ impl WorkerService for WorkerServiceNoOp {
         _worker_id: &WorkerId,
         _oplog_id: u64,
         _data: Vec<u8>,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<bool, WorkerError> {
         Ok(true)
     }
@@ -806,7 +675,7 @@ impl WorkerService for WorkerServiceNoOp {
         &self,
         _worker_id: &WorkerId,
         _recover_immediately: bool,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         Ok(())
     }
@@ -814,11 +683,11 @@ impl WorkerService for WorkerServiceNoOp {
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
-        auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<crate::model::WorkerMetadata, WorkerError> {
         Ok(crate::model::WorkerMetadata {
             worker_id: worker_id.clone(),
-            account_id: auth.token.account_id.clone(),
+            account_id: AccountId::from(""),
             args: vec![],
             env: Default::default(),
             status: WorkerStatus::Running,
@@ -838,16 +707,12 @@ impl WorkerService for WorkerServiceNoOp {
         _cursor: u64,
         _count: u64,
         _precise: bool,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<(Option<u64>, Vec<crate::model::WorkerMetadata>), WorkerError> {
         Ok((None, vec![]))
     }
 
-    async fn resume(
-        &self,
-        _worker_id: &WorkerId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), WorkerError> {
+    async fn resume(&self, _worker_id: &WorkerId, _auth: &CloudAuthCtx) -> Result<(), WorkerError> {
         Ok(())
     }
 
@@ -856,7 +721,7 @@ impl WorkerService for WorkerServiceNoOp {
         _worker_id: &WorkerId,
         _update_mode: UpdateMode,
         _target_version: ComponentVersion,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         Ok(())
     }

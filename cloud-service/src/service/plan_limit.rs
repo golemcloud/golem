@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::auth::AccountAuthorisation;
 use crate::model::{Plan, ResourceLimits, Role};
 use crate::repo::account::AccountRepo;
+use crate::repo::account_connections::AccountConnectionsRepo;
 use crate::repo::account_fuel::AccountFuelRepo;
 use crate::repo::account_uploads::AccountUploadsRepo;
 use crate::repo::account_workers::AccountWorkersRepo;
@@ -23,6 +24,7 @@ pub enum PlanLimitError {
     ComponentIdNotFound(ComponentId),
     Internal(String),
     Unauthorized(String),
+    LimitExceeded(String),
 }
 
 impl PlanLimitError {
@@ -131,12 +133,27 @@ pub trait PlanLimitService {
         updates: HashMap<AccountId, i64>,
         auth: &AccountAuthorisation,
     ) -> Result<(), PlanLimitError>;
+
+    async fn update_worker_limit(
+        &self,
+        account_id: &AccountId,
+        value: i32,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), PlanLimitError>;
+
+    async fn update_worker_connection_limit(
+        &self,
+        account_id: &AccountId,
+        value: i32,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), PlanLimitError>;
 }
 
 pub struct PlanLimitServiceDefault {
     plan_repo: Arc<dyn PlanRepo + Sync + Send>,
     account_repo: Arc<dyn AccountRepo + Sync + Send>,
     account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send>,
+    account_connections_repo: Arc<dyn AccountConnectionsRepo + Send + Sync>,
     account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send>,
     project_repo: Arc<dyn ProjectRepo + Sync + Send>,
     component_repo: Arc<dyn ComponentRepo + Sync + Send>,
@@ -297,6 +314,74 @@ impl PlanLimitService for PlanLimitServiceDefault {
         }
         Ok(())
     }
+
+    async fn update_worker_limit(
+        &self,
+        account_id: &AccountId,
+        value: i32,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), PlanLimitError> {
+        self.check_authorization(account_id, auth)?;
+        let plan = self.get_plan(account_id).await?;
+        let num_workers = self.account_workers_repo.get(account_id).await?;
+
+        if value > 0 {
+            let check_limit = CheckLimitResult {
+                account_id: account_id.clone(),
+                count: (num_workers + value).into(),
+                limit: plan.plan_data.worker_limit.into(),
+            };
+
+            if check_limit.in_limit() {
+                self.account_workers_repo.update(account_id, value).await?;
+            } else {
+                return Err(PlanLimitError::LimitExceeded(format!(
+                    "Worker limit exceeded (limit: {})",
+                    check_limit.limit
+                )));
+            }
+        } else {
+            self.account_workers_repo.update(account_id, value).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn update_worker_connection_limit(
+        &self,
+        account_id: &AccountId,
+        value: i32,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), PlanLimitError> {
+        self.check_authorization(account_id, auth)?;
+
+        let connections = self.account_connections_repo.get(account_id).await?;
+
+        if value > 0 {
+            let check_limit = CheckLimitResult {
+                account_id: account_id.clone(),
+                count: (connections + value).into(),
+                limit: 10,
+            };
+
+            if check_limit.in_limit() {
+                self.account_connections_repo
+                    .update(account_id, value)
+                    .await?;
+            } else {
+                return Err(PlanLimitError::LimitExceeded(format!(
+                    "Worker connection limit exceeded (limit: {})",
+                    check_limit.limit
+                )));
+            }
+        } else {
+            self.account_connections_repo
+                .update(account_id, value)
+                .await?;
+        }
+
+        Ok(())
+    }
 }
 
 // Helper functions.
@@ -305,6 +390,7 @@ impl PlanLimitServiceDefault {
         plan_repo: Arc<dyn PlanRepo + Sync + Send>,
         account_repo: Arc<dyn AccountRepo + Sync + Send>,
         account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send>,
+        account_connections_repo: Arc<dyn AccountConnectionsRepo + Send + Sync>,
         account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send>,
         project_repo: Arc<dyn ProjectRepo + Sync + Send>,
         component_repo: Arc<dyn ComponentRepo + Sync + Send>,
@@ -314,6 +400,7 @@ impl PlanLimitServiceDefault {
             plan_repo,
             account_repo,
             account_workers_repo,
+            account_connections_repo,
             account_uploads_repo,
             project_repo,
             component_repo,
@@ -477,6 +564,24 @@ impl PlanLimitService for PlanLimitServiceNoOp {
     async fn record_fuel_consumption(
         &self,
         _updates: HashMap<AccountId, i64>,
+        _auth: &AccountAuthorisation,
+    ) -> Result<(), PlanLimitError> {
+        Ok(())
+    }
+
+    async fn update_worker_limit(
+        &self,
+        _account_id: &AccountId,
+        _value: i32,
+        _auth: &AccountAuthorisation,
+    ) -> Result<(), PlanLimitError> {
+        Ok(())
+    }
+
+    async fn update_worker_connection_limit(
+        &self,
+        _account_id: &AccountId,
+        _value: i32,
         _auth: &AccountAuthorisation,
     ) -> Result<(), PlanLimitError> {
         Ok(())

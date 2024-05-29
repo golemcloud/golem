@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::grpcapi::get_authorisation_token;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::{
@@ -17,19 +16,18 @@ use golem_api_grpc::proto::golem::worker::{
     UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
 };
 use golem_common::model::{ComponentVersion, WorkerFilter, WorkerId};
+use golem_worker_service_base::service::component::ComponentService;
 use golem_worker_service_base::service::worker::WorkerServiceError;
 use tap::TapFallible;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 
-use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::component::{ComponentError, ComponentService};
+use crate::service::auth::{get_authorisation_token, AuthServiceError, CloudAuthCtx};
 use crate::service::worker::{self, ConnectWorkerStream, WorkerService};
 
 pub struct WorkerGrpcApi {
-    pub component_service: Arc<dyn ComponentService + Sync + Send>,
-    pub worker_service: Arc<dyn WorkerService + Sync + Send>,
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
+    component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send>,
+    worker_service: Arc<dyn WorkerService + Sync + Send>,
 }
 
 #[async_trait::async_trait]
@@ -213,14 +211,17 @@ impl GrpcWorkerService for WorkerGrpcApi {
 impl From<AuthServiceError> for GrpcWorkerError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(error) => {
+            AuthServiceError::Unauthorized(error) => {
+                worker_error::Error::Unauthorized(ErrorBody { error })
+            }
+            AuthServiceError::Forbidden(error) => {
                 worker_error::Error::Unauthorized(ErrorBody { error })
             }
             // TODO: this used to be unauthorized. How do we handle internal server errors?
-            AuthServiceError::Unexpected(details) => {
+            AuthServiceError::Internal(details) => {
                 worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details,
+                        details: details.to_string(),
                     })),
                 })
             }
@@ -230,16 +231,19 @@ impl From<AuthServiceError> for GrpcWorkerError {
 }
 
 impl WorkerGrpcApi {
-    async fn auth(
-        &self,
-        metadata: MetadataMap,
-    ) -> Result<crate::auth::AccountAuthorisation, GrpcWorkerError> {
+    pub fn new(
+        component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send>,
+        worker_service: Arc<dyn WorkerService + Sync + Send>,
+    ) -> Self {
+        Self {
+            component_service,
+            worker_service,
+        }
+    }
+
+    fn auth(&self, metadata: MetadataMap) -> Result<CloudAuthCtx, GrpcWorkerError> {
         match get_authorisation_token(metadata) {
-            Some(t) => self
-                .auth_service
-                .authorization(&t)
-                .await
-                .map_err(|e| e.into()),
+            Some(t) => Ok(CloudAuthCtx::new(t)),
             None => Err(GrpcWorkerError {
                 error: Some(worker_error::Error::Unauthorized(ErrorBody {
                     error: "Missing token".into(),
@@ -253,7 +257,7 @@ impl WorkerGrpcApi {
         request: LaunchNewWorkerRequest,
         metadata: MetadataMap,
     ) -> Result<(WorkerId, ComponentVersion), GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let component_id: golem_common::model::ComponentId = request
             .component_id
             .and_then(|id| id.try_into().ok())
@@ -261,12 +265,10 @@ impl WorkerGrpcApi {
 
         let latest_component = self
             .component_service
-            .get_latest_version(&component_id, &auth)
+            .get_latest(&component_id, &auth)
             .await
-            .tap_err(|error| {
-                tracing::error!("Error getting latest component version: {:?}", error)
-            })?
-            .ok_or(GrpcWorkerError {
+            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
+            .map_err(|_| GrpcWorkerError {
                 error: Some(worker_error::Error::NotFound(ErrorBody {
                     error: format!("Component not found: {}", &component_id),
                 })),
@@ -296,7 +298,7 @@ impl WorkerGrpcApi {
         request: DeleteWorkerRequest,
         metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
 
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
@@ -310,7 +312,7 @@ impl WorkerGrpcApi {
         request: CompletePromiseRequest,
         metadata: MetadataMap,
     ) -> Result<bool, GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         let parameters = request
@@ -330,7 +332,7 @@ impl WorkerGrpcApi {
         request: GetWorkerMetadataRequest,
         metadata: MetadataMap,
     ) -> Result<WorkerMetadata, GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         let metadata = self.worker_service.get_metadata(&worker_id, &auth).await?;
@@ -343,7 +345,7 @@ impl WorkerGrpcApi {
         request: GetWorkersMetadataRequest,
         metadata: MetadataMap,
     ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let component_id: golem_common::model::ComponentId = request
             .component_id
             .ok_or_else(|| bad_request_error("Missing component id"))?
@@ -380,7 +382,7 @@ impl WorkerGrpcApi {
         request: InterruptWorkerRequest,
         metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         self.worker_service
@@ -395,7 +397,7 @@ impl WorkerGrpcApi {
         request: InvokeRequest,
         metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         let params = request
@@ -420,7 +422,7 @@ impl WorkerGrpcApi {
         request: InvokeAndAwaitRequest,
         metadata: MetadataMap,
     ) -> Result<InvokeResult, GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         let params = request
@@ -452,7 +454,7 @@ impl WorkerGrpcApi {
         request: ResumeWorkerRequest,
         metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         self.worker_service.resume(&worker_id, &auth).await?;
@@ -465,7 +467,7 @@ impl WorkerGrpcApi {
         request: ConnectWorkerRequest,
         metadata: MetadataMap,
     ) -> Result<ConnectWorkerStream, GrpcWorkerError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let worker_id = make_crate_worker_id(request.worker_id)?;
         let stream = self.worker_service.connect(&worker_id, &auth).await?;
 
@@ -479,7 +481,7 @@ impl WorkerGrpcApi {
     ) -> Result<(), GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id.clone())?;
 
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
 
         self.worker_service
             .update(&worker_id, request.mode(), request.target_version, &auth)
@@ -532,50 +534,16 @@ impl From<crate::service::worker::WorkerError> for worker_error::Error {
             worker::WorkerError::Unauthorized(error) => {
                 worker_error::Error::Unauthorized(ErrorBody { error })
             }
-            worker::WorkerError::ProjectNotFound(_) => worker_error::Error::NotFound(ErrorBody {
-                error: value.to_string(),
-            }),
-        }
-    }
-}
-
-impl From<ComponentError> for GrpcWorkerError {
-    fn from(error: ComponentError) -> Self {
-        GrpcWorkerError {
-            error: Some(error.into()),
-        }
-    }
-}
-
-impl From<ComponentError> for worker_error::Error {
-    fn from(value: ComponentError) -> Self {
-        match value {
-            ComponentError::Internal(error) => {
+            worker::WorkerError::Internal(error) => {
                 worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
                         details: error.to_string(),
                     })),
                 })
             }
-            ComponentError::Unauthorized(error) => {
-                worker_error::Error::Unauthorized(ErrorBody { error })
-            }
-            ComponentError::LimitExceeded(error) => {
-                worker_error::Error::LimitExceeded(ErrorBody { error })
-            }
-            ComponentError::AlreadyExists(_) => worker_error::Error::BadRequest(ErrorsBody {
-                errors: vec![value.to_string()],
-            }),
-            ComponentError::UnknownComponentId(_)
-            | ComponentError::UnknownVersionedComponentId(_)
-            | ComponentError::UnknownProjectId(_) => worker_error::Error::NotFound(ErrorBody {
+            worker::WorkerError::ProjectNotFound(_) => worker_error::Error::NotFound(ErrorBody {
                 error: value.to_string(),
             }),
-            ComponentError::ComponentProcessing(error) => {
-                worker_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![error.to_string()],
-                })
-            }
         }
     }
 }

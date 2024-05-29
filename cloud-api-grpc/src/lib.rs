@@ -5,57 +5,38 @@ pub mod proto {
 
     #[cfg(test)]
     mod tests {
+        use crate::proto::golem::cloud::projectpolicy::{ProjectAction, ProjectActions};
         use std::collections::HashSet;
-
-        use crate::proto::golem::cloud::project::{
-            get_project_actions_response, GetProjectActionsResponse,
-            GetProjectActionsSuccessResponse,
-        };
-        use crate::proto::golem::cloud::projectpolicy::ProjectAction;
 
         #[test]
         fn test_project_action_conversion() {
-            let grpc_response = GetProjectActionsResponse {
-                result: Some(get_project_actions_response::Result::Success(
-                    GetProjectActionsSuccessResponse {
-                        data: vec![
-                            ProjectAction::ViewWorker as i32,
-                            ProjectAction::DeleteWorker as i32,
-                            ProjectAction::ViewComponent as i32,
-                            ProjectAction::ViewProjectGrants as i32,
-                            ProjectAction::ViewApiDefinition as i32,
-                            ProjectAction::UpdateWorker as i32,
-                            ProjectAction::UpdateApiDefinition as i32,
-                            ProjectAction::CreateComponent as i32,
-                            ProjectAction::CreateProjectGrants as i32,
-                            ProjectAction::UpdateComponent as i32,
-                            ProjectAction::DeleteComponent as i32,
-                            ProjectAction::CreateWorker as i32,
-                            ProjectAction::DeleteProjectGrants as i32,
-                            ProjectAction::DeleteApiDefinition as i32,
-                            ProjectAction::CreateApiDefinition as i32,
-                        ],
-                    },
-                )),
+            let response = ProjectActions {
+                actions: vec![
+                    ProjectAction::ViewWorker as i32,
+                    ProjectAction::DeleteWorker as i32,
+                    ProjectAction::ViewComponent as i32,
+                    ProjectAction::ViewProjectGrants as i32,
+                    ProjectAction::ViewApiDefinition as i32,
+                    ProjectAction::UpdateWorker as i32,
+                    ProjectAction::UpdateApiDefinition as i32,
+                    ProjectAction::CreateComponent as i32,
+                    ProjectAction::CreateProjectGrants as i32,
+                    ProjectAction::UpdateComponent as i32,
+                    ProjectAction::DeleteComponent as i32,
+                    ProjectAction::CreateWorker as i32,
+                    ProjectAction::DeleteProjectGrants as i32,
+                    ProjectAction::DeleteApiDefinition as i32,
+                    ProjectAction::CreateApiDefinition as i32,
+                ],
             };
 
-            let actions = match grpc_response.result {
-                None => panic!("Empty response"),
-                Some(get_project_actions_response::Result::Success(response)) => {
-                    let actions = response
-                        .data
-                        .iter()
-                        .map(|n| {
-                            ProjectAction::try_from(*n)
-                                .map_err(|err| format!("Invalid action ({err})"))
-                        })
-                        .collect::<Result<HashSet<ProjectAction>, String>>();
-                    actions
-                }
-                Some(get_project_actions_response::Result::Error(error)) => {
-                    panic!("{error:?}")
-                }
-            };
+            let actions = response
+                .actions
+                .iter()
+                .map(|n| {
+                    ProjectAction::try_from(*n).map_err(|err| format!("Invalid action ({err})"))
+                })
+                .collect::<Result<HashSet<ProjectAction>, String>>();
 
             assert_eq!(
                 actions,
