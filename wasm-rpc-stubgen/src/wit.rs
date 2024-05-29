@@ -19,7 +19,7 @@ use std::ffi::OsStr;
 use std::fmt::{Display, Formatter, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
-use wit_parser::{Enum, Field, Flags, Handle, PackageName, Resolve, Tuple, Type, TypeDef, TypeDefKind, UnresolvedPackage, Variant};
+use wit_parser::{Enum, Field, Flags, Handle, PackageName, Resolve, Result_, Tuple, Type, TypeDef, TypeDefKind, UnresolvedPackage, Variant};
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     let out = get_stub_wit(def, StubTypeGen::ImportRootTypes)?;
@@ -181,7 +181,6 @@ fn write_type_def(
     let typ_kind = typ.clone().kind;
     let kind_str = typ_kind.as_str();
 
-
     match typ_kind {
         TypeDefKind::Record(record) => {
             write!(out, "  {}", kind_str)?;
@@ -197,8 +196,15 @@ fn write_type_def(
             write_flags(out, &flags)?;
         }
         TypeDefKind::Tuple(tuple) => {
-            write!(out, "  {}", kind_str)?;
-            write_tuple(out, &tuple, def)?;
+            if let Some(name) = typ.name.clone() {
+                write!(out, "  type {} =", name)?;
+                write!(out, "  {}", kind_str)?;
+                write_tuple(out, &tuple, def)?;
+                writeln!(out, ";")?;
+            } else {
+                write!(out, "  {}", kind_str)?;
+                write_tuple(out, &tuple, def)?;
+            }
         }
         TypeDefKind::Variant(variant) => {
             write!(out, "  {}", kind_str)?;
@@ -211,14 +217,40 @@ fn write_type_def(
             write_enum(out, enum_ty)?;
         }
         TypeDefKind::Option(option) => {
-            write!(out, "  {}", kind_str)?;
-            write_option(out, &option, def)?;
+            if let Some(name) = typ.name.clone() {
+                write!(out, "  type {} =", name)?;
+                write!(out, "  {}", kind_str)?;
+                write_option(out, &option, def)?;
+                writeln!(out, ";")?;
+            } else {
+                write!(out, "  {}", kind_str)?;
+                write_option(out, &option, def)?;
+            }
         }
 
-        TypeDefKind::Result(_) => {
+        TypeDefKind::Result(result) => {
+            if let Some(name) = typ.name.clone() {
+                write!(out, "  type {} =", name)?;
+                write!(out, "  {}", kind_str)?;
+                write_result(out, &result, def)?;
+                writeln!(out, ";")?;
+            } else {
+                write!(out, "  {}", kind_str)?;
+                write_result(out, &result, def)?;
+            }
         }
 
-        TypeDefKind::List(_) => {}
+        TypeDefKind::List(list_typ) => {
+            if let Some(name) = typ.name.clone() {
+                write!(out, "  type {} =", name)?;
+                write!(out, "  {}", kind_str)?;
+                write!(out, " {}", list_typ.wit_type_string(&def.resolve)?)?;
+                writeln!(out, ";")?;
+            } else {
+                write!(out, "  {}", kind_str)?;
+                write!(out, " {}", list_typ.wit_type_string(&def.resolve)?)?;
+            }
+        }
         TypeDefKind::Future(_) => {}
         TypeDefKind::Stream(_) => {}
         TypeDefKind::Type(typ) => {
@@ -235,11 +267,36 @@ fn write_type_def(
     Ok(())
 }
 
+// https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md#wit-types
+fn write_result(out: &mut String, result: &Result_, def: &StubDefinition) -> anyhow::Result<()> {
+    match (result.ok, result.err) {
+        (Some(ok), Some(err)) => {
+            write!(out, "<")?;
+            write!(out, "{}", ok.wit_type_string(&def.resolve)?)?;
+            write!(out, ", ")?;
+            write!(out, "{}", err.wit_type_string(&def.resolve)?)?;
+            write!(out, ">")?;
+        }
+        (Some(ok), None) => {
+            write!(out, "<")?;
+            write!(out, "{}", ok.wit_type_string(&def.resolve)?)?;
+            write!(out, ">")?;
+        }
+        (None, Some(err)) => {
+            write!(out, "<_, ")?;
+            write!(out, "{}", err.wit_type_string(&def.resolve)?)?;
+            write!(out, ">")?;
+        }
+        (None, None) => {}
+    }
+
+    Ok(())
+}
 
 fn write_option(out: &mut String, option: &Type, def: &StubDefinition) -> anyhow::Result<()> {
-    write!(out, "option<")?;
+    write!(out, "<")?;
     write!(out, "{}", option.wit_type_string(&def.resolve)?)?;
-    writeln!(out, ">")?;
+    write!(out, ">")?;
     Ok(())
 }
 
@@ -292,7 +349,7 @@ fn write_tuple(out: &mut String, tuple: &Tuple, def: &StubDefinition) -> anyhow:
             write!(out, ", ")?;
         }
     }
-    writeln!(out, "  >")?;
+    write!(out, "  >")?;
     Ok(())
 }
 
