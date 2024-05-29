@@ -20,6 +20,7 @@ pub mod examples;
 pub mod model;
 pub mod version;
 pub mod worker;
+
 pub fn parse_key_val(
     s: &str,
 ) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync + 'static>> {
