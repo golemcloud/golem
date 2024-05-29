@@ -45,6 +45,10 @@ const prototype = {
    */
   mapError,
   /**
+   * Calls the given function with the payload of the result and returns the result unchanged.
+   */
+  tap,
+  /**
    * Maps the payload of the successful result and flattens the nested Result type.
    * @example
    * Result.ok(123).flatMap((x) => Result.ok(x * 2)) // Result.ok(246)
@@ -217,6 +221,14 @@ function mapError<T, E, E2>(this: Result<T, E>, f: (error: E) => E2): Result<T, 
   else return Result.err(f(this.error))
 }
 
+function tap<E>(this: Result.Err<E>, f: (error: E) => void): Result.Err<E>
+function tap<T>(this: Result.Ok<T>, f: (value: T) => void): Result.Ok<T>
+function tap<T, E>(this: Result<T, E>, f: (value: T) => void): Result<T, E>
+function tap<T, E>(this: Result<T, E>, f: (value: T) => void): Result<T, E> {
+  if (this.isOk) f(this.value)
+  return this
+}
+
 function flatMap<T, T2>(
   this: Result.Ok<T>,
   f: (value: T) => Result.Ok<T2>,
@@ -282,3 +294,13 @@ function assertErrorInstanceOf<T, E, C extends abstract new (..._: any) => any>(
   throw new TypeError(`Assertion failed: Expected error to be an instance of ${constructor.name}.`)
 }
 
+
+// function pipe<T, E, T2, E2>(
+//   this: Result<T, E>,
+//   f: (value: T) => Result<T2, E2>,
+// ): Result<T2, E2>;
+// function pipe<T, E, T2, E2, T3, E3>(
+//   this: Result<T, E>,
+//   f: (value: T) => Result<T2, E2>,
+//   g: (value: T2) => Result<T3, E3>,
+// ): Result<T3, E3>;

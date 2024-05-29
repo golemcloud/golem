@@ -13,3 +13,6 @@
 // limitations under the License.
 
 export * from './bindgen/bindgen'
+export * from './guard'
+export * from './result'
+export * from './transaction'

@@ -1,9 +1,7 @@
 package golem:ts;
 
 interface api {
-  use golem:api/host@0.2.0.{promise-id};
-  
-  create-promise: func() -> promise-id;
+  process: func(a: u64) -> string;
 }
 
 world test {

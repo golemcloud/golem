@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "esbuild index.js --bundle --outdir=out --platform=node --external:golem:api/host@0.2.0 --format=esm",
+    "stub": "jco transpile wit --no-namespaced-exports --stub --name index -o src && rm src/index.js && mv src/index.d.ts src/index.ts",
+    "build": "tsc && esbuild out/index.js --bundle --outdir=out --platform=node --external:golem:api/host@0.2.0 --allow-overwrite",
     "package": "jco componentize -w wit -o out/component.wasm out/index.js"
   },
   "keywords": [],
@@ -17,6 +18,7 @@
   "devDependencies": {
     "@bytecodealliance/componentize-js": "^0.8.3",
     "@bytecodealliance/jco": "^1.2.4",
-    "esbuild": "0.21.3"
+    "esbuild": "0.21.3",
+    "typescript": "^5.4.5"
   }
 }

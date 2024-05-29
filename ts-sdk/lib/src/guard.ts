@@ -76,6 +76,7 @@ export class AtomicOperationGuard implements Disposable {
   constructor(private begin: OplogIndex) {}
 
   [Symbol.dispose]() {
+    console.log("Disposing AtomicOperationGuard!!!")
     markEndOperation(this.begin);
   }
 }

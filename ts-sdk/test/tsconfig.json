@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "es6",
+    "module": "nodenext",                                
+    "moduleResolution": "nodenext",
+    "rootDir": "src/",
+    "outDir": "./out",
+    "lib": ["es2022", "esnext.disposable", "dom"]
+  },
+  "include": [
+    "src/**/*.ts"
+  ]
+}
