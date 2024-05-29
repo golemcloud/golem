@@ -250,6 +250,7 @@ fn collect_stub_imports<'a>(
                         .get(interface_id)
                         .ok_or(anyhow!("interface {interface_id:?} not found"))?;
                     let package = interface.package.and_then(|id| resolve.packages.get(id));
+
                     let interface_name = interface.name.clone().unwrap_or("unknown".to_string());
                     let interface_path = package
                         .map(|p| p.name.interface_id(&interface_name))
@@ -275,7 +276,7 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
         .exports
         .iter()
         .filter_map(|(name, item)| match item {
-            WorldItem::Type(t) => Some((name.clone().unwrap_name(), t)),
+            WorldItem::Type(t)  => Some((name.clone().unwrap_name(), t)),
             _ => None,
         })
         .collect::<Vec<_>>();
