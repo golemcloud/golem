@@ -49,8 +49,8 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription, Wrap
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
-    IdempotencyKey, ScanCursor, SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    IdempotencyKey, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -1428,7 +1428,10 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             .create(&self.worker_id, self.current_oplog_index().await)
             .await;
 
-        let schedule_id = self.scheduler_service.schedule(when, promise_id).await;
+        let schedule_id = self
+            .scheduler_service
+            .schedule(when, ScheduledAction::CompletePromise { promise_id })
+            .await;
         debug!(
             "Schedule added to awake suspended worker at {} with id {}",
             when.to_rfc3339(),

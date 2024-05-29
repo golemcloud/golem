@@ -344,15 +344,52 @@ impl Display for PromiseId {
     }
 }
 
+/// Actions that can be scheduled to be executed at a given point in time
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, Encode, Decode)]
+pub enum ScheduledAction {
+    /// Completes a given promise
+    CompletePromise { promise_id: PromiseId },
+    /// Archives all entries from the first non-empty layer of an oplog to the next layer,
+    /// if the last oplog index did not change. If there are more layers below, schedules
+    /// a next action to archive the next layer.
+    ArchiveOplog {
+        worker_id: WorkerId,
+        last_oplog_index: OplogIndex,
+        next_after: Duration,
+    },
+}
+
+impl ScheduledAction {
+    pub fn worker_id(&self) -> &WorkerId {
+        match self {
+            ScheduledAction::CompletePromise { promise_id } => &promise_id.worker_id,
+            ScheduledAction::ArchiveOplog { worker_id, .. } => worker_id,
+        }
+    }
+}
+
+impl Display for ScheduledAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScheduledAction::CompletePromise { promise_id } => {
+                write!(f, "complete[{}]", promise_id)
+            }
+            ScheduledAction::ArchiveOplog { worker_id, .. } => {
+                write!(f, "archive[{}]", worker_id)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct ScheduleId {
     pub timestamp: i64,
-    pub promise_id: PromiseId,
+    pub action: ScheduledAction,
 }
 
 impl Display for ScheduleId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}@{}", self.promise_id, self.timestamp)
+        write!(f, "{}@{}", self.action, self.timestamp)
     }
 }
 
