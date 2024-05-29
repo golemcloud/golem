@@ -181,35 +181,52 @@ fn write_type_def(
     let typ_kind = typ.clone().kind;
     let kind_str = typ_kind.as_str();
 
-    write!(out, "  {}", kind_str)?;
-    write!(out, " {}", typ_name)?;
 
     match typ_kind {
         TypeDefKind::Record(record) => {
+            write!(out, "  {}", kind_str)?;
+            write!(out, " {}", typ_name)?;
+
             write_record(out, record.fields, def)?;
         }
 
         TypeDefKind::Flags(flags) => {
+            write!(out, "  {}", kind_str)?;
+            write!(out, " {}", typ_name)?;
+
             write_flags(out, &flags)?;
         }
         TypeDefKind::Tuple(tuple) => {
+            write!(out, "  {}", kind_str)?;
             write_tuple(out, &tuple, def)?;
         }
         TypeDefKind::Variant(variant) => {
+            write!(out, "  {}", kind_str)?;
+            write!(out, " {}", typ_name)?;
             write_variant(out, &variant, def)?;
         }
         TypeDefKind::Enum(enum_ty) => {
+            write!(out, "  {}", kind_str)?;
+            write!(out, " {}", typ_name)?;
             write_enum(out, enum_ty)?;
         }
         TypeDefKind::Option(option) => {
+            write!(out, "  {}", kind_str)?;
             write_option(out, &option, def)?;
         }
 
-        TypeDefKind::Result(_) => {}
+        TypeDefKind::Result(_) => {
+        }
+
         TypeDefKind::List(_) => {}
         TypeDefKind::Future(_) => {}
         TypeDefKind::Stream(_) => {}
-        TypeDefKind::Type(_) => {}
+        TypeDefKind::Type(typ) => {
+            write!(out, "  {} ", kind_str)?;
+            write!(out, " =")?;
+            write!(out, " {}", typ.wit_type_string(&def.resolve)?)?;
+            writeln!(out, ";")?;
+        }
         TypeDefKind::Unknown => {}
         TypeDefKind::Resource => {}
         TypeDefKind::Handle(_) => {}
@@ -222,7 +239,7 @@ fn write_type_def(
 fn write_option(out: &mut String, option: &Type, def: &StubDefinition) -> anyhow::Result<()> {
     write!(out, "option<")?;
     write!(out, "{}", option.wit_type_string(&def.resolve)?)?;
-    write!(out, ">")?;
+    writeln!(out, ">")?;
     Ok(())
 }
 
