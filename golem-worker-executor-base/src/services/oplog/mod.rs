@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -21,7 +23,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
-use tracing::debug;
 
 pub use compressed::CompressedOplogArchive;
 pub use compressed::CompressedOplogArchiveService;
@@ -34,7 +35,7 @@ use golem_common::model::{
     Timestamp, WorkerId,
 };
 use golem_common::serialization::{serialize, try_deserialize};
-pub use multilayer::{MultiLayerOplogService, OplogArchiveService};
+pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 
 use crate::error::GolemError;
@@ -128,7 +129,7 @@ pub trait OplogService: Debug {
 
 /// An open oplog providing write access
 #[async_trait]
-pub trait Oplog: Debug {
+pub trait Oplog: Any + Debug {
     /// Adds a single entry to the oplog (possibly buffered)
     async fn add(&self, entry: OplogEntry);
 
@@ -167,11 +168,16 @@ pub trait Oplog: Debug {
 
     /// Downloads a big oplog payload by its reference
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String>;
+}
 
-    /// Archives the oplog; returns true if there is anything more to archive, for example in a multi-layer
-    /// oplog implementation this function may move entries one layer down, and return true if there are
-    /// more layers to target for archiving.
-    async fn archive(&self) -> bool;
+pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog + Send + Sync>) -> Option<Arc<T>> {
+    if oplog.deref().type_id() == TypeId::of::<T>() {
+        let raw: *const (dyn Oplog + Send + Sync) = Arc::into_raw(oplog.clone());
+        let raw: *const T = raw.cast();
+        Some(unsafe { Arc::from_raw(raw) })
+    } else {
+        None
+    }
 }
 
 #[async_trait]
@@ -301,7 +307,6 @@ impl OpenOplogEntry {
 #[derive(Clone)]
 struct OpenOplogs {
     oplogs: Cache<WorkerId, (), OpenOplogEntry, ()>,
-    name: &'static str,
 }
 
 impl OpenOplogs {
@@ -313,7 +318,6 @@ impl OpenOplogs {
                 BackgroundEvictionMode::None,
                 name,
             ),
-            name,
         }
     }
 
@@ -361,11 +365,9 @@ impl OpenOplogs {
                     oplog
                 };
 
-                debug!("get_or_open finished {} {}", self.name, worker_id);
                 break oplog;
             } else {
                 self.oplogs.remove(worker_id);
-                debug!("get_or_open retry {} {}", self.name, worker_id);
                 continue;
             }
         }

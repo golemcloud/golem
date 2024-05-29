@@ -25,7 +25,7 @@ use tracing::{error, span, Instrument, Level};
 use golem_common::model::{ScheduleId, ScheduledAction};
 
 use crate::metrics::promises::record_scheduled_promise_completed;
-use crate::services::oplog::OplogService;
+use crate::services::oplog::{MultiLayerOplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -151,18 +151,19 @@ impl SchedulerServiceDefault {
                             self.oplog_service.get_last_index(&worker_id).await;
                         if current_last_index == last_oplog_index {
                             let oplog = self.oplog_service.open(&account_id, &worker_id).await;
-                            let more = oplog.archive().await;
-                            if more {
-                                self.schedule(
-                                    now.add(next_after),
-                                    ScheduledAction::ArchiveOplog {
-                                        account_id,
-                                        worker_id,
-                                        last_oplog_index,
-                                        next_after,
-                                    },
-                                )
-                                .await;
+                            if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
+                                if more {
+                                    self.schedule(
+                                        now.add(next_after),
+                                        ScheduledAction::ArchiveOplog {
+                                            account_id,
+                                            worker_id,
+                                            last_oplog_index,
+                                            next_after,
+                                        },
+                                    )
+                                    .await;
+                                }
                             }
                         }
 

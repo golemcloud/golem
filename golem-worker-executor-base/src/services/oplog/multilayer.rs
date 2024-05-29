@@ -31,7 +31,7 @@ use golem_common::model::{AccountId, ComponentId, ScanCursor, WorkerId};
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
-use crate::services::oplog::{OpenOplogs, Oplog, OplogConstructor, OplogService};
+use crate::services::oplog::{downcast_oplog, OpenOplogs, Oplog, OplogConstructor, OplogService};
 
 #[async_trait]
 pub trait OplogArchiveService: Debug {
@@ -86,6 +86,9 @@ pub trait OplogArchive: Debug {
 
     /// Append a new chunk of entries to the oplog
     async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>);
+
+    /// Gets the last appended chunk's last index
+    async fn current_oplog_index(&self) -> OplogIndex;
 
     /// Drop a chunk of entries from the beginning of the oplog
     ///
@@ -426,6 +429,7 @@ impl MultiLayerOplog {
             match msg {
                 TransferFromPrimary {
                     last_transferred_idx,
+                    mut keep_alive,
                 } => {
                     debug!("Transferring oplog entries up to index {last_transferred_idx} of the primary oplog of {worker_id} to the next layer");
                     debug!("Reading entries from the primary oplog of {worker_id}");
@@ -441,10 +445,12 @@ impl MultiLayerOplog {
                     if let Err(error) = result {
                         error!("Failed to transfer entries from the primary oplog of {worker_id}: {error}");
                     }
+                    let _ = keep_alive.take();
                 }
                 TransferFromLower {
                     source,
                     last_transferred_idx,
+                    mut keep_alive,
                 } => {
                     debug!("Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} of {worker_id} to the next layer");
                     debug!("Reading entries from oplog layer {source} of {worker_id}");
@@ -459,7 +465,60 @@ impl MultiLayerOplog {
                     if let Err(error) = result {
                         error!("Failed to transfer entries from oplog layer {source} of {worker_id}: {error}");
                     }
+                    let _ = keep_alive.take();
                 }
+            }
+        }
+    }
+
+    pub async fn try_archive(this: &Arc<dyn Oplog + Send + Sync>) -> Option<bool> {
+        let this = downcast_oplog::<MultiLayerOplog>(this)?;
+        Some(Self::archive(this).await)
+    }
+
+    async fn archive(this: Arc<Self>) -> bool {
+        if this.primary_length.get() > 0 {
+            // transferring the whole primary oplog to the next layer
+            this.transfer
+                .send(TransferFromPrimary {
+                    last_transferred_idx: this.primary.current_oplog_index().await,
+                    keep_alive: Some(this.clone()),
+                })
+                .expect("Failed to enqueue transfer of primary oplog entries");
+
+            // If there are more layers to transfer from, return true
+            this.lower.len().get() > 1
+        } else {
+            let mut n = 0;
+            let first_non_empty = loop {
+                let length = this.lower[n].length().await;
+                if length > 0 {
+                    break Some(n);
+                } else if n < this.lower.len().get() - 2 {
+                    // skipping the last layer as there is nowhere to transfer to from there
+                    n += 1;
+                } else {
+                    break None;
+                }
+            };
+
+            if let Some(first_non_empty) = first_non_empty {
+                // transferring the whole non-empty lower layer to the next layer
+                this.transfer
+                    .send(TransferFromLower {
+                        source: first_non_empty,
+                        last_transferred_idx: this.lower[first_non_empty]
+                            .current_oplog_index()
+                            .await,
+                        keep_alive: Some(this.clone()),
+                    })
+                    .expect("Failed to enqueue transfer of primary oplog entries");
+
+                // If there are more layers to transfer from, return true
+                first_non_empty < this.lower.len().get() - 2
+            } else {
+                // Fully archived
+                false
             }
         }
     }
@@ -503,6 +562,7 @@ impl Oplog for MultiLayerOplog {
             debug!("Enqueuing transfer of {count} oplog entries from the primary oplog of {} to the next layer up to {current_idx}", self.worker_id);
             let _ = self.transfer.send(TransferFromPrimary {
                 last_transferred_idx: current_idx,
+                keep_alive: None,
             });
             // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
             self.primary_length.set(0);
@@ -541,51 +601,18 @@ impl Oplog for MultiLayerOplog {
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
         self.primary.download_payload(payload).await
     }
-
-    async fn archive(&self) -> bool {
-        if self.primary_length.get() > 0 {
-            // transferring the whole primary oplog to the next layer
-            todo!();
-            // self.transfer
-            //     .send(TransferFromPrimary {
-            //         last_transferred_idx: self.primary.current_oplog_index().await,
-            //     })
-            //     .expect("Failed to enqueue transfer of primary oplog entries");
-        } else {
-            let mut n = 0;
-            let first_non_empty = loop {
-                let length = self.lower[n].length().await;
-                if length > 0 {
-                    break Some(n);
-                } else if n < self.lower.len().get() - 2 {
-                    // skipping the last layer as there is nowhere to transfer to from there
-                    n += 1;
-                } else {
-                    break None;
-                }
-            };
-
-            if let Some(first_non_empty) = first_non_empty {
-                // transferring the whole non-empty lower layer to the next layer
-                todo!();
-
-                // If there are more layers to transfer from, return true
-                first_non_empty < self.lower.len().get() - 2
-            } else {
-                // Fully archived
-                false
-            }
-        }
-    }
 }
 
+#[derive(Debug)]
 enum BackgroundTransferMessage {
     TransferFromPrimary {
         last_transferred_idx: OplogIndex,
+        keep_alive: Option<Arc<dyn Oplog + Send + Sync>>,
     },
     TransferFromLower {
         source: usize,
         last_transferred_idx: OplogIndex,
+        keep_alive: Option<Arc<dyn Oplog + Send + Sync>>,
     },
 }
 
@@ -661,11 +688,16 @@ impl OplogArchive for WrappedOplogArchive {
                 let _ = self.transfer.send(TransferFromLower {
                     source: self.layer,
                     last_transferred_idx: last_idx,
+                    keep_alive: None,
                 });
                 // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
                 self.entry_count.set(0);
             }
         }
+    }
+
+    async fn current_oplog_index(&self) -> OplogIndex {
+        self.archive.current_oplog_index().await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {

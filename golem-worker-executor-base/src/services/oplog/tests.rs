@@ -680,4 +680,99 @@ async fn empty_layer_gets_deleted() {
     assert!(tertiary_exists);
 }
 
-// TODO: schedule transfer
+#[tokio::test]
+async fn scheduled_archive() {
+    init_logging();
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service =
+        Arc::new(PrimaryOplogService::new(indexed_storage.clone(), blob_storage, 1, 100).await);
+    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 2),
+    );
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        1000, // no transfer will occur by reaching limit in this test
+    ));
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let worker_id = WorkerId {
+        component_id: ComponentId(Uuid::new_v4()),
+        worker_name: "test".to_string(),
+    };
+
+    let timestamp = Timestamp::now_utc();
+    let entries: Vec<OplogEntry> = (0..100)
+        .map(|i| {
+            rounded(OplogEntry::Error {
+                timestamp,
+                error: WorkerError::Unknown(i.to_string()),
+            })
+        })
+        .collect();
+
+    // Adding 100 entries to the primary oplog, schedule archive and immediately drop the oplog
+    let archive_result = {
+        let oplog = oplog_service.open(&account_id, &worker_id).await;
+        for entry in &entries {
+            oplog.add(entry.clone()).await;
+        }
+        oplog.commit().await;
+
+        let result = MultiLayerOplog::try_archive(&oplog).await;
+        drop(oplog);
+        result
+    };
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let primary_length = primary_oplog_service
+        .open(&account_id, &worker_id)
+        .await
+        .length()
+        .await;
+    let secondary_length = secondary_layer.open(&worker_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&worker_id).await.length().await;
+
+    info!("primary_length: {}", primary_length);
+    info!("secondary_length: {}", secondary_length);
+    info!("tertiary_length: {}", tertiary_length);
+
+    assert_eq!(primary_length, 0);
+    assert_eq!(secondary_length, 1);
+    assert_eq!(tertiary_length, 0);
+    assert_eq!(archive_result, Some(true));
+
+    // Calling archive again
+    let archive_result2 = {
+        let oplog = oplog_service.open(&account_id, &worker_id).await;
+        let result = MultiLayerOplog::try_archive(&oplog).await;
+        drop(oplog);
+        result
+    };
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let primary_length = primary_oplog_service
+        .open(&account_id, &worker_id)
+        .await
+        .length()
+        .await;
+    let secondary_length = secondary_layer.open(&worker_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&worker_id).await.length().await;
+
+    info!("primary_length 2: {}", primary_length);
+    info!("secondary_length 2: {}", secondary_length);
+    info!("tertiary_length 2: {}", tertiary_length);
+
+    assert_eq!(primary_length, 0);
+    assert_eq!(secondary_length, 0);
+    assert_eq!(tertiary_length, 1);
+    assert_eq!(archive_result2, Some(false));
+}

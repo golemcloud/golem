@@ -283,6 +283,19 @@ impl OplogArchive for CompressedOplogArchive {
         }
     }
 
+    async fn current_oplog_index(&self) -> OplogIndex {
+        let worker_id = &self.worker_id;
+        OplogIndex::from_u64(
+            self.indexed_storage
+                .with_entity("compressed_oplog", "current_oplog_index", "compressed_entry")
+                .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key)
+                .await
+                .unwrap_or_else(|err| {
+                    panic!("failed to get first entry from compressed oplog for worker {worker_id} in indexed storage: {err}")
+                }).unwrap_or_default(),
+        )
+    }
+
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         let worker_id = &self.worker_id;
         self.indexed_storage.with("compressed_oplog", "drop_prefix")
