@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_gateway_client::model::ApiDeployment;
+use golem_cloud_worker_client::model::ApiDeployment;
 
 use crate::model::{GolemError, ProjectId};
 
@@ -33,12 +33,14 @@ pub trait DeploymentClient {
     ) -> Result<String, GolemError>;
 }
 
-pub struct DeploymentClientLive<C: golem_gateway_client::api::ApiDeploymentClient + Sync + Send> {
+pub struct DeploymentClientLive<
+    C: golem_cloud_worker_client::api::ApiDeploymentClient + Sync + Send,
+> {
     pub client: C,
 }
 
 #[async_trait]
-impl<C: golem_gateway_client::api::ApiDeploymentClient + Sync + Send> DeploymentClient
+impl<C: golem_cloud_worker_client::api::ApiDeploymentClient + Sync + Send> DeploymentClient
     for DeploymentClientLive<C>
 {
     async fn get(

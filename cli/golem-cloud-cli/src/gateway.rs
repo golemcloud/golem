@@ -20,7 +20,7 @@ mod healthcheck;
 
 use async_trait::async_trait;
 use clap::Subcommand;
-use golem_gateway_client::{Context, Security};
+use golem_cloud_worker_client::{Context, Security};
 
 use crate::clients::gateway::certificate::CertificateClientLive;
 use crate::clients::gateway::definition::DefinitionClientLive;
@@ -96,7 +96,7 @@ impl<'p, P: ProjectClient + Sync + Send> GatewayHandler for GatewayHandlerLive<'
         };
 
         let healthcheck_client = HealthcheckClientLive {
-            client: golem_gateway_client::api::HealthCheckClientLive {
+            client: golem_cloud_worker_client::api::HealthCheckClientLive {
                 context: context.clone(),
             },
         };
@@ -105,7 +105,7 @@ impl<'p, P: ProjectClient + Sync + Send> GatewayHandler for GatewayHandlerLive<'
         };
 
         let deployment_client = DeploymentClientLive {
-            client: golem_gateway_client::api::ApiDeploymentClientLive {
+            client: golem_cloud_worker_client::api::ApiDeploymentClientLive {
                 context: context.clone(),
             },
         };
@@ -115,7 +115,7 @@ impl<'p, P: ProjectClient + Sync + Send> GatewayHandler for GatewayHandlerLive<'
         };
 
         let definition_client = DefinitionClientLive {
-            client: golem_gateway_client::api::ApiDefinitionClientLive {
+            client: golem_cloud_worker_client::api::ApiDefinitionClientLive {
                 context: context.clone(),
             },
         };
@@ -125,7 +125,7 @@ impl<'p, P: ProjectClient + Sync + Send> GatewayHandler for GatewayHandlerLive<'
         };
 
         let certificate_client = CertificateClientLive {
-            client: golem_gateway_client::api::ApiCertificateClientLive {
+            client: golem_cloud_worker_client::api::ApiCertificateClientLive {
                 context: context.clone(),
             },
         };
@@ -135,7 +135,7 @@ impl<'p, P: ProjectClient + Sync + Send> GatewayHandler for GatewayHandlerLive<'
         };
 
         let domain_client = DomainClientLive {
-            client: golem_gateway_client::api::ApiDomainClientLive {
+            client: golem_cloud_worker_client::api::ApiDomainClientLive {
                 context: context.clone(),
             },
         };

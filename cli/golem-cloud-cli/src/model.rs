@@ -71,21 +71,21 @@ impl From<reqwest::header::InvalidHeaderValue> for GolemError {
 }
 
 impl<T: crate::clients::gateway::errors::ResponseContentErrorMapper>
-    From<golem_gateway_client::Error<T>> for GolemError
+    From<golem_cloud_worker_client::Error<T>> for GolemError
 {
-    fn from(value: golem_gateway_client::Error<T>) -> Self {
+    fn from(value: golem_cloud_worker_client::Error<T>) -> Self {
         match value {
-            golem_gateway_client::Error::Reqwest(error) => GolemError::from(error),
-            golem_gateway_client::Error::Serde(error) => {
+            golem_cloud_worker_client::Error::Reqwest(error) => GolemError::from(error),
+            golem_cloud_worker_client::Error::Serde(error) => {
                 GolemError(format!("Unexpected serde error: {error}"))
             }
-            golem_gateway_client::Error::Item(data) => {
+            golem_cloud_worker_client::Error::Item(data) => {
                 let error_str =
                     crate::clients::gateway::errors::ResponseContentErrorMapper::map(data);
                 GolemError(format!("Response error: {error_str}"))
             }
 
-            golem_gateway_client::Error::Unexpected { code, data } => {
+            golem_cloud_worker_client::Error::Unexpected { code, data } => {
                 match String::from_utf8(Vec::from(data)) {
                     Ok(data_string) => GolemError(format!(
                         "Unexpected http error. Code: {code}, content: {data_string}."
@@ -95,7 +95,7 @@ impl<T: crate::clients::gateway::errors::ResponseContentErrorMapper>
                     )),
                 }
             }
-            golem_gateway_client::Error::ReqwestHeader(invalid_header_value) => {
+            golem_cloud_worker_client::Error::ReqwestHeader(invalid_header_value) => {
                 GolemError::from(invalid_header_value)
             }
         }

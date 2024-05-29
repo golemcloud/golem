@@ -14,8 +14,9 @@
 
 use golem_cloud_client::api::{
     AccountError, ComponentError, GrantError, LoginError, ProjectError, ProjectGrantError,
-    ProjectPolicyError, TokenError, WorkerError,
+    ProjectPolicyError, TokenError,
 };
+use golem_cloud_worker_client::api::WorkerError;
 
 pub trait ResponseContentErrorMapper {
     fn map(self) -> String;

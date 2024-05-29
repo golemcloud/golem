@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_gateway_client::api::{
+use golem_cloud_worker_client::api::{
     ApiCertificateError, ApiDefinitionError, ApiDeploymentError, ApiDomainError, HealthCheckError,
+    WorkerError,
 };
 
 pub trait ResponseContentErrorMapper {
@@ -123,5 +124,30 @@ impl ResponseContentErrorMapper for ApiDomainError {
 impl ResponseContentErrorMapper for HealthCheckError {
     fn map(self) -> String {
         match self {}
+    }
+}
+
+impl ResponseContentErrorMapper for WorkerError {
+    fn map(self) -> String {
+        match self {
+            WorkerError::Error400(errors) => {
+                format!("BadRequest: {errors:?}")
+            }
+            WorkerError::Error401(error) => {
+                format!("Unauthorized: {error:?}")
+            }
+            WorkerError::Error403(error) => {
+                format!("Forbidden: {error:?}")
+            }
+            WorkerError::Error404(error) => {
+                format!("NotFound: {error:?}")
+            }
+            WorkerError::Error409(error) => {
+                format!("Conflict: {error:?}")
+            }
+            WorkerError::Error500(error) => {
+                format!("InternalError: {error:?}")
+            }
+        }
     }
 }

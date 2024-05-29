@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_gateway_client::model::HttpApiDefinition;
+use golem_cloud_worker_client::model::HttpApiDefinition;
 
 use crate::model::{GolemError, ProjectId};
 
@@ -39,12 +39,14 @@ pub trait DefinitionClient {
     ) -> Result<String, GolemError>;
 }
 
-pub struct DefinitionClientLive<C: golem_gateway_client::api::ApiDefinitionClient + Sync + Send> {
+pub struct DefinitionClientLive<
+    C: golem_cloud_worker_client::api::ApiDefinitionClient + Sync + Send,
+> {
     pub client: C,
 }
 
 #[async_trait]
-impl<C: golem_gateway_client::api::ApiDefinitionClient + Sync + Send> DefinitionClient
+impl<C: golem_cloud_worker_client::api::ApiDefinitionClient + Sync + Send> DefinitionClient
     for DefinitionClientLive<C>
 {
     async fn get(

@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use clap::builder::ValueParser;
 use clap::Subcommand;
-use golem_cloud_client::model::{InvokeParameters, WorkerMetadata, WorkersMetadataResponse};
+use golem_cloud_worker_client::model::{InvokeParameters, WorkerMetadata, WorkersMetadataResponse};
 use uuid::Uuid;
 
 use crate::clients::worker::WorkerClient;

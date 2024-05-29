@@ -12,7 +12,7 @@ description = "Command line interface for Golem Cloud"
 
 [dependencies]
 golem-cloud-client = { path = "../golem-cloud-client", version="0.0.0" }
-golem-gateway-client = { path = "../gateway-client", version="0.0.0" }
+golem-cloud-worker-client = { path = "../golem-cloud-worker-client", version="0.0.0" }
 
 async-trait = "0.1.76"
 chrono = { version = "0.4.31", features = ["serde"] }

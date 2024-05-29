@@ -18,7 +18,7 @@ use std::io::{BufReader, Read};
 
 use async_trait::async_trait;
 use clap::Subcommand;
-use golem_gateway_client::model::CertificateRequest;
+use golem_cloud_worker_client::model::CertificateRequest;
 use uuid::Uuid;
 
 use crate::clients::gateway::certificate::CertificateClient;

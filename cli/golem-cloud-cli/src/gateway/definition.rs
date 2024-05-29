@@ -18,7 +18,7 @@ use std::io::{BufReader, Read};
 
 use async_trait::async_trait;
 use clap::Subcommand;
-use golem_gateway_client::model::HttpApiDefinition;
+use golem_cloud_worker_client::model::HttpApiDefinition;
 
 use crate::clients::gateway::definition::DefinitionClient;
 use crate::clients::project::ProjectClient;

@@ -339,11 +339,19 @@ async fn async_main(cmd: GolemCommand) -> Result<(), Box<dyn std::error::Error>>
         client: project_grant_client,
         project: &project_client,
     };
+
+    let worker_context = golem_cloud_worker_client::Context {
+        base_url: url.clone(),
+        client: client.clone(),
+        security_token: golem_cloud_worker_client::Security::Bearer(
+            auth.0.secret.value.to_string(),
+        ),
+    };
     let worker_client = WorkerClientLive {
-        client: golem_cloud_client::api::WorkerClientLive {
-            context: context.clone(),
+        client: golem_cloud_worker_client::api::WorkerClientLive {
+            context: worker_context.clone(),
         },
-        context: context.clone(),
+        context: worker_context.clone(),
         allow_insecure,
     };
     let worker_srv = WorkerHandlerLive {
