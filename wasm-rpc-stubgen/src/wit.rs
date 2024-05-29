@@ -19,7 +19,10 @@ use std::ffi::OsStr;
 use std::fmt::{Display, Formatter, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
-use wit_parser::{Enum, Field, Flags, Handle, PackageName, Resolve, Result_, Tuple, Type, TypeDef, TypeDefKind, UnresolvedPackage, Variant};
+use wit_parser::{
+    Enum, Field, Flags, Handle, PackageName, Resolve, Result_, Tuple, Type, TypeDef, TypeDefKind,
+    UnresolvedPackage, Variant,
+};
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     let out = get_stub_wit(def, StubTypeGen::ImportRootTypes)?;
@@ -255,6 +258,7 @@ fn write_type_def(
         TypeDefKind::Stream(_) => {}
         TypeDefKind::Type(typ) => {
             write!(out, "  {} ", kind_str)?;
+            write!(out, "{}", typ_name)?;
             write!(out, " =")?;
             write!(out, " {}", typ.wit_type_string(&def.resolve)?)?;
             writeln!(out, ";")?;
@@ -322,7 +326,6 @@ fn write_variant(out: &mut String, variant: &Variant, def: &StubDefinition) -> a
 
     writeln!(out, "  }}")?;
     Ok(())
-
 }
 
 fn write_enum(out: &mut String, enum_ty: Enum) -> anyhow::Result<()> {
@@ -353,11 +356,7 @@ fn write_tuple(out: &mut String, tuple: &Tuple, def: &StubDefinition) -> anyhow:
     Ok(())
 }
 
-fn write_record(
-    out: &mut String,
-    fields: Vec<Field>,
-    def: &StubDefinition,
-) -> anyhow::Result<()> {
+fn write_record(out: &mut String, fields: Vec<Field>, def: &StubDefinition) -> anyhow::Result<()> {
     write!(out, " {{")?;
     writeln!(out)?;
 
