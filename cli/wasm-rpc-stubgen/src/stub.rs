@@ -276,7 +276,7 @@ fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<V
         .exports
         .iter()
         .filter_map(|(name, item)| match item {
-            WorldItem::Type(t)  => Some((name.clone().unwrap_name(), t)),
+            WorldItem::Type(t) => Some((name.clone().unwrap_name(), t)),
             _ => None,
         })
         .collect::<Vec<_>>();

@@ -23,7 +23,6 @@ use cargo_toml::{
 };
 use serde::{Deserialize, Serialize};
 use toml::Value;
-use wit_parser::UnresolvedPackage;
 
 use golem_wasm_rpc::WASM_RPC_VERSION;
 
