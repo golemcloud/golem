@@ -176,7 +176,7 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         &args.stub_crate_version,
         &args.wasm_rpc_path_override,
     )
-    .context("Failed to gather information for the stub generator")?;
+    .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
 
     generate_stub_wit(&stub_def).context("Failed to generate the stub wit file")?;
     copy_wit_files(&stub_def).context("Failed to copy the dependent wit files")?;
@@ -256,6 +256,20 @@ fn find_if_same_package(dep_dir: &Path, target_wit: &UnresolvedPackage) -> anyho
     }
 }
 
+fn find_world_name(unresolved_package: UnresolvedPackage) -> anyhow::Result<String> {
+    // In reality, there is only 1 interface in generated stub in 1 _stub.wit
+    for (_, interface) in unresolved_package.interfaces {
+        if let Some(name) = interface.name {
+            if name.starts_with("stub-") {
+                let world_name = name.replace("stub-", "");
+                return Ok(world_name);
+            }
+        }
+    }
+
+    Err(anyhow!("Failed to find world name from the stub. The interface name in stub is expected to have the pattern stub-<world-name>"))
+}
+
 pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     // The destination's WIT's package details
     let destination_wit_root = UnresolvedPackage::parse_dir(&args.dest_wit_root)?;
@@ -270,16 +284,26 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
         .collect::<Vec<_>>();
 
     let main_wit = args.stub_wit_root.join("_stub.wit");
+    let parsed = UnresolvedPackage::parse_file(&main_wit)?;
 
-    let stub_dependency = StubDefinition::new(
+    let world_name = find_world_name(parsed)?;
+
+    let stub_root = &args
+        .stub_wit_root
+        .parent()
+        .ok_or(anyhow!("Failed to get parent of stub wit root"))?;
+
+    // We re-generate stub instead of copying it and inline types
+    let stub_definition = StubDefinition::new(
         &args.dest_wit_root,
-        args.stub_wit_root.parent().unwrap(),
-        &None, // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
-        "0.0.1", // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
-        &None, // Unavailable at this stage because of the disconnect between stub creation and adding stub as a dependency
+        stub_root,
+        &Some(world_name),
+        "0.0.1", // Version is unused when it comes to re-generating stub at this stage.
+        &None, // wasm-rpc path is is unused when it comes to re-generating stub during dependency addition
     )?;
 
-    let new_stub = get_stub_wit(&stub_dependency, StubTypeGen::InlineRootTypes)
+    // New stub string
+    let new_stub = get_stub_wit(&stub_definition, StubTypeGen::InlineRootTypes)
         .context("Failed to regenerate inlined stub")?;
 
     let main_wit_package_name = wit::get_package_name(&main_wit)?;
