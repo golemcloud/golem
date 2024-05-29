@@ -645,4 +645,8 @@ impl Oplog for PrimaryOplog {
             }
         }
     }
+
+    async fn archive(&self) -> bool {
+        false
+    }
 }

@@ -420,6 +420,8 @@ impl MultiLayerOplog {
         multi_layer_oplog_service: MultiLayerOplogService,
         mut rx: UnboundedReceiver<BackgroundTransferMessage>,
     ) {
+        // TODO: monitor queue length
+
         while let Some(msg) = rx.recv().await {
             match msg {
                 TransferFromPrimary {
@@ -538,6 +540,42 @@ impl Oplog for MultiLayerOplog {
 
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
         self.primary.download_payload(payload).await
+    }
+
+    async fn archive(&self) -> bool {
+        if self.primary_length.get() > 0 {
+            // transferring the whole primary oplog to the next layer
+            todo!();
+            // self.transfer
+            //     .send(TransferFromPrimary {
+            //         last_transferred_idx: self.primary.current_oplog_index().await,
+            //     })
+            //     .expect("Failed to enqueue transfer of primary oplog entries");
+        } else {
+            let mut n = 0;
+            let first_non_empty = loop {
+                let length = self.lower[n].length().await;
+                if length > 0 {
+                    break Some(n);
+                } else if n < self.lower.len().get() - 2 {
+                    // skipping the last layer as there is nowhere to transfer to from there
+                    n += 1;
+                } else {
+                    break None;
+                }
+            };
+
+            if let Some(first_non_empty) = first_non_empty {
+                // transferring the whole non-empty lower layer to the next layer
+                todo!();
+
+                // If there are more layers to transfer from, return true
+                first_non_empty < self.lower.len().get() - 2
+            } else {
+                // Fully archived
+                false
+            }
+        }
     }
 }
 

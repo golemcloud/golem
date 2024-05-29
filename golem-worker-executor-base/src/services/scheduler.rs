@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::ops::Add;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,6 +25,7 @@ use tracing::{error, span, Instrument, Level};
 use golem_common::model::{ScheduleId, ScheduledAction};
 
 use crate::metrics::promises::record_scheduled_promise_completed;
+use crate::services::oplog::OplogService;
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -45,6 +47,7 @@ pub struct SchedulerServiceDefault {
     shard_service: Arc<dyn ShardService + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+    oplog_service: Arc<dyn OplogService + Send + Sync>,
 }
 
 impl SchedulerServiceDefault {
@@ -53,6 +56,7 @@ impl SchedulerServiceDefault {
         shard_service: Arc<dyn ShardService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        oplog_service: Arc<dyn OplogService + Send + Sync>,
         process_interval: Duration,
     ) -> Arc<Self> {
         let svc = Self {
@@ -60,6 +64,7 @@ impl SchedulerServiceDefault {
             background_handle: Arc::new(Mutex::new(None)),
             shard_service,
             promise_service,
+            oplog_service,
             worker_activator,
         };
         let svc = Arc::new(svc);
@@ -132,13 +137,39 @@ impl SchedulerServiceDefault {
                         .complete(promise_id, vec![])
                         .await
                         .map_err(|golem_err| format!("{golem_err}"))?;
+
+                    record_scheduled_promise_completed();
                 }
-                ScheduledAction::ArchiveOplog { .. } => {
-                    todo!()
+                ScheduledAction::ArchiveOplog {
+                    account_id,
+                    worker_id,
+                    last_oplog_index,
+                    next_after,
+                } => {
+                    if self.oplog_service.exists(&worker_id).await {
+                        let current_last_index =
+                            self.oplog_service.get_last_index(&worker_id).await;
+                        if current_last_index == last_oplog_index {
+                            let oplog = self.oplog_service.open(&account_id, &worker_id).await;
+                            let more = oplog.archive().await;
+                            if more {
+                                self.schedule(
+                                    now.add(next_after),
+                                    ScheduledAction::ArchiveOplog {
+                                        account_id,
+                                        worker_id,
+                                        last_oplog_index,
+                                        next_after,
+                                    },
+                                )
+                                .await;
+                            }
+                        }
+
+                        // TODO: metrics
+                    }
                 }
             }
-
-            record_scheduled_promise_completed();
         }
 
         for worker_id in worker_ids {
@@ -264,6 +295,7 @@ mod tests {
 
     use uuid::Uuid;
 
+    use crate::services::oplog::mock::OplogServiceMock;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{ComponentId, PromiseId, ScheduledAction, WorkerId};
 
@@ -310,12 +342,14 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service,
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // not testing process() here
         );
 
@@ -406,12 +440,14 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service,
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // not testing process() here
         );
 
@@ -493,12 +529,14 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
@@ -587,12 +625,14 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
@@ -680,12 +720,14 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
@@ -778,12 +820,14 @@ mod tests {
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 

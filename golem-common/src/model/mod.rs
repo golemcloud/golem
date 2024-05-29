@@ -353,6 +353,7 @@ pub enum ScheduledAction {
     /// if the last oplog index did not change. If there are more layers below, schedules
     /// a next action to archive the next layer.
     ArchiveOplog {
+        account_id: AccountId,
         worker_id: WorkerId,
         last_oplog_index: OplogIndex,
         next_after: Duration,

@@ -221,6 +221,8 @@ pub struct OplogConfig {
     pub max_payload_size: usize,
     pub indexed_storage_layers: usize,
     pub entry_count_limit: u64,
+    #[serde(with = "humantime_serde")]
+    pub archive_interval: Duration,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -374,6 +376,7 @@ impl Default for OplogConfig {
             max_payload_size: 64 * 1024,
             indexed_storage_layers: 2,
             entry_count_limit: 1024,
+            archive_interval: Duration::from_secs(60 * 60 * 24), // 24 hours
         }
     }
 }

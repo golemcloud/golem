@@ -167,6 +167,11 @@ pub trait Oplog: Debug {
 
     /// Downloads a big oplog payload by its reference
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String>;
+
+    /// Archives the oplog; returns true if there is anything more to archive, for example in a multi-layer
+    /// oplog implementation this function may move entries one layer down, and return true if there are
+    /// more layers to target for archiving.
+    async fn archive(&self) -> bool;
 }
 
 #[async_trait]

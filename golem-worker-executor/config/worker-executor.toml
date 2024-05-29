@@ -52,6 +52,7 @@ max_operations_before_commit = 128
 max_payload_size = 65536
 indexed_storage_layers = 2
 entry_count_limit = 1024
+archive_interval = "24h"
 
 [limits]
 max_active_workers = 1024

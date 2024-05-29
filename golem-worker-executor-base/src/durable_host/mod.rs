@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use std::ops::Add;
 use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -44,6 +45,7 @@ use crate::workerctx::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use cap_std::ambient_authority;
+use chrono::{DateTime, Utc};
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription, WrappedFunctionType};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
@@ -324,7 +326,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn store_worker_status(&self, status: WorkerStatus) {
-        self.update_worker_status(|s| s.status = status).await;
+        self.update_worker_status(|s| s.status = status.clone())
+            .await;
+        if status == WorkerStatus::Idle
+            || status == WorkerStatus::Failed
+            || status == WorkerStatus::Exited
+        {
+            debug!("Scheduling oplog archive");
+            let at = Utc::now().add(self.state.config.oplog.archive_interval);
+            self.state
+                .scheduler_service
+                .schedule(
+                    at,
+                    ScheduledAction::ArchiveOplog {
+                        account_id: self.state.account_id.clone(),
+                        worker_id: self.worker_id.clone(),
+                        last_oplog_index: self.public_state.oplog.current_oplog_index().await,
+                        next_after: self.state.config.oplog.archive_interval,
+                    },
+                )
+                .await;
+        }
     }
 
     pub async fn update_pending_invocations(&self) {
@@ -1422,7 +1444,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
-    pub async fn sleep_until(&self, when: chrono::DateTime<chrono::Utc>) -> Result<(), GolemError> {
+    pub async fn sleep_until(&self, when: DateTime<Utc>) -> Result<(), GolemError> {
         let promise_id = self
             .promise_service
             .create(&self.worker_id, self.current_oplog_index().await)

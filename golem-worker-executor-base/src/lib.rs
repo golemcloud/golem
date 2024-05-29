@@ -308,6 +308,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             shard_service.clone(),
             promise_service.clone(),
             lazy_worker_activator.clone(),
+            oplog_service.clone(),
             golem_config.scheduler.refresh_interval,
         );
 
