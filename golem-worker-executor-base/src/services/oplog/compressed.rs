@@ -20,7 +20,6 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use evicting_cache_map::EvictingCacheMap;
 use tokio::sync::RwLock;
-use tracing::debug;
 
 use crate::error::GolemError;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -170,12 +169,6 @@ impl CompressedOplogArchive {
             .await?
         {
             let entries = chunk.decompress()?;
-
-            debug!(
-                "read {} compressed entries for idx {idx}, adding to cache",
-                entries.len()
-            );
-
             let mut cache = self.cache.write().await;
 
             let mut idx = last_idx - chunk.count + 1;
@@ -186,7 +179,6 @@ impl CompressedOplogArchive {
 
             Ok(Some(OplogIndex::from_u64(last_idx)))
         } else {
-            debug!("no compressed entries found for idx {idx}");
             Ok(None)
         }
     }
@@ -203,6 +195,7 @@ impl OplogArchive for CompressedOplogArchive {
         n: u64,
     ) -> BTreeMap<golem_common::model::oplog::OplogIndex, OplogEntry> {
         let worker_id = &self.worker_id;
+
         let mut result = BTreeMap::new();
         let mut last_idx = idx.range_end(n);
         let mut before = OplogIndex::from_u64(u64::MAX);
@@ -249,11 +242,9 @@ impl OplogArchive for CompressedOplogArchive {
                     }) {
                     last_idx = min(last_idx, OplogIndex::from_u64(idx));
                 } else {
-                    debug!("No compressed entries found for worker {worker_id}, finishing read");
                     break;
                 }
             } else {
-                debug!("No more compressed entries found for worker {worker_id}, finishing read");
                 // We go newer towards older entries so if we didn't fetch the chunk we reached the
                 // boundary of this layer
                 break;

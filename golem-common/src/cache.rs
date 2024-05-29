@@ -336,6 +336,20 @@ impl<
         }
     }
 
+    pub fn create_weak_remover(&self, key: K) -> impl FnOnce() {
+        let weak_state = Arc::downgrade(&self.state);
+        let name = self.name;
+        move || {
+            if let Some(state) = weak_state.upgrade() {
+                let removed = state.items.remove(&key).is_some();
+                if removed {
+                    let count = state.count.fetch_sub(1, Ordering::SeqCst);
+                    record_cache_size(name, count.saturating_sub(1));
+                }
+            }
+        }
+    }
+
     fn evict(&self) {
         record_cache_eviction(self.name, "full");
         match self.full_cache_eviction {

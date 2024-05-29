@@ -115,7 +115,7 @@ impl MultiLayerOplogService {
         Self {
             primary,
             lower,
-            oplogs: OpenOplogs::new(),
+            oplogs: OpenOplogs::new("multi-layer oplog"),
             entry_count_limit,
         }
     }
@@ -132,6 +132,7 @@ impl Clone for MultiLayerOplogService {
     }
 }
 
+#[derive(Clone)]
 struct CreateOplogConstructor {
     worker_id: WorkerId,
     account_id: AccountId,

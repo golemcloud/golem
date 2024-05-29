@@ -14,7 +14,7 @@
 
 use crate::error::GolemError;
 use crate::metrics::oplog::record_oplog_call;
-use crate::services::oplog::{Oplog, OplogService};
+use crate::services::oplog::{OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use async_mutex::Mutex;
@@ -40,6 +40,7 @@ pub struct PrimaryOplogService {
     replicas: u8,
     max_operations_before_commit: u64,
     max_payload_size: usize,
+    oplogs: OpenOplogs,
 }
 
 impl PrimaryOplogService {
@@ -62,6 +63,7 @@ impl PrimaryOplogService {
             replicas,
             max_operations_before_commit,
             max_payload_size,
+            oplogs: OpenOplogs::new("primary oplog"),
         }
     }
 
@@ -134,17 +136,22 @@ impl OplogService for PrimaryOplogService {
         let key = Self::oplog_key(worker_id);
         let last_oplog_index = self.get_last_index(worker_id).await;
 
-        Arc::new(PrimaryOplog::new(
-            self.indexed_storage.clone(),
-            self.blob_storage.clone(),
-            self.replicas,
-            self.max_operations_before_commit,
-            self.max_payload_size,
-            key,
-            last_oplog_index,
-            worker_id.clone(),
-            account_id.clone(),
-        ))
+        self.oplogs
+            .get_or_open(
+                worker_id,
+                CreateOplogConstructor::new(
+                    self.indexed_storage.clone(),
+                    self.blob_storage.clone(),
+                    self.replicas,
+                    self.max_operations_before_commit,
+                    self.max_payload_size,
+                    key,
+                    last_oplog_index,
+                    worker_id.clone(),
+                    account_id.clone(),
+                ),
+            )
+            .await
     }
 
     async fn get_first_index(&self, worker_id: &WorkerId) -> OplogIndex {
@@ -261,9 +268,78 @@ impl OplogService for PrimaryOplogService {
     }
 }
 
+#[derive(Clone)]
+struct CreateOplogConstructor {
+    indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+    blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+    replicas: u8,
+    max_operations_before_commit: u64,
+    max_payload_size: usize,
+    key: String,
+    last_oplog_idx: OplogIndex,
+    worker_id: WorkerId,
+    account_id: AccountId,
+}
+
+impl CreateOplogConstructor {
+    fn new(
+        indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        replicas: u8,
+        max_operations_before_commit: u64,
+        max_payload_size: usize,
+        key: String,
+        last_oplog_idx: OplogIndex,
+        worker_id: WorkerId,
+        account_id: AccountId,
+    ) -> Self {
+        Self {
+            indexed_storage,
+            blob_storage,
+            replicas,
+            max_operations_before_commit,
+            max_payload_size,
+            key,
+            last_oplog_idx,
+            worker_id,
+            account_id,
+        }
+    }
+}
+
+#[async_trait]
+impl OplogConstructor for CreateOplogConstructor {
+    async fn create_oplog(
+        self,
+        close: Box<dyn FnOnce() + Send + Sync>,
+    ) -> Arc<dyn Oplog + Send + Sync> {
+        Arc::new(PrimaryOplog::new(
+            self.indexed_storage,
+            self.blob_storage,
+            self.replicas,
+            self.max_operations_before_commit,
+            self.max_payload_size,
+            self.key,
+            self.last_oplog_idx,
+            self.worker_id,
+            self.account_id,
+            close,
+        ))
+    }
+}
+
 struct PrimaryOplog {
     state: Arc<Mutex<PrimaryOplogState>>,
     key: String,
+    close: Option<Box<dyn FnOnce() + Send + Sync>>,
+}
+
+impl Drop for PrimaryOplog {
+    fn drop(&mut self) {
+        if let Some(close) = self.close.take() {
+            close();
+        }
+    }
 }
 
 impl PrimaryOplog {
@@ -277,6 +353,7 @@ impl PrimaryOplog {
         last_oplog_idx: OplogIndex,
         worker_id: WorkerId,
         account_id: AccountId,
+        close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         Self {
             state: Arc::new(Mutex::new(PrimaryOplogState {
@@ -293,6 +370,7 @@ impl PrimaryOplog {
                 account_id,
             })),
             key,
+            close: Some(close),
         }
     }
 }

@@ -13,17 +13,19 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
-use dashmap::mapref::entry::Entry;
-use dashmap::DashMap;
+use tracing::debug;
 
 pub use compressed::CompressedOplogArchive;
+pub use compressed::CompressedOplogArchiveService;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, OplogPayload, UpdateDescription, WrappedFunctionType,
 };
@@ -32,8 +34,6 @@ use golem_common::model::{
     Timestamp, WorkerId,
 };
 use golem_common::serialization::{serialize, try_deserialize};
-
-pub use compressed::CompressedOplogArchiveService;
 pub use multilayer::{MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 
@@ -278,52 +278,103 @@ pub trait OplogOps: Oplog {
 #[async_trait]
 impl<O: Oplog + ?Sized> OplogOps for O {}
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
+struct OpenOplogEntry {
+    pub oplog: Weak<dyn Oplog + Send + Sync>,
+    pub initial: Arc<AtomicBool>,
+}
+
+impl OpenOplogEntry {
+    pub fn new(oplog: Arc<dyn Oplog + Send + Sync>) -> Self {
+        Self {
+            oplog: Arc::downgrade(&oplog),
+            initial: Arc::new(AtomicBool::new(true)),
+        }
+    }
+}
+
+#[derive(Clone)]
 struct OpenOplogs {
-    oplogs: Arc<DashMap<WorkerId, Weak<dyn Oplog + Send + Sync>>>,
+    oplogs: Cache<WorkerId, (), OpenOplogEntry, ()>,
+    name: &'static str,
 }
 
 impl OpenOplogs {
-    fn new() -> Self {
+    fn new(name: &'static str) -> Self {
         Self {
-            oplogs: Arc::new(DashMap::new()),
+            oplogs: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                name,
+            ),
+            name,
         }
     }
 
     async fn get_or_open(
         &self,
         worker_id: &WorkerId,
-        constructor: impl OplogConstructor,
+        constructor: impl OplogConstructor + Send + 'static,
     ) -> Arc<dyn Oplog + Send + Sync> {
-        let oplogs_clone = self.oplogs.clone();
-        let worker_id_clone = worker_id.clone();
-        let entry = self.oplogs.entry(worker_id.clone());
-        match entry {
-            Entry::Occupied(existing) => match existing.get().upgrade() {
-                Some(oplog) => oplog,
-                None => {
-                    let close = Box::new(move || {
-                        oplogs_clone.remove(&worker_id_clone);
-                    });
-                    let oplog = constructor.create_oplog(close).await;
-                    existing.replace_entry(Arc::downgrade(&oplog));
+        loop {
+            let constructor_clone = constructor.clone();
+            let close = Box::new(self.oplogs.create_weak_remover(worker_id.clone()));
+
+            let entry = self
+                .oplogs
+                .get_or_insert(
+                    worker_id,
+                    || Ok(()),
+                    |_| {
+                        Box::pin(async move {
+                            let result = constructor_clone.create_oplog(close).await;
+
+                            // Temporarily increasing ref count because we want to store a weak pointer
+                            // but not drop it before we re-gain a strong reference when got out of the cache
+                            let result = unsafe {
+                                let ptr = Arc::into_raw(result);
+                                Arc::increment_strong_count(ptr);
+                                Arc::from_raw(ptr)
+                            };
+                            Ok(OpenOplogEntry::new(result))
+                        })
+                    },
+                )
+                .await
+                .unwrap();
+            if let Some(oplog) = entry.oplog.upgrade() {
+                let oplog = if entry.initial.load(Ordering::Acquire) {
+                    let oplog = unsafe {
+                        let ptr = Arc::into_raw(oplog);
+                        Arc::decrement_strong_count(ptr);
+                        Arc::from_raw(ptr)
+                    };
+                    entry.initial.store(false, Ordering::Release);
                     oplog
-                }
-            },
-            Entry::Vacant(entry) => {
-                let close = Box::new(move || {
-                    oplogs_clone.remove(&worker_id_clone);
-                });
-                let oplog = constructor.create_oplog(close).await;
-                entry.insert(Arc::downgrade(&oplog));
-                oplog
+                } else {
+                    oplog
+                };
+
+                debug!("get_or_open finished {} {}", self.name, worker_id);
+                break oplog;
+            } else {
+                self.oplogs.remove(worker_id);
+                debug!("get_or_open retry {} {}", self.name, worker_id);
+                continue;
             }
         }
     }
 }
 
+impl Debug for OpenOplogs {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenOplogs").finish()
+    }
+}
+
 #[async_trait]
-trait OplogConstructor {
+trait OplogConstructor: Clone {
     async fn create_oplog(
         self,
         close: Box<dyn FnOnce() + Send + Sync>,
