@@ -1,188 +1,284 @@
-// Copyright 2024 Golem Cloud
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+const prototype = {
+  /**
+   * Returns `this.value` if `this` is a successful result, otherwise throws a TypeError.
+   * @example Returns the payload of a successful result.
+   * Result.ok(123).unwrap() // 123
+   * @example Throws the payload of a failed result.
+   * Result.err('error').unwrap() // throws 'error'
+   */
+  unwrap,
 
-export type Result<T, E> = Ok<T> | Err<E>;
+  /**
+   * 
+   * Returns `this.error` if `this` is a failed result, otherwise throws a TypeError.
+   * @example Returns the payload of a failed result.
+   * Result.
+   */
+  unwrapErr,
+  /**
+   * Returns the payload of the result.
+   * @example Returns the payload of a successful result.
+   * Result.ok(123).toUnion() // 123
+   * @example Returns the payload of a failed result.
+   * Result.err('error').toUnion() // 'error'
+   */
+  toUnion,
+  /**
+   * Return the result of applying one of the given functions to the payload.
+   * @example
+   * Result.ok(123).match((x) => x * 2, (x: string) => x + '!') // 246
+   * Result.err('error').match((x: number) => x * 2, (x) => x + '!') // 'error!'
+   */
+  match,
+  /**
+   * Creates a Result value by modifying the payload of the successful result using the given function.
+   * @example
+   * Result.ok(123).map((x) => x * 2) // Result.ok(246)
+   * Result.err('error').map((x: number) => x * 2) // Result.err('error')
+   */
+  map,
+  /**
+   * Creates a Result value by modifying the payload of the failed result using the given function.
+   * @example
+   * Result.ok(123).mapError((x: string) => x + '!') // Result.ok(123)
+   * Result.err('error').mapError((x) => x + '!') // Result.err('error!')
+   */
+  mapError,
+  /**
+   * Maps the payload of the successful result and flattens the nested Result type.
+   * @example
+   * Result.ok(123).flatMap((x) => Result.ok(x * 2)) // Result.ok(246)
+   * Result.ok(123).flatMap((x) => Result.err('error')) // Result.err('error')
+   * Result.err('error').flatMap((x: number) => Result.ok(x * 2)) // Result.err('error')
+   * Result.err('error').flatMap((x) => Result.err('failure')) // Result.err('error')
+   */
+  flatMap,
+  /**
+   * Flattens the nested Result type.
+   * @example
+   * Result.ok(Result.ok(123)).flatten() // Result.ok(123)
+   * Result.ok(Result.err('error')).flatten() // Result.err('error')
+   * Result.err('error').flatten() // Result.err('error')
+   */
+  flatten,
+  /**
+   * Perform a safe cast of the error type to the given class. If the payload of the failed result is not instance of constructor, throws TypeError.
+   * @example
+   * const result: Result<number, Error> = Result.tryCatch(() => {
+   *   if (Math.random() >= 0) {
+   *     throw new Error('error')
+   *   } else {
+   *     return 123
+   *   }
+   * }).assertErrorInstanceOf(Error)
+   */
+  assertErrorInstanceOf,
+} as const
 
-interface BaseResult<T, E> {
-    isOk(): this is Ok<T>;
-    isErr(): this is Err<E>;
+/** Type representing success or failure. */
+export type Result<T, E = unknown> = Result.Ok<T> | Result.Err<E>
 
-    unwrap(): T;
-    unwrapErr(): E;
+export namespace Result {
+  /**
+   * The type of a successful result.
+   * @example
+   * const success: Result.ok<number> = Result.ok(123)
+   */
+  export type Ok<T> = typeof prototype & {
+    readonly value: T
+    readonly error?: never
+    readonly isOk: true
+    readonly isErr: false
+  }
 
-    /**
-     * Maps a `Result<T, E>` to `Result<U, E>` by applying a function to a contained `Ok` value,
-     * leaving an `Err` value untouched.
-     *
-     * This function can be used to compose the results of two functions.
-     */
-    map<U>(mapper: (val: T) => U): Result<U, E>;
+  /**
+   * A failed result.
+   * @example
+   * const failure: Result.err<string> = Result.err('error')
+   */
+  export type Err<E> = typeof prototype & {
+    readonly value?: never
+    readonly error: E
+    readonly isOk: false
+    readonly isErr: true
+  }
 
-    /**
-     * Maps a `Result<T, E>` to `Result<T, F>` by applying a function to a contained `Err` value,
-     * leaving an `Ok` value untouched.
-     *
-     * This function can be used to pass through a successful result while handling an error.
-     */
-    mapErr<E2>(mapper: (val: E) => E2): Result<T, E2>;
+  const UNIT = ok(undefined) 
 
-    /**
-     * Calls `mapper` if the result is `Ok`, otherwise returns the `Err` value of self.
-     * This function can be used for control flow based on `Result` values.
-     */
-    flatMap<R, E2>(mapper: (val: T) => Result<R, E2>): Result<R, E | E2>;
+  /**
+   * @returns A successful result with no payload.
+   */
+  export function unit(): Ok<void> {
+    return UNIT 
+  }
+
+  /**
+   * Create a successful result.
+   */
+  export function ok<T>(value: T): Result.Ok<T> {
+    return withPrototype({ value, isOk: true, isErr: false }, prototype)
+  }
+
+  /**
+   * Create an error result.
+   */
+  export function err<E>(error: E): Err<E> {
+    return withPrototype({ error, isOk: false, isErr: true }, prototype)
+  }
+
+  /**
+   * 
+   */
+  export function tryCatch<T>(f: () => T): Result<T, unknown> {
+    try {
+      return ok(f())
+    } catch (error) {
+      return err(error)
+    }
+  }
+
+  export function fromNullish(value: null): Result.Err<null>
+  export function fromNullish(value: undefined): Result.Err<undefined>
+  export function fromNullish(value: null | undefined): Result.Err<null | undefined>
+  export function fromNullish<T extends {}>(value: T): Result.Ok<T>
+  export function fromNullish<T>(value: T | null): Result<T, null>
+  export function fromNullish<T>(value: T | undefined): Result<T, undefined>
+  export function fromNullish<T>(value: T | null | undefined): Result<T, null | undefined>
+  export function fromNullish<T>(value: T | null | undefined) {
+    return value != null ? Result.ok(value) : Result.err(value)
+  }
+
+  export function all<T>(results: readonly Result.Ok<T>[]): Result.Ok<T[]>
+  export function all<T, E>(results: readonly Result<T, E>[]): Result<T[], E>
+  export function all<T, E>(results: readonly Result<T, E>[]): Result<T[], E> {
+    const values: T[] = []
+    for (const result of results) {
+      if (result.isErr) return result
+      values.push(result.value)
+    }
+    return Result.ok(values)
+  }
+
 }
 
-export type Err<E> = ErrImpl<E>;
-
-export class ErrImpl<E> implements BaseResult<never, E> {
-    _tag = 'Ok';
-    
-    readonly val!: E;
-
-    constructor(val: E) {
-        return new ErrImpl(val);
-    }
-
-    isOk(): this is OkImpl<never> {
-        return false
-    }
-
-    isErr(): this is ErrImpl<E> {
-        return true
-    }
-
-    unwrap(): never {
-        throw new Error(`Tried to unwrap Error`);
-    }
-
-    unwrapErr(): E {
-        return this.val;
-    }
-
-    map(_mapper: unknown): Err<E> {
-        return this;
-    }
-
-    mapErr<E2>(mapper: (err: E) => E2): Err<E2> {
-        return new Err(mapper(this.val));
-    }
-
-    flatMap<U, F>(mapper: unknown): Err<E> {
-        return this; 
-    }
-
+function withPrototype<T, P extends {}>(target: T, prototype: P): T & Omit<P, keyof T> {
+  return Object.assign(Object.create(prototype), target)
 }
 
-export const Err = ErrImpl as typeof ErrImpl & (<E>(err: E) => Err<E>);
-
-export type Ok<T> = OkImpl<T>;
-export class OkImpl<T> implements BaseResult<T, never> {
-    _tag = 'Ok';
-
-    constructor(readonly val: T) {}
-
-    isOk(): this is OkImpl<T> {
-        return true
-    }
-    isErr(): this is ErrImpl<never> {
-        return false
-    }
-
-    unwrap(): T {
-        return this.val;
-    }
-
-    unwrapErr(): never {
-        throw new Error(`Tried to unwrap Ok as Error`);
-    }
-
-    map<U>(mapper: (val: T) => U): Ok<U> {
-        return new Ok(mapper(this.val));
-    }
-
-    mapErr<F>(_mapper: (val: never) => F): Ok<T> {
-        return this;
-    }
-
-    flatMap<U, F>(mapper: (val: T) => Result<U, F>): Result<U, F> {
-        return mapper(this.val);
-    }
-
-    private static readonly UNIT = new OkImpl<void>(undefined);
-    public static unit<E>(): Result<void, E> {
-        return OkImpl.UNIT as Result<void, E>;
-    }
+function unwrap<T>(this: Result.Ok<T>): T
+function unwrap<E>(this: Result.Err<E>): never
+function unwrap<T, E>(this: Result<T, E>): T
+function unwrap<T, E>(this: Result<T, E>): T {
+  if (this.isOk) return this.value
+  else throw new TypeError('unwrap called on Err result: ' + this.error) 
 }
-  
-export const Ok = OkImpl as typeof OkImpl & (<T>(val: T) => Ok<T>);
 
-// export function pipe<T, E, T2, E2>(result: Result<T, E>, mapper: (val: T) => Result<T2, E2>): Result<T2, E | E2>;
-// export function pipe<T, E, T2, E2, T3, E3>(
-//     result: Result<T, E>,
-//     mapper1: (val: T) => Result<T2, E2>,
-//     mapper2: (val: T2) => Result<T3, E3>
-// ): Result<T3, E | E2 | E3>;
-// export function pipe<T, E, T2, E2, T3, E3, T4, E4>(
-//     result: Result<T, E>,
-//     mapper1: (val: T) => Result<T2, E2>,
-//     mapper2: (val: T2) => Result<T3, E3>,
-//     mapper3: (val: T3) => Result<T4, E4>
-// ): Result<T4, E | E2 | E3 | E4>;
-// export function pipe<T, E, T2, E2, T3, E3, T4, E4, T5, E5>(
-//     result: Result<T, E>,
-//     mapper1: (val: T) => Result<T2, E2>,
-//     mapper2: (val: T2) => Result<T3, E3>,
-//     mapper3: (val: T3) => Result<T4, E4>,
-//     mapper4: (val: T4) => Result<T5, E5>
-// ): Result<T5, E | E2 | E3 | E4 | E5>;
-// export function pipe<T, E, T2, E2, T3, E3, T4, E4, T5, E5, T6, E6>(
-//     result: Result<T, E>,
-//     mapper1: (val: T) => Result<T2, E2>,
-//     mapper2: (val: T2) => Result<T3, E3>,
-//     mapper3: (val: T3) => Result<T4, E4>,
-//     mapper4: (val: T4) => Result<T5, E5>,
-//     mapper5: (val: T5) => Result<T6, E6>
-// ): Result<T6, E | E2 | E3 | E4 | E5 | E6>;
+function unwrapErr<T>(this: Result.Ok<T>): never
+function unwrapErr<E>(this: Result.Err<E>): E
+function unwrapErr<T, E>(this: Result<T, E>): E
+function unwrapErr<T, E>(this: Result<T, E>): E {
+  if (this.isOk) throw new TypeError('unwrapErr called on Ok result: ' + this.value)
+  else return this.error
+}
 
-// export function pipe(
-//     a: unknown,
-//     b?: Function,
-//     c?: Function,
-//     d?: Function,
-//     e?: Function,
-//     f?: Function,
-//     g?: Function,
-//     h?: Function,
-//     i?: Function
-//   ): unknown  {
-//     switch (arguments.length) {
-//         case 1: return a;
-//         case 2: return b!(a);
-//         case 3: return b!(a).flatMap(c!);
-//         case 4: return b!(a).flatMap(c!).flatMap(d!);
-//         case 5: return b!(a).flatMap(c!).flatMap(d!).flatMap(e!);
-//         case 6: return b!(a).flatMap(c!).flatMap(d!).flatMap(e!).flatMap(f!);
-//         case 7: return b!(a).flatMap(c!).flatMap(d!).flatMap(e!).flatMap(f!).flatMap(g!);
-//         case 8: return b!(a).flatMap(c!).flatMap(d!).flatMap(e!).flatMap(f!).flatMap(g!).flatMap(h!);
-//         case 9: return b!(a).flatMap(c!).flatMap(d!).flatMap(e!).flatMap(f!).flatMap(g!).flatMap(h!).flatMap(i!);
-//         default: 
-//             let ret = a as Result<any, any>;
-//             for (let j = 1; j < arguments.length; j++) {
-//                 ret = ret.flatMap(arguments[j]);
-//             }
-//             return ret;
-//     }
-// }
+function toUnion<T>(this: Result.Ok<T>): T
+function toUnion<E>(this: Result.Err<E>): E
+function toUnion<T, E>(this: Result<T, E>): T | E
+function toUnion<T, E>(this: Result<T, E>): T | E {
+  if (this.isOk) return this.value
+  else return this.error
+}
+
+function match<T, E, T2, E2>(this: Result.Ok<T>, f: (value: T) => T2, g: (error: E) => E2): T2
+function match<T, E, T2, E2>(this: Result.Err<E>, f: (value: T) => T2, g: (error: E) => E2): E2
+function match<T, E, T2, E2>(this: Result<T, E>, f: (value: T) => T2, g: (error: E) => E2): T2 | E2
+function match<T, E, T2, E2>(
+  this: Result<T, E>,
+  f: (value: T) => T2,
+  g: (error: E) => E2,
+): T2 | E2 {
+  if (this.isOk) return f(this.value)
+  else return g(this.error)
+}
+
+function map<T, T2>(this: Result.Ok<T>, f: (value: T) => T2): Result.Ok<T2>
+function map<T, E, T2>(this: Result.Err<E>, f: (value: T) => T2): Result.Err<E>
+function map<T, E, T2>(this: Result<T, E>, f: (value: T) => T2): Result<T2, E>
+function map<T, E, T2>(this: Result<T, E>, f: (value: T) => T2): Result<T2, E> {
+  if (this.isErr) return this
+  else return Result.ok(f(this.value))
+}
+
+function mapError<T, E, E2>(this: Result.Ok<T>, f: (error: E) => E2): Result.Ok<T>
+function mapError<E, E2>(this: Result.Err<E>, f: (error: E) => E2): Result.Err<E2>
+function mapError<T, E, E2>(this: Result<T, E>, f: (error: E) => E2): Result<T, E2>
+function mapError<T, E, E2>(this: Result<T, E>, f: (error: E) => E2): Result<T, E2> {
+  if (this.isOk) return this
+  else return Result.err(f(this.error))
+}
+
+function flatMap<T, T2>(
+  this: Result.Ok<T>,
+  f: (value: T) => Result.Ok<T2>,
+): Result.Ok<T2>
+function flatMap<T, E2>(
+  this: Result.Ok<T>,
+  f: (value: T) => Result.Err<E2>,
+): Result.Err<E2>
+function flatMap<T, T2, E2>(
+  this: Result.Ok<T>,
+  f: (value: T) => Result<T2, E2>,
+): Result<T2, E2>
+function flatMap<T, E, T2, E2>(
+  this: Result.Err<E>,
+  f: (value: T) => Result<T2, E2>,
+): Result.Err<E>
+function flatMap<T, E, T2>(this: Result<T, E>, f: (value: T) => Result.Ok<T2>): Result<T2, E>
+function flatMap<T, E, T2, E2>(
+  this: Result<T, E>,
+  f: (value: T) => Result.Err<E2>,
+): Result.Err<E | E2>
+function flatMap<T, E, T2, E2>(
+  this: Result<T, E>,
+  f: (value: T) => Result<T2, E2>,
+): Result<T2, E | E2>
+function flatMap<T, E, T2, E2>(this: Result<T, E>, f: (value: T) => Result<T2, E2>) {
+  if (this.isErr) return this
+  else return f(this.value)
+}
+
+function flatten<E>(this: Result.Err<E>): Result.Err<E>
+function flatten<E>(this: Result.Ok<Result.Err<E>>): Result.Err<E>
+function flatten<T>(this: Result.Ok<Result.Ok<T>>): Result.Ok<T>
+function flatten<T, E>(this: Result.Ok<Result<T, E>>): Result<T, E>
+function flatten<T, E>(this: Result<Result.Ok<T>, E>): Result<T, E>
+function flatten<E, E2>(this: Result<Result.Err<E>, E2>): Result.Err<E | E2>
+function flatten<T, E, E2>(this: Result<Result<T, E>, E2>): Result<T, E | E2>
+function flatten<T, E, E2>(this: Result<Result<T, E>, E2>): Result<T, E | E2> {
+  if (this.isErr) return this
+  else return this.value
+}
+
+function assertErrorInstanceOf<T, C extends abstract new (..._: any) => any>(
+  this: Result.Ok<T>,
+  constructor: C,
+): Result.Ok<T>
+function assertErrorInstanceOf<E, C extends abstract new (..._: any) => any>(
+  this: Result.Err<E>,
+  constructor: C,
+): Result.Err<E & InstanceType<C>>
+function assertErrorInstanceOf<T, E, C extends abstract new (..._: any) => any>(
+  this: Result<T, E>,
+  constructor: C,
+): Result<T, E & InstanceType<C>>
+function assertErrorInstanceOf<T, E, C extends abstract new (..._: any) => any>(
+  this: Result<T, E>,
+  constructor: C,
+): Result<T, E & InstanceType<C>> {
+  if (this.isOk) return this
+
+  if (this.error instanceof constructor) return this as any
+
+  throw new TypeError(`Assertion failed: Expected error to be an instance of ${constructor.name}.`)
+}
 
