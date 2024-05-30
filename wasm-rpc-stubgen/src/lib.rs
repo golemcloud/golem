@@ -325,7 +325,7 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
             actions.push(WitAction::CopyDepDir { source_dir })
         }
 
-        actions.push(WitAction::CopyWitStr {
+        actions.push(WitAction::WriteWit {
             source_wit: new_stub,
             dir_name: format!(
                 "{}_{}",

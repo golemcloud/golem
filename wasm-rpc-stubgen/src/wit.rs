@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::stub::{FunctionParamStub, FunctionResultStub, InterfaceStubTypeDef, StubDefinition};
+use crate::stub::{
+    FunctionParamStub, FunctionResultStub, InterfaceStubImport, InterfaceStubTypeDef,
+    StubDefinition,
+};
 use anyhow::{anyhow, bail, Context};
+use indexmap::IndexMap;
 use regex::Regex;
 use std::ffi::OsStr;
 use std::fmt::{Display, Formatter, Write};
@@ -55,14 +59,14 @@ pub fn get_stub_wit(
     let all_imports = def
         .interfaces
         .iter()
-        .flat_map(|i| i.imports.iter())
-        .collect::<Vec<_>>();
+        .flat_map(|i| i.imports.iter().map(|i| (InterfaceStubImport::from(i), i)))
+        .collect::<IndexMap<_, _>>();
 
     writeln!(out, "  use golem:rpc/types@0.1.0.{{uri}};")?;
 
     match type_gen_strategy {
         StubTypeGen::ImportRootTypes => {
-            for import in all_imports {
+            for (import, _) in all_imports {
                 writeln!(out, "  use {}.{{{}}};", import.path, import.name)?;
             }
             writeln!(out)?;
@@ -70,10 +74,10 @@ pub fn get_stub_wit(
         StubTypeGen::InlineRootTypes => {
             let mut inline_types: Vec<InterfaceStubTypeDef> = vec![];
 
-            for import in all_imports {
-                match &import.package_name {
+            for (import, type_def_info) in all_imports {
+                match &type_def_info.package_name {
                     Some(package) if package == &def.root_package_name => {
-                        inline_types.push(import.clone());
+                        inline_types.push(type_def_info.clone());
                     }
                     _ => writeln!(out, "  use {}.{{{}}};", import.path, import.name)?,
                 }
@@ -263,9 +267,32 @@ fn write_type_def(
             write!(out, " {}", typ.wit_type_string(&def.resolve)?)?;
             writeln!(out, ";")?;
         }
-        TypeDefKind::Unknown => {}
-        TypeDefKind::Resource => {}
-        TypeDefKind::Handle(_) => {}
+        TypeDefKind::Unknown => {
+            write!(out, "  {}", kind_str)?;
+        }
+        TypeDefKind::Resource => {
+            write!(out, "  {}", kind_str)?;
+        }
+        TypeDefKind::Handle(handle) => {
+            write!(out, "  {}", kind_str)?;
+            write_handle(out, handle, def)?;
+        }
+    }
+
+    Ok(())
+}
+
+// https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md#wit-types
+fn write_handle(out: &mut String, handle: Handle, def: &StubDefinition) -> anyhow::Result<()> {
+    match handle {
+        Handle::Own(type_id) => {
+            write!(out, "{}", Type::Id(type_id).wit_type_string(&def.resolve)?)?;
+        }
+        Handle::Borrow(type_id) => {
+            write!(out, " borrow<")?;
+            write!(out, "{}", Type::Id(type_id).wit_type_string(&def.resolve)?)?;
+            write!(out, ">")?;
+        }
     }
 
     Ok(())
@@ -605,7 +632,7 @@ pub enum WitAction {
     CopyDepDir {
         source_dir: PathBuf,
     },
-    CopyWitStr {
+    WriteWit {
         source_wit: String,
         dir_name: String,
         file_name: String,
@@ -619,7 +646,7 @@ pub enum WitAction {
 impl Display for WitAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            WitAction::CopyWitStr {
+            WitAction::WriteWit {
                 dir_name,
                 file_name,
                 ..
@@ -655,7 +682,7 @@ impl Display for WitAction {
 impl WitAction {
     pub fn perform(&self, target_wit_root: &Path) -> anyhow::Result<()> {
         match self {
-            WitAction::CopyWitStr {
+            WitAction::WriteWit {
                 source_wit,
                 dir_name,
                 file_name,
@@ -709,7 +736,7 @@ impl WitAction {
                 .context("Get wit dependency directory name")?
                 .to_string_lossy()
                 .to_string()),
-            WitAction::CopyWitStr { dir_name, .. } => Ok(dir_name.clone()),
+            WitAction::WriteWit { dir_name, .. } => Ok(dir_name.clone()),
             WitAction::CopyDepWit { dir_name, .. } => Ok(dir_name.clone()),
         }
     }
@@ -721,7 +748,7 @@ pub fn verify_action(
     overwrite: bool,
 ) -> anyhow::Result<bool> {
     match action {
-        WitAction::CopyWitStr {
+        WitAction::WriteWit {
             source_wit,
             dir_name,
             file_name,

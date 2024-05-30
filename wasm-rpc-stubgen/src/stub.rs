@@ -152,6 +152,15 @@ pub struct InterfaceStubImport {
     pub path: String,
 }
 
+impl From<&InterfaceStubTypeDef> for InterfaceStubImport {
+    fn from(value: &InterfaceStubTypeDef) -> Self {
+        Self {
+            name: value.name.clone(),
+            path: value.path.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FunctionStub {
     pub name: String,
