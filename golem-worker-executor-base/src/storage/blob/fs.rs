@@ -75,7 +75,7 @@ impl FileSystemBlobStorage {
             BlobStorageNamespace::CompressedOplog {
                 account_id,
                 component_id,
-                level
+                level,
             } => {
                 result.push("compressed_oplog");
                 result.push(account_id.to_string());

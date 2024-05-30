@@ -614,9 +614,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                     }
                 }
             } else {
-                warn!(
-                    "Lost invocation message because the worker was dropped: {message:?}"
-                );
+                warn!("Lost invocation message because the worker was dropped: {message:?}");
                 break;
             }
         }

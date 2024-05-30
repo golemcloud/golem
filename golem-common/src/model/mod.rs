@@ -405,7 +405,7 @@ impl ScheduledAction {
             ScheduledAction::CompletePromise {
                 account_id,
                 promise_id,
-            } => OwnedWorkerId::new(&account_id, &promise_id.worker_id),
+            } => OwnedWorkerId::new(account_id, &promise_id.worker_id),
             ScheduledAction::ArchiveOplog {
                 owned_worker_id, ..
             } => owned_worker_id.clone(),

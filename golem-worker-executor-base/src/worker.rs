@@ -342,7 +342,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
         .await?;
 
-        let oplog = this.oplog_service().open(&owned_worker_id).await;
+        let oplog = this.oplog_service().open(owned_worker_id).await;
         let initial_pending_invocations = worker_metadata
             .last_known_status
             .pending_invocations
@@ -423,7 +423,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
         .await?;
 
-        let oplog = this.oplog_service().open(&owned_worker_id).await;
+        let oplog = this.oplog_service().open(owned_worker_id).await;
         let initial_pending_invocations = worker_metadata
             .last_known_status
             .pending_invocations
@@ -505,7 +505,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
         .await?;
 
-        let oplog = this.oplog_service().open(&owned_worker_id).await;
+        let oplog = this.oplog_service().open(owned_worker_id).await;
         let initial_pending_invocations = worker_metadata
             .last_known_status
             .pending_invocations

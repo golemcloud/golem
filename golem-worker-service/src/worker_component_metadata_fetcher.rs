@@ -1,3 +1,4 @@
+use crate::empty_worker_metadata;
 use async_trait::async_trait;
 use golem_service_base::model::{Export, WorkerId};
 use golem_wasm_ast::analysis::AnalysedFunction;
@@ -24,7 +25,7 @@ impl WorkerMetadataFetcher for DefaultWorkerComponentMetadataFetcher {
     ) -> Result<Vec<AnalysedFunction>, MetadataFetchError> {
         let result = self
             .worker_service
-            .get_component_for_worker(worker_id, &EmptyAuthCtx {})
+            .get_component_for_worker(worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
             .await
             .map_err(|e| MetadataFetchError(e.to_string()))?;
 

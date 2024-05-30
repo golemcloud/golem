@@ -30,7 +30,10 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, OplogPayload, UpdateDescription, WrappedFunctionType,
 };
-use golem_common::model::{AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp, WorkerId};
+use golem_common::model::{
+    AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+    ScanCursor, Timestamp, WorkerId,
+};
 use golem_common::serialization::{serialize, try_deserialize};
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
@@ -68,10 +71,8 @@ pub trait OplogService: Debug {
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
     ) -> Arc<dyn Oplog + Send + Sync + 'static>;
-    async fn open(
-        &self,
-        owned_worker_id: &OwnedWorkerId,
-    ) -> Arc<dyn Oplog + Send + Sync + 'static>;
+    async fn open(&self, owned_worker_id: &OwnedWorkerId)
+        -> Arc<dyn Oplog + Send + Sync + 'static>;
 
     async fn get_first_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;

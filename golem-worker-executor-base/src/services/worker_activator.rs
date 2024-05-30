@@ -103,7 +103,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator
             Some(metadata) => {
                 Worker::activate(
                     &self.all,
-                    &owned_worker_id,
+                    owned_worker_id,
                     metadata.args,
                     metadata.env,
                     Some(metadata.last_known_status.component_version),

@@ -300,6 +300,12 @@ async fn promise() {
                 .into(),
             ),
             data: vec![42],
+            account_id: Some(
+                AccountId {
+                    value: "test-account".to_string(),
+                }
+                .into(),
+            ),
         })
         .await
         .unwrap();
