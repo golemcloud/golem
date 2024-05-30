@@ -89,25 +89,32 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         },
     );
     for dep in &def.unresolved_deps {
-        let mut dirs = BTreeSet::new();
-        for source in dep.source_files() {
-            let relative = source.strip_prefix(&def.source_wit_root)?;
-            let dir = relative
-                .parent()
-                .ok_or(anyhow!("Package source {source:?} has no parent directory"))?;
-            dirs.insert(dir);
-        }
+        let dep_package = &dep.name;
+        let stub_package_name = format!("{}-stub", def.root_package_name);
 
-        if dirs.len() != 1 {
-            bail!("Package {} has multiple source directories", dep.name);
-        }
+        if dep_package.to_string() == stub_package_name {
+            println!("Skipping updating WIT dependency for {}", dep_package);
+        } else {
+            let mut dirs = BTreeSet::new();
+            for source in dep.source_files() {
+                let relative = source.strip_prefix(&def.source_wit_root)?;
+                let dir = relative
+                    .parent()
+                    .ok_or(anyhow!("Package source {source:?} has no parent directory"))?;
+                dirs.insert(dir);
+            }
 
-        wit_dependencies.insert(
-            format!("{}:{}", dep.name.namespace, dep.name.name),
-            WitDependency {
-                path: format!("wit/{}", dirs.iter().next().unwrap().to_str().unwrap()),
-            },
-        );
+            if dirs.len() != 1 {
+                bail!("Package {} has multiple source directories", dep.name);
+            }
+
+            wit_dependencies.insert(
+                format!("{}:{}", dep.name.namespace, dep.name.name),
+                WitDependency {
+                    path: format!("wit/{}", dirs.iter().next().unwrap().to_str().unwrap()),
+                },
+            );
+        }
     }
 
     let metadata = MetadataRoot {

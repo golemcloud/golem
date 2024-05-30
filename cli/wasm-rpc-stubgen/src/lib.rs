@@ -23,7 +23,9 @@ use crate::cargo::generate_cargo_toml;
 use crate::compilation::compile;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
-use crate::wit::{copy_wit_files, generate_stub_wit, verify_action, WitAction};
+use crate::wit::{
+    copy_wit_files, generate_stub_wit, get_stub_wit, verify_action, StubTypeGen, WitAction,
+};
 use anyhow::{anyhow, Context};
 use clap::Parser;
 use fs_extra::dir::CopyOptions;
@@ -32,9 +34,10 @@ use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use heck::ToSnakeCase;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempdir::TempDir;
 use wasm_compose::config::Dependency;
+use wit_parser::UnresolvedPackage;
 
 #[derive(Parser, Debug)]
 #[command(name = "wasm-rpc-stubgen", version)]
@@ -173,7 +176,7 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         &args.stub_crate_version,
         &args.wasm_rpc_path_override,
     )
-    .context("Failed to gather information for the stub generator")?;
+    .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
 
     generate_stub_wit(&stub_def).context("Failed to generate the stub wit file")?;
     copy_wit_files(&stub_def).context("Failed to copy the dependent wit files")?;
@@ -238,23 +241,112 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn find_if_same_package(dep_dir: &Path, target_wit: &UnresolvedPackage) -> anyhow::Result<bool> {
+    let dep_package_name = UnresolvedPackage::parse_dir(dep_dir)?.name;
+    let dest_package = target_wit.name.clone();
+
+    if dep_package_name != dest_package {
+        Ok(true)
+    } else {
+        println!(
+            "Skipping the copy of cyclic dependencies {} to the the same as {}",
+            dep_package_name, dest_package
+        );
+        Ok(false)
+    }
+}
+
+fn find_world_name(unresolved_package: UnresolvedPackage) -> anyhow::Result<String> {
+    // In reality, there is only 1 interface in generated stub in 1 _stub.wit
+    for (_, interface) in unresolved_package.interfaces {
+        if let Some(name) = interface.name {
+            if name.starts_with("stub-") {
+                let world_name = name.replace("stub-", "");
+                return Ok(world_name);
+            }
+        }
+    }
+
+    Err(anyhow!("Failed to find world name from the stub. The interface name in stub is expected to have the pattern stub-<world-name>"))
+}
+
+fn dest_owns_stub_world(stub_world_name: &str, destination_wit_root: &UnresolvedPackage) -> bool {
+    destination_wit_root
+        .worlds
+        .iter()
+        .map(|(_, world)| world.name.clone())
+        .collect::<Vec<_>>()
+        .contains(&stub_world_name.to_string())
+}
+
 pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
+    // The destination's WIT's package details
+    let destination_wit_root = UnresolvedPackage::parse_dir(&args.dest_wit_root)?;
+
+    // Dependencies of stub as directories
     let source_deps = wit::get_dep_dirs(&args.stub_wit_root)?;
 
     let main_wit = args.stub_wit_root.join("_stub.wit");
-    let main_wit_package_name = wit::get_package_name(&main_wit)?;
+    let parsed = UnresolvedPackage::parse_file(&main_wit)?;
 
+    let world_name = find_world_name(parsed)?;
     let mut actions = Vec::new();
-    for source_dir in source_deps {
-        actions.push(WitAction::CopyDepDir { source_dir })
+
+    // If stub generated world points to the destination world (meaning the destination still owns the world for which the stub is generated),
+    // we re-generation of stub with inlined types and copy the inlined stub to the destination
+    if dest_owns_stub_world(&world_name, &destination_wit_root) {
+        let stub_root = &args
+            .stub_wit_root
+            .parent()
+            .ok_or(anyhow!("Failed to get parent of stub wit root"))?;
+
+        // We re-generate stub instead of copying it and inline types
+        let stub_definition = StubDefinition::new(
+            &args.dest_wit_root,
+            stub_root,
+            &Some(world_name),
+            "0.0.1", // Version is unused when it comes to re-generating stub at this stage.
+            &None, // wasm-rpc path is is unused when it comes to re-generating stub during dependency addition
+        )?;
+
+        // We filter the dependencies of stub that's already existing in dest_wit_root
+        let filtered_source_deps = source_deps
+            .into_iter()
+            .filter(|dep| find_if_same_package(dep, &destination_wit_root).unwrap())
+            .collect::<Vec<_>>();
+
+        // New stub string
+        let new_stub = get_stub_wit(&stub_definition, StubTypeGen::InlineRootTypes)
+            .context("Failed to regenerate inlined stub")?;
+
+        let main_wit_package_name = wit::get_package_name(&main_wit)?;
+
+        for source_dir in filtered_source_deps {
+            actions.push(WitAction::CopyDepDir { source_dir })
+        }
+
+        actions.push(WitAction::WriteWit {
+            source_wit: new_stub,
+            dir_name: format!(
+                "{}_{}",
+                main_wit_package_name.namespace, main_wit_package_name.name
+            ),
+            file_name: "_stub.wit".to_string(),
+        });
+    } else {
+        let main_wit_package_name = wit::get_package_name(&main_wit)?;
+
+        for source_dir in source_deps {
+            actions.push(WitAction::CopyDepDir { source_dir })
+        }
+        actions.push(WitAction::CopyDepWit {
+            source_wit: main_wit,
+            dir_name: format!(
+                "{}_{}",
+                main_wit_package_name.namespace, main_wit_package_name.name
+            ),
+        });
     }
-    actions.push(WitAction::CopyDepWit {
-        source_wit: main_wit,
-        dir_name: format!(
-            "{}_{}",
-            main_wit_package_name.namespace, main_wit_package_name.name
-        ),
-    });
 
     let mut proceed = true;
     for action in &actions {
