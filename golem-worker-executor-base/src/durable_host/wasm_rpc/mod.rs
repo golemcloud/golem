@@ -21,7 +21,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::oplog::WrappedFunctionType;
-use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
+use golem_common::model::{ComponentId, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_wasm_rpc::golem::rpc::types::Uri;
 use golem_wasm_rpc::{HostWasmRpc, WasmRpcEntry, WitValue};
 use std::str::FromStr;
@@ -36,6 +36,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         match location.parse_as_golem_uri() {
             Some((remote_worker_id, None)) => {
+                let remote_worker_id =
+                    OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
                 let demand = self.rpc().create_demand(&remote_worker_id).await;
                 let entry = self.table.push(WasmRpcEntry {
                     payload: Box::new(WasmRpcEntryPayload {
@@ -94,7 +96,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             Some(idempotency_key),
                             function_name,
                             function_params,
-                            &ctx.state.account_id,
                         )
                         .await
                 })
@@ -156,7 +157,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             Some(idempotency_key),
                             function_name,
                             function_params,
-                            &ctx.state.account_id,
                         )
                         .await
                 })
@@ -167,7 +167,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         match result {
             Ok(result) => Ok(Ok(result)),
             Err(err) => {
-                error!("RPC error for {}: {err}", self.worker_id);
+                error!("RPC error for: {err}");
                 Ok(Err(err.into()))
             }
         }
@@ -200,7 +200,7 @@ impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {}
 pub struct WasmRpcEntryPayload {
     #[allow(dead_code)]
     demand: Box<dyn RpcDemand>,
-    remote_worker_id: WorkerId,
+    remote_worker_id: OwnedWorkerId,
 }
 
 pub trait UriExtensions {

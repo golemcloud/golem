@@ -7,7 +7,9 @@ use crate::services::{HasConfig, HasOplogService, HasWorkerService};
 use crate::worker::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::{ComponentId, ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus};
+use golem_common::model::{
+    AccountId, ComponentId, ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus,
+};
 use std::sync::Arc;
 use tracing::info;
 
@@ -99,6 +101,7 @@ impl RunningWorkerEnumerationService for RunningWorkerEnumerationServiceMock {
 pub trait WorkerEnumerationService {
     async fn get(
         &self,
+        account_id: &AccountId,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
@@ -129,6 +132,7 @@ impl DefaultWorkerEnumerationService {
 
     async fn get_internal(
         &self,
+        account_id: &AccountId,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
@@ -140,17 +144,17 @@ impl DefaultWorkerEnumerationService {
 
         let (new_scan_cursor, keys) = self
             .oplog_service
-            .scan_for_component(component_id, cursor, count)
+            .scan_for_component(account_id, component_id, cursor, count)
             .await?;
 
-        for worker_id in keys {
-            let worker_metadata = self.worker_service.get(&worker_id).await;
+        for owned_worker_id in keys {
+            let worker_metadata = self.worker_service.get(&owned_worker_id).await;
 
             if let Some(worker_metadata) = worker_metadata {
                 let metadata = if precise {
                     let last_known_status = calculate_last_known_status(
                         self,
-                        &worker_id,
+                        &owned_worker_id,
                         &Some(worker_metadata.clone()),
                     )
                     .await?;
@@ -198,6 +202,7 @@ impl HasConfig for DefaultWorkerEnumerationService {
 impl WorkerEnumerationService for DefaultWorkerEnumerationService {
     async fn get(
         &self,
+        account_id: &AccountId,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
@@ -223,6 +228,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
 
             let (next_cursor, workers_page) = self
                 .get_internal(
+                    account_id,
                     component_id,
                     filter.clone(),
                     new_cursor.unwrap_or_default(),
@@ -262,6 +268,7 @@ impl WorkerEnumerationServiceMock {
 impl WorkerEnumerationService for WorkerEnumerationServiceMock {
     async fn get(
         &self,
+        _account_id: &AccountId,
         _component_id: &ComponentId,
         _filter: Option<WorkerFilter>,
         _cursor: ScanCursor,

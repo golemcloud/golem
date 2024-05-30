@@ -178,7 +178,8 @@ async fn open_add_and_read_back() {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let oplog = oplog_service.open(&account_id, &worker_id).await;
+    let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+    let oplog = oplog_service.open(&owned_worker_id).await;
 
     let entry1 = rounded(OplogEntry::jump(OplogRegion {
         start: OplogIndex::from_u64(5),
@@ -202,7 +203,7 @@ async fn open_add_and_read_back() {
     assert_eq!(r3, entry3);
 
     let entries = oplog_service
-        .read(&worker_id, last_oplog_idx.next(), 3)
+        .read(&owned_worker_id, last_oplog_idx.next(), 3)
         .await;
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
@@ -222,7 +223,9 @@ async fn entries_with_small_payload() {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let oplog = oplog_service.open(&account_id, &worker_id).await;
+    let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+    let oplog = oplog_service.open(&owned_worker_id).await;
 
     let last_oplog_idx = oplog.current_oplog_index().await;
     let entry1 = rounded(
@@ -276,7 +279,7 @@ async fn entries_with_small_payload() {
     assert_eq!(r4, entry4);
 
     let entries = oplog_service
-        .read(&worker_id, last_oplog_idx.next(), 4)
+        .read(&owned_worker_id, last_oplog_idx.next(), 4)
         .await;
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
@@ -327,7 +330,8 @@ async fn entries_with_large_payload() {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let oplog = oplog_service.open(&account_id, &worker_id).await;
+    let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+    let oplog = oplog_service.open(&owned_worker_id).await;
 
     let large_payload1 = vec![0u8; 1024 * 1024];
     let large_payload2 = vec![1u8; 1024 * 1024];
@@ -386,7 +390,7 @@ async fn entries_with_large_payload() {
     assert_eq!(r4, entry4);
 
     let entries = oplog_service
-        .read(&worker_id, last_oplog_idx.next(), 4)
+        .read(&owned_worker_id, last_oplog_idx.next(), 4)
         .await;
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
@@ -480,8 +484,9 @@ async fn multilayer_transfers_entries_after_limit_reached(
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
+    let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
-    let oplog = oplog_service.open(&account_id, &worker_id).await;
+    let oplog = oplog_service.open(&owned_worker_id).await;
     let mut entries = Vec::new();
 
     for i in 0..n {
@@ -504,15 +509,15 @@ async fn multilayer_transfers_entries_after_limit_reached(
     debug!("Fetching information to evaluate the test");
 
     let primary_length = primary_oplog_service
-        .open(&account_id, &worker_id)
+        .open(&owned_worker_id)
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&worker_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&worker_id).await.length().await;
+    let secondary_length = secondary_layer.open(&owned_worker_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_worker_id).await.length().await;
 
     let all_entries = oplog_service
-        .read(&worker_id, OplogIndex::NONE, n + 100)
+        .read(&owned_worker_id, OplogIndex::NONE, n + 100)
         .await;
 
     assert_eq!(all_entries.len(), entries.len());
@@ -563,7 +568,9 @@ async fn read_from_archive() {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let oplog = oplog_service.open(&account_id, &worker_id).await;
+    let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+    let oplog = oplog_service.open(&owned_worker_id).await;
 
     let timestamp = Timestamp::now_utc();
     let entries: Vec<OplogEntry> = (0..100)
@@ -584,19 +591,19 @@ async fn read_from_archive() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
-        .open(&account_id, &worker_id)
+        .open(&owned_worker_id)
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&worker_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&worker_id).await.length().await;
+    let secondary_length = secondary_layer.open(&owned_worker_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_worker_id).await.length().await;
 
     info!("primary_length: {}", primary_length);
     info!("secondary_length: {}", secondary_length);
     info!("tertiary_length: {}", tertiary_length);
 
     let first10 = oplog_service
-        .read(&worker_id, initial_oplog_idx.next(), 10)
+        .read(&owned_worker_id, initial_oplog_idx.next(), 10)
         .await;
     let original_first10 = entries.into_iter().take(10).collect::<Vec<_>>();
 
@@ -629,7 +636,9 @@ async fn empty_layer_gets_deleted() {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let oplog = oplog_service.open(&account_id, &worker_id).await;
+    let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+    let oplog = oplog_service.open(&owned_worker_id).await;
 
     // As we add 100 entries at once, and that exceeds the limit, we expect that all entries have
     // been moved to the secondary layer. By doing this 10 more times, we end up having all entries
@@ -656,12 +665,12 @@ async fn empty_layer_gets_deleted() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let primary_length = primary_oplog_service
-        .open(&account_id, &worker_id)
+        .open(&owned_worker_id)
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&worker_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&worker_id).await.length().await;
+    let secondary_length = secondary_layer.open(&owned_worker_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_worker_id).await.length().await;
 
     info!("primary_length: {}", primary_length);
     info!("secondary_length: {}", secondary_length);
@@ -671,9 +680,9 @@ async fn empty_layer_gets_deleted() {
     assert_eq!(secondary_length, 0);
     assert_eq!(tertiary_length, 1);
 
-    let primary_exists = primary_oplog_service.exists(&worker_id).await;
-    let secondary_exists = secondary_layer.exists(&worker_id).await;
-    let tertiary_exists = tertiary_layer.exists(&worker_id).await;
+    let primary_exists = primary_oplog_service.exists(&owned_worker_id).await;
+    let secondary_exists = secondary_layer.exists(&owned_worker_id).await;
+    let tertiary_exists = tertiary_layer.exists(&owned_worker_id).await;
 
     assert!(!primary_exists);
     assert!(!secondary_exists);
@@ -706,6 +715,7 @@ async fn scheduled_archive() {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
+    let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
     let timestamp = Timestamp::now_utc();
     let entries: Vec<OplogEntry> = (0..100)
@@ -719,7 +729,7 @@ async fn scheduled_archive() {
 
     // Adding 100 entries to the primary oplog, schedule archive and immediately drop the oplog
     let archive_result = {
-        let oplog = oplog_service.open(&account_id, &worker_id).await;
+        let oplog = oplog_service.open(&owned_worker_id).await;
         for entry in &entries {
             oplog.add(entry.clone()).await;
         }
@@ -733,12 +743,12 @@ async fn scheduled_archive() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
-        .open(&account_id, &worker_id)
+        .open(&owned_worker_id)
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&worker_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&worker_id).await.length().await;
+    let secondary_length = secondary_layer.open(&owned_worker_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_worker_id).await.length().await;
 
     info!("primary_length: {}", primary_length);
     info!("secondary_length: {}", secondary_length);
@@ -751,7 +761,7 @@ async fn scheduled_archive() {
 
     // Calling archive again
     let archive_result2 = {
-        let oplog = oplog_service.open(&account_id, &worker_id).await;
+        let oplog = oplog_service.open(&owned_worker_id).await;
         let result = MultiLayerOplog::try_archive(&oplog).await;
         drop(oplog);
         result
@@ -760,12 +770,12 @@ async fn scheduled_archive() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
-        .open(&account_id, &worker_id)
+        .open(&owned_worker_id)
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&worker_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&worker_id).await.length().await;
+    let secondary_length = secondary_layer.open(&owned_worker_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_worker_id).await.length().await;
 
     info!("primary_length 2: {}", primary_length);
     info!("secondary_length 2: {}", secondary_length);

@@ -37,8 +37,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    CallingConvention, ComponentVersion, IdempotencyKey, TimestampedWorkerInvocation, WorkerId,
-    WorkerInvocation,
+    CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+    TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
 };
 
 /// Per-worker invocation queue service
@@ -379,7 +379,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
         parent: Weak<InvocationQueue<Ctx>>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     ) -> Self {
-        let worker_id = worker.metadata.worker_id.clone();
+        let owned_worker_id = worker.metadata.owned_worker_id();
 
         let worker = Arc::downgrade(&worker);
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -396,10 +396,11 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                 receiver,
                 active_clone,
                 worker_clone,
-                worker_id,
+                owned_worker_id,
                 parent,
                 worker_activator,
             )
+            .in_current_span()
             .await;
         });
 
@@ -459,11 +460,11 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
         mut receiver: UnboundedReceiver<()>,
         active: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
         worker: Weak<Worker<Ctx>>,
-        worker_id: WorkerId,
+        owned_worker_id: OwnedWorkerId,
         parent: Weak<InvocationQueue<Ctx>>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     ) {
-        debug!("Invocation queue loop for {worker_id} started");
+        debug!("Invocation queue loop started");
 
         while receiver.recv().await.is_some() {
             let message = active
@@ -472,7 +473,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                 .pop_front()
                 .expect("Message should be present");
             if let Some(worker) = worker.upgrade() {
-                debug!("Invocation queue processing {message:?} for {worker_id}");
+                debug!("Invocation queue processing {message:?}");
 
                 let instance = &worker.instance;
                 let store = &worker.store;
@@ -489,7 +490,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                         let span = span!(
                             Level::INFO,
                             "invocation",
-                            worker_id = worker_id.to_string(),
+                            worker_id = owned_worker_id.worker_id.to_string(),
                             idempotency_key = invocation_key.to_string(),
                             function = full_function_name
                         );
@@ -531,7 +532,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                         let span = span!(
                             Level::INFO,
                             "manual_update",
-                            worker_id = worker_id.to_string(),
+                            worker_id = owned_worker_id.worker_id.to_string(),
                             target_version = target_version.to_string()
                         );
                         let do_break = async {
@@ -578,7 +579,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
 
                                                     // Reactivate the worker in the background
                                                     worker_activator
-                                                        .reactivate_worker(&worker_id)
+                                                        .reactivate_worker(&owned_worker_id)
                                                         .await;
 
                                                     // Stop processing the queue to avoid race conditions
@@ -614,12 +615,12 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                 }
             } else {
                 warn!(
-                    "Lost invocation message because the worker {worker_id} was dropped: {message:?}"
+                    "Lost invocation message because the worker was dropped: {message:?}"
                 );
                 break;
             }
         }
-        debug!("Invocation queue loop for {worker_id} finished");
+        debug!("Invocation queue loop for finished");
     }
 
     async fn fail_update(target_version: ComponentVersion, error: String, store: &mut Store<Ctx>) {

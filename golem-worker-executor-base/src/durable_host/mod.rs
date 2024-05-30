@@ -51,8 +51,8 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription, Wrap
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
-    IdempotencyKey, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -102,7 +102,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: ResourceTable,
     wasi: WasiCtx,
     wasi_http: WasiHttpCtx,
-    pub worker_id: WorkerId,
+    pub owned_worker_id: OwnedWorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState<Ctx>,
     #[allow(unused)] // note: need to keep reference to it to keep the temp dir alive
@@ -112,8 +112,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn create(
-        worker_id: WorkerId,
-        account_id: AccountId,
+        owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         _events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
@@ -147,10 +146,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         debug!(
             "Worker {} initialized with deleted regions {}",
-            worker_id, worker_config.deleted_regions
+            owned_worker_id.worker_id, worker_config.deleted_regions
         );
 
-        let stdio = ManagedStandardIo::new(worker_id.clone(), invocation_queue.clone());
+        let stdio = ManagedStandardIo::new(owned_worker_id.worker_id(), invocation_queue.clone());
         let stdin = ManagedStdIn::from_standard_io(stdio.clone()).await;
         let stdout = ManagedStdOut::from_standard_io(stdio.clone());
         let stderr = ManagedStdErr::from_stderr(Stderr);
@@ -173,7 +172,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     table,
                     wasi,
                     wasi_http,
-                    worker_id: worker_id.clone(),
+                    owned_worker_id: owned_worker_id.clone(),
                     public_state: PublicDurableWorkerState {
                         promise_service: promise_service.clone(),
                         event_service,
@@ -191,8 +190,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         key_value_service,
                         blob_store_service,
                         config.clone(),
-                        worker_id.clone(),
-                        account_id.clone(),
+                        owned_worker_id.clone(),
                         active_workers.clone(),
                         recovery_management,
                         rpc,
@@ -213,7 +211,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn worker_id(&self) -> &WorkerId {
-        &self.worker_id
+        &self.owned_worker_id.worker_id
     }
 
     pub fn is_exit(error: &anyhow::Error) -> Option<i32> {
@@ -277,7 +275,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn get_worker_status(&self) -> WorkerStatus {
-        match self.state.worker_service.get(&self.worker_id).await {
+        match self.state.worker_service.get(&self.owned_worker_id).await {
             Some(metadata) => {
                 if metadata.last_known_status.oplog_idx
                     == self.state.oplog.current_oplog_index().await
@@ -318,7 +316,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         f(&mut status);
         self.state
             .worker_service
-            .update_status(&self.worker_id, &status)
+            .update_status(&self.owned_worker_id, &status)
             .await;
 
         let mut execution_status = self.execution_status.write().unwrap();
@@ -339,8 +337,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .schedule(
                     at,
                     ScheduledAction::ArchiveOplog {
-                        account_id: self.state.account_id.clone(),
-                        worker_id: self.worker_id.clone(),
+                        owned_worker_id: self.owned_worker_id.clone(),
                         last_oplog_index: self.public_state.oplog.current_oplog_index().await,
                         next_after: self.state.config.oplog.archive_interval,
                     },
@@ -602,7 +599,9 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 
     async fn deactivate(&self) {
         debug!("deactivating worker");
-        self.state.active_workers.remove(&self.worker_id);
+        self.state
+            .active_workers
+            .remove(&self.owned_worker_id.worker_id);
     }
 }
 
@@ -691,7 +690,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let decision = self
             .state
             .recovery_management
-            .schedule_recovery_on_trap(&self.worker_id, &retry_config, previous_tries, error)
+            .schedule_recovery_on_trap(&self.owned_worker_id, &retry_config, previous_tries, error)
             .await;
 
         debug!(
@@ -770,10 +769,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             }
         }
 
-        debug!(
-            "Function {}/{full_function_name} finished with {:?}",
-            self.worker_id, output
-        );
+        debug!("Function {full_function_name} finished with {output:?}");
 
         // Return indicating that it is done
         Ok(Some(output))
@@ -837,18 +833,15 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         .await;
 
         warn!(
-            "Worker {} failed to update to {}: {}, update attempt aborted",
-            self.worker_id,
+            "Worker failed to update to {}: {}, update attempt aborted",
             target_version,
             details.unwrap_or_else(|| "?".to_string())
         );
     }
 
     async fn on_worker_update_succeeded(&self, target_version: ComponentVersion) {
-        info!(
-            "Worker update to {} finished successfully for {}",
-            target_version, self.worker_id
-        );
+        info!("Worker update to {} finished successfully", target_version);
+
         let entry = OplogEntry::successful_update(target_version);
         let timestamp = entry.timestamp();
         self.public_state.oplog.add_and_commit(entry).await;
@@ -874,31 +867,32 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
     async fn set_worker_status<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         status: WorkerStatus,
     ) -> Result<(), GolemError> {
-        let metadata = this.worker_service().get(worker_id).await;
-        let mut latest_status = calculate_last_known_status(this, worker_id, &metadata).await?;
+        let metadata = this.worker_service().get(owned_worker_id).await;
+        let mut latest_status =
+            calculate_last_known_status(this, owned_worker_id, &metadata).await?;
         latest_status.status = status;
         this.worker_service()
-            .update_status(worker_id, &latest_status)
+            .update_status(owned_worker_id, &latest_status)
             .await;
         Ok(())
     }
 
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
     ) -> Option<LastError> {
-        last_error_and_retry_count(this, worker_id).await
+        last_error_and_retry_count(this, owned_worker_id).await
     }
 
     async fn compute_latest_worker_status<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
     ) -> Result<WorkerStatusRecord, GolemError> {
-        calculate_last_known_status(this, worker_id, metadata).await
+        calculate_last_known_status(this, owned_worker_id, metadata).await
     }
 
     async fn prepare_instance(
@@ -1021,14 +1015,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         let default_retry_config = &this.config().retry;
         for worker in workers {
-            let worker_id = worker.worker_id.clone();
+            let owned_worker_id = worker.owned_worker_id();
             let actualized_metadata =
-                calculate_last_known_status(this, &worker_id, &Some(worker)).await?;
-            let last_error = Self::get_last_error_and_retry_count(this, &worker_id).await;
+                calculate_last_known_status(this, &owned_worker_id, &Some(worker)).await?;
+            let last_error = Self::get_last_error_and_retry_count(this, &owned_worker_id).await;
             let decision = this
                 .recovery_management()
                 .schedule_recovery_on_startup(
-                    &worker_id,
+                    &owned_worker_id,
                     actualized_metadata
                         .overridden_retry_config
                         .as_ref()
@@ -1048,18 +1042,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
 async fn last_error_and_retry_count<T: HasOplogService>(
     this: &T,
-    worker_id: &WorkerId,
+    owned_worker_id: &OwnedWorkerId,
 ) -> Option<LastError> {
-    let mut idx = this.oplog_service().get_last_index(worker_id).await;
+    let mut idx = this.oplog_service().get_last_index(owned_worker_id).await;
     let mut retry_count = 0;
     if idx == OplogIndex::NONE {
         None
     } else {
         let mut first_error = None;
         let result = loop {
-            let oplog_entry = this.oplog_service().read(worker_id, idx, 1).await;
+            let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
             match oplog_entry.first_key_value()
-                .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", worker_id)) {
+                .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", owned_worker_id.worker_id)) {
                 (_, OplogEntry::Error { error, .. } )=> {
                     retry_count += 1;
                     if first_error.is_none() {
@@ -1099,8 +1093,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
     config: Arc<GolemConfig>,
-    worker_id: WorkerId,
-    account_id: AccountId,
+    owned_worker_id: OwnedWorkerId,
     current_idempotency_key: Option<IdempotencyKey>,
     active_workers: Arc<ActiveWorkers<Ctx>>,
     recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
@@ -1134,8 +1127,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         config: Arc<GolemConfig>,
-        worker_id: WorkerId,
-        account_id: AccountId,
+        owned_worker_id: OwnedWorkerId,
         active_workers: Arc<ActiveWorkers<Ctx>>,
         recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
@@ -1153,8 +1145,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             key_value_service,
             blob_store_service,
             config,
-            worker_id,
-            account_id,
+            owned_worker_id,
             current_idempotency_key: None,
             active_workers,
             recovery_management,
@@ -1247,7 +1238,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
     async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<OplogEntry> {
         self.oplog_service
-            .read(&self.worker_id, idx, n)
+            .read(&self.owned_worker_id, idx, n)
             .await
             .into_values()
             .collect()
@@ -1270,7 +1261,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     let target = region.end.next(); // we want to continue reading _after_ the region
                     debug!(
                         "Worker {} reached deleted region at {}, jumping to {} (oplog size: {})",
-                        self.worker_id, region.start, target, self.replay_target
+                        self.owned_worker_id.worker_id, region.start, target, self.replay_target
                     );
                     self.last_replayed_index = target.previous(); // so we set the last replayed index to the end of the region
 
@@ -1338,7 +1329,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         while start < self.replay_target {
             let entries = self
                 .oplog_service
-                .read(&self.worker_id, start, CHUNK_SIZE)
+                .read(&self.owned_worker_id, start, CHUNK_SIZE)
                 .await;
             for (idx, entry) in &entries {
                 // TODO: handle deleted regions
@@ -1447,12 +1438,21 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     pub async fn sleep_until(&self, when: DateTime<Utc>) -> Result<(), GolemError> {
         let promise_id = self
             .promise_service
-            .create(&self.worker_id, self.current_oplog_index().await)
+            .create(
+                &self.owned_worker_id.worker_id,
+                self.current_oplog_index().await,
+            )
             .await;
 
         let schedule_id = self
             .scheduler_service
-            .schedule(when, ScheduledAction::CompletePromise { promise_id })
+            .schedule(
+                when,
+                ScheduledAction::CompletePromise {
+                    account_id: self.owned_worker_id.account_id(),
+                    promise_id,
+                },
+            )
             .await;
         debug!(
             "Schedule added to awake suspended worker at {} with id {}",
@@ -1474,7 +1474,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     /// Counts the number of Error entries that are at the end of the oplog. This equals to the number of retries that have been attempted.
     /// It also returns the last error stored in these entries.
     pub async fn trailing_error_count(&self) -> u64 {
-        last_error_and_retry_count(self, &self.worker_id)
+        last_error_and_retry_count(self, &self.owned_worker_id)
             .await
             .map(|last_error| last_error.retry_count)
             .unwrap_or_default()
@@ -1489,7 +1489,14 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
         self.worker_enumeration_service
-            .get(component_id, filter, cursor, count, precise)
+            .get(
+                &self.owned_worker_id.account_id,
+                component_id,
+                filter,
+                cursor,
+                count,
+                precise,
+            )
             .await
     }
 }
@@ -1497,7 +1504,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
     fn self_uri(&self) -> Uri {
-        Uri::golem_uri(&self.worker_id, None)
+        Uri::golem_uri(&self.owned_worker_id.worker_id, None)
     }
 
     fn add(&mut self, resource: ResourceAny) -> u64 {

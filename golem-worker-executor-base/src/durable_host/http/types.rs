@@ -592,7 +592,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                             self.state.open_function_table.remove(&handle);
                         }
                         None => {
-                            warn!("No matching BeginRemoteWrite index was found when HTTP response arrived for {}. Handle: {}; open functions: {:?}", self.worker_id, handle, self.state.open_function_table);
+                            warn!("No matching BeginRemoteWrite index was found when HTTP response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
                         }
                     }
                 }
@@ -625,7 +625,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         self.state.open_function_table.remove(&handle);
                     }
                     None => {
-                        warn!("No matching BeginRemoteWrite index was found when HTTP response arrived for {}. Handle: {}; open functions: {:?}", self.worker_id, handle, self.state.open_function_table);
+                        warn!("No matching BeginRemoteWrite index was found when HTTP response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
                     }
                 }
             }

@@ -293,9 +293,46 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
     }
 }
 
+/// Associates a worker-id with its owner account
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
+pub struct OwnedWorkerId {
+    pub account_id: AccountId,
+    pub worker_id: WorkerId,
+}
+
+impl OwnedWorkerId {
+    pub fn new(account_id: &AccountId, worker_id: &WorkerId) -> Self {
+        Self {
+            account_id: account_id.clone(),
+            worker_id: worker_id.clone(),
+        }
+    }
+
+    pub fn worker_id(&self) -> WorkerId {
+        self.worker_id.clone()
+    }
+
+    pub fn account_id(&self) -> AccountId {
+        self.account_id.clone()
+    }
+
+    pub fn component_id(&self) -> ComponentId {
+        self.worker_id.component_id.clone()
+    }
+
+    pub fn worker_name(&self) -> String {
+        self.worker_id.worker_name.clone()
+    }
+}
+
+impl Display for OwnedWorkerId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.account_id, self.worker_id)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct PromiseId {
-    #[serde(rename = "instance_id")]
     pub worker_id: WorkerId,
     pub oplog_idx: OplogIndex,
 }
@@ -348,23 +385,30 @@ impl Display for PromiseId {
 #[derive(Debug, Clone, Hash, Serialize, Deserialize, Encode, Decode)]
 pub enum ScheduledAction {
     /// Completes a given promise
-    CompletePromise { promise_id: PromiseId },
+    CompletePromise {
+        account_id: AccountId,
+        promise_id: PromiseId,
+    },
     /// Archives all entries from the first non-empty layer of an oplog to the next layer,
     /// if the last oplog index did not change. If there are more layers below, schedules
     /// a next action to archive the next layer.
     ArchiveOplog {
-        account_id: AccountId,
-        worker_id: WorkerId,
+        owned_worker_id: OwnedWorkerId,
         last_oplog_index: OplogIndex,
         next_after: Duration,
     },
 }
 
 impl ScheduledAction {
-    pub fn worker_id(&self) -> &WorkerId {
+    pub fn owned_worker_id(&self) -> OwnedWorkerId {
         match self {
-            ScheduledAction::CompletePromise { promise_id } => &promise_id.worker_id,
-            ScheduledAction::ArchiveOplog { worker_id, .. } => worker_id,
+            ScheduledAction::CompletePromise {
+                account_id,
+                promise_id,
+            } => OwnedWorkerId::new(&account_id, &promise_id.worker_id),
+            ScheduledAction::ArchiveOplog {
+                owned_worker_id, ..
+            } => owned_worker_id.clone(),
         }
     }
 }
@@ -372,11 +416,13 @@ impl ScheduledAction {
 impl Display for ScheduledAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ScheduledAction::CompletePromise { promise_id } => {
+            ScheduledAction::CompletePromise { promise_id, .. } => {
                 write!(f, "complete[{}]", promise_id)
             }
-            ScheduledAction::ArchiveOplog { worker_id, .. } => {
-                write!(f, "archive[{}]", worker_id)
+            ScheduledAction::ArchiveOplog {
+                owned_worker_id, ..
+            } => {
+                write!(f, "archive[{}]", owned_worker_id)
             }
         }
     }
@@ -667,6 +713,10 @@ impl WorkerMetadata {
             created_at: Timestamp::now_utc(),
             last_known_status: WorkerStatusRecord::default(),
         }
+    }
+
+    pub fn owned_worker_id(&self) -> OwnedWorkerId {
+        OwnedWorkerId::new(&self.account_id, &self.worker_id)
     }
 }
 
