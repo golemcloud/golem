@@ -188,6 +188,45 @@ impl BlobOplogArchive {
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         level: usize,
     ) -> Self {
+        let exists = blob_storage
+            .with("blob_oplog", "new")
+            .exists(
+                BlobStorageNamespace::CompressedOplog {
+                    account_id: owned_worker_id.account_id(),
+                    component_id: owned_worker_id.component_id(),
+                    level,
+                },
+                Path::new(&owned_worker_id.worker_name()),
+            )
+            .await
+            .map(|exists| exists == ExistsResult::Directory)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to check existence of compressed oplog for worker {} in blob storage: {err}",
+                    owned_worker_id.worker_id
+                )
+            });
+
+        if !exists {
+            blob_storage
+                .with("blob_oplog", "exists")
+                .create_dir(
+                    BlobStorageNamespace::CompressedOplog {
+                        account_id: owned_worker_id.account_id(),
+                        component_id: owned_worker_id.component_id(),
+                        level,
+                    },
+                    Path::new(&owned_worker_id.worker_name()),
+                )
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to create compressed oplog directory for worker {} in blob storage: {err}",
+                        owned_worker_id.worker_id
+                    )
+                });
+        }
+
         let paths = blob_storage.with("blob_oplog",
                                       "new").list_dir(
             BlobStorageNamespace::CompressedOplog {
@@ -249,10 +288,10 @@ impl BlobOplogArchive {
                         component_id: self.owned_worker_id.component_id(),
                         level: self.level,
                     },
-                    &self.oplog_index_to_path(idx),
+                    &self.oplog_index_to_path(*last_idx),
                 )
                 .await?
-                .ok_or(format!("compressed chunk for {idx} not found"))?;
+                .ok_or(format!("compressed chunk for {last_idx} not found"))?;
 
             let entries = chunk.decompress()?;
             let mut cache = self.cache.write().await;
@@ -405,6 +444,22 @@ impl OplogArchive for BlobOplogArchive {
 
         for idx in idx_to_drop {
             let _ = entries.remove(&idx);
+        }
+
+        if entries.len() == 0 {
+            self.blob_storage
+                .with("blob_oplog", "drop_prefix")
+                .delete_dir(BlobStorageNamespace::CompressedOplog {
+                    account_id: self.owned_worker_id.account_id(),
+                    component_id: self.owned_worker_id.component_id(),
+                    level: self.level,
+                },
+                Path::new(&self.owned_worker_id.worker_name())).await.unwrap_or_else(|err| {
+                    panic!(
+                        "failed to drop compressed oplog directory for worker {} in blob storage: {err}",
+                        self.owned_worker_id.worker_id
+                    )
+                });
         }
     }
 
