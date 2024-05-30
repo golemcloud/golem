@@ -3030,17 +3030,21 @@ dependencies = [
 name = "golem-cli"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-recursion",
  "async-trait",
  "chrono",
  "clap 4.5.4",
  "clap-verbosity-flag",
  "cli-table",
+ "colored",
  "derive_more",
  "dirs 5.0.1",
  "env_logger 0.11.3",
  "futures-util",
  "golem-client",
+ "golem-cloud-client",
+ "golem-cloud-worker-client",
  "golem-examples",
  "golem-test-framework",
  "golem-wasm-ast",
@@ -3088,6 +3092,46 @@ dependencies = [
 [[package]]
 name = "golem-client"
 version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bytes 1.6.0",
+ "chrono",
+ "futures-core",
+ "golem-openapi-client-generator",
+ "http 1.1.0",
+ "relative-path",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "golem-cloud-client"
+version = "0.0.61"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d27eec2a66561138517d60bd80ea2f88e0cc78258bf20c4a87361850d069370"
+dependencies = [
+ "async-trait",
+ "bytes 1.6.0",
+ "chrono",
+ "futures-core",
+ "golem-openapi-client-generator",
+ "http 1.1.0",
+ "relative-path",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "golem-cloud-worker-client"
+version = "0.0.61"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5f6a5727ee477f9fa906f8eab7651e20cc4a0e51ca46e87c8804278a7f71da8"
 dependencies = [
  "async-trait",
  "bytes 1.6.0",

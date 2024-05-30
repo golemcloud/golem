@@ -10,6 +10,14 @@ readme = "README.md"
 description = "Command line interface for OSS version of Golem. See also golem-cloud-cli."
 autotests = false
 
+[[bin]]
+name = "golem-cli"
+path = "src/main.rs"
+
+[[bin]]
+name = "golem-cloud-cli"
+path = "src/cloud_main.rs"
+
 [[test]]
 name = "integration"
 path = "tests/main.rs"
@@ -17,6 +25,10 @@ harness = false
 
 [dependencies]
 golem-client = { path = "../golem-client", version = "0.0.0" }
+
+golem-cloud-client = "0.0.61"
+golem-cloud-worker-client = "0.0.61"
+
 
 async-trait = { workspace = true }
 chrono = { workspace = true }
@@ -56,6 +68,8 @@ version-compare = "=0.0.11"
 wasm-wave = { workspace = true }
 cli-table = { workspace = true }
 textwrap = "0.16.1"
+anyhow.workspace = true
+colored = "2.1.0"
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }

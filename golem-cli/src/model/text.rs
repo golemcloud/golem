@@ -1,11 +1,10 @@
 use crate::model::component::ComponentView;
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::{ExampleDescription, IdempotencyKey};
-use cli_table::{format::Justify, print_stdout, Table, WithTitle};
-use golem_client::model::{
-    ApiDeployment, HttpApiDefinition, Route, ScanCursor, WorkerId, WorkerMetadata,
-    WorkersMetadataResponse,
+use crate::model::{
+    ApiDeployment, ExampleDescription, IdempotencyKey, WorkerMetadata, WorkersMetadataResponse,
 };
+use cli_table::{format::Justify, print_stdout, Table, WithTitle};
+use golem_client::model::{HttpApiDefinition, Route, ScanCursor, WorkerId};
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier};
 use indoc::{eprintdoc, printdoc};
 use itertools::Itertools;
