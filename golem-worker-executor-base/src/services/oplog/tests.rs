@@ -731,6 +731,10 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
 
     tokio::time::sleep(Duration::from_secs(1)).await;
 
+    let primary_exists = primary_oplog_service.exists(&owned_worker_id).await;
+    let secondary_exists = secondary_layer.exists(&owned_worker_id).await;
+    let tertiary_exists = tertiary_layer.exists(&owned_worker_id).await;
+
     let primary_length = primary_oplog_service
         .open(&owned_worker_id)
         .await
@@ -746,10 +750,6 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
     assert_eq!(primary_length, 0);
     assert_eq!(secondary_length, 0);
     assert_eq!(tertiary_length, 1);
-
-    let primary_exists = primary_oplog_service.exists(&owned_worker_id).await;
-    let secondary_exists = secondary_layer.exists(&owned_worker_id).await;
-    let tertiary_exists = tertiary_layer.exists(&owned_worker_id).await;
 
     assert!(!primary_exists);
     assert!(!secondary_exists);
