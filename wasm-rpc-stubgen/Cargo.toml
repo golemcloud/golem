@@ -32,6 +32,7 @@ pretty_env_logger = "0.5.0"
 prettyplease = "0.2.16"
 proc-macro2 = "1.0.78"
 quote = "1.0.35"
+regex = "1.10.4"
 serde = { version = "1.0.196", features = ["derive"] }
 syn = "2.0.48"
 tempdir = "0.3.7"
