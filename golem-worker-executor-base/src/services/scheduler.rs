@@ -120,19 +120,23 @@ impl SchedulerServiceDefault {
 
         let matching: Vec<(&str, ScheduledAction)> = all
             .into_iter()
-            .filter(|(_, action)| self.shard_service.check_worker(action.worker_id()).is_ok())
+            .filter(|(_, action)| {
+                self.shard_service
+                    .check_worker(&action.owned_worker_id().worker_id)
+                    .is_ok()
+            })
             .collect::<Vec<_>>();
 
-        let mut worker_ids = HashSet::new();
+        let mut owned_worker_ids = HashSet::new();
         for (key, action) in matching {
-            worker_ids.insert(action.worker_id().clone());
+            owned_worker_ids.insert(action.owned_worker_id().clone());
             self.key_value_storage
                 .with_entity("scheduler", "process", "scheduled_action")
                 .remove_from_sorted_set(KeyValueStorageNamespace::Schedule, key, &action)
                 .await?;
 
             match action {
-                ScheduledAction::CompletePromise { promise_id } => {
+                ScheduledAction::CompletePromise { promise_id, .. } => {
                     self.promise_service
                         .complete(promise_id, vec![])
                         .await
@@ -141,23 +145,21 @@ impl SchedulerServiceDefault {
                     record_scheduled_promise_completed();
                 }
                 ScheduledAction::ArchiveOplog {
-                    account_id,
-                    worker_id,
+                    owned_worker_id,
                     last_oplog_index,
                     next_after,
                 } => {
-                    if self.oplog_service.exists(&worker_id).await {
+                    if self.oplog_service.exists(&owned_worker_id).await {
                         let current_last_index =
-                            self.oplog_service.get_last_index(&worker_id).await;
+                            self.oplog_service.get_last_index(&owned_worker_id).await;
                         if current_last_index == last_oplog_index {
-                            let oplog = self.oplog_service.open(&account_id, &worker_id).await;
+                            let oplog = self.oplog_service.open(&owned_worker_id).await;
                             if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
                                 if more {
                                     self.schedule(
                                         now.add(next_after),
                                         ScheduledAction::ArchiveOplog {
-                                            account_id,
-                                            worker_id,
+                                            owned_worker_id,
                                             last_oplog_index,
                                             next_after,
                                         },
@@ -173,10 +175,14 @@ impl SchedulerServiceDefault {
             }
         }
 
-        for worker_id in worker_ids {
-            let span = span!(Level::INFO, "scheduler", worker_id = worker_id.to_string());
+        for owned_worker_id in owned_worker_ids {
+            let span = span!(
+                Level::INFO,
+                "scheduler",
+                worker_id = owned_worker_id.worker_id.to_string()
+            );
             self.worker_activator
-                .activate_worker(&worker_id)
+                .activate_worker(&owned_worker_id)
                 .instrument(span)
                 .await;
         }
@@ -298,7 +304,7 @@ mod tests {
 
     use crate::services::oplog::mock::OplogServiceMock;
     use golem_common::model::oplog::OplogIndex;
-    use golem_common::model::{ComponentId, PromiseId, ScheduledAction, WorkerId};
+    use golem_common::model::{AccountId, ComponentId, PromiseId, ScheduledAction, WorkerId};
 
     use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
@@ -325,6 +331,10 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
@@ -358,6 +368,7 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
+                    account_id: account_id.clone(),
                     promise_id: p1.clone(),
                 },
             )
@@ -367,6 +378,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p2.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -375,6 +387,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p3.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -391,7 +404,10 @@ mod tests {
                     "Schedule/worker:schedule:469329".to_string(),
                     vec![(
                         3540000.0,
-                        serialized_bytes(&ScheduledAction::CompletePromise { promise_id: p2 })
+                        serialized_bytes(&ScheduledAction::CompletePromise {
+                            promise_id: p2,
+                            account_id: account_id.clone()
+                        })
                     )]
                 ),
                 (
@@ -399,11 +415,17 @@ mod tests {
                     vec![
                         (
                             300000.0,
-                            serialized_bytes(&ScheduledAction::CompletePromise { promise_id: p1 })
+                            serialized_bytes(&ScheduledAction::CompletePromise {
+                                promise_id: p1,
+                                account_id: account_id.clone()
+                            })
                         ),
                         (
                             301000.0,
-                            serialized_bytes(&ScheduledAction::CompletePromise { promise_id: p3 })
+                            serialized_bytes(&ScheduledAction::CompletePromise {
+                                promise_id: p3,
+                                account_id: account_id.clone()
+                            })
                         )
                     ]
                 )
@@ -423,6 +445,10 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
@@ -457,6 +483,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p1.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -465,6 +492,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p2.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -473,6 +501,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p3.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -493,7 +522,10 @@ mod tests {
                     "Schedule/worker:schedule:469330".to_string(),
                     vec![(
                         300000.0,
-                        serialized_bytes(&ScheduledAction::CompletePromise { promise_id: p1 })
+                        serialized_bytes(&ScheduledAction::CompletePromise {
+                            promise_id: p1,
+                            account_id: account_id.clone()
+                        })
                     )]
                 )
             ])
@@ -510,6 +542,10 @@ mod tests {
         let i2: WorkerId = WorkerId {
             component_id: c1.clone(),
             worker_name: "inst2".to_string(),
+        };
+
+        let account_id = AccountId {
+            value: "test-account".to_string(),
         };
 
         let p1: PromiseId = PromiseId {
@@ -546,6 +582,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p1.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -554,6 +591,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T10:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p2.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -562,6 +600,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p3.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -583,7 +622,8 @@ mod tests {
                 vec![(
                     3540000.0,
                     serialized_bytes(&ScheduledAction::CompletePromise {
-                        promise_id: p2.clone()
+                        promise_id: p2.clone(),
+                        account_id: account_id.clone()
                     })
                 )]
             )])
@@ -608,6 +648,10 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
@@ -642,6 +686,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p1.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -650,6 +695,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p2.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -658,6 +704,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p3.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -699,6 +746,10 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
@@ -737,6 +788,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p1.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -745,6 +797,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p2.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -753,6 +806,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p3.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -761,6 +815,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p4.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -803,6 +858,10 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
@@ -837,6 +896,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p1.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -845,6 +905,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p2.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;
@@ -853,6 +914,7 @@ mod tests {
                 DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     promise_id: p3.clone(),
+                    account_id: account_id.clone(),
                 },
             )
             .await;

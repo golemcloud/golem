@@ -52,8 +52,8 @@ use crate::services::golem_config::{
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::{
-    CompressedOplogArchiveService, MultiLayerOplogService, OplogArchiveService, OplogService,
-    PrimaryOplogService,
+    BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
+    OplogArchiveService, OplogService, PrimaryOplogService,
 };
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
@@ -226,10 +226,32 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let shard_service = Arc::new(ShardServiceDefault::new());
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
 
-        let oplog_service: Arc<dyn OplogService + Send + Sync> =
-            match golem_config.oplog.indexed_storage_layers {
-                0 => panic!("At least one indexed storage based oplog layer must be configured"),
-                1 => Arc::new(
+        let mut oplog_archives: Vec<Arc<dyn OplogArchiveService + Send + Sync>> = Vec::new();
+        for idx in 1..golem_config.oplog.indexed_storage_layers {
+            let svc: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+                CompressedOplogArchiveService::new(indexed_storage.clone(), idx),
+            );
+            oplog_archives.push(svc);
+        }
+        for idx in 0..golem_config.oplog.blob_storage_layers {
+            let svc: Arc<dyn OplogArchiveService + Send + Sync> =
+                Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), idx));
+            oplog_archives.push(svc);
+        }
+        let oplog_archives = NEVec::from_vec(oplog_archives);
+
+        let oplog_service: Arc<dyn OplogService + Send + Sync> = match oplog_archives {
+            None => Arc::new(
+                PrimaryOplogService::new(
+                    indexed_storage.clone(),
+                    blob_storage.clone(),
+                    golem_config.oplog.max_operations_before_commit,
+                    golem_config.oplog.max_payload_size,
+                )
+                .await,
+            ),
+            Some(oplog_archives) => {
+                let primary = Arc::new(
                     PrimaryOplogService::new(
                         indexed_storage.clone(),
                         blob_storage.clone(),
@@ -237,33 +259,15 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                         golem_config.oplog.max_payload_size,
                     )
                     .await,
-                ),
-                n => {
-                    let primary = Arc::new(
-                        PrimaryOplogService::new(
-                            indexed_storage.clone(),
-                            blob_storage.clone(),
-                            golem_config.oplog.max_operations_before_commit,
-                            golem_config.oplog.max_payload_size,
-                        )
-                        .await,
-                    );
-                    let lower = (1..n)
-                        .map(|idx| {
-                            let svc: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
-                                CompressedOplogArchiveService::new(indexed_storage.clone(), idx),
-                            );
-                            svc
-                        })
-                        .collect::<Vec<_>>();
+                );
 
-                    Arc::new(MultiLayerOplogService::new(
-                        primary,
-                        NEVec::from_vec(lower).unwrap(),
-                        golem_config.oplog.entry_count_limit,
-                    ))
-                }
-            };
+                Arc::new(MultiLayerOplogService::new(
+                    primary,
+                    oplog_archives,
+                    golem_config.oplog.entry_count_limit,
+                ))
+            }
+        };
 
         let worker_service = Arc::new(DefaultWorkerService::new(
             key_value_storage.clone(),

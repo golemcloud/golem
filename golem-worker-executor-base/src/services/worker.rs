@@ -16,7 +16,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord};
+use golem_common::model::{
+    OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+};
 use tracing::debug;
 
 use crate::error::GolemError;
@@ -33,13 +35,17 @@ use crate::storage::keyvalue::{
 pub trait WorkerService {
     async fn add(&self, worker_metadata: &WorkerMetadata) -> Result<(), GolemError>;
 
-    async fn get(&self, worker_id: &WorkerId) -> Option<WorkerMetadata>;
+    async fn get(&self, owned_worker_id: &OwnedWorkerId) -> Option<WorkerMetadata>;
 
     async fn get_running_workers_in_shards(&self) -> Vec<WorkerMetadata>;
 
-    async fn remove(&self, worker_id: &WorkerId);
+    async fn remove(&self, owned_worker_id: &OwnedWorkerId);
 
-    async fn update_status(&self, worker_id: &WorkerId, status_value: &WorkerStatusRecord);
+    async fn update_status(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        status_value: &WorkerStatusRecord,
+    );
 }
 
 #[derive(Clone)]
@@ -65,7 +71,7 @@ impl DefaultWorkerService {
     async fn enum_workers_at_key(&self, key: &str) -> Vec<WorkerMetadata> {
         record_worker_call("enum");
 
-        let value: Vec<WorkerId> = self
+        let value: Vec<OwnedWorkerId> = self
             .key_value_storage
             .with_entity("worker", "enum", "worker_id")
             .members_of_set(KeyValueStorageNamespace::Worker, key)
@@ -74,9 +80,9 @@ impl DefaultWorkerService {
 
         let mut workers = Vec::new();
 
-        for worker_id in value {
+        for owned_worker_id in value {
             let metadata = self
-                .get(&worker_id)
+                .get(&owned_worker_id)
                 .await
                 .unwrap_or_else(|| panic!("failed to get worker metadata from KV storage"));
             workers.push(metadata);
@@ -100,6 +106,7 @@ impl WorkerService for DefaultWorkerService {
         record_worker_call("add");
 
         let worker_id = &worker_metadata.worker_id;
+        let owned_worker_id = OwnedWorkerId::new(&worker_metadata.account_id, worker_id);
 
         let initial_oplog_entry = OplogEntry::create(
             worker_metadata.worker_id.clone(),
@@ -109,7 +116,7 @@ impl WorkerService for DefaultWorkerService {
             worker_metadata.account_id.clone(),
         );
         self.oplog_service
-            .create(&worker_metadata.account_id, worker_id, initial_oplog_entry)
+            .create(&owned_worker_id, initial_oplog_entry)
             .await;
 
         self.key_value_storage
@@ -133,7 +140,7 @@ impl WorkerService for DefaultWorkerService {
             self
                 .key_value_storage
                 .with_entity("worker", "add", "worker_id")
-                .add_to_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), worker_id)
+                .add_to_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), &owned_worker_id)
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -145,13 +152,12 @@ impl WorkerService for DefaultWorkerService {
         Ok(())
     }
 
-    async fn get(&self, worker_id: &WorkerId) -> Option<WorkerMetadata> {
+    async fn get(&self, owned_worker_id: &OwnedWorkerId) -> Option<WorkerMetadata> {
         record_worker_call("get");
 
-        let wid = worker_id;
         let initial_oplog_entry = self
             .oplog_service
-            .read(worker_id, OplogIndex::INITIAL, 1)
+            .read(owned_worker_id, OplogIndex::INITIAL, 1)
             .await
             .into_iter()
             .next();
@@ -184,10 +190,13 @@ impl WorkerService for DefaultWorkerService {
                 let status_value: Option<WorkerStatusRecord> = self
                     .key_value_storage
                     .with_entity("worker", "get", "worker_status")
-                    .get(KeyValueStorageNamespace::Worker, &Self::status_key(wid))
+                    .get(
+                        KeyValueStorageNamespace::Worker,
+                        &Self::status_key(&owned_worker_id.worker_id),
+                    )
                     .await
                     .unwrap_or_else(|err| {
-                        panic!("failed to get worker status for {wid} from KV storage: {err}")
+                        panic!("failed to get worker status for {owned_worker_id} from KV storage: {err}")
                     });
 
                 if let Some(status) = status_value {
@@ -213,16 +222,16 @@ impl WorkerService for DefaultWorkerService {
         result
     }
 
-    async fn remove(&self, worker_id: &WorkerId) {
+    async fn remove(&self, owned_worker_id: &OwnedWorkerId) {
         record_worker_call("remove");
 
-        self.oplog_service.delete(worker_id).await;
+        self.oplog_service.delete(owned_worker_id).await;
 
         self.key_value_storage
             .with("worker", "remove")
             .del(
                 KeyValueStorageNamespace::Worker,
-                &Self::status_key(worker_id),
+                &Self::status_key(&owned_worker_id.worker_id),
             )
             .await
             .unwrap_or_else(|err| {
@@ -230,12 +239,15 @@ impl WorkerService for DefaultWorkerService {
             });
 
         let shard_assignment = self.shard_service.current_assignment();
-        let shard_id = ShardId::from_worker_id(worker_id, shard_assignment.number_of_shards);
+        let shard_id = ShardId::from_worker_id(
+            &owned_worker_id.worker_id,
+            shard_assignment.number_of_shards,
+        );
 
         self
             .key_value_storage
             .with_entity("worker", "remove", "worker_id")
-            .remove_from_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), worker_id)
+            .remove_from_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), owned_worker_id)
             .await
             .unwrap_or_else(|err| {
                 panic!(
@@ -244,7 +256,11 @@ impl WorkerService for DefaultWorkerService {
             });
     }
 
-    async fn update_status(&self, worker_id: &WorkerId, status_value: &WorkerStatusRecord) {
+    async fn update_status(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        status_value: &WorkerStatusRecord,
+    ) {
         record_worker_call("update_status");
 
         debug!("Updating worker status to {status_value:?}");
@@ -252,14 +268,17 @@ impl WorkerService for DefaultWorkerService {
             .with_entity("worker", "update_status", "worker_status")
             .set(
                 KeyValueStorageNamespace::Worker,
-                &Self::status_key(worker_id),
+                &Self::status_key(&owned_worker_id.worker_id),
                 status_value,
             )
             .await
             .unwrap_or_else(|err| panic!("failed to set worker status in KV storage: {err}"));
 
         let shard_assignment = self.shard_service.current_assignment();
-        let shard_id = ShardId::from_worker_id(worker_id, shard_assignment.number_of_shards);
+        let shard_id = ShardId::from_worker_id(
+            &owned_worker_id.worker_id,
+            shard_assignment.number_of_shards,
+        );
 
         if status_value.status == WorkerStatus::Running {
             debug!("Adding worker to the set of running workers in shard {shard_id}");
@@ -267,7 +286,7 @@ impl WorkerService for DefaultWorkerService {
             self
                 .key_value_storage
                 .with_entity("worker", "add", "worker_id")
-                .add_to_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), worker_id)
+                .add_to_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), owned_worker_id)
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -280,7 +299,7 @@ impl WorkerService for DefaultWorkerService {
             self
                 .key_value_storage
                 .with_entity("worker", "remove", "worker_id")
-                .remove_from_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), worker_id)
+                .remove_from_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), owned_worker_id)
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -315,7 +334,7 @@ impl WorkerService for WorkerServiceMock {
         unimplemented!()
     }
 
-    async fn get(&self, _worker_id: &WorkerId) -> Option<WorkerMetadata> {
+    async fn get(&self, _owned_worker_id: &OwnedWorkerId) -> Option<WorkerMetadata> {
         unimplemented!()
     }
 
@@ -323,11 +342,15 @@ impl WorkerService for WorkerServiceMock {
         unimplemented!()
     }
 
-    async fn remove(&self, _worker_id: &WorkerId) {
+    async fn remove(&self, _owned_worker_id: &OwnedWorkerId) {
         unimplemented!()
     }
 
-    async fn update_status(&self, _worker_id: &WorkerId, _status_value: &WorkerStatusRecord) {
+    async fn update_status(
+        &self,
+        _owned_worker_id: &OwnedWorkerId,
+        _status_value: &WorkerStatusRecord,
+    ) {
         unimplemented!()
     }
 }

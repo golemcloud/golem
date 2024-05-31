@@ -26,7 +26,7 @@ use tracing::{debug, error, warn, Instrument};
 
 use crate::error::GolemError;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::{AccountId, ComponentId, ScanCursor, WorkerId};
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor};
 
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
@@ -36,28 +36,29 @@ use crate::services::oplog::{downcast_oplog, OpenOplogs, Oplog, OplogConstructor
 #[async_trait]
 pub trait OplogArchiveService: Debug {
     /// Opens an oplog archive for writing
-    async fn open(&self, worker_id: &WorkerId) -> Arc<dyn OplogArchive + Send + Sync>;
+    async fn open(&self, owned_worker_id: &OwnedWorkerId) -> Arc<dyn OplogArchive + Send + Sync>;
 
     /// Deletes the oplog archive for a worker completely
-    async fn delete(&self, worker_id: &WorkerId);
+    async fn delete(&self, owned_worker_id: &OwnedWorkerId);
 
     /// Read an arbitrary section of the oplog archive without opening it for writing
     async fn read(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry>;
 
     /// Checks if an oplog archive exists for a worker
-    async fn exists(&self, worker_id: &WorkerId) -> bool;
+    async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool;
 
     async fn scan_for_component(
         &self,
+        account_id: &AccountId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError>;
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError>;
 }
 
 /// Interface for secondary oplog archives - requires less functionality than the primary archive
@@ -137,8 +138,7 @@ impl Clone for MultiLayerOplogService {
 
 #[derive(Clone)]
 struct CreateOplogConstructor {
-    worker_id: WorkerId,
-    account_id: AccountId,
+    owned_worker_id: OwnedWorkerId,
     initial_entry: Option<OplogEntry>,
     primary: Arc<dyn OplogService + Send + Sync>,
     service: MultiLayerOplogService,
@@ -146,15 +146,13 @@ struct CreateOplogConstructor {
 
 impl CreateOplogConstructor {
     fn new(
-        worker_id: WorkerId,
-        account_id: AccountId,
+        owned_worker_id: OwnedWorkerId,
         initial_entry: Option<OplogEntry>,
         primary: Arc<dyn OplogService + Send + Sync>,
         service: MultiLayerOplogService,
     ) -> Self {
         Self {
-            worker_id,
-            account_id,
+            owned_worker_id,
             initial_entry,
             primary,
             service,
@@ -170,12 +168,12 @@ impl OplogConstructor for CreateOplogConstructor {
     ) -> Arc<dyn Oplog + Send + Sync> {
         let primary = if let Some(initial_entry) = self.initial_entry {
             self.primary
-                .create(&self.account_id, &self.worker_id, initial_entry)
+                .create(&self.owned_worker_id, initial_entry)
                 .await
         } else {
-            self.primary.open(&self.account_id, &self.worker_id).await
+            self.primary.open(&self.owned_worker_id).await
         };
-        Arc::new(MultiLayerOplog::new(self.worker_id, primary, self.service, close).await)
+        Arc::new(MultiLayerOplog::new(self.owned_worker_id, primary, self.service, close).await)
     }
 }
 
@@ -183,16 +181,14 @@ impl OplogConstructor for CreateOplogConstructor {
 impl OplogService for MultiLayerOplogService {
     async fn create(
         &self,
-        account_id: &AccountId,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
     ) -> Arc<dyn Oplog + Send + Sync> {
         self.oplogs
             .get_or_open(
-                worker_id,
+                &owned_worker_id.worker_id,
                 CreateOplogConstructor::new(
-                    worker_id.clone(),
-                    account_id.clone(),
+                    owned_worker_id.clone(),
                     Some(initial_entry),
                     self.primary.clone(),
                     self.clone(),
@@ -201,17 +197,12 @@ impl OplogService for MultiLayerOplogService {
             .await
     }
 
-    async fn open(
-        &self,
-        account_id: &AccountId,
-        worker_id: &WorkerId,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    async fn open(&self, owned_worker_id: &OwnedWorkerId) -> Arc<dyn Oplog + Send + Sync> {
         self.oplogs
             .get_or_open(
-                worker_id,
+                &owned_worker_id.worker_id,
                 CreateOplogConstructor::new(
-                    worker_id.clone(),
-                    account_id.clone(),
+                    owned_worker_id.clone(),
                     None,
                     self.primary.clone(),
                     self.clone(),
@@ -220,24 +211,24 @@ impl OplogService for MultiLayerOplogService {
             .await
     }
 
-    async fn get_first_index(&self, worker_id: &WorkerId) -> OplogIndex {
-        self.primary.get_first_index(worker_id).await
+    async fn get_first_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
+        self.primary.get_first_index(owned_worker_id).await
     }
 
-    async fn get_last_index(&self, worker_id: &WorkerId) -> OplogIndex {
-        self.primary.get_last_index(worker_id).await
+    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
+        self.primary.get_last_index(owned_worker_id).await
     }
 
-    async fn delete(&self, worker_id: &WorkerId) {
-        self.primary.delete(worker_id).await;
+    async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
+        self.primary.delete(owned_worker_id).await;
         for layer in &self.lower {
-            layer.delete(worker_id).await
+            layer.delete(owned_worker_id).await
         }
     }
 
     async fn read(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -246,7 +237,7 @@ impl OplogService for MultiLayerOplogService {
         let mut result = BTreeMap::new();
         let mut n: i64 = n as i64;
         if n > 0 {
-            let partial_result = self.primary.read(worker_id, idx, n as u64).await;
+            let partial_result = self.primary.read(owned_worker_id, idx, n as u64).await;
             let full_match = match partial_result.first_key_value() {
                 None => false,
                 Some((first_idx, _)) => {
@@ -263,7 +254,7 @@ impl OplogService for MultiLayerOplogService {
 
             if !full_match {
                 for layer in &self.lower {
-                    let partial_result = layer.read(worker_id, idx, n as u64).await;
+                    let partial_result = layer.read(owned_worker_id, idx, n as u64).await;
                     let full_match = match partial_result.first_key_value() {
                         None => false,
                         Some((first_idx, _)) => {
@@ -284,13 +275,13 @@ impl OplogService for MultiLayerOplogService {
         result
     }
 
-    async fn exists(&self, worker_id: &WorkerId) -> bool {
-        if self.primary.exists(worker_id).await {
+    async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool {
+        if self.primary.exists(owned_worker_id).await {
             return true;
         }
 
         for layer in &self.lower {
-            if layer.exists(worker_id).await {
+            if layer.exists(owned_worker_id).await {
                 return true;
             }
         }
@@ -300,15 +291,16 @@ impl OplogService for MultiLayerOplogService {
 
     async fn scan_for_component(
         &self,
+        account_id: &AccountId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
         match cursor.layer {
             0 => {
                 let (new_cursor, ids) = self
                     .primary
-                    .scan_for_component(component_id, cursor, count)
+                    .scan_for_component(account_id, component_id, cursor, count)
                     .await?;
                 if new_cursor.is_finished() {
                     // Continuing with the first lower layer
@@ -326,7 +318,7 @@ impl OplogService for MultiLayerOplogService {
             }
             layer if layer < self.lower.len().get() => {
                 let (new_cursor, ids) = self.lower[layer]
-                    .scan_for_component(component_id, cursor, count)
+                    .scan_for_component(account_id, component_id, cursor, count)
                     .await?;
                 if new_cursor.is_finished() && (layer + 1) < self.lower.len().get() {
                     // Continuing with the next lower layer
@@ -352,7 +344,7 @@ impl OplogService for MultiLayerOplogService {
 }
 
 pub struct MultiLayerOplog {
-    worker_id: WorkerId,
+    owned_worker_id: OwnedWorkerId,
     primary: Arc<dyn Oplog + Send + Sync>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     multi_layer_oplog_service: MultiLayerOplogService,
@@ -364,7 +356,7 @@ pub struct MultiLayerOplog {
 
 impl MultiLayerOplog {
     pub async fn new(
-        worker_id: WorkerId,
+        owned_worker_id: OwnedWorkerId,
         primary: Arc<dyn Oplog + Send + Sync>,
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
@@ -378,7 +370,7 @@ impl MultiLayerOplog {
                 lower.push(Arc::new(
                     WrappedOplogArchive::new(
                         i,
-                        layer.open(&worker_id).await,
+                        layer.open(&owned_worker_id).await,
                         tx.clone(),
                         multi_layer_oplog_service.entry_count_limit,
                     )
@@ -386,14 +378,14 @@ impl MultiLayerOplog {
                 ));
             } else {
                 // Not wrapping the last layer
-                lower.push(layer.open(&worker_id).await);
+                lower.push(layer.open(&owned_worker_id).await);
             }
         }
         let lower = NEVec::from_vec(lower).expect("At least one lower layer is required");
 
         let transfer_fiber = tokio::spawn(
             Self::background_transfer(
-                worker_id.clone(),
+                owned_worker_id.clone(),
                 primary.clone(),
                 lower.clone(),
                 multi_layer_oplog_service.clone(),
@@ -405,7 +397,7 @@ impl MultiLayerOplog {
         let initial_primary_length = primary.length().await;
 
         Self {
-            worker_id,
+            owned_worker_id,
             primary,
             lower,
             multi_layer_oplog_service,
@@ -417,7 +409,7 @@ impl MultiLayerOplog {
     }
 
     async fn background_transfer(
-        worker_id: WorkerId,
+        owned_worker_id: OwnedWorkerId,
         primary: Arc<dyn Oplog + Send + Sync>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         multi_layer_oplog_service: MultiLayerOplogService,
@@ -431,11 +423,11 @@ impl MultiLayerOplog {
                     last_transferred_idx,
                     mut keep_alive,
                 } => {
-                    debug!("Transferring oplog entries up to index {last_transferred_idx} of the primary oplog of {worker_id} to the next layer");
-                    debug!("Reading entries from the primary oplog of {worker_id}");
+                    debug!("Transferring oplog entries up to index {last_transferred_idx} of the primary oplog to the next layer");
+                    debug!("Reading entries from the primary oplog");
 
                     let transfer = BackgroundTransferFromPrimary::new(
-                        worker_id.clone(),
+                        owned_worker_id.clone(),
                         last_transferred_idx,
                         multi_layer_oplog_service.clone(),
                         primary.clone(),
@@ -443,7 +435,7 @@ impl MultiLayerOplog {
                     );
                     let result = transfer.run().await;
                     if let Err(error) = result {
-                        error!("Failed to transfer entries from the primary oplog of {worker_id}: {error}");
+                        error!("Failed to transfer entries from the primary oplog: {error}");
                     }
                     let _ = keep_alive.take();
                 }
@@ -452,8 +444,8 @@ impl MultiLayerOplog {
                     last_transferred_idx,
                     mut keep_alive,
                 } => {
-                    debug!("Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} of {worker_id} to the next layer");
-                    debug!("Reading entries from oplog layer {source} of {worker_id}");
+                    debug!("Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} to the next layer");
+                    debug!("Reading entries from oplog layer {source}");
 
                     let transfer = BackgroundTransferBetweenLowers::new(
                         source,
@@ -463,7 +455,7 @@ impl MultiLayerOplog {
                     let result = transfer.run().await;
 
                     if let Err(error) = result {
-                        error!("Failed to transfer entries from oplog layer {source} of {worker_id}: {error}");
+                        error!("Failed to transfer entries from oplog layer {source}: {error}");
                     }
                     let _ = keep_alive.take();
                 }
@@ -536,7 +528,7 @@ impl Drop for MultiLayerOplog {
 impl Debug for MultiLayerOplog {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MultiLayerOplog")
-            .field("worker_id", &self.worker_id)
+            .field("worker_id", &self.owned_worker_id)
             .finish()
     }
 }
@@ -559,7 +551,7 @@ impl Oplog for MultiLayerOplog {
         let count = self.primary_length.get();
         if count >= self.multi_layer_oplog_service.entry_count_limit {
             let current_idx = self.primary.current_oplog_index().await;
-            debug!("Enqueuing transfer of {count} oplog entries from the primary oplog of {} to the next layer up to {current_idx}", self.worker_id);
+            debug!("Enqueuing transfer of {count} oplog entries from the primary oplog to the next layer up to {current_idx}");
             let _ = self.transfer.send(TransferFromPrimary {
                 last_transferred_idx: current_idx,
                 keep_alive: None,
@@ -579,7 +571,7 @@ impl Oplog for MultiLayerOplog {
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         self.multi_layer_oplog_service
-            .read(&self.worker_id, oplog_index, 1)
+            .read(&self.owned_worker_id, oplog_index, 1)
             .await
             .into_values()
             .next()
@@ -712,7 +704,7 @@ impl OplogArchive for WrappedOplogArchive {
 }
 
 struct BackgroundTransferFromPrimary {
-    worker_id: WorkerId,
+    owned_worker_id: OwnedWorkerId,
     last_transferred_idx: OplogIndex,
     multi_layer_oplog_service: MultiLayerOplogService,
     primary: Arc<dyn Oplog + Send + Sync>,
@@ -721,14 +713,14 @@ struct BackgroundTransferFromPrimary {
 
 impl BackgroundTransferFromPrimary {
     pub fn new(
-        worker_id: WorkerId,
+        owned_worker_id: OwnedWorkerId,
         last_transferred_idx: OplogIndex,
         multi_layer_oplog_service: MultiLayerOplogService,
         primary: Arc<dyn Oplog + Send + Sync>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     ) -> Self {
         Self {
-            worker_id,
+            owned_worker_id,
             last_transferred_idx,
             multi_layer_oplog_service,
             primary,
@@ -742,7 +734,7 @@ impl BackgroundTransfer for BackgroundTransferFromPrimary {
     async fn read_source(&self) -> Vec<(OplogIndex, OplogEntry)> {
         self.multi_layer_oplog_service
             .primary
-            .read_prefix(&self.worker_id, self.last_transferred_idx)
+            .read_prefix(&self.owned_worker_id, self.last_transferred_idx)
             .await
             .into_iter()
             .collect()

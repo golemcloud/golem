@@ -16,8 +16,8 @@ use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, IdempotencyKey, ScanCursor, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
@@ -151,6 +151,12 @@ impl TestWorkerExecutor {
                 cursor: Some(cursor.into()),
                 count,
                 precise,
+                account_id: Some(
+                    AccountId {
+                        value: "test-account".to_string(),
+                    }
+                    .into(),
+                ),
             })
             .await
             .expect("Failed to get workers metadata")
@@ -386,26 +392,31 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
 
     async fn set_worker_status<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         status: WorkerStatus,
     ) -> Result<(), GolemError> {
-        DurableWorkerCtx::<TestWorkerCtx>::set_worker_status(this, worker_id, status).await
+        DurableWorkerCtx::<TestWorkerCtx>::set_worker_status(this, owned_worker_id, status).await
     }
 
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
     ) -> Option<LastError> {
-        DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(this, worker_id).await
+        DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(this, owned_worker_id)
+            .await
     }
 
     async fn compute_latest_worker_status<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
     ) -> Result<WorkerStatusRecord, GolemError> {
-        DurableWorkerCtx::<TestWorkerCtx>::compute_latest_worker_status(this, worker_id, metadata)
-            .await
+        DurableWorkerCtx::<TestWorkerCtx>::compute_latest_worker_status(
+            this,
+            owned_worker_id,
+            metadata,
+        )
+        .await
     }
 
     async fn prepare_instance(
@@ -614,8 +625,7 @@ impl WorkerCtx for TestWorkerCtx {
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
     async fn create(
-        worker_id: WorkerId,
-        account_id: AccountId,
+        owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
@@ -637,8 +647,7 @@ impl WorkerCtx for TestWorkerCtx {
         execution_status: Arc<RwLock<ExecutionStatus>>,
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
-            worker_id,
-            account_id,
+            owned_worker_id,
             promise_service,
             events,
             worker_service,

@@ -21,7 +21,7 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId};
-use golem_common::model::{AccountId, ComponentId, ScanCursor, WorkerId};
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::path::Path;
@@ -93,24 +93,23 @@ impl PrimaryOplogService {
 impl OplogService for PrimaryOplogService {
     async fn create(
         &self,
-        account_id: &AccountId,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
     ) -> Arc<dyn Oplog + Send + Sync> {
         record_oplog_call("create");
 
-        let key = Self::oplog_key(worker_id);
+        let key = Self::oplog_key(&owned_worker_id.worker_id);
         let already_exists: bool = self
             .indexed_storage
             .with("oplog", "create")
             .exists(IndexedStorageNamespace::OpLog, &key)
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to check if oplog exists for worker {worker_id} in indexed storage: {err}")
+                panic!("failed to check if oplog exists for worker {owned_worker_id} in indexed storage: {err}")
             });
 
         if already_exists {
-            panic!("oplog for worker {worker_id} already exists in indexed storage")
+            panic!("oplog for worker {owned_worker_id} already exists in indexed storage")
         }
 
         self.indexed_storage
@@ -119,26 +118,22 @@ impl OplogService for PrimaryOplogService {
             .await
             .unwrap_or_else(|err| {
                 panic!(
-                    "failed to append initial oplog entry for worker {worker_id} in indexed storage: {err}"
+                    "failed to append initial oplog entry for worker {owned_worker_id} in indexed storage: {err}"
                 )
             });
 
-        self.open(account_id, worker_id).await
+        self.open(owned_worker_id).await
     }
 
-    async fn open(
-        &self,
-        account_id: &AccountId,
-        worker_id: &WorkerId,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    async fn open(&self, owned_worker_id: &OwnedWorkerId) -> Arc<dyn Oplog + Send + Sync> {
         record_oplog_call("open");
 
-        let key = Self::oplog_key(worker_id);
-        let last_oplog_index = self.get_last_index(worker_id).await;
+        let key = Self::oplog_key(&owned_worker_id.worker_id);
+        let last_oplog_index = self.get_last_index(owned_worker_id).await;
 
         self.oplogs
             .get_or_open(
-                worker_id,
+                &owned_worker_id.worker_id,
                 CreateOplogConstructor::new(
                     self.indexed_storage.clone(),
                     self.blob_storage.clone(),
@@ -147,62 +142,66 @@ impl OplogService for PrimaryOplogService {
                     self.max_payload_size,
                     key,
                     last_oplog_index,
-                    worker_id.clone(),
-                    account_id.clone(),
+                    owned_worker_id.clone(),
                 ),
             )
             .await
     }
 
-    async fn get_first_index(&self, worker_id: &WorkerId) -> OplogIndex {
+    async fn get_first_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
         record_oplog_call("get_first_index");
 
         OplogIndex::from_u64(
             self.indexed_storage
                 .with_entity("oplog", "get_first_index", "entry")
-                .first_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
+                .first_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(&owned_worker_id.worker_id))
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
-                        "failed to get first oplog index for worker {worker_id} from indexed storage: {err}"
+                        "failed to get first oplog index for worker {owned_worker_id} from indexed storage: {err}"
                     )
                 })
                 .unwrap_or_default()
         )
     }
 
-    async fn get_last_index(&self, worker_id: &WorkerId) -> OplogIndex {
+    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
         record_oplog_call("get_last_index");
 
         OplogIndex::from_u64(
         self.indexed_storage
             .with_entity("oplog", "get_last_index", "entry")
-            .last_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
+            .last_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(&owned_worker_id.worker_id))
             .await
             .unwrap_or_else(|err| {
                 panic!(
-                    "failed to get last oplog index for worker {worker_id} from indexed storage: {err}"
+                    "failed to get last oplog index for worker {owned_worker_id} from indexed storage: {err}"
                 )
             })
             .unwrap_or_default()
         )
     }
 
-    async fn delete(&self, worker_id: &WorkerId) {
+    async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
         record_oplog_call("delete");
 
         self.indexed_storage
             .with("oplog", "delete")
-            .delete(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
+            .delete(
+                IndexedStorageNamespace::OpLog,
+                &Self::oplog_key(&owned_worker_id.worker_id),
+            )
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to drop oplog for worker {worker_id} in indexed storage: {err}")
+                panic!(
+                    "failed to drop oplog for worker {owned_worker_id} in indexed storage: {err}"
+                )
             });
     }
 
     async fn read(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -212,37 +211,40 @@ impl OplogService for PrimaryOplogService {
             .with_entity("oplog", "read", "entry")
             .read(
                 IndexedStorageNamespace::OpLog,
-                &Self::oplog_key(worker_id),
+                &Self::oplog_key(&owned_worker_id.worker_id),
                 idx.into(),
                 idx.range_end(n).into(),
             )
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to read oplog for worker {worker_id} from indexed storage: {err}")
+                panic!(
+                    "failed to read oplog for worker {owned_worker_id} from indexed storage: {err}"
+                )
             })
             .into_iter()
             .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
             .collect()
     }
 
-    async fn exists(&self, worker_id: &WorkerId) -> bool {
+    async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool {
         record_oplog_call("exists");
 
         self.indexed_storage
             .with("oplog", "exists")
-            .exists(IndexedStorageNamespace::OpLog, &Self::oplog_key(worker_id))
+            .exists(IndexedStorageNamespace::OpLog, &Self::oplog_key(&owned_worker_id.worker_id))
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to check if oplog exists for worker {worker_id} in indexed storage: {err}")
+                panic!("failed to check if oplog exists for worker {owned_worker_id} in indexed storage: {err}")
             })
     }
 
     async fn scan_for_component(
         &self,
+        account_id: &AccountId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
         record_oplog_call("scan");
 
         let (cursor, keys) = self
@@ -262,7 +264,10 @@ impl OplogService for PrimaryOplogService {
         Ok((
             ScanCursor { cursor, layer: 0 },
             keys.into_iter()
-                .map(|key| Self::get_worker_id_from_key(&key, component_id))
+                .map(|key| OwnedWorkerId {
+                    worker_id: Self::get_worker_id_from_key(&key, component_id),
+                    account_id: account_id.clone(),
+                })
                 .collect(),
         ))
     }
@@ -277,8 +282,7 @@ struct CreateOplogConstructor {
     max_payload_size: usize,
     key: String,
     last_oplog_idx: OplogIndex,
-    worker_id: WorkerId,
-    account_id: AccountId,
+    owned_worker_id: OwnedWorkerId,
 }
 
 impl CreateOplogConstructor {
@@ -290,8 +294,7 @@ impl CreateOplogConstructor {
         max_payload_size: usize,
         key: String,
         last_oplog_idx: OplogIndex,
-        worker_id: WorkerId,
-        account_id: AccountId,
+        owned_worker_id: OwnedWorkerId,
     ) -> Self {
         Self {
             indexed_storage,
@@ -301,8 +304,7 @@ impl CreateOplogConstructor {
             max_payload_size,
             key,
             last_oplog_idx,
-            worker_id,
-            account_id,
+            owned_worker_id,
         }
     }
 }
@@ -321,8 +323,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.max_payload_size,
             self.key,
             self.last_oplog_idx,
-            self.worker_id,
-            self.account_id,
+            self.owned_worker_id,
             close,
         ))
     }
@@ -351,8 +352,7 @@ impl PrimaryOplog {
         max_payload_size: usize,
         key: String,
         last_oplog_idx: OplogIndex,
-        worker_id: WorkerId,
-        account_id: AccountId,
+        owned_worker_id: OwnedWorkerId,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         Self {
@@ -366,8 +366,7 @@ impl PrimaryOplog {
                 buffer: VecDeque::new(),
                 last_committed_idx: last_oplog_idx,
                 last_oplog_idx,
-                worker_id,
-                account_id,
+                owned_worker_id,
             })),
             key,
             close: Some(close),
@@ -385,8 +384,7 @@ struct PrimaryOplogState {
     buffer: VecDeque<OplogEntry>,
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
-    worker_id: WorkerId,
-    account_id: AccountId,
+    owned_worker_id: OwnedWorkerId,
 }
 
 impl PrimaryOplogState {
@@ -580,12 +578,11 @@ impl Oplog for PrimaryOplog {
     }
 
     async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String> {
-        let (blob_storage, worker_id, account_id, max_length) = {
+        let (blob_storage, owned_worker_id, max_length) = {
             let state = self.state.lock().await;
             (
                 state.blob_storage.clone(),
-                state.worker_id.clone(),
-                state.account_id.clone(),
+                state.owned_worker_id.clone(),
                 state.max_payload_size,
             )
         };
@@ -594,12 +591,12 @@ impl Oplog for PrimaryOplog {
             let md5_hash = md5::compute(data).to_vec();
 
             blob_storage
-                .put(
+                .put_raw(
                     "oplog",
                     "upload_payload",
                     BlobStorageNamespace::OplogPayload {
-                        account_id: account_id.clone(),
-                        worker_id: worker_id.clone(),
+                        account_id: owned_worker_id.account_id(),
+                        worker_id: owned_worker_id.worker_id(),
                     },
                     Path::new(&format!("{:02X?}/{}", md5_hash, payload_id.0)),
                     data,
@@ -622,26 +619,22 @@ impl Oplog for PrimaryOplog {
                 payload_id,
                 md5_hash,
             } => {
-                let (blob_storage, worker_id, account_id) = {
+                let (blob_storage, owned_worker_id) = {
                     let state = self.state.lock().await;
-                    (
-                        state.blob_storage.clone(),
-                        state.worker_id.clone(),
-                        state.account_id.clone(),
-                    )
+                    (state.blob_storage.clone(), state.owned_worker_id.clone())
                 };
                 blob_storage
-                    .get(
+                    .get_raw(
                         "oplog",
                         "download_payload",
                         BlobStorageNamespace::OplogPayload {
-                            account_id: account_id.clone(),
-                            worker_id: worker_id.clone(),
+                            account_id: owned_worker_id.account_id(),
+                            worker_id: owned_worker_id.worker_id(),
                         },
                         Path::new(&format!("{:02X?}/{}", md5_hash, payload_id.0)),
                     )
                     .await?
-                    .ok_or(format!("Payload not found (account_id: {account_id}, worker_id: {worker_id}, payload_id: {payload_id}, md5 hash: {md5_hash:02X?})"))
+                    .ok_or(format!("Payload not found (worker: {owned_worker_id}, payload_id: {payload_id}, md5 hash: {md5_hash:02X?})"))
             }
         }
     }

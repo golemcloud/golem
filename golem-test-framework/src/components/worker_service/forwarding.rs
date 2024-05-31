@@ -124,7 +124,15 @@ impl WorkerService for ForwardingWorkerService {
             .worker_executor
             .client()
             .await
-            .delete_worker(request.worker_id.expect("Worker ID is required"))
+            .delete_worker(workerexecutor::DeleteWorkerRequest {
+                worker_id: request.worker_id,
+                account_id: Some(
+                    AccountId {
+                        value: "test-account".to_string(),
+                    }
+                    .into(),
+                ),
+            })
             .await
             .expect("Failed to call golem-worker-executor")
             .into_inner();
@@ -156,7 +164,15 @@ impl WorkerService for ForwardingWorkerService {
             .worker_executor
             .client()
             .await
-            .get_worker_metadata(request.worker_id.expect("Worker ID is required"))
+            .get_worker_metadata(workerexecutor::GetWorkerMetadataRequest {
+                worker_id: Some(request.worker_id.expect("Worker ID is required")),
+                account_id: Some(
+                    AccountId {
+                        value: "test-account".to_string(),
+                    }
+                    .into(),
+                ),
+            })
             .await
             .expect("Failed to call golem-worker-executor")
             .into_inner();
@@ -308,6 +324,12 @@ impl WorkerService for ForwardingWorkerService {
             .await
             .resume_worker(workerexecutor::ResumeWorkerRequest {
                 worker_id: request.worker_id,
+                account_id: Some(
+                    AccountId {
+                        value: "test-account".to_string(),
+                    }
+                    .into(),
+                ),
             })
             .await
             .expect("Failed to call golem-worker-executor")
@@ -340,6 +362,12 @@ impl WorkerService for ForwardingWorkerService {
             .interrupt_worker(workerexecutor::InterruptWorkerRequest {
                 worker_id: request.worker_id,
                 recover_immediately: request.recover_immediately,
+                account_id: Some(
+                    AccountId {
+                        value: "test-account".to_string(),
+                    }
+                    .into(),
+                ),
             })
             .await
             .expect("Failed to call golem-worker-executor")
@@ -375,6 +403,12 @@ impl WorkerService for ForwardingWorkerService {
                 worker_id: request.worker_id,
                 target_version: request.target_version,
                 mode: request.mode,
+                account_id: Some(
+                    AccountId {
+                        value: "test-account".to_string(),
+                    }
+                    .into(),
+                ),
             })
             .await
             .expect("Failed to call golem-worker-executor")

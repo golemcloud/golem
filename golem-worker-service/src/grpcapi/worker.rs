@@ -267,7 +267,7 @@ impl WorkerGrpcApi {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         self.worker_service
-            .delete(&worker_id, &EmptyAuthCtx {})
+            .delete(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
             .await?;
 
         Ok(())
@@ -289,6 +289,7 @@ impl WorkerGrpcApi {
                 &worker_id,
                 parameters.oplog_idx,
                 parameters.data,
+                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
             .await?;
@@ -304,7 +305,7 @@ impl WorkerGrpcApi {
 
         let metadata = self
             .worker_service
-            .get_metadata(&worker_id, &EmptyAuthCtx {})
+            .get_metadata(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
             .await?;
 
         Ok(metadata.into())
@@ -336,6 +337,7 @@ impl WorkerGrpcApi {
                 request.cursor.map(|c| c.into()).unwrap_or_default(),
                 request.count,
                 request.precise,
+                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
             .await?;
@@ -352,7 +354,12 @@ impl WorkerGrpcApi {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         self.worker_service
-            .interrupt(&worker_id, request.recover_immediately, &EmptyAuthCtx {})
+            .interrupt(
+                &worker_id,
+                request.recover_immediately,
+                empty_worker_metadata(),
+                &EmptyAuthCtx {},
+            )
             .await?;
 
         Ok(())
@@ -414,7 +421,7 @@ impl WorkerGrpcApi {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         self.worker_service
-            .resume(&worker_id, &EmptyAuthCtx {})
+            .resume(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
             .await?;
 
         Ok(())
@@ -441,6 +448,7 @@ impl WorkerGrpcApi {
                 &worker_id,
                 request.mode(),
                 request.target_version,
+                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
             .await?;

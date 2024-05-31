@@ -21,8 +21,8 @@ use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 
 use crate::error::GolemError;
@@ -91,8 +91,7 @@ pub trait WorkerCtx:
     /// - `execution_status`: Lock created to store the execution status
     #[allow(clippy::too_many_arguments)]
     async fn create(
-        worker_id: WorkerId,
-        account_id: AccountId,
+        owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
@@ -328,7 +327,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Sets the current worker status without activating the worker
     async fn set_worker_status<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         status: WorkerStatus,
     ) -> Result<(), GolemError>;
 
@@ -336,13 +335,13 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// error was stored in the last entry.
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
     ) -> Option<LastError>;
 
     /// Gets a best-effort current worker status without activating the worker
     async fn compute_latest_worker_status<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
     ) -> Result<WorkerStatusRecord, GolemError>;
 

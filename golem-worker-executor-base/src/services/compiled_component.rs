@@ -66,7 +66,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
     ) -> Result<Option<Component>, GolemError> {
         match self
             .blob_storage
-            .get(
+            .get_raw(
                 "compiled_component",
                 "get",
                 BlobStorageNamespace::CompilationCache,
@@ -105,7 +105,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             .serialize()
             .expect("Could not serialize component");
         self.blob_storage
-            .put(
+            .put_raw(
                 "compiled_component",
                 "put",
                 BlobStorageNamespace::CompilationCache,
