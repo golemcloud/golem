@@ -16,7 +16,7 @@ use anyhow::anyhow;
 use golem_common::model::{parse_function_name, CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output};
 use golem_wasm_rpc::Value;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
 use wasmtime::AsContextMut;
 

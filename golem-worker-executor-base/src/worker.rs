@@ -78,17 +78,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Arguments:
     /// - `this` - the caller object having reference to all services
     /// - `worker_id` - the worker id (consisting of a component id and a worker name)
-    /// - `worker_args` - the command line arguments to be associated with the worker
-    /// - `worker_env` - the environment variables to be associated with the worker
     /// - `component_version` - the version of the component to be used (if None, the latest version is used)
     /// - `account_id` - the account id of the user who initiated the creation of the worker
     /// - `pending_worker` - the pending worker object which is already published during the worker initializes. This allows clients
     ///                      to connect to the worker's event stream during it initializes.
-    pub async fn new<T>(
+    async fn new<T>(
         this: &T,
         worker_id: WorkerId,
-        worker_args: Vec<String>,
-        worker_env: Vec<(String, String)>,
         mut worker_metadata: WorkerMetadata,
         pending_worker: &PendingWorker<Ctx>,
     ) -> Result<Arc<Self>, GolemError>
@@ -150,8 +146,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     WorkerConfig::new(
                         worker_metadata.worker_id.clone(),
                         worker_metadata.last_known_status.component_version,
-                        worker_args.clone(),
-                        worker_env.clone(),
+                        worker_metadata.args.clone(),
+                        worker_metadata.env.clone(),
                         worker_metadata.last_known_status.deleted_regions.clone(),
                     ),
                     execution_status.clone(),
@@ -260,13 +256,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// If the active worker cache is not full, this newly created worker will be added to it.
     /// If it was full, the worker will be dropped but only after it finishes recovering which means
     /// a previously interrupted / suspended invocation might be resumed.
-    pub async fn activate<T>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        worker_args: Vec<String>,
-        worker_env: Vec<(String, String)>,
-        component_version: Option<u64>,
-    ) where
+    pub async fn activate<T>(this: &T, owned_worker_id: &OwnedWorkerId)
+    where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let owned_worker_id_clone = owned_worker_id.clone();
@@ -274,14 +265,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let this_clone = this.clone();
         tokio::task::spawn(
             async move {
-                let result = Worker::get_or_create_with_config(
-                    &this_clone,
-                    &owned_worker_id_clone,
-                    worker_args,
-                    worker_env,
-                    component_version,
-                )
-                .await;
+                let result =
+                    Worker::get_or_create(&this_clone, &owned_worker_id_clone, None, None, None)
+                        .await;
                 if let Err(err) = result {
                     error!("Failed to activate worker: {err}");
                 }
@@ -298,49 +284,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_version: Option<u64>,
     ) -> Result<Arc<Self>, GolemError>
     where
-        T: HasAll<Ctx> + Send + Sync + Clone + 'static,
-    {
-        let (worker_args, worker_env) = match this.worker_service().get(owned_worker_id).await {
-            Some(metadata) => (metadata.args, metadata.env),
-            None => (
-                worker_args.unwrap_or_default(),
-                worker_env.unwrap_or_default(),
-            ),
-        };
-
-        Worker::get_or_create_with_config(
-            this,
-            owned_worker_id,
-            worker_args,
-            worker_env,
-            component_version,
-        )
-        .await
-    }
-
-    pub async fn get_or_create_with_config<T>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        worker_args: Vec<String>,
-        worker_env: Vec<(String, String)>,
-        component_version: Option<u64>,
-    ) -> Result<Arc<Self>, GolemError>
-    where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         let this_clone = this.clone();
         let worker_id_clone_1 = owned_worker_id.worker_id();
         let worker_id_clone_2 = owned_worker_id.worker_id();
-        let worker_args_clone = worker_args.clone();
-        let worker_env_clone = worker_env.clone();
         let config_clone = this.config().clone();
 
         let worker_metadata = Self::get_or_create_worker_metadata(
             this,
             owned_worker_id,
             component_version,
-            worker_args.clone(),
-            worker_env.clone(),
+            worker_args,
+            worker_env,
         )
         .await?;
 
@@ -380,8 +336,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         Worker::new(
                             &this_clone,
                             worker_id_clone_2,
-                            worker_args_clone,
-                            worker_env_clone,
                             worker_metadata,
                             &pending_worker_clone,
                         )
@@ -391,7 +345,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 },
             )
             .await?;
-        validate_worker(worker_details.metadata.clone(), worker_args, worker_env)?;
         Ok(worker_details)
     }
 
@@ -403,9 +356,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_or_create_pending<T>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Vec<String>,
-        worker_env: Vec<(String, String)>,
-        component_version: Option<u64>,
     ) -> Result<PendingOrFinal<PendingWorker<Ctx>, Arc<Self>>, GolemError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -413,18 +363,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let this_clone = this.clone();
         let worker_id_clone_1 = owned_worker_id.worker_id();
         let worker_id_clone_2 = owned_worker_id.worker_id();
-        let worker_args_clone = worker_args.clone();
-        let worker_env_clone = worker_env.clone();
         let config_clone = this.config().clone();
 
-        let worker_metadata = Self::get_or_create_worker_metadata(
-            this,
-            owned_worker_id,
-            component_version,
-            worker_args.clone(),
-            worker_env.clone(),
-        )
-        .await?;
+        let worker_metadata =
+            Self::get_or_create_worker_metadata(this, owned_worker_id, None, None, None).await?;
 
         let oplog = this.oplog_service().open(owned_worker_id).await;
         let initial_pending_invocations = worker_metadata
@@ -461,8 +403,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         Worker::new(
                             &this_clone,
                             worker_id_clone_2,
-                            worker_args_clone,
-                            worker_env_clone,
                             worker_metadata,
                             &pending_worker_clone,
                         )
@@ -485,8 +425,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_or_create_paused_pending<T>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
-        worker_args: Vec<String>,
-        worker_env: Vec<(String, String)>,
         component_version: Option<u64>,
     ) -> Result<(PendingWorker<Ctx>, tokio::sync::oneshot::Sender<()>), GolemError>
     where
@@ -496,16 +434,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let worker_id_clone_1 = owned_worker_id.worker_id();
         let worker_id_clone_2 = owned_worker_id.worker_id();
         let owned_worker_id_clone = owned_worker_id.clone();
-        let worker_args_clone = worker_args.clone();
-        let worker_env_clone = worker_env.clone();
         let config_clone = this.config().clone();
 
         let mut worker_metadata = Self::get_or_create_worker_metadata(
             this,
             owned_worker_id,
             component_version,
-            worker_args.clone(),
-            worker_env.clone(),
+            None,
+            None,
         )
         .await?;
 
@@ -559,8 +495,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             Worker::new(
                                 &this_clone,
                                 worker_id_clone_2,
-                                worker_args_clone,
-                                worker_env_clone,
                                 worker_metadata,
                                 &pending_worker_clone,
                             )
@@ -638,8 +572,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         this: &T,
         owned_worker_id: &OwnedWorkerId,
         component_version: Option<u64>,
-        worker_args: Vec<String>,
-        worker_env: Vec<(String, String)>,
+        worker_args: Option<Vec<String>>,
+        worker_env: Option<Vec<(String, String)>>,
     ) -> Result<WorkerMetadata, GolemError> {
         let component_id = owned_worker_id.component_id();
 
@@ -658,8 +592,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     calculate_last_known_status(this, owned_worker_id, &None).await?;
                 let worker_metadata = WorkerMetadata {
                     worker_id: owned_worker_id.worker_id(),
-                    args: worker_args,
-                    env: worker_env,
+                    args: worker_args.unwrap_or_default(),
+                    env: worker_env.unwrap_or_default(),
                     account_id: owned_worker_id.account_id(),
                     created_at: Timestamp::now_utc(),
                     last_known_status: WorkerStatusRecord {
@@ -747,46 +681,14 @@ impl<Ctx: WorkerCtx> PendingWorker<Ctx> {
     }
 }
 
-fn validate_worker(
-    worker_metadata: WorkerMetadata,
-    worker_args: Vec<String>,
-    worker_env: Vec<(String, String)>,
-) -> Result<(), GolemError> {
-    let mut errors: Vec<String> = Vec::new();
-    if worker_metadata.args != worker_args {
-        let error = format!(
-            "Worker is already running with different args: {:?} != {:?}",
-            worker_metadata.args, worker_args
-        );
-        errors.push(error)
-    }
-    if worker_metadata.env != worker_env {
-        let error = format!(
-            "Worker is already running with different env: {:?} != {:?}",
-            worker_metadata.env, worker_env
-        );
-        errors.push(error)
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(GolemError::worker_creation_failed(
-            worker_metadata.worker_id,
-            errors.join("\n"),
-        ))
-    }
-}
-
 pub async fn invoke<Ctx: WorkerCtx>(
-    worker: Arc<Worker<Ctx>>,
+    invocation_queue: Arc<InvocationQueue<Ctx>>,
     idempotency_key: IdempotencyKey,
     calling_convention: CallingConvention,
     full_function_name: String,
     function_input: Vec<Value>,
 ) -> Result<Option<Result<Vec<Value>, GolemError>>, GolemError> {
-    let output = worker
-        .public_state
-        .invocation_queue()
+    let output = invocation_queue
         .lookup_invocation_result(&idempotency_key)
         .await;
 
@@ -796,9 +698,7 @@ pub async fn invoke<Ctx: WorkerCtx>(
         LookupResult::Pending => Ok(None),
         LookupResult::New => {
             // Invoke the function in the background
-            worker
-                .public_state
-                .invocation_queue()
+            invocation_queue
                 .enqueue(
                     idempotency_key,
                     full_function_name,
@@ -812,14 +712,14 @@ pub async fn invoke<Ctx: WorkerCtx>(
 }
 
 pub async fn invoke_and_await<Ctx: WorkerCtx>(
-    worker: Arc<Worker<Ctx>>,
+    invocation_queue: Arc<InvocationQueue<Ctx>>,
     idempotency_key: IdempotencyKey,
     calling_convention: CallingConvention,
     full_function_name: String,
     function_input: Vec<Value>,
 ) -> Result<Vec<Value>, GolemError> {
     match invoke(
-        worker.clone(),
+        invocation_queue.clone(),
         idempotency_key.clone(),
         calling_convention,
         full_function_name,
@@ -831,9 +731,6 @@ pub async fn invoke_and_await<Ctx: WorkerCtx>(
         Some(Err(err)) => Err(err),
         None => {
             debug!("Waiting for idempotency key to complete",);
-
-            let invocation_queue = worker.public_state.invocation_queue().clone();
-            drop(worker); // we must not hold reference to the worker while waiting
 
             let result = invocation_queue
                 .wait_for_invocation_result(&idempotency_key)

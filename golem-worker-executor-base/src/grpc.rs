@@ -248,11 +248,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        Worker::get_or_create_with_config(
+        Worker::get_or_create(
             self,
             &owned_worker_id,
-            args,
-            env,
+            Some(args),
+            Some(env),
             Some(component_version),
         )
         .await?;
@@ -310,14 +310,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             // By making sure the worker is in memory. If it was suspended because of waiting
             // for a promise, replaying that call will now not suspend as the promise has been
             // completed, and the worker will continue running.
-            Worker::activate(
-                &self.services,
-                &owned_worker_id,
-                metadata.args,
-                metadata.env,
-                Some(worker_status.component_version),
-            )
-            .await;
+            Worker::activate(&self.services, &owned_worker_id).await;
         }
 
         let success = golem::workerexecutor::CompletePromiseSuccess { completed };
@@ -344,7 +337,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let metadata = self.worker_service().get(&owned_worker_id).await;
         let worker_status =
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
-        let metadata = metadata.ok_or(GolemError::invalid_request("Worker not found"))?;
 
         let should_interrupt = match &worker_status.status {
             WorkerStatus::Running | WorkerStatus::Suspended | WorkerStatus::Retrying => true,
@@ -355,18 +347,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
 
         if should_interrupt {
-            let worker_details = Worker::get_or_create_with_config(
-                self,
-                &owned_worker_id,
-                metadata.args,
-                metadata.env,
-                Some(worker_status.component_version),
-            )
-            .await?;
+            let worker = Worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
 
-            if let Some(mut await_interrupted) =
-                worker_details.set_interrupting(InterruptKind::Interrupt)
-            {
+            if let Some(mut await_interrupted) = worker.set_interrupting(InterruptKind::Interrupt) {
                 await_interrupted.recv().await.unwrap();
             }
         }
@@ -415,8 +398,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
 
-        let metadata = metadata.ok_or(GolemError::worker_not_found(worker_id.clone()))?;
-
         match &worker_status.status {
             WorkerStatus::Exited => {
                 warn!("Attempted interrupting worker which already exited")
@@ -439,16 +420,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ctx::set_worker_status(self, &owned_worker_id, WorkerStatus::Interrupted).await?;
             }
             WorkerStatus::Running => {
-                let worker_state = Worker::get_or_create_with_config(
-                    self,
-                    &owned_worker_id,
-                    metadata.args,
-                    metadata.env,
-                    Some(worker_status.component_version),
-                )
-                .await?;
+                let worker =
+                    Worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
 
-                worker_state.set_interrupting(if request.recover_immediately {
+                worker.set_interrupting(if request.recover_immediately {
                     InterruptKind::Restart
                 } else {
                     InterruptKind::Interrupt
@@ -487,16 +462,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match &worker_status.status {
             WorkerStatus::Suspended | WorkerStatus::Interrupted => {
-                let metadata = metadata.ok_or(GolemError::invalid_request("Worker not found"))?;
                 info!("Activating ${worker_status:?} worker {worker_id} due to explicit resume request");
-                Worker::activate(
-                    &self.services,
-                    &owned_worker_id,
-                    metadata.args,
-                    metadata.env,
-                    Some(worker_status.component_version),
-                )
-                .await;
+                Worker::activate(&self.services, &owned_worker_id).await;
                 Ok(())
             }
             _ => Err(GolemError::invalid_request(format!(
@@ -526,7 +493,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .unwrap_or(IdempotencyKey::fresh());
 
         let values = invoke_and_await::<Ctx>(
-            worker,
+            worker.public_state.invocation_queue(),
             idempotency_key,
             calling_convention.into(),
             full_function_name,
@@ -555,31 +522,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
         }
 
-        let (worker_args, worker_env, component_version) = match metadata {
-            Some(metadata) => {
-                let latest_status = Ctx::compute_latest_worker_status(
-                    self,
-                    &owned_worker_id,
-                    &Some(metadata.clone()),
-                )
-                .await?;
-                (
-                    metadata.args,
-                    metadata.env,
-                    Some(latest_status.component_version),
-                )
-            }
-            None => (vec![], vec![], None),
-        };
-
-        Worker::get_or_create_with_config(
-            self,
-            &owned_worker_id,
-            worker_args.clone(),
-            worker_env.clone(),
-            component_version,
-        )
-        .await
+        Worker::get_or_create(self, &owned_worker_id, None, None, None).await
     }
 
     async fn get_or_create_pending<Req: GrpcInvokeRequest>(
@@ -600,31 +543,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
         }
 
-        let (worker_args, worker_env, component_version) = match metadata {
-            Some(metadata) => {
-                let latest_status = Ctx::compute_latest_worker_status(
-                    self,
-                    &owned_worker_id,
-                    &Some(metadata.clone()),
-                )
-                .await?;
-                (
-                    metadata.args,
-                    metadata.env,
-                    Some(latest_status.component_version),
-                )
-            }
-            None => (vec![], vec![], None),
-        };
-
-        Worker::get_or_create_pending(
-            self,
-            &owned_worker_id,
-            worker_args.clone(),
-            worker_env.clone(),
-            component_version,
-        )
-        .await
+        Worker::get_or_create_pending(self, &owned_worker_id).await
     }
 
     async fn invoke_worker_internal<Req: GrpcInvokeRequest>(
@@ -748,9 +667,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn get_running_workers_metadata_internal(
         &self,
-        request: golem::workerexecutor::GetRunningWorkersMetadataRequest,
+        request: GetRunningWorkersMetadataRequest,
     ) -> Result<Vec<golem::worker::WorkerMetadata>, GolemError> {
-        let component_id: common_model::ComponentId = request
+        let component_id: ComponentId = request
             .component_id
             .and_then(|t| t.try_into().ok())
             .ok_or(GolemError::invalid_request("Invalid component id"))?;
@@ -778,14 +697,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn get_workers_metadata_internal(
         &self,
-        request: golem::workerexecutor::GetWorkersMetadataRequest,
-    ) -> Result<
-        (
-            Option<golem::worker::Cursor>,
-            Vec<golem::worker::WorkerMetadata>,
-        ),
-        GolemError,
-    > {
+        request: GetWorkersMetadataRequest,
+    ) -> Result<(Option<Cursor>, Vec<golem::worker::WorkerMetadata>), GolemError> {
         let component_id: ComponentId = request
             .component_id
             .and_then(|t| t.try_into().ok())
@@ -836,10 +749,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         ))
     }
 
-    async fn update_worker_internal(
-        &self,
-        request: golem::workerexecutor::UpdateWorkerRequest,
-    ) -> Result<(), GolemError> {
+    async fn update_worker_internal(&self, request: UpdateWorkerRequest) -> Result<(), GolemError> {
         let worker_id = request
             .worker_id
             .clone()
@@ -904,8 +814,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         let (pending_worker, resume) = Worker::get_or_create_paused_pending(
                             self,
                             &owned_worker_id,
-                            metadata.args,
-                            metadata.env,
                             Some(worker_status.component_version),
                         )
                         .await?;
@@ -939,14 +847,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         // If the worker is already running we need to write to its oplog the
                         // update attempt, and then interrupt it and have it immediately restarting
                         // to begin the update.
-                        let worker = Worker::get_or_create_with_config(
-                            self,
-                            &owned_worker_id,
-                            metadata.args,
-                            metadata.env,
-                            Some(worker_status.component_version),
-                        )
-                        .await?;
+                        let worker =
+                            Worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
 
                         worker
                             .public_state
@@ -977,23 +879,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 // This is in a race condition with other worker invocations, so the whole update
                 // process need to be initiated through the worker's invocation queue.
 
-                let pending_or_final = Worker::get_or_create_pending(
-                    self,
-                    &owned_worker_id,
-                    metadata.args,
-                    metadata.env,
-                    Some(worker_status.component_version),
-                )
-                .await?;
-                let (invocation_queue, _worker_id) = match pending_or_final {
-                    PendingOrFinal::Pending(pending_worker) => (
-                        pending_worker.invocation_queue.clone(),
-                        pending_worker.worker_id.clone(),
-                    ),
-                    PendingOrFinal::Final(worker) => (
-                        worker.public_state.invocation_queue(),
-                        worker.metadata.worker_id.clone(),
-                    ),
+                let pending_or_final =
+                    Worker::get_or_create_pending(self, &owned_worker_id).await?;
+                let invocation_queue = match pending_or_final {
+                    PendingOrFinal::Pending(pending_worker) => {
+                        pending_worker.invocation_queue.clone()
+                    }
+                    PendingOrFinal::Final(worker) => worker.public_state.invocation_queue(),
                 };
 
                 invocation_queue
@@ -1032,17 +924,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?;
 
         if worker_status.status != WorkerStatus::Interrupted {
-            let metadata = metadata.ok_or(Status::not_found("Worker not found"))?;
-
-            let event_service = match Worker::get_or_create_pending(
-                self,
-                &owned_worker_id,
-                metadata.args,
-                metadata.env,
-                Some(metadata.last_known_status.component_version),
-            )
-            .await?
-            {
+            let event_service = match Worker::get_or_create_pending(self, &owned_worker_id).await? {
                 PendingOrFinal::Pending(pending) => pending.event_service.clone(),
                 PendingOrFinal::Final(worker_details) => {
                     worker_details.public_state.event_service().clone()
@@ -1424,12 +1306,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             account_id = proto_account_id_string(&request.account_id)
         );
 
-        let result = self
-            .connect_worker_internal(request)
+        self.connect_worker_internal(request)
             .instrument(record.span.clone())
-            .await;
-
-        result
+            .await
     }
 
     async fn delete_worker(

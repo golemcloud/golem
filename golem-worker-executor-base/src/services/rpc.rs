@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
+use golem_common::cache::PendingOrFinal;
 use golem_wasm_rpc::{Value, WitValue};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
@@ -31,9 +32,10 @@ use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, recovery,
     scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration,
     HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
-    HasKeyValueService, HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardService, HasWasmtimeEngine,
-    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
+    HasInvocationQueue, HasKeyValueService, HasOplogService, HasPromiseService,
+    HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
+    HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::{invoke, invoke_and_await, Worker};
 use crate::workerctx::WorkerCtx;
@@ -480,10 +482,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker = Worker::get_or_create(self, owned_worker_id, None, None, None).await?;
+            let worker = Worker::get_or_create_pending(self, owned_worker_id).await?;
+            let invocation_queue = match worker {
+                PendingOrFinal::Pending(pending_worker) => pending_worker.invocation_queue.clone(),
+                PendingOrFinal::Final(worker) => worker.public_state.invocation_queue(),
+            };
 
             let result_values = invoke_and_await(
-                worker,
+                invocation_queue,
                 idempotency_key,
                 golem_common::model::CallingConvention::Component,
                 function_name,
@@ -524,10 +530,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker = Worker::get_or_create(self, owned_worker_id, None, None, None).await?;
+            let worker = Worker::get_or_create_pending(self, owned_worker_id).await?;
+            let invocation_queue = match worker {
+                PendingOrFinal::Pending(pending_worker) => pending_worker.invocation_queue.clone(),
+                PendingOrFinal::Final(worker) => worker.public_state.invocation_queue(),
+            };
 
             invoke(
-                worker,
+                invocation_queue,
                 idempotency_key,
                 golem_common::model::CallingConvention::Component,
                 function_name,

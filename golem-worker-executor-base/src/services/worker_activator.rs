@@ -100,16 +100,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator
     async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId) {
         let metadata = self.all.worker_service().get(owned_worker_id).await;
         match metadata {
-            Some(metadata) => {
-                Worker::activate(
-                    &self.all,
-                    owned_worker_id,
-                    metadata.args,
-                    metadata.env,
-                    Some(metadata.last_known_status.component_version),
-                )
-                .await
-            }
+            Some(_) => Worker::activate(&self.all, owned_worker_id).await,
             None => {
                 error!("WorkerActivator::activate_worker: worker not found")
             }
@@ -119,16 +110,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator
     async fn reactivate_worker(&self, owned_worker_id: &OwnedWorkerId) {
         let metadata = self.all.worker_service().get(owned_worker_id).await;
         match metadata {
-            Some(metadata) => {
+            Some(_) => {
                 self.all.active_workers().remove(&owned_worker_id.worker_id);
-                Worker::activate(
-                    &self.all,
-                    owned_worker_id,
-                    metadata.args,
-                    metadata.env,
-                    Some(metadata.last_known_status.component_version),
-                )
-                .await
+                Worker::activate(&self.all, owned_worker_id).await
             }
             None => {
                 error!("WorkerActivator::reactivate_worker: worker not found")

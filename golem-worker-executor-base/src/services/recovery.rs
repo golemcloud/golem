@@ -540,15 +540,9 @@ where
     info!("Recovering worker");
 
     match this.worker_service().get(owned_worker_id).await {
-        Some(worker) => {
-            let worker_details = Worker::get_or_create_with_config(
-                this,
-                owned_worker_id,
-                worker.args,
-                worker.env,
-                Some(worker.last_known_status.component_version),
-            )
-            .await;
+        Some(_) => {
+            let worker_details =
+                Worker::get_or_create(this, owned_worker_id, None, None, None).await;
 
             if let Err(e) = worker_details {
                 warn!("Failed to recover worker: {:?}", e);
