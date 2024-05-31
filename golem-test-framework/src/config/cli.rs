@@ -1062,10 +1062,12 @@ impl CliTestService {
                 build_target,
                 ..
             } => {
+                let workspace_root = Path::new(workspace_root).canonicalize().unwrap();
+
                 let workspace_root = if let Some(service_path) = service_path {
-                    Path::new(workspace_root).join(service_path)
+                    workspace_root.join(service_path)
                 } else {
-                    Path::new(workspace_root).into()
+                    workspace_root
                 };
 
                 let build_root = workspace_root.join(build_target);
