@@ -49,7 +49,7 @@ impl SpawnedShardManager {
         out_level: Level,
         err_level: Level,
     ) -> Self {
-        println!("Starting golem-shard-manager process");
+        info!("Starting golem-shard-manager process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled golem-shard-manager at {executable:?}");

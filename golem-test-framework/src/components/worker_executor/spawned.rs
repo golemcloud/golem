@@ -58,7 +58,7 @@ impl SpawnedWorkerExecutor {
         out_level: Level,
         err_level: Level,
     ) -> Self {
-        println!("Starting golem-worker-executor process");
+        info!("Starting golem-worker-executor process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled golem-worker-executor at {executable:?}");
