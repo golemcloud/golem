@@ -460,8 +460,6 @@ jobs:
         timeout-minutes: 20
   run-benchmark:
     runs-on: ubuntu-latest-large
-    if: |
-      github.event.issue.pull_request
     steps:
       - name: Checkout
         uses: actions/checkout@v4
