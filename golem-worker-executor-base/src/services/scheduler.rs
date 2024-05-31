@@ -20,7 +20,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use tokio::task::JoinHandle;
-use tracing::{error, span, Instrument, Level};
+use tracing::{error, span, Instrument, Level, warn};
 
 use golem_common::model::{ScheduleId, ScheduledAction};
 
@@ -181,6 +181,7 @@ impl SchedulerServiceDefault {
                 "scheduler",
                 worker_id = owned_worker_id.worker_id.to_string()
             );
+            warn!("SCHEDULE PROCESS CALLS ACTIVATE_WORKER");
             self.worker_activator
                 .activate_worker(&owned_worker_id)
                 .instrument(span)

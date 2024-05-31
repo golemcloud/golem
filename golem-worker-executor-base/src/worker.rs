@@ -272,20 +272,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let owned_worker_id_clone = owned_worker_id.clone();
 
         let this_clone = this.clone();
-        tokio::task::spawn(async move {
-            let result = Worker::get_or_create_with_config(
-                &this_clone,
-                &owned_worker_id_clone,
-                worker_args,
-                worker_env,
-                component_version,
-            )
-            .in_current_span()
-            .await;
-            if let Err(err) = result {
-                error!("Failed to activate worker: {err}");
+        tokio::task::spawn(
+            async move {
+                let result = Worker::get_or_create_with_config(
+                    &this_clone,
+                    &owned_worker_id_clone,
+                    worker_args,
+                    worker_env,
+                    component_version,
+                )
+                .await;
+                if let Err(err) = result {
+                    error!("Failed to activate worker: {err}");
+                }
             }
-        });
+            .in_current_span(),
+        );
     }
 
     pub async fn get_or_create<T>(
@@ -383,6 +385,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             worker_metadata,
                             &pending_worker_clone,
                         )
+                        .in_current_span()
                         .await
                     })
                 },
@@ -463,6 +466,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             worker_metadata,
                             &pending_worker_clone,
                         )
+                        .in_current_span()
                         .await
                     })
                 },
@@ -539,28 +543,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 },
                 move |pending_worker| {
                     let pending_worker_clone = pending_worker.clone();
-                    Box::pin(async move {
-                        resume_receiver.await.unwrap();
+                    Box::pin(
+                        async move {
+                            resume_receiver.await.unwrap();
 
-                        // Getting an up-to-date worker metadata before continuing with the worker creation
-                        let worker_status = calculate_last_known_status(
-                            &this_clone,
-                            &owned_worker_id_clone,
-                            &Some(worker_metadata.clone()),
-                        )
-                        .await?;
-                        worker_metadata.last_known_status = worker_status;
+                            // Getting an up-to-date worker metadata before continuing with the worker creation
+                            let worker_status = calculate_last_known_status(
+                                &this_clone,
+                                &owned_worker_id_clone,
+                                &Some(worker_metadata.clone()),
+                            )
+                            .await?;
+                            worker_metadata.last_known_status = worker_status;
 
-                        Worker::new(
-                            &this_clone,
-                            worker_id_clone_2,
-                            worker_args_clone,
-                            worker_env_clone,
-                            worker_metadata,
-                            &pending_worker_clone,
-                        )
-                        .await
-                    })
+                            Worker::new(
+                                &this_clone,
+                                worker_id_clone_2,
+                                worker_args_clone,
+                                worker_env_clone,
+                                worker_metadata,
+                                &pending_worker_clone,
+                            )
+                            .await
+                        }
+                        .in_current_span(),
+                    )
                 },
             )
             .await?;

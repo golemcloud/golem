@@ -404,6 +404,8 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
     ) -> RecoveryDecision {
         match decision {
             RecoveryDecision::Immediate => {
+                let span = tracing::info_span!("recovery", decision = "immediate");
+
                 // NOTE: Even immediate recovery must be spawned to allow the original worker to get dropped first
                 let clone = self.clone();
                 let owned_worker_id_clone = owned_worker_id.clone();
@@ -430,7 +432,7 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                             }
                         }
                     }
-                    .in_current_span(),
+                    .instrument(span),
                 );
                 self.cancel_scheduled_recovery(&owned_worker_id.worker_id)
                     .await;
@@ -440,6 +442,12 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                     .insert(owned_worker_id.worker_id(), handle);
             }
             RecoveryDecision::Delayed(duration) => {
+                let span = tracing::info_span!(
+                    "recovery",
+                    decision = "delayed",
+                    duration = format!("{:?}", duration)
+                );
+
                 let clone = self.clone();
                 let owned_worker_id_clone = owned_worker_id.clone();
                 let worker_id_clone = owned_worker_id.worker_id();
@@ -461,12 +469,11 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                                     info!(
                                     "Initiating scheduled recovery for worker: {worker_id_clone}"
                                 );
-                                    recover_worker(&clone, &owned_worker_id_clone).await;
                                 }
                             }
                         }
                     }
-                    .in_current_span(),
+                    .instrument(span),
                 );
                 self.cancel_scheduled_recovery(&owned_worker_id.worker_id)
                     .await;

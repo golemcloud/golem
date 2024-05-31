@@ -24,9 +24,9 @@ use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::{
-    DeleteWorkerRequest, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse,
+    ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
+    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::cache::PendingOrFinal;
 use golem_common::model as common_model;
@@ -1005,6 +1005,165 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
+    async fn connect_worker_internal(
+        &self,
+        request: ConnectWorkerRequest,
+    ) -> ResponseResult<<Self as WorkerExecutor>::ConnectWorkerStream> {
+        let worker_id: WorkerId = request
+            .worker_id
+            .ok_or(GolemError::invalid_request("missing worker_id"))?
+            .try_into()
+            .map_err(GolemError::invalid_request)?;
+        let account_id: AccountId = request
+            .account_id
+            .ok_or(GolemError::invalid_request("missing account_id"))?
+            .into();
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        self.validate_worker_id(&worker_id)?;
+
+        let metadata = self.worker_service().get(&owned_worker_id).await;
+        let worker_status = self
+            .validate_worker_status(&owned_worker_id, &metadata)
+            .await
+            .map_err(|e| {
+                error!("Failed to connect to worker {worker_id}: {:?}", e);
+                Status::internal(format!("Error connecting to worker: {e}"))
+            })?;
+
+        if worker_status.status != WorkerStatus::Interrupted {
+            let metadata = metadata.ok_or(Status::not_found("Worker not found"))?;
+
+            let event_service = match Worker::get_or_create_pending(
+                self,
+                &owned_worker_id,
+                metadata.args,
+                metadata.env,
+                Some(metadata.last_known_status.component_version),
+            )
+            .await?
+            {
+                PendingOrFinal::Pending(pending) => pending.event_service.clone(),
+                PendingOrFinal::Final(worker_details) => {
+                    worker_details.public_state.event_service().clone()
+                }
+            };
+
+            let mut receiver = event_service.receiver();
+
+            info!("Client connected to {worker_id}");
+            record_new_grpc_active_stream();
+
+            // spawn and channel are required if you want handle "disconnect" functionality
+            // the `out_stream` will not be polled after client disconnect
+            let (tx, rx) = mpsc::channel(128);
+
+            tokio::spawn(
+                async move {
+                    while let Ok(item) = receiver.recv().await {
+                        match item {
+                            worker_event::WorkerEvent::Close => {
+                                break;
+                            }
+                            worker_event::WorkerEvent::StdOut(line) => {
+                                match tx
+                                    .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
+                                        event: Some(golem::worker::log_event::Event::Stdout(
+                                            golem::worker::StdOutLog {
+                                                message: String::from_utf8(line).unwrap(),
+                                            },
+                                        )),
+                                    }))
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        // item (server response) was queued to be send to client
+                                    }
+                                    Err(_item) => {
+                                        // output_stream was build from rx and both are dropped
+                                        break;
+                                    }
+                                }
+                            }
+                            worker_event::WorkerEvent::StdErr(line) => {
+                                match tx
+                                    .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
+                                        event: Some(golem::worker::log_event::Event::Stderr(
+                                            golem::worker::StdErrLog {
+                                                message: String::from_utf8(line).unwrap(),
+                                            },
+                                        )),
+                                    }))
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        // item (server response) was queued to be send to client
+                                    }
+                                    Err(_item) => {
+                                        // output_stream was build from rx and both are dropped
+                                        break;
+                                    }
+                                }
+                            }
+                            worker_event::WorkerEvent::Log {
+                                level,
+                                context,
+                                message,
+                            } => match tx
+                                .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
+                                    event: Some(golem::worker::log_event::Event::Log(
+                                        golem::worker::Log {
+                                            level: match level {
+                                                LogLevel::Trace => {
+                                                    golem::worker::Level::Trace.into()
+                                                }
+                                                LogLevel::Debug => {
+                                                    golem::worker::Level::Debug.into()
+                                                }
+                                                LogLevel::Info => golem::worker::Level::Info.into(),
+                                                LogLevel::Warn => golem::worker::Level::Warn.into(),
+                                                LogLevel::Error => {
+                                                    golem::worker::Level::Error.into()
+                                                }
+                                                LogLevel::Critical => {
+                                                    golem::worker::Level::Critical.into()
+                                                }
+                                            },
+                                            context,
+                                            message,
+                                        },
+                                    )),
+                                }))
+                                .await
+                            {
+                                Ok(_) => {
+                                    // item (server response) was queued to be send to client
+                                }
+                                Err(_item) => {
+                                    // output_stream was build from rx and both are dropped
+                                    break;
+                                }
+                            },
+                        }
+                    }
+
+                    record_closed_grpc_active_stream();
+                    info!("Client disconnected from {worker_id}");
+                }
+                .in_current_span(),
+            );
+
+            let output_stream = ReceiverStream::new(rx);
+            Ok(Response::new(output_stream))
+        } else {
+            // We don't want 'connect' to resume interrupted workers
+            Err(GolemError::Interrupted {
+                kind: InterruptKind::Interrupt,
+            }
+            .into())
+        }
+    }
+
     fn create_proto_metadata(
         metadata: WorkerMetadata,
         latest_status: WorkerStatusRecord,
@@ -1258,161 +1417,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: Request<golem::workerexecutor::ConnectWorkerRequest>,
     ) -> ResponseResult<Self::ConnectWorkerStream> {
-        let inner = request.into_inner();
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "connect_worker",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            account_id = proto_account_id_string(&request.account_id)
+        );
 
-        let worker_id: WorkerId = inner
-            .worker_id
-            .ok_or(GolemError::invalid_request("missing worker_id"))?
-            .try_into()
-            .map_err(GolemError::invalid_request)?;
-        let account_id: AccountId = inner
-            .account_id
-            .ok_or(GolemError::invalid_request("missing account_id"))?
-            .into();
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+        let result = self
+            .connect_worker_internal(request)
+            .instrument(record.span.clone())
+            .await;
 
-        self.validate_worker_id(&worker_id)?;
-
-        let metadata = self.worker_service().get(&owned_worker_id).await;
-        let worker_status = self
-            .validate_worker_status(&owned_worker_id, &metadata)
-            .await
-            .map_err(|e| {
-                error!("Failed to connect to worker {worker_id}: {:?}", e);
-                Status::internal(format!("Error connecting to worker: {e}"))
-            })?;
-
-        if worker_status.status != WorkerStatus::Interrupted {
-            let metadata = metadata.ok_or(Status::not_found("Worker not found"))?;
-
-            let event_service = match Worker::get_or_create_pending(
-                self,
-                &owned_worker_id,
-                metadata.args,
-                metadata.env,
-                Some(metadata.last_known_status.component_version),
-            )
-            .await?
-            {
-                PendingOrFinal::Pending(pending) => pending.event_service.clone(),
-                PendingOrFinal::Final(worker_details) => {
-                    worker_details.public_state.event_service().clone()
-                }
-            };
-
-            let mut receiver = event_service.receiver();
-
-            info!("Client connected to {worker_id}");
-            record_new_grpc_active_stream();
-
-            // spawn and channel are required if you want handle "disconnect" functionality
-            // the `out_stream` will not be polled after client disconnect
-            let (tx, rx) = mpsc::channel(128);
-
-            tokio::spawn(
-                async move {
-                    while let Ok(item) = receiver.recv().await {
-                        match item {
-                            worker_event::WorkerEvent::Close => {
-                                break;
-                            }
-                            worker_event::WorkerEvent::StdOut(line) => {
-                                match tx
-                                    .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
-                                        event: Some(golem::worker::log_event::Event::Stdout(
-                                            golem::worker::StdOutLog {
-                                                message: String::from_utf8(line).unwrap(),
-                                            },
-                                        )),
-                                    }))
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        // item (server response) was queued to be send to client
-                                    }
-                                    Err(_item) => {
-                                        // output_stream was build from rx and both are dropped
-                                        break;
-                                    }
-                                }
-                            }
-                            worker_event::WorkerEvent::StdErr(line) => {
-                                match tx
-                                    .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
-                                        event: Some(golem::worker::log_event::Event::Stderr(
-                                            golem::worker::StdErrLog {
-                                                message: String::from_utf8(line).unwrap(),
-                                            },
-                                        )),
-                                    }))
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        // item (server response) was queued to be send to client
-                                    }
-                                    Err(_item) => {
-                                        // output_stream was build from rx and both are dropped
-                                        break;
-                                    }
-                                }
-                            }
-                            worker_event::WorkerEvent::Log {
-                                level,
-                                context,
-                                message,
-                            } => match tx
-                                .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
-                                    event: Some(golem::worker::log_event::Event::Log(
-                                        golem::worker::Log {
-                                            level: match level {
-                                                LogLevel::Trace => {
-                                                    golem::worker::Level::Trace.into()
-                                                }
-                                                LogLevel::Debug => {
-                                                    golem::worker::Level::Debug.into()
-                                                }
-                                                LogLevel::Info => golem::worker::Level::Info.into(),
-                                                LogLevel::Warn => golem::worker::Level::Warn.into(),
-                                                LogLevel::Error => {
-                                                    golem::worker::Level::Error.into()
-                                                }
-                                                LogLevel::Critical => {
-                                                    golem::worker::Level::Critical.into()
-                                                }
-                                            },
-                                            context,
-                                            message,
-                                        },
-                                    )),
-                                }))
-                                .await
-                            {
-                                Ok(_) => {
-                                    // item (server response) was queued to be send to client
-                                }
-                                Err(_item) => {
-                                    // output_stream was build from rx and both are dropped
-                                    break;
-                                }
-                            },
-                        }
-                    }
-
-                    record_closed_grpc_active_stream();
-                    info!("Client disconnected from {worker_id}");
-                }
-                .in_current_span(),
-            );
-
-            let output_stream = ReceiverStream::new(rx);
-            Ok(Response::new(output_stream))
-        } else {
-            // We don't want 'connect' to resume interrupted workers
-            Err(GolemError::Interrupted {
-                kind: InterruptKind::Interrupt,
-            }
-            .into())
-        }
+        result
     }
 
     async fn delete_worker(
