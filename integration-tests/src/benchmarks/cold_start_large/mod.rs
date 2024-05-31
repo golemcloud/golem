@@ -16,13 +16,10 @@ use async_trait::async_trait;
 use golem_common::model::WorkerId;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
-use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use integration_tests::benchmarks::{
-    cleanup_iteration, get_worker_ids, run_benchmark, run_echo, setup_benchmark, setup_iteration,
-    start, BenchmarkContext, IterationContext,
-};
+use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, BenchmarkResult, RunConfig};
+use crate::benchmarks::{cleanup_iteration, get_worker_ids, run_benchmark, run_echo, setup_benchmark, setup_iteration, start, BenchmarkContext, IterationContext, get_benchmark_results};
 
-struct ColdStartEchoLarge {
+pub struct ColdStartEchoLarge {
     config: RunConfig,
     params: CliParams,
 }
@@ -70,7 +67,7 @@ impl Benchmark for ColdStartEchoLarge {
                     get_worker_ids(context.worker_ids.len(), component_id, "warmup-worker"),
                     benchmark_context.deps.clone(),
                 )
-                .await
+                    .await
             }
         }
     }
@@ -94,7 +91,6 @@ impl Benchmark for ColdStartEchoLarge {
     }
 }
 
-#[tokio::main]
-async fn main() {
-    run_benchmark::<ColdStartEchoLarge>().await;
+pub async fn run_with_params(cli_params: CliParams) -> BenchmarkResult {
+    get_benchmark_results::<ColdStartEchoLarge>(cli_params).await
 }

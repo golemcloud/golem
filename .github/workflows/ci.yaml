@@ -492,7 +492,9 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo make build
       - name: Run Benchmark
-        run: ./target/debug/benchmark_cold_start_small
+        run: | 
+          ./target/debug/benchmark_cold_start_small
+          echo "Benchmark finished"
   publish:
     needs:
       [

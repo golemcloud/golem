@@ -4203,6 +4203,7 @@ dependencies = [
  "golem-common",
  "golem-test-framework",
  "golem-wasm-rpc",
+ "poem",
  "rand 0.8.5",
  "reqwest",
  "serde",

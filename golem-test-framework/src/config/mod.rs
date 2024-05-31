@@ -28,7 +28,7 @@ use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 
-mod cli;
+pub mod cli;
 mod env;
 
 pub trait TestDependencies {

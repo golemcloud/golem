@@ -20,6 +20,7 @@ clap = { workspace = true }
 console-subscriber = { workspace = true }
 ctor = { workspace = true }
 golem-wasm-rpc = { workspace = true }
+poem = { version = "2.0.0", features = ["prometheus", "opentelemetry", "test"] }
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
@@ -55,7 +56,7 @@ path = "src/benchmarks/cold_start_medium.rs"
 
 [[bin]]
 name = "benchmark_cold_start_large"
-path = "src/benchmarks/cold_start_large.rs"
+path = "src/benchmarks/cold_start_large/cold_start_large.rs"
 
 [[bin]]
 name = "benchmark_latency_small"
@@ -77,3 +78,10 @@ path = "src/benchmarks/durability_overhead.rs"
 name = "benchmark_throughput"
 path = "src/benchmarks/throughput.rs"
 
+[[bin]]
+name = "benchmark_service"
+path = "src/benchmarks/benchmark_service.rs"
+#
+[lib]
+name = "integration_tests"
+path = "src/lib.rs"

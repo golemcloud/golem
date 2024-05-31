@@ -19,8 +19,9 @@ use golem_wasm_rpc::Value;
 
 use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::config::{CliParams, CliTestDependencies};
-use golem_test_framework::dsl::benchmark::{BenchmarkApi, BenchmarkRecorder, RunConfig};
+use golem_test_framework::dsl::benchmark::{BenchmarkApi, BenchmarkRecorder, BenchmarkResult, RunConfig};
 use golem_test_framework::dsl::TestDsl;
+pub mod cold_start_large;
 
 #[derive(Clone)]
 pub struct BenchmarkContext {
@@ -168,9 +169,13 @@ pub async fn run_echo(
     }
 }
 
+pub async fn get_benchmark_results<A: BenchmarkApi>(params: CliParams)-> BenchmarkResult {
+    CliTestDependencies::init_logging(&params);
+    A::run_benchmark(params).await
+}
+
 pub async fn run_benchmark<A: BenchmarkApi>() {
     let params = CliParams::parse();
-    CliTestDependencies::init_logging(&params);
-    let result = A::run_benchmark(params).await;
+    let result = get_benchmark_results::<A>(params).await;
     println!("{}", result.view());
 }

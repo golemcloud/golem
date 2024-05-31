@@ -53,7 +53,7 @@ pub struct BenchmarkConfig {
     pub length: Vec<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RunConfig {
     pub cluster_size: usize,
     pub size: usize,
@@ -62,7 +62,7 @@ pub struct RunConfig {
 
 pub type ResultKey = String;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DurationResult {
     pub avg: Duration,
     pub min: Duration,
@@ -105,7 +105,7 @@ impl Default for DurationResult {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CountResult {
     pub avg: u64,
     pub min: u64,
@@ -363,7 +363,7 @@ impl Display for BenchmarkResultView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BenchmarkResult {
     runs: Vec<RunConfig>,
     results: Vec<(RunConfig, BenchmarkRunResult)>,
@@ -415,7 +415,7 @@ impl BenchmarkResult {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BenchmarkRunResult {
     duration_results: HashMap<ResultKey, DurationResult>,
     count_results: HashMap<ResultKey, CountResult>,
