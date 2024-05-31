@@ -39,6 +39,7 @@ async fn run_cold_start_large() -> Json<BenchmarkResult> {
         },
         quiet: false,
         verbose: false,
+        json: false
     }).await;
     Json(result)
 }

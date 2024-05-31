@@ -176,6 +176,11 @@ pub async fn get_benchmark_results<A: BenchmarkApi>(params: CliParams)-> Benchma
 
 pub async fn run_benchmark<A: BenchmarkApi>() {
     let params = CliParams::parse();
-    let result = get_benchmark_results::<A>(params).await;
-    println!("{}", result.view());
+    let result = get_benchmark_results::<A>(params.clone()).await;
+    if params.json {
+        let str = serde_json::to_string(&result).expect("Failed to serialize BenchmarkResult");
+        println!("{}", str);
+    } else {
+        println!("{}", result.view());
+    }
 }
