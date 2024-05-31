@@ -461,8 +461,7 @@ jobs:
   run-benchmark:
     runs-on: ubuntu-latest-large
     if: |
-      github.event.issue.pull_request &&
-      contains(github.event.comment.body, 'run benchmark')
+      github.event.issue.pull_request
     steps:
       - name: Checkout
         uses: actions/checkout@v4
