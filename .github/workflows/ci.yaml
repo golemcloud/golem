@@ -460,6 +460,10 @@ jobs:
         timeout-minutes: 20
   run-benchmark:
     runs-on: ubuntu-latest-large
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, 'run benchmark')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -488,10 +492,6 @@ jobs:
           RUSTC_WRAPPER: "sccache"
         run: cargo make build
       - name: Run Benchmark
-        if: |
-          github.event_name == 'issue_comment' &&
-          github.event.issue.pull_request &&
-          contains(github.event.comment.body, 'run benchmark')
         run: ./target/debug/benchmark_cold_start_small
   publish:
     needs:
