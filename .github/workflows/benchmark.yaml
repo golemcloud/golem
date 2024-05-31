@@ -1,0 +1,42 @@
+name: CI
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  run-benchmark:
+    runs-on: ubuntu-latest-large
+    if: |
+      github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, 'run benchmark')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: debug
+          cache-all-crates: true
+          save-if: true
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.3
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build all targets
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo make build
+      - name: Run Benchmark
+        run: |
+          ./target/debug/benchmark_cold_start_large --quiet --json spawned > benchmark_cold_start_large.txt
+          echo "Benchmark finished"
