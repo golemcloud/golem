@@ -461,7 +461,6 @@ jobs:
   run-benchmark:
     runs-on: ubuntu-latest-large
     if: |
-      github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
       contains(github.event.comment.body, 'run benchmark')
     steps:
@@ -493,7 +492,7 @@ jobs:
         run: cargo make build
       - name: Run Benchmark
         run: | 
-          ./target/debug/benchmark_cold_start_small
+          ./target/debug/benchmark_cold_start_large --quiet --json spawned > benchmark_cold_start_large.txt
           echo "Benchmark finished"
   publish:
     needs:
