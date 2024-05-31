@@ -65,7 +65,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
 
     async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
         self.blob_storage
-            .delete(
+            .delete_dir(
                 "blob_oplog",
                 "delete",
                 BlobStorageNamespace::CompressedOplog {
