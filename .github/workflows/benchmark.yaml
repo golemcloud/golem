@@ -1,4 +1,4 @@
-name: Benchmark
+name: Benchmark Job
 on:
   issue_comment:
     types: [created]
