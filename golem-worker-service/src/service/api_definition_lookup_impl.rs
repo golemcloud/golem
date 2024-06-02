@@ -63,7 +63,7 @@ impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition>
                 &host
             )))?;
 
-        let api_key = api_deployment.api_definition_id;
+        let api_key = api_deployment.api_definition_keys;
 
         let value = self
             .register_api_definition_repo

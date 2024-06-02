@@ -34,15 +34,15 @@ impl ApiDeploymentApi {
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         info!(
             "Deploy API definition - id: {}, version: {}, site: {}",
-            payload.api_definition_id, payload.version, payload.site
+            payload.api_definitions, payload.version, payload.site
         );
 
         let api_deployment = api_definition::ApiDeployment {
-            api_definition_id: ApiDefinitionKey {
+            api_definition_keys: vec![ApiDefinitionKey {
                 namespace: CommonNamespace::default(),
-                id: payload.api_definition_id.clone(),
+                id: payload.api_definitions.clone(),
                 version: payload.version.clone(),
-            },
+            }],
             site: payload.site.clone(),
         };
 

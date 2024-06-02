@@ -9,6 +9,7 @@ use async_trait::async_trait;
 
 use std::sync::Arc;
 use tracing::log::error;
+use crate::service::api_definition::ApiDefinitionKey;
 
 #[async_trait]
 pub trait ApiDeploymentService<Namespace> {
@@ -28,14 +29,6 @@ pub trait ApiDeploymentService<Namespace> {
     async fn get_by_host(
         &self,
         host: &ApiSiteString,
-    ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
-
-    // Example: A version of API definition can only be utmost 1 deployment
-    async fn get_by_id_and_version(
-        &self,
-        namespace: &Namespace,
-        api_definition_id: &ApiDefinitionId,
-        version: &ApiVersion,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
     async fn delete(
@@ -85,22 +78,33 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
         &self,
         deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
-        let api_definition_key = deployment.api_definition_id.clone();
+        let api_definition_keys = deployment.api_definition_keys.clone();
 
-        let definition = self
-            .definition_repo
-            .get(&api_definition_key)
-            .await
-            .map_err(|err| {
-                ApiDeploymentError::<Namespace>::InternalError(format!(
-                    "Error getting api definition: {}",
-                    err
-                ))
-            })?
-            .ok_or(ApiDeploymentError::ApiDefinitionNotFound(
-                api_definition_key.namespace.clone(),
-                api_definition_key.id.clone(),
-            ))?;
+        let mut api_definitions = vec![];
+
+        for definition_key in api_definition_keys {
+            let api_definition_key = ApiDefinitionKey {
+                namespace: deployment.namespace.clone(),
+                id: definition_key.id.clone(),
+                version: definition_key.version.clone(),
+            };
+
+            let definition = self
+                .definition_repo
+                .get(&api_definition_key)
+                .await
+                .map_err(|err| {
+                    ApiDeploymentError::<Namespace>::InternalError(format!(
+                        "Error getting api definition: {}",
+                        err
+                    ))
+                })?
+                .ok_or(ApiDeploymentError::ApiDefinitionNotFound(
+                    deployment.namespace.clone(),
+                    definition_key.id.clone(),
+                ))?;
+            api_definitions.push((api_definition_key, definition))
+        }
 
         let existing_deployment = self
             .deployment_repo
@@ -108,36 +112,28 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
             .await?;
 
         match existing_deployment {
-            Some(existing_deployment)
-                if existing_deployment.api_definition_id.namespace
-                    != deployment.api_definition_id.namespace =>
+            Some(existing_deployment) =>
             {
-                error!(
-                        "Failed to deploy api-definition of namespace {} with site: {} - site used by another API (under another namespace/API)",
-                        &deployment.api_definition_id.namespace,
-                        &deployment.site,
-                );
-                Err(ApiDeploymentError::DeploymentConflict(ApiSiteString::from(
-                    &existing_deployment.site,
-                )))
-            }
-            _ => {
-                if definition.is_draft() {
-                    self.definition_repo
-                        .set_not_draft(&api_definition_key)
-                        .await
-                        .map_err(|err| {
-                            ApiDeploymentError::<Namespace>::InternalError(format!(
-                                "Error freezing api definition: {}",
-                                err
-                            ))
-                        })?;
-                }
+                let existing_namespace = existing_deployment.namespace;
 
-                self.deployment_repo
-                    .deploy(deployment)
-                    .await
-                    .map_err(|err| err.into())
+                let new_deployment_namespace =
+                    deployment.namespace.clone();
+
+                if existing_namespace != new_deployment_namespace {
+                    error!(
+                         "Failed to deploy api-definition of namespace {} with site: {} - site used by another API (under another namespace/API)",
+                        &new_deployment_namespace,
+                        &deployment.site,
+                    );
+                    Err(ApiDeploymentError::DeploymentConflict(ApiSiteString::from(
+                        &existing_deployment.site,
+                    )))
+                } else {
+                    internal::deploy(api_definitions, deployment, self.definition_repo.clone(), self.deployment_repo.clone()).await
+                }
+            }
+            None => {
+                internal::deploy(api_definitions, deployment, self.definition_repo.clone(), self.deployment_repo.clone()).await
             }
         }
     }
@@ -163,24 +159,6 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
             .map_err(|err| err.into())
     }
 
-    async fn get_by_id_and_version(
-        &self,
-        namespace: &Namespace,
-        api_definition_id: &ApiDefinitionId,
-        version: &ApiVersion,
-    ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
-        let api_deployments = self
-            .deployment_repo
-            .get_by_id(namespace, api_definition_id)
-            .await?;
-
-        // Finding if any of the api_deployments match the input version
-        api_deployments
-            .into_iter()
-            .find(|api_deployment| api_deployment.api_definition_id.version == *version)
-            .map_or(Ok(None), |api_deployment| Ok(Some(api_deployment)))
-    }
-
     async fn delete(
         &self,
         namespace: &Namespace,
@@ -188,8 +166,9 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
     ) -> Result<bool, ApiDeploymentError<Namespace>> {
         let deployment = self.deployment_repo.get(host).await?;
 
+
         match deployment {
-            Some(deployment) if deployment.api_definition_id.namespace != *namespace => {
+            Some(deployment) if deployment.namespace != *namespace => {
                 error!(
                         "Failed to delete api deployment of namespace {} with site: {} - site used by another API (under another namespace/API)",
                         namespace,
@@ -209,5 +188,41 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
                 host.clone(),
             )),
         }
+    }
+}
+
+mod internal {
+    use std::sync::Arc;
+    use crate::api_definition::{ApiDeployment, HasIsDraft};
+    use crate::repo::api_definition_repo::ApiDefinitionRepo;
+    use crate::repo::api_deployment_repo::ApiDeploymentRepo;
+    use crate::repo::api_namespace::ApiNamespace;
+    use crate::service::api_definition::ApiDefinitionKey;
+    use crate::service::api_deployment::ApiDeploymentError;
+
+    pub(crate) async fn deploy<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send>(
+        api_definitions: Vec<(ApiDefinitionKey<Namespace>, ApiDefinition)>,
+        deployment: &ApiDeployment<Namespace>,
+        definition_repo: Arc<dyn ApiDefinitionRepo<Namespace, ApiDefinition> + Sync + Send>,
+        deployment_repo: Arc<dyn ApiDeploymentRepo<Namespace> + Sync + Send>,
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
+        for (key, definition) in api_definitions {
+            if definition.is_draft() {
+                definition_repo
+                    .set_not_draft(&key)
+                    .await
+                    .map_err(|err| {
+                        ApiDeploymentError::<Namespace>::InternalError(format!(
+                            "Error freezing api definition: {}",
+                            err
+                        ))
+                    })?;
+            }
+        }
+
+        deployment_repo
+            .deploy(deployment)
+            .await
+            .map_err(|err| err.into())
     }
 }

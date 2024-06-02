@@ -1,15 +1,19 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSiteString};
+use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString};
 use async_trait::async_trait;
+use bincode::{Decode, Encode};
 use bytes::Bytes;
+use poem_openapi::Object;
+use serde::{Deserialize, Serialize};
 use golem_common::config::RedisConfig;
 
 use golem_common::redis::{RedisError, RedisPool};
 use tracing::{debug, info};
 
 use crate::repo::api_namespace::ApiNamespace;
+use crate::service::api_definition::{ApiDefinitionInfo, ApiDefinitionKey};
 
 const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 
@@ -61,16 +65,33 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeploymen
         &self,
         deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentRepoError> {
+
         debug!(
-            "Deploy API site: {}, id: {}",
-            deployment.site, deployment.api_definition_id.id
+            "Deploy API site: {}, ids: {}",
+            deployment.site, deployment.api_definition_keys.iter().map(|def| def.id.to_string()).collect::<Vec<String>>().join(", ")
         );
 
         let key = deployment.site.clone();
 
         let mut deployments = self.deployments.lock().unwrap();
 
-        deployments.insert(ApiSiteString::from(&key), deployment.clone());
+        let api_site_string = ApiSiteString::from(&key);
+
+        let existing_deployment = deployments.get(&api_site_string);
+
+        let new_deployment = if let Some(existing_deployment) = existing_deployment {
+            let mut keys = existing_deployment.clone().api_definition_keys;
+            keys.extend(deployment.api_definition_keys.clone());
+            ApiDeployment {
+                namespace: deployment.namespace.clone(),
+                api_definition_keys: keys,
+                site: deployment.site.clone(),
+            }
+        } else {
+            deployment.clone()
+        };
+
+        deployments.insert(ApiSiteString::from(&key), new_deployment);
 
         Ok(())
     }
@@ -106,7 +127,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeploymen
         let result: Vec<ApiDeployment<Namespace>> = registry
             .values()
             .filter(|x| {
-                &x.api_definition_id.namespace == namespace && &x.api_definition_id.id == api_id
+                x.namespace == *namespace  && x.api_definition_keys.iter().any(|key| &key.id == api_id)
             })
             .cloned()
             .collect();
@@ -126,6 +147,13 @@ impl RedisApiDeploy {
     }
 }
 
+#[derive(
+    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
+)]struct SiteMetadata<Namespace> {
+    site: ApiSite,
+    namespace: Namespace
+}
+
 #[async_trait]
 impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
     async fn deploy(
@@ -134,37 +162,63 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
     ) -> Result<(), ApiDeploymentRepoError> {
         debug!(
             "Deploy API site: {}, id: {}",
-            &deployment.site, &deployment.api_definition_id
+            &deployment.site, &deployment.api_definition_keys.iter().map(|def| def.id.to_string()).collect::<Vec<String>>().join(", ")
         );
 
-        let key = redis_keys::api_deployment_redis_key(&ApiSiteString::from(&deployment.site));
+        // Store all definition ids for the site
+        let site_key = redis_keys::api_deployment_redis_key(&ApiSiteString::from(&deployment.site));
 
-        let value = self
-            .pool
-            .serialize(deployment)
-            .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
+        let mut api_definition_redis_values = vec![];
 
-        let sites_key = redis_keys::api_deployments_redis_key(
-            &deployment.api_definition_id.namespace,
-            &deployment.api_definition_id.id,
-        );
+        for api_key in &deployment.api_definition_keys {
+            let value = self
+                .pool
+                .serialize(api_key)
+                .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
+
+            api_definition_redis_values.push((1.0, value));
+        }
 
         self.pool
             .with("persistence", "deploy_deployment")
-            .set(key, value, None, None, false)
+            .zadd(site_key, None, None, false, false, api_definition_redis_values)
             .await?;
 
-        let site_value = self
-            .pool
-            .serialize(&deployment.site.to_string())
-            .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
-        let score: f64 = 1.0;
+
+        // Store the metadata of the site
+        let site_metadata_key = redis_keys::site_metadata_redis_key(&ApiSiteString::from(&deployment.site));
+
+        let site_metadata_value =
+            self.pool.serialize(&SiteMetadata {
+                site: deployment.site.clone(),
+                namespace: deployment.namespace.clone()
+            }).map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
 
         self.pool
             .with("persistence", "deploy_deployment")
-            .zadd(sites_key, None, None, false, false, (score, site_value))
-            .await
-            .map_err(|e| e.into())
+            .set(site_metadata_key, site_metadata_value, None, None, false)
+            .await?;
+
+        // Store the reverse direction: API definition id to the list of sites it is deployed
+        for api_definition_key in &deployment.api_definition_keys {
+            let sites_key = redis_keys::api_deployments_redis_key(
+                &deployment.namespace,
+                &api_definition_key.id,
+            );
+
+            let site_value = self
+                .pool
+                .serialize(&deployment.site.to_string())
+                .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
+
+            self.pool
+                .with("persistence", "deploy_deployment")
+                .zadd(sites_key, None, None, false, false, (1.0, site_value))
+                .await
+                .map_err(|e| ApiDeploymentRepoError::from(e))?;
+        }
+
+        Ok(())
     }
 
     async fn get(
@@ -173,55 +227,83 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentRepoError> {
         info!("Get host id: {}", host);
 
-        let key = redis_keys::api_deployment_redis_key(host);
+        let site_key = redis_keys::api_deployment_redis_key(host);
 
-        let value: Option<Bytes> = self
+        let site_values: Vec<Bytes> = self
             .pool
             .with("persistence", "get_deployment")
-            .get(key)
+            .zrange(&site_key, 0, -1, None, false, None, false)
             .await?;
 
-        match value {
+        // Retrieve all the API definitions for the keys
+        let mut api_definition_keys = Vec::new();
+
+        for value in site_values {
+            let api_definition_key: Result<ApiDefinitionInfo, ApiDeploymentRepoError> = self
+                .pool
+                .deserialize(&value)
+                .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e.to_string())));
+
+            api_definition_keys.push(api_definition_key?);
+        }
+
+        // Retrieve site metadata
+        let site_metadata_key = redis_keys::site_metadata_redis_key(host);
+        let site_metadata_value: Option<Bytes> = self
+            .pool
+            .with("persistence", "get_deployment")
+            .get(site_metadata_key)
+            .await?;
+
+        // Deserialize site metadata to ApiSite
+        let site_metadata: SiteMetadata<Namespace> = match site_metadata_value {
             Some(value) => self
                 .pool
                 .deserialize(&value)
-                .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e.to_string())))
-                .map(Some),
-            None => Ok(None),
+                .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?,
+            None => return Ok(None),
+        };
+
+        // If zero API definitions found then it implies such a deployment never existed
+        if api_definition_keys.is_empty() {
+            return Ok(None);
+        } else {
+            Ok(Some(ApiDeployment {
+                namespace: site_metadata.namespace,
+                api_definition_keys,
+                site: site_metadata.site,
+            }))
         }
     }
 
     async fn delete(&self, host: &ApiSiteString) -> Result<bool, ApiDeploymentRepoError> {
         debug!("Delete API site: {}", host);
+
+        let api_deployment: Option<ApiDeployment<Namespace>> = self.get(host).await?;
+
         let key = redis_keys::api_deployment_redis_key(host);
-        let value: Option<Bytes> = self
-            .pool
-            .with("persistence", "delete_deployment")
-            .get(key.clone())
-            .await?;
-
-        match value {
+        
+        match api_deployment {
             Some(value) => {
-                let deployment: ApiDeployment<Namespace> = self
-                    .pool
-                    .deserialize(&value)
-                    .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
 
-                let sites_key = redis_keys::api_deployments_redis_key(
-                    &deployment.api_definition_id.namespace,
-                    &deployment.api_definition_id.id,
-                );
+                for api_definition_key in &value.api_definition_keys {
+                    let sites_key = redis_keys::api_deployments_redis_key(
+                        &value.namespace,
+                        &api_definition_key.id,
+                    );
 
-                let site_value = self
-                    .pool
-                    .serialize(&deployment.site.to_string())
-                    .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
+                    let site_value = self
+                        .pool
+                        .serialize(&value.site.to_string())
+                        .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
 
-                let _ = self
-                    .pool
-                    .with("persistence", "delete_deployment")
-                    .zrem(sites_key, site_value)
-                    .await?;
+                    // Delete the site from the list of sites for the definition
+                    let _ = self
+                        .pool
+                        .with("persistence", "delete_deployment")
+                        .zrem(sites_key, site_value)
+                        .await?;
+                }
 
                 let definition_delete: u32 = self
                     .pool
@@ -261,21 +343,8 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         let mut deployments = Vec::new();
 
         for site in sites {
-            let key = redis_keys::api_deployment_redis_key(&ApiSiteString(site));
-
-            let value: Option<Bytes> = self
-                .pool
-                .with("persistence", "get_deployment")
-                .get(&key)
-                .await?;
-
-            if let Some(value) = value {
-                let deployment: Result<ApiDeployment<Namespace>, ApiDeploymentRepoError> =
-                    self.pool.deserialize(&value).map_err(|e| {
-                        ApiDeploymentRepoError::Internal(anyhow::Error::msg(e.to_string()))
-                    });
-
-                deployments.push(deployment?);
+            if let Some(deployment) =  self.get(&ApiSiteString(site)).await? {
+                deployments.push(deployment);
             }
         }
 
@@ -290,6 +359,10 @@ mod redis_keys {
 
     pub(crate) fn api_deployment_redis_key(api_site: &ApiSiteString) -> String {
         format!("{}:deployment:{}", API_DEFINITION_REDIS_NAMESPACE, api_site)
+    }
+
+    pub(crate) fn site_metadata_redis_key(api_site: &ApiSiteString) -> String {
+        format!("{}:site_metadata:{}", API_DEFINITION_REDIS_NAMESPACE, api_site)
     }
 
     pub(crate) fn api_deployments_redis_key<Namespace: ApiNamespace>(
@@ -314,7 +387,7 @@ mod tests {
         api_deployment_redis_key, api_deployments_redis_key,
     };
     use crate::repo::api_deployment_repo::{ApiDeploymentRepo, InMemoryDeployment};
-    use crate::service::api_definition::ApiDefinitionKey;
+    use crate::service::api_definition::{ApiDefinitionInfo, ApiDefinitionKey};
 
     #[tokio::test]
     pub async fn test_in_memory_deploy() {
@@ -333,11 +406,11 @@ mod tests {
         let version = ApiVersion("0.0.1".to_string());
 
         let deployment = ApiDeployment {
-            api_definition_id: ApiDefinitionKey {
-                namespace: namespace.clone(),
+            namespace: namespace.clone(),
+            api_definition_keys: vec![ApiDefinitionInfo {
                 id: api_definition_id.clone(),
                 version: version.clone(),
-            },
+            }],
             site: site.clone(),
         };
 
@@ -348,7 +421,7 @@ mod tests {
         let result1 = registry
             .get_by_id(
                 &CommonNamespace::default(),
-                &deployment.api_definition_id.id,
+                &deployment.api_definition_keys.first().unwrap().id,
             )
             .await
             .unwrap_or(vec![]);
