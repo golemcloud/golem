@@ -1,15 +1,13 @@
-use crate::api_definition::{
-    ApiDefinitionId, ApiDeployment, ApiSiteString, ApiVersion, HasIsDraft,
-};
+use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSiteString, HasIsDraft};
 use crate::repo::api_definition_repo::ApiDefinitionRepo;
 use crate::repo::api_deployment_repo::{ApiDeploymentRepo, ApiDeploymentRepoError};
 use crate::repo::api_namespace::ApiNamespace;
 
 use async_trait::async_trait;
 
+use crate::service::api_definition::ApiDefinitionKey;
 use std::sync::Arc;
 use tracing::log::error;
-use crate::service::api_definition::ApiDefinitionKey;
 
 #[async_trait]
 pub trait ApiDeploymentService<Namespace> {
@@ -112,12 +110,10 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
             .await?;
 
         match existing_deployment {
-            Some(existing_deployment) =>
-            {
+            Some(existing_deployment) => {
                 let existing_namespace = existing_deployment.namespace;
 
-                let new_deployment_namespace =
-                    deployment.namespace.clone();
+                let new_deployment_namespace = deployment.namespace.clone();
 
                 if existing_namespace != new_deployment_namespace {
                     error!(
@@ -129,11 +125,23 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
                         &existing_deployment.site,
                     )))
                 } else {
-                    internal::deploy(api_definitions, deployment, self.definition_repo.clone(), self.deployment_repo.clone()).await
+                    internal::deploy(
+                        api_definitions,
+                        deployment,
+                        self.definition_repo.clone(),
+                        self.deployment_repo.clone(),
+                    )
+                    .await
                 }
             }
             None => {
-                internal::deploy(api_definitions, deployment, self.definition_repo.clone(), self.deployment_repo.clone()).await
+                internal::deploy(
+                    api_definitions,
+                    deployment,
+                    self.definition_repo.clone(),
+                    self.deployment_repo.clone(),
+                )
+                .await
             }
         }
     }
@@ -166,7 +174,6 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
     ) -> Result<bool, ApiDeploymentError<Namespace>> {
         let deployment = self.deployment_repo.get(host).await?;
 
-
         match deployment {
             Some(deployment) if deployment.namespace != *namespace => {
                 error!(
@@ -192,13 +199,13 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
 }
 
 mod internal {
-    use std::sync::Arc;
     use crate::api_definition::{ApiDeployment, HasIsDraft};
     use crate::repo::api_definition_repo::ApiDefinitionRepo;
     use crate::repo::api_deployment_repo::ApiDeploymentRepo;
     use crate::repo::api_namespace::ApiNamespace;
     use crate::service::api_definition::ApiDefinitionKey;
     use crate::service::api_deployment::ApiDeploymentError;
+    use std::sync::Arc;
 
     pub(crate) async fn deploy<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send>(
         api_definitions: Vec<(ApiDefinitionKey<Namespace>, ApiDefinition)>,
@@ -208,15 +215,12 @@ mod internal {
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         for (key, definition) in api_definitions {
             if definition.is_draft() {
-                definition_repo
-                    .set_not_draft(&key)
-                    .await
-                    .map_err(|err| {
-                        ApiDeploymentError::<Namespace>::InternalError(format!(
-                            "Error freezing api definition: {}",
-                            err
-                        ))
-                    })?;
+                definition_repo.set_not_draft(&key).await.map_err(|err| {
+                    ApiDeploymentError::<Namespace>::InternalError(format!(
+                        "Error freezing api definition: {}",
+                        err
+                    ))
+                })?;
             }
         }
 

@@ -3,17 +3,16 @@ use std::sync::Mutex;
 
 use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString};
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
+
 use bytes::Bytes;
-use poem_openapi::Object;
-use serde::{Deserialize, Serialize};
+
 use golem_common::config::RedisConfig;
 
 use golem_common::redis::{RedisError, RedisPool};
 use tracing::{debug, info};
 
 use crate::repo::api_namespace::ApiNamespace;
-use crate::service::api_definition::{ApiDefinitionInfo, ApiDefinitionKey};
+use crate::service::api_definition::ApiDefinitionInfo;
 
 const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 
@@ -65,10 +64,15 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeploymen
         &self,
         deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentRepoError> {
-
         debug!(
             "Deploy API site: {}, ids: {}",
-            deployment.site, deployment.api_definition_keys.iter().map(|def| def.id.to_string()).collect::<Vec<String>>().join(", ")
+            deployment.site,
+            deployment
+                .api_definition_keys
+                .iter()
+                .map(|def| def.id.to_string())
+                .collect::<Vec<String>>()
+                .join(", ")
         );
 
         let key = deployment.site.clone();
@@ -127,7 +131,8 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeploymen
         let result: Vec<ApiDeployment<Namespace>> = registry
             .values()
             .filter(|x| {
-                x.namespace == *namespace  && x.api_definition_keys.iter().any(|key| &key.id == api_id)
+                x.namespace == *namespace
+                    && x.api_definition_keys.iter().any(|key| &key.id == api_id)
             })
             .cloned()
             .collect();
@@ -149,9 +154,10 @@ impl RedisApiDeploy {
 
 #[derive(
     Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
-)]struct SiteMetadata<Namespace> {
+)]
+struct SiteMetadata<Namespace> {
     site: ApiSite,
-    namespace: Namespace
+    namespace: Namespace,
 }
 
 #[async_trait]
@@ -162,7 +168,13 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
     ) -> Result<(), ApiDeploymentRepoError> {
         debug!(
             "Deploy API site: {}, id: {}",
-            &deployment.site, &deployment.api_definition_keys.iter().map(|def| def.id.to_string()).collect::<Vec<String>>().join(", ")
+            &deployment.site,
+            &deployment
+                .api_definition_keys
+                .iter()
+                .map(|def| def.id.to_string())
+                .collect::<Vec<String>>()
+                .join(", ")
         );
 
         // Store all definition ids for the site
@@ -181,18 +193,27 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
 
         self.pool
             .with("persistence", "deploy_deployment")
-            .zadd(site_key, None, None, false, false, api_definition_redis_values)
+            .zadd(
+                site_key,
+                None,
+                None,
+                false,
+                false,
+                api_definition_redis_values,
+            )
             .await?;
 
-
         // Store the metadata of the site
-        let site_metadata_key = redis_keys::site_metadata_redis_key(&ApiSiteString::from(&deployment.site));
+        let site_metadata_key =
+            redis_keys::site_metadata_redis_key(&ApiSiteString::from(&deployment.site));
 
-        let site_metadata_value =
-            self.pool.serialize(&SiteMetadata {
+        let site_metadata_value = self
+            .pool
+            .serialize(&SiteMetadata {
                 site: deployment.site.clone(),
-                namespace: deployment.namespace.clone()
-            }).map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
+                namespace: deployment.namespace.clone(),
+            })
+            .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
 
         self.pool
             .with("persistence", "deploy_deployment")
@@ -215,7 +236,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
                 .with("persistence", "deploy_deployment")
                 .zadd(sites_key, None, None, false, false, (1.0, site_value))
                 .await
-                .map_err(|e| ApiDeploymentRepoError::from(e))?;
+                .map_err(ApiDeploymentRepoError::from)?;
         }
 
         Ok(())
@@ -282,10 +303,9 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         let api_deployment: Option<ApiDeployment<Namespace>> = self.get(host).await?;
 
         let key = redis_keys::api_deployment_redis_key(host);
-        
+
         match api_deployment {
             Some(value) => {
-
                 for api_definition_key in &value.api_definition_keys {
                     let sites_key = redis_keys::api_deployments_redis_key(
                         &value.namespace,
@@ -343,7 +363,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         let mut deployments = Vec::new();
 
         for site in sites {
-            if let Some(deployment) =  self.get(&ApiSiteString(site)).await? {
+            if let Some(deployment) = self.get(&ApiSiteString(site)).await? {
                 deployments.push(deployment);
             }
         }
@@ -362,7 +382,10 @@ mod redis_keys {
     }
 
     pub(crate) fn site_metadata_redis_key(api_site: &ApiSiteString) -> String {
-        format!("{}:site_metadata:{}", API_DEFINITION_REDIS_NAMESPACE, api_site)
+        format!(
+            "{}:site_metadata:{}",
+            API_DEFINITION_REDIS_NAMESPACE, api_site
+        )
     }
 
     pub(crate) fn api_deployments_redis_key<Namespace: ApiNamespace>(
@@ -387,7 +410,7 @@ mod tests {
         api_deployment_redis_key, api_deployments_redis_key,
     };
     use crate::repo::api_deployment_repo::{ApiDeploymentRepo, InMemoryDeployment};
-    use crate::service::api_definition::{ApiDefinitionInfo, ApiDefinitionKey};
+    use crate::service::api_definition::ApiDefinitionInfo;
 
     #[tokio::test]
     pub async fn test_in_memory_deploy() {

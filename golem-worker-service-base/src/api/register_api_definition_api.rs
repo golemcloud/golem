@@ -64,7 +64,7 @@ impl<N> From<crate::api_definition::ApiDeployment<N>> for ApiDeployment {
         let api_definitions = value
             .api_definition_keys
             .into_iter()
-            .map(|key|ApiDefinitionInfo {
+            .map(|key| ApiDefinitionInfo {
                 id: key.id,
                 version: key.version,
             })

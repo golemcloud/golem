@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::fmt::Display;
 
-use crate::service::api_definition::{ApiDefinitionInfo, ApiDefinitionKey};
+use crate::service::api_definition::ApiDefinitionInfo;
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
