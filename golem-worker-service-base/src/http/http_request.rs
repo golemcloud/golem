@@ -103,7 +103,7 @@ pub mod router {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::{AnalysedFunction, AnalysedType};
+    use golem_wasm_ast::analysis::{AnalysedType};
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
@@ -111,15 +111,12 @@ mod tests {
     use std::sync::Arc;
 
     use golem_common::model::IdempotencyKey;
-    use golem_service_base::model::{ComponentMetadata, FunctionResult, WorkerId};
+    use golem_service_base::model::{ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId};
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
-    use crate::evaluator::{
-        DefaultEvaluator, EvaluationError, EvaluationResult, Evaluator, MetadataFetchError,
-        WorkerMetadataFetcher,
-    };
+    use crate::evaluator::{DefaultEvaluator, EvaluationError, EvaluationResult, Evaluator, FQN, MetadataFetchError, WorkerMetadataFetcher};
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
     use crate::primitive::GetPrimitive;
@@ -175,7 +172,7 @@ mod tests {
                 ),
                 (
                     "function_name".to_string(),
-                    TypeAnnotatedValue::Str(worker_request.function_name.clone()),
+                    TypeAnnotatedValue::Str(worker_request.function_name.to_string()),
                 ),
                 (
                     "function_params".to_string(),
@@ -220,7 +217,7 @@ mod tests {
     }
 
     struct TestMetadataFetcher {
-        function_name: String,
+        test_fqn: FQN,
     }
 
     #[async_trait]
@@ -230,8 +227,15 @@ mod tests {
             _worker_id: &WorkerId,
         ) -> Result<ComponentMetadata, MetadataFetchError> {
             Ok(ComponentMetadata {
-                exports: vec![],
-                producers: vec![]
+                exports: vec![Export::Instance(ExportInstance{
+                    name: self.test_fqn.clone().interface.unwrap(),
+                    functions: vec![ExportFunction {
+                        name: self.test_fqn.name.clone(),
+                        parameters: vec![],
+                        results: vec![]
+                    }]
+                })],
+                producers: vec![],
             })
         }
     }
@@ -240,7 +244,7 @@ mod tests {
         function_name: &str,
     ) -> Arc<dyn WorkerMetadataFetcher + Sync + Send> {
         Arc::new(TestMetadataFetcher {
-            function_name: function_name.to_string(),
+            test_fqn: FQN::from(function_name),
         })
     }
 

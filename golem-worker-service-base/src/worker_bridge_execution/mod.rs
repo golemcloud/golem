@@ -7,9 +7,9 @@ mod refined_worker_response;
 pub mod to_response;
 mod worker_request_executor;
 
+use crate::evaluator::FQN;
 pub use refined_worker_response::*;
 pub use worker_request_executor::*;
-use crate::evaluator::FQN;
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct WorkerRequest {

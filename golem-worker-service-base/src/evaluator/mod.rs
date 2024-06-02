@@ -491,7 +491,7 @@ mod internal {
     use crate::worker_bridge_execution::{
         RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor,
     };
-    use golem_common::model::{ComponentId, IdempotencyKey, parse_function_name};
+    use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_wasm_rpc::TypeAnnotatedValue;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -506,9 +506,13 @@ mod internal {
             "No variables found in the context".to_string(),
         ))?;
 
-        let analysed_function = runtime.find_function(function_name).ok_or(EvaluationError::Message(format!(
-            "The function {} is not found at Runtime", function_name
-            )))?;
+        let analysed_function =
+            runtime
+                .find_function(function_name)
+                .ok_or(EvaluationError::Message(format!(
+                    "The function {} is not found at Runtime",
+                    function_name
+                )))?;
 
         let worker_variables = variables.get(&Path::from_key("worker")).map_err(|_| {
             EvaluationError::Message("No worker variables found in the context".to_string())
