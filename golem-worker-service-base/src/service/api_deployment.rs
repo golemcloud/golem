@@ -2,7 +2,7 @@ use crate::api_definition::{
     ApiDefinitionId, ApiDeployment, ApiSiteString, ApiVersion, HasIsDraft,
 };
 use crate::repo::api_definition_repo::ApiDefinitionRepo;
-use crate::repo::api_deployment_repo::ApiDeploymentRepo;
+use crate::repo::api_deployment_repo::{ApiDeploymentRepo, ApiDeploymentRepoError};
 use crate::repo::api_namespace::ApiNamespace;
 
 use async_trait::async_trait;
@@ -52,6 +52,14 @@ pub enum ApiDeploymentError<Namespace> {
     DeploymentConflict(ApiSiteString),
 }
 
+impl<Namespace> From<ApiDeploymentRepoError> for ApiDeploymentError<Namespace> {
+    fn from(error: ApiDeploymentRepoError) -> Self {
+        match error {
+            ApiDeploymentRepoError::Internal(e) => ApiDeploymentError::InternalError(e.to_string()),
+        }
+    }
+}
+
 pub struct ApiDeploymentServiceDefault<Namespace, ApiDefinition> {
     pub deployment_repo: Arc<dyn ApiDeploymentRepo<Namespace> + Sync + Send>,
     pub definition_repo: Arc<dyn ApiDefinitionRepo<Namespace, ApiDefinition> + Sync + Send>,
@@ -97,10 +105,7 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
         let existing_deployment = self
             .deployment_repo
             .get(&ApiSiteString::from(&deployment.site))
-            .await
-            .map_err(|err| {
-                ApiDeploymentError::InternalError(format!("Error getting api deployment: {}", err))
-            })?;
+            .await?;
 
         match existing_deployment {
             Some(existing_deployment)
@@ -132,12 +137,7 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
                 self.deployment_repo
                     .deploy(deployment)
                     .await
-                    .map_err(|err| {
-                        ApiDeploymentError::InternalError(format!(
-                            "Error deploying api deployment: {}",
-                            err
-                        ))
-                    })
+                    .map_err(|err| err.into())
             }
         }
     }
@@ -150,21 +150,17 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
         self.deployment_repo
             .get_by_id(namespace, api_definition_id)
             .await
-            .map_err(|err| {
-                ApiDeploymentError::InternalError(format!(
-                    "Error getting api deployment by id: {}",
-                    err
-                ))
-            })
+            .map_err(|err| err.into())
     }
 
     async fn get_by_host(
         &self,
         host: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
-        self.deployment_repo.get(host).await.map_err(|err| {
-            ApiDeploymentError::InternalError(format!("Error getting api deployment: {}", err))
-        })
+        self.deployment_repo
+            .get(host)
+            .await
+            .map_err(|err| err.into())
     }
 
     async fn get_by_id_and_version(
@@ -176,13 +172,7 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
         let api_deployments = self
             .deployment_repo
             .get_by_id(namespace, api_definition_id)
-            .await
-            .map_err(|err| {
-                ApiDeploymentError::InternalError(format!(
-                    "Error getting api deployment by id and version: {}",
-                    err
-                ))
-            })?;
+            .await?;
 
         // Finding if any of the api_deployments match the input version
         api_deployments
@@ -196,9 +186,7 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
         namespace: &Namespace,
         host: &ApiSiteString,
     ) -> Result<bool, ApiDeploymentError<Namespace>> {
-        let deployment = self.deployment_repo.get(host).await.map_err(|err| {
-            ApiDeploymentError::InternalError(format!("Error getting api deployment: {}", err))
-        })?;
+        let deployment = self.deployment_repo.get(host).await?;
 
         match deployment {
             Some(deployment) if deployment.api_definition_id.namespace != *namespace => {
@@ -211,9 +199,11 @@ impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send> ApiDeploymentSer
                     &deployment.site,
                 )))
             }
-            Some(_) => self.deployment_repo.delete(host).await.map_err(|err| {
-                ApiDeploymentError::InternalError(format!("Error deleting api deployment: {}", err))
-            }),
+            Some(_) => self
+                .deployment_repo
+                .delete(host)
+                .await
+                .map_err(|err| err.into()),
             None => Err(ApiDeploymentError::ApiDeploymentNotFound(
                 namespace.clone(),
                 host.clone(),

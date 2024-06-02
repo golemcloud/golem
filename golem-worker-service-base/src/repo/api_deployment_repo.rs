@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::error::Error;
 use std::sync::Mutex;
 
 use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSiteString};
@@ -7,7 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::RedisConfig;
 
-use golem_common::redis::RedisPool;
+use golem_common::redis::{RedisError, RedisPool};
 use tracing::{debug, info};
 
 use crate::repo::api_namespace::ApiNamespace;
@@ -16,20 +15,32 @@ const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 
 #[async_trait]
 pub trait ApiDeploymentRepo<Namespace: ApiNamespace> {
-    async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>>;
+    async fn deploy(
+        &self,
+        deployment: &ApiDeployment<Namespace>,
+    ) -> Result<(), ApiDeploymentRepoError>;
 
     async fn get(
         &self,
         host: &ApiSiteString,
-    ) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>>;
+    ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentRepoError>;
 
-    async fn delete(&self, host: &ApiSiteString) -> Result<bool, Box<dyn Error>>;
+    async fn delete(&self, host: &ApiSiteString) -> Result<bool, ApiDeploymentRepoError>;
 
     async fn get_by_id(
         &self,
         namespace: &Namespace,
         api_id: &ApiDefinitionId,
-    ) -> Result<Vec<ApiDeployment<Namespace>>, Box<dyn Error>>;
+    ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentRepoError>;
+}
+
+pub enum ApiDeploymentRepoError {
+    Internal(anyhow::Error),
+}
+impl From<RedisError> for ApiDeploymentRepoError {
+    fn from(err: RedisError) -> Self {
+        ApiDeploymentRepoError::Internal(anyhow::Error::new(err))
+    }
 }
 
 pub struct InMemoryDeployment<Namespace> {
@@ -46,7 +57,10 @@ impl<Namespace> Default for InMemoryDeployment<Namespace> {
 
 #[async_trait]
 impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeployment<Namespace> {
-    async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>> {
+    async fn deploy(
+        &self,
+        deployment: &ApiDeployment<Namespace>,
+    ) -> Result<(), ApiDeploymentRepoError> {
         debug!(
             "Deploy API site: {}, id: {}",
             deployment.site, deployment.api_definition_id.id
@@ -64,7 +78,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeploymen
     async fn get(
         &self,
         host: &ApiSiteString,
-    ) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
+    ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentRepoError> {
         debug!("Get API site: {}", host);
         let deployments = self.deployments.lock().unwrap();
 
@@ -73,7 +87,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeploymen
         Ok(deployment)
     }
 
-    async fn delete(&self, host: &ApiSiteString) -> Result<bool, Box<dyn Error>> {
+    async fn delete(&self, host: &ApiSiteString) -> Result<bool, ApiDeploymentRepoError> {
         debug!("Delete API site: {}", host);
         let mut deployments = self.deployments.lock().unwrap();
 
@@ -86,7 +100,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for InMemoryDeploymen
         &self,
         namespace: &Namespace,
         api_id: &ApiDefinitionId,
-    ) -> Result<Vec<ApiDeployment<Namespace>>, Box<dyn Error>> {
+    ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentRepoError> {
         let registry = self.deployments.lock().unwrap();
 
         let result: Vec<ApiDeployment<Namespace>> = registry
@@ -106,7 +120,7 @@ pub struct RedisApiDeploy {
 }
 
 impl RedisApiDeploy {
-    pub async fn new(config: &RedisConfig) -> Result<RedisApiDeploy, Box<dyn Error>> {
+    pub async fn new(config: &RedisConfig) -> Result<RedisApiDeploy, ApiDeploymentRepoError> {
         let pool = RedisPool::configured(config).await?;
         Ok(Self { pool })
     }
@@ -114,7 +128,10 @@ impl RedisApiDeploy {
 
 #[async_trait]
 impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
-    async fn deploy(&self, deployment: &ApiDeployment<Namespace>) -> Result<(), Box<dyn Error>> {
+    async fn deploy(
+        &self,
+        deployment: &ApiDeployment<Namespace>,
+    ) -> Result<(), ApiDeploymentRepoError> {
         debug!(
             "Deploy API site: {}, id: {}",
             &deployment.site, &deployment.api_definition_id
@@ -122,7 +139,10 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
 
         let key = redis_keys::api_deployment_redis_key(&ApiSiteString::from(&deployment.site));
 
-        let value = self.pool.serialize(deployment).map_err(|e| e.to_string())?;
+        let value = self
+            .pool
+            .serialize(deployment)
+            .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
 
         let sites_key = redis_keys::api_deployments_redis_key(
             &deployment.api_definition_id.namespace,
@@ -132,26 +152,25 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         self.pool
             .with("persistence", "deploy_deployment")
             .set(key, value, None, None, false)
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
 
         let site_value = self
             .pool
             .serialize(&deployment.site.to_string())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
         let score: f64 = 1.0;
 
         self.pool
             .with("persistence", "deploy_deployment")
             .zadd(sites_key, None, None, false, false, (score, site_value))
             .await
-            .map_err(|e| e.to_string().into())
+            .map_err(|e| e.into())
     }
 
     async fn get(
         &self,
         host: &ApiSiteString,
-    ) -> Result<Option<ApiDeployment<Namespace>>, Box<dyn Error>> {
+    ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentRepoError> {
         info!("Get host id: {}", host);
 
         let key = redis_keys::api_deployment_redis_key(host);
@@ -160,35 +179,33 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
             .pool
             .with("persistence", "get_deployment")
             .get(key)
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
 
         match value {
-            Some(value) => {
-                let value: Result<ApiDeployment<Namespace>, Box<dyn Error>> = self
-                    .pool
-                    .deserialize(&value)
-                    .map_err(|e| e.to_string().into());
-                value.map(Some)
-            }
+            Some(value) => self
+                .pool
+                .deserialize(&value)
+                .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e.to_string())))
+                .map(Some),
             None => Ok(None),
         }
     }
 
-    async fn delete(&self, host: &ApiSiteString) -> Result<bool, Box<dyn Error>> {
+    async fn delete(&self, host: &ApiSiteString) -> Result<bool, ApiDeploymentRepoError> {
         debug!("Delete API site: {}", host);
         let key = redis_keys::api_deployment_redis_key(host);
         let value: Option<Bytes> = self
             .pool
             .with("persistence", "delete_deployment")
             .get(key.clone())
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
 
         match value {
             Some(value) => {
-                let deployment: ApiDeployment<Namespace> =
-                    self.pool.deserialize(&value).map_err(|e| e.to_string())?;
+                let deployment: ApiDeployment<Namespace> = self
+                    .pool
+                    .deserialize(&value)
+                    .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
 
                 let sites_key = redis_keys::api_deployments_redis_key(
                     &deployment.api_definition_id.namespace,
@@ -198,21 +215,19 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
                 let site_value = self
                     .pool
                     .serialize(&deployment.site.to_string())
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
 
                 let _ = self
                     .pool
                     .with("persistence", "delete_deployment")
                     .zrem(sites_key, site_value)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                    .await?;
 
                 let definition_delete: u32 = self
                     .pool
                     .with("persistence", "delete_deployment")
                     .del(key)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                    .await?;
                 Ok(definition_delete > 0)
             }
             None => Ok(false),
@@ -223,23 +238,22 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         &self,
         namespace: &Namespace,
         api_id: &ApiDefinitionId,
-    ) -> Result<Vec<ApiDeployment<Namespace>>, Box<dyn Error>> {
+    ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentRepoError> {
         let sites_key = redis_keys::api_deployments_redis_key(namespace, api_id);
 
         let site_values: Vec<Bytes> = self
             .pool
             .with("persistence", "get_deployment")
             .zrange(&sites_key, 0, -1, None, false, None, false)
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
 
         let mut sites = Vec::new();
 
         for value in site_values {
-            let site: Result<String, Box<dyn Error>> = self
+            let site: Result<String, ApiDeploymentRepoError> = self
                 .pool
                 .deserialize(&value)
-                .map_err(|e| e.to_string().into());
+                .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e.to_string())));
 
             sites.push(site?);
         }
@@ -253,14 +267,14 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
                 .pool
                 .with("persistence", "get_deployment")
                 .get(&key)
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
 
             if let Some(value) = value {
-                let deployment: Result<ApiDeployment<Namespace>, Box<dyn Error>> = self
-                    .pool
-                    .deserialize(&value)
-                    .map_err(|e| e.to_string().into());
+                let deployment: Result<ApiDeployment<Namespace>, ApiDeploymentRepoError> =
+                    self.pool.deserialize(&value).map_err(|e| {
+                        ApiDeploymentRepoError::Internal(anyhow::Error::msg(e.to_string()))
+                    });
+
                 deployments.push(deployment?);
             }
         }
