@@ -54,7 +54,10 @@ impl<C: golem_cloud_worker_client::api::ApiDefinitionClient + Sync + Send> Defin
         project_id: ProjectId,
         api_definition_id: Option<&str>,
     ) -> Result<Vec<HttpApiDefinition>, GolemError> {
-        Ok(self.client.get(&project_id.0, api_definition_id).await?)
+        Ok(self
+            .client
+            .list_definitions(&project_id.0, api_definition_id)
+            .await?)
     }
 
     async fn update(
@@ -62,7 +65,10 @@ impl<C: golem_cloud_worker_client::api::ApiDefinitionClient + Sync + Send> Defin
         project_id: ProjectId,
         api_definition: HttpApiDefinition,
     ) -> Result<HttpApiDefinition, GolemError> {
-        Ok(self.client.put(&project_id.0, &api_definition).await?)
+        Ok(self
+            .client
+            .create_definition(&project_id.0, &api_definition)
+            .await?)
     }
 
     async fn delete(
@@ -73,7 +79,7 @@ impl<C: golem_cloud_worker_client::api::ApiDefinitionClient + Sync + Send> Defin
     ) -> Result<String, GolemError> {
         Ok(self
             .client
-            .delete(&project_id.0, api_definition_id, version)
+            .delete_definition(&project_id.0, api_definition_id, version)
             .await?)
     }
 }

@@ -48,22 +48,22 @@ impl<C: golem_cloud_worker_client::api::ApiDeploymentClient + Sync + Send> Deplo
         project_id: ProjectId,
         api_definition_id: &str,
     ) -> Result<Vec<ApiDeployment>, GolemError> {
-        Ok(self.client.get(&project_id.0, api_definition_id).await?)
+        Ok(self
+            .client
+            .list_deployments(&project_id.0, api_definition_id)
+            .await?)
     }
 
     async fn update(&self, api_deployment: ApiDeployment) -> Result<ApiDeployment, GolemError> {
-        Ok(self.client.put(&api_deployment).await?)
+        Ok(self.client.deploy(&api_deployment).await?)
     }
 
     async fn delete(
         &self,
-        project_id: ProjectId,
-        api_definition_id: &str,
+        _project_id: ProjectId,
+        _api_definition_id: &str,
         site: &str,
     ) -> Result<String, GolemError> {
-        Ok(self
-            .client
-            .delete(&project_id.0, api_definition_id, site)
-            .await?)
+        Ok(self.client.delete_deployment(site).await?)
     }
 }
