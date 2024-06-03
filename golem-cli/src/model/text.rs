@@ -411,7 +411,7 @@ impl TextFormat for ApiDeployment {
         for api_defs in &self.api_definitions {
             printdoc!(
                 "
-                API deployment on {} with definition {}/{}.
+                API deployment on {} with definition {}/{}
                 ",
                 match &self.site.subdomain {
                     Some(subdomain) => format!("{}.{}", subdomain, self.site.host),
