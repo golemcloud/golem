@@ -97,7 +97,7 @@ impl CustomHttpRequestApi {
             }
         };
 
-        match api_request.resolve(&possible_api_definitions).await {
+        match api_request.resolve(possible_api_definitions).await {
             Ok(resolved_worker_request) => {
                 resolved_worker_request
                     .execute_with::<poem::Response>(&self.evaluator, &self.worker_metadata_fetcher)

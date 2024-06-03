@@ -92,18 +92,20 @@ fn api_deployment_deploy(
         "sdomain",
     ])?;
 
+    let api_definition_info = deployment.api_definitions.first().unwrap();
+
     assert_eq!(deployment.site.subdomain, Some("sdomain".to_string()));
     assert_eq!(deployment.site.host, host);
-    assert_eq!(deployment.api_definition_id, definition.id);
-    assert_eq!(deployment.version, definition.version);
+    assert_eq!(api_definition_info.id, definition.id);
+    assert_eq!(api_definition_info.version, definition.version);
 
     let updated_def: HttpApiDefinition = cli.run(&[
         "api-definition",
         "get",
         &cfg.arg('i', "id"),
-        &deployment.api_definition_id,
+        &deployment.api_definitions.first().unwrap().id,
         &cfg.arg('V', "version"),
-        &deployment.version,
+        &deployment.api_definitions.first().unwrap().version,
     ])?;
 
     assert!(definition.draft);

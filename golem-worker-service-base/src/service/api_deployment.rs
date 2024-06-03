@@ -123,7 +123,7 @@ impl<
             }
             None => {
                 internal::deploy(
-                    &vec![],
+                    &[],
                     &new_api_definitions,
                     deployment,
                     self.definition_repo.clone(),
@@ -188,14 +188,14 @@ impl<
 
 pub trait ConflictChecker {
     type Entity: Display + Send;
-    fn find_conflicts(input: &Vec<Self>) -> Vec<Self::Entity>
+    fn find_conflicts(input: &[Self]) -> Vec<Self::Entity>
     where
         Self: Sized;
 }
 
 impl ConflictChecker for HttpApiDefinition {
     type Entity = AllPathPatterns;
-    fn find_conflicts(definitions: &Vec<Self>) -> Vec<Self::Entity> {
+    fn find_conflicts(definitions: &[Self]) -> Vec<Self::Entity> {
         let routes = definitions
             .iter()
             .flat_map(|def| def.routes.clone())
@@ -245,7 +245,7 @@ mod internal {
         Namespace: ApiNamespace,
         ApiDefinition: Clone + ConflictChecker + HasIsDraft + Send,
     >(
-        old_api_definitions: &Vec<ApiDefinitionWithKey<Namespace, ApiDefinition>>,
+        old_api_definitions: &[ApiDefinitionWithKey<Namespace, ApiDefinition>],
         new_api_definitions: &Vec<ApiDefinitionWithKey<Namespace, ApiDefinition>>,
         deployment: &ApiDeployment<Namespace>,
         definition_repo: Arc<dyn ApiDefinitionRepo<Namespace, ApiDefinition> + Sync + Send>,

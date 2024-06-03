@@ -29,7 +29,7 @@ use crate::worker_bridge_execution::to_response::ToResponse;
 pub trait WorkerBindingResolver<ApiDefinition> {
     async fn resolve(
         &self,
-        api_specification: &Vec<ApiDefinition>,
+        api_definitions: Vec<ApiDefinition>,
     ) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError>;
 }
 
@@ -156,7 +156,7 @@ impl ResolvedWorkerBinding {
 impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
     async fn resolve(
         &self,
-        api_definition: &Vec<HttpApiDefinition>,
+        api_definition: Vec<HttpApiDefinition>,
     ) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError> {
         let default_evaluator = DefaultEvaluator::noop();
 
