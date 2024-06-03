@@ -19,7 +19,7 @@ use cli_table::format::{Border, Separator};
 use cli_table::{format::Justify, Cell, CellStruct, Style, Table};
 use colored::Colorize;
 use itertools::Itertools;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -363,10 +363,10 @@ impl Display for BenchmarkResultView {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkResult {
-    runs: Vec<RunConfig>,
-    results: Vec<(RunConfig, BenchmarkRunResult)>,
+    pub runs: Vec<RunConfig>,
+    pub results: Vec<(RunConfig, BenchmarkRunResult)>,
 }
 
 impl BenchmarkResult {
@@ -417,8 +417,8 @@ impl BenchmarkResult {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BenchmarkRunResult {
-    duration_results: HashMap<ResultKey, DurationResult>,
-    count_results: HashMap<ResultKey, CountResult>,
+    pub duration_results: HashMap<ResultKey, DurationResult>,
+    pub count_results: HashMap<ResultKey, CountResult>,
 }
 
 impl Default for BenchmarkRunResult {

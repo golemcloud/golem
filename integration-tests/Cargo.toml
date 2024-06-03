@@ -81,6 +81,11 @@ path = "src/benchmarks/throughput.rs"
 [[bin]]
 name = "benchmark_service"
 path = "src/benchmarks/benchmark_service.rs"
+
+[[bin]]
+name = "compare_benchmark"
+path = "src/benchmarks/compare_benchmark.rs"
+
 #
 [lib]
 name = "integration_tests"
