@@ -17,7 +17,14 @@ pub type ApiDefResult<T> = Result<(T, CloudNamespace), ApiDefinitionError>;
 
 #[async_trait]
 pub trait ApiDefinitionService {
-    async fn register(
+    async fn create(
+        &self,
+        project_id: &ProjectId,
+        definition: &HttpApiDefinition,
+        ctx: &CloudAuthCtx,
+    ) -> ApiDefResult<ApiDefinitionId>;
+
+    async fn update(
         &self,
         project_id: &ProjectId,
         definition: &HttpApiDefinition,
@@ -92,7 +99,7 @@ impl ApiDefinitionServiceDefault {
 
 #[async_trait]
 impl ApiDefinitionService for ApiDefinitionServiceDefault {
-    async fn register(
+    async fn create(
         &self,
         project_id: &ProjectId,
         definition: &HttpApiDefinition,
@@ -107,6 +114,26 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         let api_definition_id = self
             .api_definition_service
             .create(&api_definition, namespace.clone(), ctx)
+            .await?;
+
+        Ok((api_definition_id, namespace))
+    }
+
+    async fn update(
+        &self,
+        project_id: &ProjectId,
+        definition: &HttpApiDefinition,
+        ctx: &CloudAuthCtx,
+    ) -> ApiDefResult<ApiDefinitionId> {
+        let namespace = self
+            .auth_service
+            .is_authorized(project_id, ProjectAction::UpdateApiDefinition, ctx)
+            .await?;
+
+        let api_definition = definition.clone();
+        let api_definition_id = self
+            .api_definition_service
+            .update(&api_definition, namespace.clone(), ctx)
             .await?;
 
         Ok((api_definition_id, namespace))
