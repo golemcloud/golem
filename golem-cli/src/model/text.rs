@@ -408,17 +408,19 @@ impl TextFormat for ScanCursor {
 
 impl TextFormat for ApiDeployment {
     fn print(&self) {
-        printdoc!(
-            "
-            API deployment on {} with definition {}/{}
-            ",
-            match &self.site.subdomain {
-                Some(subdomain) => format!("{}.{}", subdomain, self.site.host),
-                None => self.site.host.to_string(),
-            },
-            self.api_definition_id,
-            self.version,
-        );
+        for api_defs in self.api_definitions {
+            printdoc!(
+                "
+                API deployment on {} with definition {}/{}.
+                ",
+                match &self.site.subdomain {
+                    Some(subdomain) => format!("{}.{}", subdomain, self.site.host),
+                    None => self.site.host.to_string(),
+                },
+                api_defs.id,
+                api_defs.version,
+            );
+        }
     }
 }
 

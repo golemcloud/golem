@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::fmt::Display;
 
-use crate::service::api_definition::ApiDefinitionInfo;
+use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
@@ -52,7 +52,7 @@ pub trait HasGolemWorkerBindings {
 )]
 pub struct ApiDeployment<Namespace> {
     pub namespace: Namespace,
-    pub api_definition_keys: Vec<ApiDefinitionInfo>,
+    pub api_definition_keys: Vec<ApiDefinitionIdWithVersion>,
     pub site: ApiSite,
 }
 

@@ -13,7 +13,7 @@ use golem_common::redis::{RedisError, RedisPool};
 use tracing::{debug, info};
 
 use crate::repo::api_namespace::ApiNamespace;
-use crate::service::api_definition::ApiDefinitionInfo;
+use crate::service::api_definition::ApiDefinitionIdWithVersion;
 
 const API_DEFINITION_REDIS_NAMESPACE: &str = "apidefinition";
 
@@ -192,10 +192,10 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
 
         let mut api_definition_redis_values = vec![];
 
-        for api_key in &deployment.api_definition_keys {
+        for api_def_with_version in &deployment.api_definition_keys {
             let value = self
                 .pool
-                .serialize(api_key)
+                .serialize(api_def_with_version)
                 .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e)))?;
 
             api_definition_redis_values.push((1.0, value));
@@ -270,7 +270,7 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         let mut api_definition_keys = Vec::new();
 
         for value in site_values {
-            let api_definition_key: Result<ApiDefinitionInfo, ApiDeploymentRepoError> = self
+            let api_definition_key: Result<ApiDefinitionIdWithVersion, ApiDeploymentRepoError> = self
                 .pool
                 .deserialize(&value)
                 .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e.to_string())));
@@ -420,7 +420,7 @@ mod tests {
         api_deployment_redis_key, api_deployments_redis_key,
     };
     use crate::repo::api_deployment_repo::{ApiDeploymentRepo, InMemoryDeployment};
-    use crate::service::api_definition::ApiDefinitionInfo;
+    use crate::service::api_definition::ApiDefinitionIdWithVersion;
 
     #[tokio::test]
     pub async fn test_in_memory_deploy() {
@@ -440,7 +440,7 @@ mod tests {
 
         let deployment = ApiDeployment {
             namespace: namespace.clone(),
-            api_definition_keys: vec![ApiDefinitionInfo {
+            api_definition_keys: vec![ApiDefinitionIdWithVersion {
                 id: api_definition_id.clone(),
                 version: version.clone(),
             }],

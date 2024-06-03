@@ -83,7 +83,7 @@ pub struct ApiDefinitionKey<Namespace> {
 #[derive(
     Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
 )]
-pub struct ApiDefinitionInfo {
+pub struct ApiDefinitionIdWithVersion {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
 }

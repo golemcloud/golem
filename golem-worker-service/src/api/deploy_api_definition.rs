@@ -12,7 +12,7 @@ use tracing::log::info;
 
 use golem_worker_service_base::api::ApiDeployment;
 use golem_worker_service_base::api_definition;
-use golem_worker_service_base::service::api_definition::ApiDefinitionInfo;
+use golem_worker_service_base::service::api_definition::ApiDefinitionIdWithVersion;
 use golem_worker_service_base::service::api_deployment::ApiDeploymentService;
 
 pub struct ApiDeploymentApi {
@@ -35,11 +35,11 @@ impl ApiDeploymentApi {
         let api_definition_infos = payload
             .api_definitions
             .iter()
-            .map(|k| ApiDefinitionInfo {
+            .map(|k| ApiDefinitionIdWithVersion {
                 id: k.id.clone(),
                 version: k.version.clone(),
             })
-            .collect::<Vec<ApiDefinitionInfo>>();
+            .collect::<Vec<ApiDefinitionIdWithVersion>>();
 
         info!("Deploy API definitions at site: {}", payload.site);
 

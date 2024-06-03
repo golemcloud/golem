@@ -14,7 +14,7 @@
 
 use async_trait::async_trait;
 
-use golem_client::model::{ApiDeployment, ApiSite};
+use golem_client::model::{ApiDefinitionInfo, ApiDeployment, ApiSite};
 use tracing::info;
 
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError};
@@ -59,9 +59,13 @@ impl<C: golem_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClien
                 .map_or("".to_string(), |s| format!("subdomain {}", s))
         );
 
-        let deployment = ApiDeployment {
-            api_definition_id: api_definition_id.0.to_string(),
+        let api_definition = ApiDefinitionInfo {
+            id: api_definition_id.0.to_string(),
             version: version.0.to_string(),
+        };
+
+        let deployment = ApiDeployment {
+            api_definitions: vec![api_definition],
             site: ApiSite {
                 host: host.to_string(),
                 subdomain,
