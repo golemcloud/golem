@@ -21,11 +21,15 @@ use golem_service_base::model::{Id, WorkerId};
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::to_response::ToResponse;
 
+// TODO; It will be better if worker binding resolver
+// able to deal with only one API definition
+// as the first stage resolution can take place (based on host, input request (route resolution)
+// up the stage
 #[async_trait]
 pub trait WorkerBindingResolver<ApiDefinition> {
     async fn resolve(
         &self,
-        api_specification: &ApiDefinition,
+        api_specification: &Vec<ApiDefinition>,
     ) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError>;
 }
 
@@ -152,12 +156,17 @@ impl ResolvedWorkerBinding {
 impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
     async fn resolve(
         &self,
-        api_definition: &HttpApiDefinition,
+        api_definition: &Vec<HttpApiDefinition>,
     ) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError> {
         let default_evaluator = DefaultEvaluator::noop();
 
+        let routes = api_definition
+            .iter()
+            .flat_map(|x| x.routes.clone())
+            .collect::<Vec<_>>();
+
         let api_request = self;
-        let router = router::build(api_definition.routes.clone());
+        let router = router::build(routes);
         let path: Vec<&str> = RouterPattern::split(&api_request.input_path.base_path).collect();
         let request_query_variables = self.input_path.query_components().unwrap_or_default();
         let request_body = &self.req_body;

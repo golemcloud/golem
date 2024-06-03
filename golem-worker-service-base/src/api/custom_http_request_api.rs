@@ -9,7 +9,7 @@ use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
 use crate::http::{ApiInputPath, InputHttpRequest};
-use crate::service::api_definition_lookup::ApiDefinitionLookup;
+use crate::service::api_definition_lookup::ApiDefinitionsLookup;
 
 use crate::worker_binding::WorkerBindingResolver;
 use crate::worker_bridge_execution::WorkerRequestExecutor;
@@ -21,7 +21,7 @@ pub struct CustomHttpRequestApi {
     pub evaluator: Arc<dyn Evaluator + Sync + Send>,
     pub worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     pub api_definition_lookup_service:
-        Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
+        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
@@ -29,7 +29,7 @@ impl CustomHttpRequestApi {
         worker_request_executor_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
         worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send>,
         api_definition_lookup_service: Arc<
-            dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
+            dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         >,
     ) -> Self {
         let evaluator = Arc::new(DefaultEvaluator::from_worker_request_executor(
@@ -83,7 +83,7 @@ impl CustomHttpRequestApi {
             req_body: json_request_body,
         };
 
-        let api_definition = match self
+        let possible_api_definitions = match self
             .api_definition_lookup_service
             .get(api_request.clone())
             .await
@@ -97,7 +97,7 @@ impl CustomHttpRequestApi {
             }
         };
 
-        match api_request.resolve(&api_definition).await {
+        match api_request.resolve(&possible_api_definitions).await {
             Ok(resolved_worker_request) => {
                 resolved_worker_request
                     .execute_with::<poem::Response>(&self.evaluator, &self.worker_metadata_fetcher)
@@ -105,10 +105,7 @@ impl CustomHttpRequestApi {
             }
 
             Err(msg) => {
-                error!(
-                    "API request id: {} - request error: {}",
-                    &api_definition.id, msg
-                );
+                error!("Failed to resolve the API definition; error: {}", msg);
 
                 Response::builder()
                     .status(StatusCode::METHOD_NOT_ALLOWED)

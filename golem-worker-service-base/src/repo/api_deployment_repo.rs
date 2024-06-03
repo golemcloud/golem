@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::Mutex;
 
 use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString};
@@ -40,6 +41,15 @@ pub trait ApiDeploymentRepo<Namespace: ApiNamespace> {
 pub enum ApiDeploymentRepoError {
     Internal(anyhow::Error),
 }
+
+impl Display for ApiDeploymentRepoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApiDeploymentRepoError::Internal(e) => write!(f, "Internal error: {}", e),
+        }
+    }
+}
+
 impl From<RedisError> for ApiDeploymentRepoError {
     fn from(err: RedisError) -> Self {
         ApiDeploymentRepoError::Internal(anyhow::Error::new(err))

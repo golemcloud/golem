@@ -313,7 +313,10 @@ mod tests {
         let evaluator = get_test_evaluator();
         let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
 
-        let resolved_route = api_request.resolve(api_specification).await.unwrap();
+        let resolved_route = api_request
+            .resolve(&vec![api_specification.clone()])
+            .await
+            .unwrap();
 
         resolved_route
             .execute_with(&evaluator, &worker_metadata_fetcher)
@@ -951,7 +954,7 @@ mod tests {
                 function_params,
             );
 
-            let resolved_route = api_request.resolve(&api_specification).await;
+            let resolved_route = api_request.resolve(&vec![api_specification]).await;
 
             let result = resolved_route.map(|x| x.worker_detail);
 
@@ -985,7 +988,7 @@ mod tests {
                 expression,
             );
 
-            let resolved_route = api_request.resolve(&api_specification).await.unwrap();
+            let resolved_route = api_request.resolve(&vec![api_specification]).await.unwrap();
 
             assert_eq!(
                 resolved_route.worker_detail.idempotency_key,

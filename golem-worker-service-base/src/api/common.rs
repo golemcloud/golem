@@ -134,6 +134,12 @@ mod conversion {
                 ApiDeploymentError::DeploymentConflict(conflict) => {
                     ApiEndpointError::already_exists(format!("Deployment conflict: {}", conflict))
                 }
+                ApiDeploymentError::ConflictingDefinitions(conflicts) => {
+                    ApiEndpointError::already_exists(format!(
+                        "Conflicting API definitions during deployment: {}",
+                        conflicts.join(", ")
+                    ))
+                }
             }
         }
     }
