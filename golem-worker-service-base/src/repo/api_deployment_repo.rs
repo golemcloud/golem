@@ -270,10 +270,10 @@ impl<Namespace: ApiNamespace> ApiDeploymentRepo<Namespace> for RedisApiDeploy {
         let mut api_definition_keys = Vec::new();
 
         for value in site_values {
-            let api_definition_key: Result<ApiDefinitionIdWithVersion, ApiDeploymentRepoError> = self
-                .pool
-                .deserialize(&value)
-                .map_err(|e| ApiDeploymentRepoError::Internal(anyhow::Error::msg(e.to_string())));
+            let api_definition_key: Result<ApiDefinitionIdWithVersion, ApiDeploymentRepoError> =
+                self.pool.deserialize(&value).map_err(|e| {
+                    ApiDeploymentRepoError::Internal(anyhow::Error::msg(e.to_string()))
+                });
 
             api_definition_keys.push(api_definition_key?);
         }

@@ -408,7 +408,7 @@ impl TextFormat for ScanCursor {
 
 impl TextFormat for ApiDeployment {
     fn print(&self) {
-        for api_defs in self.api_definitions {
+        for api_defs in &self.api_definitions {
             printdoc!(
                 "
                 API deployment on {} with definition {}/{}.
@@ -434,24 +434,25 @@ struct ApiDeploymentView {
     pub version: String,
 }
 
-impl From<&ApiDeployment> for ApiDeploymentView {
-    fn from(value: &ApiDeployment) -> Self {
-        ApiDeploymentView {
-            site: match &value.site.subdomain {
-                Some(subdomain) => format!("{}.{}", subdomain, value.site.host),
-                None => value.site.host.to_string(),
-            },
-            id: value.api_definition_id.to_string(),
-            version: value.version.to_string(),
-        }
-    }
-}
-
 impl TextFormat for Vec<ApiDeployment> {
     fn print(&self) {
         print_stdout(
             self.iter()
-                .map(ApiDeploymentView::from)
+                .flat_map(|deployment| {
+                    deployment
+                        .api_definitions
+                        .iter()
+                        .map(|def| ApiDeploymentView {
+                            site: match &deployment.site.subdomain {
+                                Some(subdomain) => {
+                                    format!("{}.{}", subdomain, deployment.site.host)
+                                }
+                                None => deployment.site.host.to_string(),
+                            },
+                            id: def.id.to_string(),
+                            version: def.version.to_string(),
+                        })
+                })
                 .collect::<Vec<_>>()
                 .with_title(),
         )
