@@ -14,7 +14,7 @@
 
 pub mod text;
 
-use crate::model::{ComponentId, ComponentIdOrName, ComponentName};
+use crate::model::{ComponentId, ComponentName};
 use clap::{ArgMatches, Error, FromArgMatches};
 use derive_more::{Display, FromStr, Into};
 use serde::{Deserialize, Serialize};
@@ -219,15 +219,6 @@ impl From<&CloudComponentIdOrName> for CloudComponentIdOrNameArgs {
 pub enum CloudComponentIdOrName {
     Id(ComponentId),
     Name(ComponentName, ProjectRef),
-}
-
-impl CloudComponentIdOrName {
-    pub fn split(self) -> (ComponentIdOrName, Option<ProjectRef>) {
-        match self {
-            CloudComponentIdOrName::Id(id) => (ComponentIdOrName::Id(id), None),
-            CloudComponentIdOrName::Name(name, p) => (ComponentIdOrName::Name(name), Some(p)),
-        }
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize)]

@@ -13,16 +13,20 @@
 // limitations under the License.
 
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
-use crate::oss::model::OssContext;
 use crate::service::api_deployment::ApiDeploymentService;
+use crate::service::project::ProjectResolver;
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 #[command()]
-pub enum ApiDeploymentSubcommand {
+pub enum ApiDeploymentSubcommand<ProjectRef: clap::Args> {
     /// Create or update deployment
     #[command()]
     Deploy {
+        /// The newly created component's owner project
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
         /// Api definition id
         #[arg(short, long)]
         id: ApiDefinitionId,
@@ -49,6 +53,10 @@ pub enum ApiDeploymentSubcommand {
     /// List api deployment for api definition
     #[command()]
     List {
+        /// The newly created component's owner project
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
         /// Api definition id
         #[arg(short, long)]
         id: ApiDefinitionId,
@@ -63,22 +71,30 @@ pub enum ApiDeploymentSubcommand {
     },
 }
 
-impl ApiDeploymentSubcommand {
-    pub async fn handle(
+impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDeploymentSubcommand<ProjectRef> {
+    pub async fn handle<ProjectContext>(
         self,
-        service: &(dyn ApiDeploymentService<ProjectContext = OssContext> + Send + Sync),
+        service: &(dyn ApiDeploymentService<ProjectContext = ProjectContext> + Send + Sync),
+        projects: &(dyn ProjectResolver<ProjectRef, ProjectContext> + Send + Sync),
     ) -> Result<GolemResult, GolemError> {
-        let ctx = &OssContext::EMPTY;
-
         match self {
             ApiDeploymentSubcommand::Deploy {
+                project_ref,
                 id,
                 version,
                 host,
                 subdomain,
-            } => service.deploy(id, version, host, subdomain, ctx).await,
+            } => {
+                let project_id = projects.resolve_id_or_default(project_ref).await?;
+                service
+                    .deploy(id, version, host, subdomain, &project_id)
+                    .await
+            }
             ApiDeploymentSubcommand::Get { site } => service.get(site).await,
-            ApiDeploymentSubcommand::List { id } => service.list(id, ctx).await,
+            ApiDeploymentSubcommand::List { project_ref, id } => {
+                let project_id = projects.resolve_id_or_default(project_ref).await?;
+                service.list(id, &project_id).await
+            }
             ApiDeploymentSubcommand::Delete { site } => service.delete(site).await,
         }
     }

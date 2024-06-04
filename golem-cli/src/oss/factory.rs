@@ -25,6 +25,7 @@ use crate::oss::clients::component::ComponentClientLive;
 use crate::oss::clients::health_check::HealthCheckClientLive;
 use crate::oss::clients::worker::WorkerClientLive;
 use crate::oss::model::OssContext;
+use crate::service::project::{ProjectResolver, ProjectResolverOss};
 use golem_client::Context;
 use url::Url;
 
@@ -61,16 +62,27 @@ impl OssServiceFactory {
 
 impl ServiceFactory for OssServiceFactory {
     type SecurityContext = OssContext;
+    type ProjectRef = OssContext;
     type ProjectContext = OssContext;
 
     fn with_auth(
         &self,
         auth: &Self::SecurityContext,
-    ) -> FactoryWithAuth<Self::ProjectContext, Self::SecurityContext> {
+    ) -> FactoryWithAuth<Self::ProjectRef, Self::ProjectContext, Self::SecurityContext> {
         FactoryWithAuth {
             auth: *auth,
             factory: Box::new(self.clone()),
         }
+    }
+
+    fn project_resolver(
+        &self,
+        _auth: &Self::SecurityContext,
+    ) -> Result<
+        Box<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
+        GolemError,
+    > {
+        Ok(Box::new(ProjectResolverOss::DUMMY))
     }
 
     fn component_client(

@@ -14,7 +14,7 @@
 
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(clap::Args, Debug, Clone, Copy)]
 pub struct OssContext {}
 
 impl OssContext {

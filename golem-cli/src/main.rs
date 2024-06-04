@@ -88,12 +88,19 @@ async fn async_main(cmd: GolemOssCommand) -> Result<(), Box<dyn std::error::Erro
     let res = match cmd.command {
         OssCommand::Component { subcommand } => {
             subcommand
-                .handle(factory.component_service(ctx)?.as_ref())
+                .handle(
+                    factory.component_service(ctx)?.as_ref(),
+                    factory.project_resolver(ctx)?.as_ref(),
+                )
                 .await
         }
         OssCommand::Worker { subcommand } => {
             subcommand
-                .handle(cmd.format, factory.worker_service(ctx)?.as_ref())
+                .handle(
+                    cmd.format,
+                    factory.worker_service(ctx)?.as_ref(),
+                    factory.project_resolver(ctx)?.as_ref(),
+                )
                 .await
         }
         OssCommand::New {
@@ -108,12 +115,18 @@ async fn async_main(cmd: GolemOssCommand) -> Result<(), Box<dyn std::error::Erro
         OssCommand::Stubgen { subcommand } => handle_stubgen(subcommand).await,
         OssCommand::ApiDefinition { subcommand } => {
             subcommand
-                .handle(factory.api_definition_service(ctx)?.as_ref())
+                .handle(
+                    factory.api_definition_service(ctx)?.as_ref(),
+                    factory.project_resolver(ctx)?.as_ref(),
+                )
                 .await
         }
         OssCommand::ApiDeployment { subcommand } => {
             subcommand
-                .handle(factory.api_deployment_service(ctx)?.as_ref())
+                .handle(
+                    factory.api_deployment_service(ctx)?.as_ref(),
+                    factory.project_resolver(ctx)?.as_ref(),
+                )
                 .await
         }
     };
