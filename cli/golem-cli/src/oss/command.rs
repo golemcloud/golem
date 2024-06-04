@@ -12,19 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::Format;
-use crate::oss::command::api_definition::ApiDefinitionSubcommand;
-use crate::oss::command::api_deployment::ApiDeploymentSubcommand;
-use crate::oss::command::component::ComponentSubCommand;
-use crate::oss::command::worker::WorkerSubcommand;
+use crate::command::api_definition::ApiDefinitionSubcommand;
+use crate::command::api_deployment::ApiDeploymentSubcommand;
+use crate::command::component::ComponentSubCommand;
+use crate::command::worker::WorkerSubcommand;
+use crate::model::{ComponentIdOrName, Format};
+use crate::oss::model::OssContext;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
-
-pub mod api_definition;
-pub mod api_deployment;
-pub mod component;
-pub mod worker;
 
 #[derive(Subcommand, Debug)]
 #[command()]
@@ -33,14 +29,14 @@ pub enum OssCommand {
     #[command()]
     Component {
         #[command(subcommand)]
-        subcommand: ComponentSubCommand,
+        subcommand: ComponentSubCommand<OssContext, ComponentIdOrName>,
     },
 
     /// Manage Golem workers
     #[command()]
     Worker {
         #[command(subcommand)]
-        subcommand: WorkerSubcommand,
+        subcommand: WorkerSubcommand<ComponentIdOrName>,
     },
 
     /// Create a new Golem component from built-in examples
@@ -82,14 +78,14 @@ pub enum OssCommand {
     #[command()]
     ApiDefinition {
         #[command(subcommand)]
-        subcommand: ApiDefinitionSubcommand,
+        subcommand: ApiDefinitionSubcommand<OssContext>,
     },
 
     /// Manage Golem api deployments
     #[command()]
     ApiDeployment {
         #[command(subcommand)]
-        subcommand: ApiDeploymentSubcommand,
+        subcommand: ApiDeploymentSubcommand<OssContext>,
     },
 }
 

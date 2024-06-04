@@ -13,33 +13,31 @@
 // limitations under the License.
 
 use crate::cloud::command::account::AccountSubcommand;
-use crate::cloud::command::api_definition::ApiDefinitionSubcommand;
-use crate::cloud::command::api_deployment::ApiDeploymentSubcommand;
 use crate::cloud::command::certificate::CertificateSubcommand;
 use crate::cloud::command::domain::DomainSubcommand;
 use crate::cloud::command::policy::ProjectPolicySubcommand;
 use crate::cloud::command::project::ProjectSubcommand;
 use crate::cloud::command::token::TokenSubcommand;
-use crate::cloud::command::worker::WorkerSubcommand;
-use crate::cloud::model::{AccountId, ProjectAction, ProjectPolicyId, ProjectRef};
+use crate::cloud::model::{
+    AccountId, CloudComponentIdOrName, ProjectAction, ProjectPolicyId, ProjectRef,
+};
+use crate::command::api_definition::ApiDefinitionSubcommand;
+use crate::command::api_deployment::ApiDeploymentSubcommand;
+use crate::command::component::ComponentSubCommand;
+use crate::command::worker::WorkerSubcommand;
 use crate::model::Format;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
-use component::ComponentSubCommand;
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
 use std::path::PathBuf;
 use uuid::Uuid;
 
 pub mod account;
-pub mod api_definition;
-pub mod api_deployment;
 pub mod certificate;
-pub mod component;
 pub mod domain;
 pub mod policy;
 pub mod project;
 pub mod token;
-pub mod worker;
 
 #[derive(Subcommand, Debug)]
 #[command()]
@@ -48,14 +46,14 @@ pub enum CloudCommand {
     #[command()]
     Component {
         #[command(subcommand)]
-        subcommand: ComponentSubCommand,
+        subcommand: ComponentSubCommand<ProjectRef, CloudComponentIdOrName>,
     },
 
     /// Manage Golem workers
     #[command()]
     Worker {
         #[command(subcommand)]
-        subcommand: WorkerSubcommand,
+        subcommand: WorkerSubcommand<CloudComponentIdOrName>,
     },
 
     /// Manage accounts
@@ -157,14 +155,14 @@ pub enum CloudCommand {
     #[command()]
     ApiDefinition {
         #[command(subcommand)]
-        subcommand: ApiDefinitionSubcommand,
+        subcommand: ApiDefinitionSubcommand<ProjectRef>,
     },
 
     /// Manage Golem api deployments
     #[command()]
     ApiDeployment {
         #[command(subcommand)]
-        subcommand: ApiDeploymentSubcommand,
+        subcommand: ApiDeploymentSubcommand<ProjectRef>,
     },
 
     #[command()]

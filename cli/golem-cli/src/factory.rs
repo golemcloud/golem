@@ -21,6 +21,7 @@ use crate::model::GolemError;
 use crate::service::api_definition::{ApiDefinitionService, ApiDefinitionServiceLive};
 use crate::service::api_deployment::{ApiDeploymentService, ApiDeploymentServiceLive};
 use crate::service::component::{ComponentService, ComponentServiceLive};
+use crate::service::project::ProjectResolver;
 use crate::service::version::{VersionService, VersionServiceLive};
 use crate::service::worker::{
     ComponentServiceBuilder, WorkerClientBuilder, WorkerService, WorkerServiceLive,
@@ -29,12 +30,20 @@ use std::fmt::Display;
 
 pub trait ServiceFactory {
     type SecurityContext: Clone + Send + Sync + 'static;
+    type ProjectRef: Send + Sync + 'static;
     type ProjectContext: Display + Send + Sync + 'static;
 
     fn with_auth(
         &self,
         auth: &Self::SecurityContext,
-    ) -> FactoryWithAuth<Self::ProjectContext, Self::SecurityContext>;
+    ) -> FactoryWithAuth<Self::ProjectRef, Self::ProjectContext, Self::SecurityContext>;
+    fn project_resolver(
+        &self,
+        auth: &Self::SecurityContext,
+    ) -> Result<
+        Box<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
+        GolemError,
+    >;
     fn component_client(
         &self,
         auth: &Self::SecurityContext,
@@ -126,25 +135,28 @@ pub trait ServiceFactory {
 }
 
 pub struct FactoryWithAuth<
+    PR: Send + Sync + 'static,
     PC: Send + Sync + 'static,
     SecurityContext: Clone + Send + Sync + 'static,
 > {
     pub auth: SecurityContext,
     pub factory: Box<
-        dyn ServiceFactory<ProjectContext = PC, SecurityContext = SecurityContext> + Send + Sync,
+        dyn ServiceFactory<ProjectRef = PR, ProjectContext = PC, SecurityContext = SecurityContext>
+            + Send
+            + Sync,
     >,
 }
 
-impl<PC: Display + Send + Sync, S: Clone + Send + Sync> WorkerClientBuilder
-    for FactoryWithAuth<PC, S>
+impl<PR: Send + Sync, PC: Display + Send + Sync, S: Clone + Send + Sync> WorkerClientBuilder
+    for FactoryWithAuth<PR, PC, S>
 {
     fn build(&self) -> Result<Box<dyn WorkerClient + Send + Sync>, GolemError> {
         self.factory.worker_client(&self.auth)
     }
 }
 
-impl<PC: Display + Send + Sync, S: Clone + Send + Sync> ComponentServiceBuilder<PC>
-    for FactoryWithAuth<PC, S>
+impl<PR: Send + Sync, PC: Display + Send + Sync, S: Clone + Send + Sync> ComponentServiceBuilder<PC>
+    for FactoryWithAuth<PR, PC, S>
 {
     fn build(
         &self,
