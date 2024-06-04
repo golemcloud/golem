@@ -21,7 +21,6 @@ use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::config::{CliParams, CliTestDependencies};
 use golem_test_framework::dsl::benchmark::{BenchmarkApi, BenchmarkRecorder, BenchmarkResult, RunConfig};
 use golem_test_framework::dsl::TestDsl;
-pub mod cold_start_large;
 
 #[derive(Clone)]
 pub struct BenchmarkContext {

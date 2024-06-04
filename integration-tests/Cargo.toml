@@ -56,7 +56,7 @@ path = "src/benchmarks/cold_start_medium.rs"
 
 [[bin]]
 name = "benchmark_cold_start_large"
-path = "src/benchmarks/cold_start_large/cold_start_large.rs"
+path = "src/benchmarks/cold_start_large.rs"
 
 [[bin]]
 name = "benchmark_latency_small"
@@ -79,14 +79,5 @@ name = "benchmark_throughput"
 path = "src/benchmarks/throughput.rs"
 
 [[bin]]
-name = "benchmark_service"
-path = "src/benchmarks/benchmark_service.rs"
-
-[[bin]]
 name = "compare_benchmark"
 path = "src/benchmarks/compare_benchmark.rs"
-
-#
-[lib]
-name = "integration_tests"
-path = "src/lib.rs"
