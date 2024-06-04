@@ -2,13 +2,13 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cloud_common::model::Role;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use tracing::info;
 
 use crate::auth::AccountAuthorisation;
-use crate::model::{Project, ProjectData, ProjectType, Role};
-use crate::repo::component::ComponentRepo;
+use crate::model::{Project, ProjectData, ProjectType};
 use crate::repo::project::{ProjectRecord, ProjectRepo};
 use crate::repo::RepoError;
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
@@ -107,7 +107,6 @@ pub struct ProjectServiceDefault {
     project_repo: Arc<dyn ProjectRepo + Sync + Send>,
     project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
     plan_limit_service: Arc<dyn PlanLimitService + Sync + Send>,
-    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
 }
 
 impl ProjectServiceDefault {
@@ -115,13 +114,11 @@ impl ProjectServiceDefault {
         project_repo: Arc<dyn ProjectRepo + Sync + Send>,
         project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
         plan_limit_service: Arc<dyn PlanLimitService + Sync + Send>,
-        component_repo: Arc<dyn ComponentRepo + Sync + Send>,
     ) -> Self {
         ProjectServiceDefault {
             project_repo,
             project_auth_service,
             plan_limit_service,
-            component_repo,
         }
     }
 }
@@ -167,16 +164,18 @@ impl ProjectService for ProjectServiceDefault {
         let project = self.project_repo.get(&project_id.0).await?;
 
         if let Some(project) = project {
-            let component_count = self
-                .component_repo
-                .get_count_by_projects(vec![project_id.0])
-                .await?;
+            // FIXME delete components, workers ...
+
+            // let component_count = self
+            //     .component_repo
+            //     .get_count_by_projects(vec![project_id.0])
+            //     .await?;
 
             if auth.has_account_or_role(
                 &AccountId::from(project.owner_account_id.as_str()),
                 &Role::Admin,
             ) && !project.is_default
-                && component_count == 0
+            // && component_count == 0
             {
                 self.project_repo.delete(&project_id.0).await?;
             } else {

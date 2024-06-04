@@ -13,7 +13,7 @@ use poem_openapi::*;
 
 use crate::api::ApiTags;
 use crate::model::*;
-use crate::service::auth::{AuthService, AuthServiceError};
+use crate::service::auth::CloudAuthCtx;
 use crate::service::component::{ComponentError as ComponentServiceError, ComponentService};
 use golem_service_base::model::*;
 
@@ -47,19 +47,6 @@ pub struct UploadPayload {
 
 type Result<T> = std::result::Result<T, ComponentError>;
 
-impl From<AuthServiceError> for ComponentError {
-    fn from(value: AuthServiceError) -> Self {
-        match value {
-            AuthServiceError::InvalidToken(error) => {
-                ComponentError::Unauthorized(Json(ErrorBody { error }))
-            }
-            AuthServiceError::Unexpected(error) => {
-                ComponentError::InternalError(Json(ErrorBody { error }))
-            }
-        }
-    }
-}
-
 impl From<ComponentServiceError> for ComponentError {
     fn from(value: ComponentServiceError) -> Self {
         match value {
@@ -73,7 +60,7 @@ impl From<ComponentServiceError> for ComponentError {
             }
             ComponentServiceError::UnknownComponentId(_)
             | ComponentServiceError::UnknownVersionedComponentId(_)
-            | ComponentServiceError::UnknownProjectId(_) => {
+            | ComponentServiceError::UnknownProject(_) => {
                 ComponentError::BadRequest(Json(ErrorsBody {
                     errors: vec![value.to_string()],
                 }))
@@ -112,12 +99,15 @@ impl From<std::io::Error> for ComponentError {
 }
 
 pub struct ComponentApi {
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
-    pub component_service: Arc<dyn ComponentService + Sync + Send>,
+    component_service: Arc<dyn ComponentService + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v2/components", tag = ApiTags::Component)]
 impl ComponentApi {
+    pub fn new(component_service: Arc<dyn ComponentService + Sync + Send>) -> Self {
+        Self { component_service }
+    }
+
     /// Get the metadata for all component versions
     ///
     /// Each component can have multiple versions. Every time a new WASM is uploaded for a given component id, that creates a new version.
@@ -140,7 +130,7 @@ impl ComponentApi {
         component_id: Path<ComponentId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<crate::model::Component>>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let response = self.component_service.get(&component_id.0, &auth).await?;
         Ok(Json(response))
     }
@@ -157,7 +147,7 @@ impl ComponentApi {
         wasm: Binary<Body>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::Component>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let data = wasm.0.into_vec().await?;
         let response = self
             .component_service
@@ -175,7 +165,7 @@ impl ComponentApi {
         payload: UploadPayload,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::Component>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let data = payload.component.into_vec().await?;
         let component_name = payload.query.0.component_name;
         let project_id = payload.query.0.project_id;
@@ -200,7 +190,7 @@ impl ComponentApi {
         version: Query<Option<u64>>,
         token: GolemSecurityScheme,
     ) -> Result<Binary<Body>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let bytes = self
             .component_service
             .download_stream(&component_id.0, version.0, &auth)
@@ -224,7 +214,7 @@ impl ComponentApi {
         #[oai(name = "version")] version: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::Component>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let version_int = match version.0.parse::<u64>() {
             Ok(v) => v,
             Err(_) => {
@@ -265,7 +255,7 @@ impl ComponentApi {
         component_id: Path<ComponentId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::Component>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let response = self
             .component_service
             .get_latest_version(&component_id.0, &auth)
@@ -293,7 +283,7 @@ impl ComponentApi {
         component_name: Query<Option<ComponentName>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<crate::model::Component>>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let auth = CloudAuthCtx::new(token.secret());
         let response = self
             .component_service
             .find_by_project_and_name(project_id.0, component_name.0, &auth)

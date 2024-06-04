@@ -27,7 +27,7 @@ figment = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
-http_02 = { package = "http", version = "0.2.11" }
+http_02 = { workspace = true }
 hyper = { workspace = true }
 nom = "7.1.3"
 opentelemetry = { workspace = true }

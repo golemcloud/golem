@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use tracing::error;
-
 use crate::auth::AccountAuthorisation;
-use crate::model::{AccountSummary, Role};
+use crate::model::AccountSummary;
 use crate::repo::account_summary::AccountSummaryRepo;
 use crate::repo::RepoError;
+use async_trait::async_trait;
+use cloud_common::model::Role;
+use tracing::error;
 
 #[derive(Debug, Clone)]
 pub enum AccountSummaryServiceError {

@@ -2,12 +2,13 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cloud_common::model::Role;
 use cloud_common::model::TokenId;
 use golem_common::model::AccountId;
 use tracing::info;
 
 use crate::auth::AccountAuthorisation;
-use crate::model::{OAuth2Provider, OAuth2Token, Role};
+use crate::model::{OAuth2Provider, OAuth2Token};
 use crate::repo::oauth2_token::{OAuth2TokenRecord, OAuth2TokenRepo};
 use crate::repo::RepoError;
 

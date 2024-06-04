@@ -6,7 +6,7 @@ use golem_common::model::AccountId;
 use sqlx::{Database, Pool};
 
 use super::RepoError;
-use crate::model::Role;
+use cloud_common::model::Role;
 
 #[async_trait]
 pub trait AccountGrantRepo {

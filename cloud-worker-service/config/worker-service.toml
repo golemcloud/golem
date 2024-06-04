@@ -20,6 +20,17 @@ min_delay = "100ms"
 max_delay = "2s"
 multiplier = 2
 
+[cloud_service]
+# host
+# port
+# access_token
+
+[cloud_service.retries]
+max_attempts = 3
+min_delay = "100ms"
+max_delay = "1s"
+multiplier = 3
+
 [component_service]
 # host
 # port

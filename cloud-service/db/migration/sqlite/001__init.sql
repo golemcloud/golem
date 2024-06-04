@@ -72,6 +72,20 @@ CREATE TABLE account_workers
     FOREIGN KEY (account_id) REFERENCES accounts (id)
 );
 
+CREATE TABLE account_components
+(
+    account_id character varying(100) NOT NULL PRIMARY KEY,
+    counter    integer                NOT NULL,
+    FOREIGN KEY (account_id) REFERENCES accounts (id)
+);
+
+CREATE TABLE account_used_storage
+(
+    account_id character varying(100) NOT NULL PRIMARY KEY,
+    counter    bigint                 NOT NULL,
+    FOREIGN KEY (account_id) REFERENCES accounts (id)
+);
+
 CREATE TABLE account_uploads
 (
     account_id character varying(100) NOT NULL PRIMARY KEY,

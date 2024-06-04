@@ -159,10 +159,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         sqlx::query_as::<_, ComponentRecord>(
             "SELECT component_id, version, project_id, name, size, user_component, protected_component, protector_version, jsonb_pretty(components.metadata) AS metadata FROM components WHERE component_id = $1 ORDER BY version DESC LIMIT 1",
         )
-        .bind(component_id)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+            .bind(component_id)
+            .fetch_optional(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
     }
 
     async fn get_by_version(
@@ -173,11 +173,11 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         sqlx::query_as::<_, ComponentRecord>(
             "SELECT component_id, version, project_id, name, size, user_component, protected_component, protector_version, jsonb_pretty(components.metadata) AS metadata  FROM components WHERE component_id = $1 AND version = $2",
         )
-        .bind(component_id)
-        .bind(version as i64)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+            .bind(component_id)
+            .bind(version as i64)
+            .fetch_optional(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
     }
 
     async fn get_by_project(&self, project_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
@@ -196,11 +196,11 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         sqlx::query_as::<_, ComponentRecord>(
             "SELECT component_id, version, project_id, name, size, user_component, protected_component, protector_version, jsonb_pretty(components.metadata) AS metadata FROM components WHERE project_id = $1 AND name = $2",
         )
-        .bind(project_id)
-        .bind(name)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+            .bind(project_id)
+            .bind(name)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
     }
 
     async fn get_count_by_projects(&self, project_ids: Vec<Uuid>) -> Result<u64, RepoError> {

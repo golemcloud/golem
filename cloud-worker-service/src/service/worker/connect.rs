@@ -7,8 +7,6 @@ use golem_worker_service_base::service::worker::ConnectWorkerStream as BaseWorke
 use std::sync::Arc;
 use tonic::Status;
 
-// use crate::repo::account_connections::AccountConnectionsRepo;
-
 pub struct ConnectWorkerStream {
     stream: BaseWorkerStream,
     worker_id: WorkerId,

@@ -3,6 +3,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
+    use cloud_common::model::Role;
     use cloud_common::model::{
         PlanId, ProjectActions, ProjectAuthorisedActions, ProjectGrantId, ProjectPolicyId, TokenId,
     };
@@ -11,7 +12,7 @@ mod tests {
     use cloud_service::db;
     use cloud_service::model::{
         Account, AccountData, OAuth2Provider, OAuth2Token, Project, ProjectData, ProjectGrant,
-        ProjectGrantData, ProjectPolicy, ProjectType, Role, Token,
+        ProjectGrantData, ProjectPolicy, ProjectType, Token,
     };
     use cloud_service::service::account::AccountService;
     use cloud_service::service::oauth2_token::OAuth2TokenService;

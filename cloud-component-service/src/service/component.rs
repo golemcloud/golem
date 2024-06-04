@@ -11,15 +11,12 @@ use golem_component_service_base::service::component_processor::ComponentProcess
 use tap::TapFallible;
 use tracing::{error, info};
 
-use super::plan_limit::CheckLimitResult;
-use crate::auth::AccountAuthorisation;
-use crate::model::*;
-use crate::repo::account_uploads::AccountUploadsRepo;
 use crate::repo::component::ComponentRepo;
 use crate::repo::RepoError;
-use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
+use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx, CloudNamespace};
+use crate::service::limit::{LimitError, LimitService};
 use crate::service::project::{ProjectError, ProjectService};
-use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisationService};
+use cloud_api_grpc::proto::golem::cloud::project::project_error;
 use golem_service_base::model::*;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
@@ -32,8 +29,8 @@ pub enum ComponentError {
     UnknownComponentId(ComponentId),
     #[error("Unknown versioned component id: {0}")]
     UnknownVersionedComponentId(VersionedComponentId),
-    #[error("Unknown project id: {0}")]
-    UnknownProjectId(ProjectId),
+    #[error("Unknown project: {0}")]
+    UnknownProject(String),
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
     #[error("Limit exceeded: {0}")]
@@ -65,24 +62,22 @@ impl From<RepoError> for ComponentError {
     }
 }
 
-impl From<PlanLimitError> for ComponentError {
-    fn from(error: PlanLimitError) -> Self {
+impl From<AuthServiceError> for ComponentError {
+    fn from(value: AuthServiceError) -> Self {
+        match value {
+            AuthServiceError::Unauthorized(error) => ComponentError::Unauthorized(error),
+            AuthServiceError::Forbidden(error) => ComponentError::Unauthorized(error),
+            AuthServiceError::Internal(error) => ComponentError::Internal(error),
+        }
+    }
+}
+
+impl From<LimitError> for ComponentError {
+    fn from(error: LimitError) -> Self {
         match error {
-            PlanLimitError::Unauthorized(error) => ComponentError::Unauthorized(error),
-            PlanLimitError::Internal(error) => {
-                ComponentError::Internal(anyhow::Error::msg(error.to_string()))
-            }
-            // TODO: This looks wrong.
-            PlanLimitError::AccountIdNotFound(_) => {
-                ComponentError::Internal(anyhow::Error::msg("Account not found"))
-            }
-            PlanLimitError::ProjectIdNotFound(project_id) => {
-                ComponentError::UnknownProjectId(project_id)
-            }
-            PlanLimitError::ComponentIdNotFound(component_id) => {
-                ComponentError::UnknownComponentId(component_id)
-            }
-            PlanLimitError::LimitExceeded(error) => ComponentError::LimitExceeded(error),
+            LimitError::Unauthorized(string) => ComponentError::Unauthorized(string),
+            LimitError::LimitExceeded(string) => ComponentError::LimitExceeded(string),
+            LimitError::Internal(e) => ComponentError::Internal(e),
         }
     }
 }
@@ -90,20 +85,25 @@ impl From<PlanLimitError> for ComponentError {
 impl From<ProjectError> for ComponentError {
     fn from(error: ProjectError) -> Self {
         match error {
-            ProjectError::Unauthorized(error) => ComponentError::Unauthorized(error),
-            ProjectError::LimitExceeded(error) => ComponentError::LimitExceeded(error),
-            ProjectError::Internal(error) => ComponentError::Internal(anyhow::Error::msg(error)),
-        }
-    }
-}
-
-impl From<ProjectAuthorisationError> for ComponentError {
-    fn from(error: ProjectAuthorisationError) -> Self {
-        match error {
-            ProjectAuthorisationError::Unauthorized(error) => ComponentError::Unauthorized(error),
-            ProjectAuthorisationError::Internal(error) => {
-                ComponentError::Internal(anyhow::Error::msg(error))
-            }
+            ProjectError::Server(e) => match e.error {
+                Some(e) => match e {
+                    project_error::Error::BadRequest(e) => {
+                        ComponentError::Internal(anyhow::Error::msg(e.errors.join(", ")))
+                    }
+                    project_error::Error::Unauthorized(e) => ComponentError::Unauthorized(e.error),
+                    project_error::Error::LimitExceeded(e) => {
+                        ComponentError::LimitExceeded(e.error)
+                    }
+                    project_error::Error::NotFound(e) => ComponentError::UnknownProject(e.error),
+                    project_error::Error::InternalError(e) => {
+                        ComponentError::Internal(anyhow::Error::msg(e.error))
+                    }
+                },
+                None => ComponentError::Internal(anyhow::Error::msg("Empty error")),
+            },
+            ProjectError::Connection(e) => ComponentError::Internal(e.into()),
+            ProjectError::Transport(e) => ComponentError::Internal(e.into()),
+            ProjectError::Unknown(e) => ComponentError::Internal(anyhow::Error::msg(e)),
         }
     }
 }
@@ -115,96 +115,93 @@ pub trait ComponentService {
         project_id: Option<ProjectId>,
         component_name: &ComponentName,
         data: Vec<u8>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError>;
 
     async fn update(
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError>;
 
     async fn download(
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Vec<u8>, ComponentError>;
 
     async fn download_stream(
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<ByteStream, ComponentError>;
 
     async fn get_protected_data(
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Option<Vec<u8>>, ComponentError>;
 
     async fn find_by_project_and_name(
         &self,
         project_id: Option<ProjectId>,
         component_name: Option<ComponentName>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Vec<crate::model::Component>, ComponentError>;
 
     async fn get_by_project(
         &self,
         project_id: &ProjectId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Vec<crate::model::Component>, ComponentError>;
 
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Option<crate::model::Component>, ComponentError>;
 
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Option<crate::model::Component>, ComponentError>;
 
     async fn get(
         &self,
         component_id: &ComponentId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Vec<crate::model::Component>, ComponentError>;
 }
 
 pub struct ComponentServiceDefault {
-    account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send>,
     component_repo: Arc<dyn ComponentRepo + Sync + Send>,
-    plan_limit_service: Arc<dyn PlanLimitService + Sync + Send>,
     object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
+    auth_service: Arc<dyn AuthService + Sync + Send>,
+    limit_service: Arc<dyn LimitService + Sync + Send>,
     project_service: Arc<dyn ProjectService + Sync + Send>,
-    project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
     component_compilation_service: Arc<dyn ComponentCompilationService + Sync + Send>,
 }
 
 impl ComponentServiceDefault {
     pub fn new(
-        account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send>,
         component_repo: Arc<dyn ComponentRepo + Sync + Send>,
-        plan_limit_service: Arc<dyn PlanLimitService + Sync + Send>,
         object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
+        auth_service: Arc<dyn AuthService + Sync + Send>,
+        limit_service: Arc<dyn LimitService + Sync + Send>,
         project_service: Arc<dyn ProjectService + Sync + Send>,
-        project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
         component_compilation_service: Arc<dyn ComponentCompilationService + Sync + Send>,
     ) -> Self {
         ComponentServiceDefault {
-            account_uploads_repo,
             component_repo,
-            plan_limit_service,
             object_store,
+            auth_service,
+            limit_service,
             project_service,
-            project_auth_service,
             component_compilation_service,
         }
     }
@@ -217,52 +214,41 @@ impl ComponentService for ComponentServiceDefault {
         project_id: Option<ProjectId>,
         component_name: &ComponentName,
         data: Vec<u8>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError> {
+        let component_id = ComponentId::new_v4();
         let pid = project_id
             .clone()
             .map_or("default".to_string(), |n| n.0.to_string());
         let tn = component_name.0.clone();
         info!("Creating component for project {} with name {}", pid, tn);
 
-        let project_id = if let Some(project_id) = project_id.clone() {
-            project_id
+        let namespace = if let Some(project_id) = project_id.clone() {
+            self.is_authorized_by_project(auth, &project_id, &ProjectAction::CreateComponent)
+                .await?
         } else {
-            let project = self.project_service.get_own_default(auth).await?;
-            project.project_id
+            let project = self.project_service.get_default(&auth.token_secret).await?;
+            CloudNamespace {
+                project_id: project.id,
+                account_id: project.owner_account_id,
+            }
         };
 
-        self.is_authorized_by_project(auth, &project_id, &ProjectAction::CreateComponent)
-            .await?;
-        self.check_plan_limits(&project_id).await?;
+        let project_id = namespace.project_id;
+        let account_id = namespace.account_id;
 
         self.check_new_name(&project_id, component_name).await?;
 
-        let plan_limit = self
-            .plan_limit_service
-            .get_project_limits(&project_id)
-            .await?;
+        let component_size: u64 = data
+            .len()
+            .try_into()
+            .map_err(|e| ComponentError::internal(e, "Failed to convert data length"))?;
 
-        let account_id = plan_limit.account_id;
-
-        let storage_limit = self
-            .plan_limit_service
-            .check_storage_limit(&account_id)
-            .await?;
-
-        let upload_limit = self
-            .plan_limit_service
-            .check_upload_limit(&account_id)
-            .await?;
-
-        info!("create_component limits verified");
-
-        self.validate_limits(storage_limit, upload_limit, &data)
+        self.limit_service
+            .update_component_limit(&account_id, &component_id, 1, component_size as i64)
             .await?;
 
         let metadata = process_component(&data)?;
-
-        let component_id = ComponentId::new_v4();
 
         info!("Component {component_id} metadata: {metadata:?}");
 
@@ -279,11 +265,6 @@ impl ComponentService for ComponentServiceDefault {
         };
 
         info!("Pushing {:?}", user_component_id);
-
-        let component_size: u64 = data
-            .len()
-            .try_into()
-            .map_err(|e| ComponentError::internal(e, "Failed to convert data length"))?;
 
         tokio::try_join!(
             self.upload_user_component(&user_component_id, data.clone()),
@@ -319,32 +300,22 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError> {
         info!("Updating component {}", component_id.0);
-        self.is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
+        let namespace = self
+            .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
 
-        let plan_limit = self
-            .plan_limit_service
-            .get_component_limits(component_id)
-            .await?;
+        let account_id = namespace.account_id;
 
-        let account_id = plan_limit.account_id;
+        let component_size: u64 = data
+            .len()
+            .try_into()
+            .map_err(|e| ComponentError::internal(e, "Failed to convert data length"))?;
 
-        let storage_limit = self
-            .plan_limit_service
-            .check_storage_limit(&account_id)
-            .await?;
-
-        let upload_limit = self
-            .plan_limit_service
-            .check_upload_limit(&account_id)
-            .await?;
-
-        info!("update_component limits verified");
-
-        self.validate_limits(storage_limit, upload_limit, &data)
+        self.limit_service
+            .update_component_limit(&account_id, component_id, 1, component_size as i64)
             .await?;
 
         let metadata = process_component(&data)?;
@@ -361,11 +332,6 @@ impl ComponentService for ComponentServiceDefault {
 
         info!("Pushing {:?}", next_component.user_component_id);
 
-        let component_size: u64 = data
-            .len()
-            .try_into()
-            .map_err(|e| ComponentError::internal(e, "Failed to convert data length"))?;
-
         tokio::try_join!(
             self.upload_user_component(&next_component.user_component_id, data.clone()),
             self.upload_protected_component(&next_component.protected_component_id, data)
@@ -379,16 +345,16 @@ impl ComponentService for ComponentServiceDefault {
             ..next_component
         };
 
+        self.component_repo
+            .upsert(&component.clone().into())
+            .await?;
+
         self.component_compilation_service
             .enqueue_compilation(
                 &component.versioned_component_id.component_id,
                 component.versioned_component_id.version,
             )
             .await;
-
-        self.component_repo
-            .upsert(&component.clone().into())
-            .await?;
 
         Ok(component)
     }
@@ -397,7 +363,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Vec<u8>, ComponentError> {
         self.is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
             .await?;
@@ -438,7 +404,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<ByteStream, ComponentError> {
         self.is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
             .await?;
@@ -480,7 +446,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Option<Vec<u8>>, ComponentError> {
         info!(
             "Getting component  {} version {} data",
@@ -536,7 +502,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         project_id: Option<ProjectId>,
         component_name: Option<ComponentName>,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Vec<crate::model::Component>, ComponentError> {
         let pid = project_id
             .clone()
@@ -545,14 +511,15 @@ impl ComponentService for ComponentServiceDefault {
         info!("Getting component by project {} and name {}", pid, tn);
 
         let project_id = if let Some(project_id) = project_id.clone() {
-            project_id
+            self.is_authorized_by_project(auth, &project_id, &ProjectAction::ViewComponent)
+                .await?
+                .project_id
         } else {
-            let project = self.project_service.get_own_default(auth).await?;
-            project.project_id
+            self.project_service
+                .get_default(&auth.token_secret)
+                .await?
+                .id
         };
-
-        self.is_authorized_by_project(auth, &project_id, &ProjectAction::ViewComponent)
-            .await?;
 
         let result = match component_name {
             Some(name) => {
@@ -573,7 +540,7 @@ impl ComponentService for ComponentServiceDefault {
     async fn get_by_project(
         &self,
         project_id: &ProjectId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Vec<crate::model::Component>, ComponentError> {
         info!("Getting component by project {}", project_id);
         self.is_authorized_by_project(auth, project_id, &ProjectAction::ViewComponent)
@@ -591,7 +558,7 @@ impl ComponentService for ComponentServiceDefault {
     async fn get(
         &self,
         component_id: &ComponentId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Vec<crate::model::Component>, ComponentError> {
         info!("Getting component {}", component_id);
         self.is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
@@ -608,7 +575,7 @@ impl ComponentService for ComponentServiceDefault {
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Option<crate::model::Component>, ComponentError> {
         info!(
             "Getting component {} version {}",
@@ -634,7 +601,7 @@ impl ComponentService for ComponentServiceDefault {
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
     ) -> Result<Option<crate::model::Component>, ComponentError> {
         info!("Getting component {} latest version", component_id);
         self.is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
@@ -654,71 +621,39 @@ impl ComponentService for ComponentServiceDefault {
 impl ComponentServiceDefault {
     async fn is_authorized_by_component(
         &self,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
         component_id: &ComponentId,
-        required_action: &ProjectAction,
-    ) -> Result<(), ComponentError> {
-        if auth.has_role(&Role::Admin) {
-            Ok(())
-        } else {
-            let permissions = self
-                .project_auth_service
-                .get_by_component(component_id, auth)
-                .await
-                .tap_err(|e| error!("Error getting component permissions: {:?}", e))?;
+        action: &ProjectAction,
+    ) -> Result<CloudNamespace, ComponentError> {
+        let component = self
+            .component_repo
+            .get_latest_version(&component_id.0)
+            .await?;
 
-            if permissions.actions.actions.contains(required_action) {
-                Ok(())
-            } else {
-                Err(ComponentError::Unauthorized(format!(
-                    "Account unauthorized to perform action on component {}: {}",
-                    component_id.0, required_action
-                )))
+        match component {
+            Some(component) => {
+                let project_id = ProjectId(component.project_id);
+                self.is_authorized_by_project(auth, &project_id, action)
+                    .await
             }
+            None => Err(ComponentError::Unauthorized(format!(
+                "Account unauthorized to perform action on component {}: {}",
+                component_id.0, action
+            ))),
         }
     }
 
     async fn is_authorized_by_project(
         &self,
-        auth: &AccountAuthorisation,
+        auth: &CloudAuthCtx,
         project_id: &ProjectId,
-        required_action: &ProjectAction,
-    ) -> Result<(), ComponentError> {
-        if auth.has_role(&Role::Admin) {
-            Ok(())
-        } else {
-            let permissions = self
-                .project_auth_service
-                .get_by_project(project_id, auth)
-                .await
-                .tap_err(|e| error!("Error getting component permissions: {:?}", e))?;
-
-            if permissions.actions.actions.contains(required_action) {
-                Ok(())
-            } else {
-                Err(ComponentError::Unauthorized(format!(
-                    "Account unauthorized to perform action on project {}: {}",
-                    project_id.0, required_action
-                )))
-            }
-        }
-    }
-
-    async fn check_plan_limits(&self, project_id: &ProjectId) -> Result<(), ComponentError> {
-        let limits = self
-            .plan_limit_service
-            .check_component_limit(project_id)
-            .await
-            .tap_err(|e| error!("Error checking limit for project {}: {:?}", project_id, e))?;
-
-        if limits.not_in_limit() {
-            Err(ComponentError::LimitExceeded(format!(
-                "Component limit exceeded for project: {} (limit: {})",
-                project_id.0, limits.limit
-            )))
-        } else {
-            Ok(())
-        }
+        action: &ProjectAction,
+    ) -> Result<CloudNamespace, ComponentError> {
+        let namespace = self
+            .auth_service
+            .is_authorized(project_id, action.clone(), auth)
+            .await?;
+        Ok(namespace)
     }
 
     async fn check_new_name(
@@ -788,42 +723,6 @@ impl ComponentServiceDefault {
                 ComponentError::internal(e.to_string(), "Failed to upload protected component")
             })
     }
-
-    async fn validate_limits(
-        &self,
-        storage_limit: CheckLimitResult,
-        upload_limit: CheckLimitResult,
-        data: &[u8],
-    ) -> Result<(), ComponentError> {
-        let num_bytes: i32 = data
-            .len()
-            .try_into()
-            .map_err(|e| ComponentError::internal(e, "Failed to convert data length"))?;
-
-        if num_bytes > 50000000 {
-            Err(ComponentError::LimitExceeded(
-                "Component size limit exceeded (limit: 50MB)".into(),
-            ))
-        } else if !storage_limit.add(num_bytes.into()).in_limit() {
-            Err(ComponentError::LimitExceeded(format!(
-                "Storage limit exceeded for account: {} (limit: {} MB)",
-                storage_limit.account_id.value,
-                storage_limit.limit / 1000000
-            )))
-        } else if !upload_limit.add(num_bytes.into()).in_limit() {
-            Err(ComponentError::LimitExceeded(format!(
-                "Upload limit exceeded for account: {} (limit: {} MB)",
-                upload_limit.account_id.value,
-                upload_limit.limit / 1000000
-            )))
-        } else {
-            self.account_uploads_repo
-                .update(&upload_limit.account_id, num_bytes)
-                .await?;
-
-            Ok(())
-        }
-    }
 }
 
 #[derive(Default)]
@@ -836,7 +735,7 @@ impl ComponentService for ComponentServiceNoOp {
         project_id: Option<ProjectId>,
         _component_name: &ComponentName,
         _data: Vec<u8>,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError> {
         let fake_component = crate::model::Component {
             component_name: ComponentName("fake".to_string()),
@@ -871,7 +770,7 @@ impl ComponentService for ComponentServiceNoOp {
         &self,
         _component_id: &ComponentId,
         _data: Vec<u8>,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError> {
         let fake_component = crate::model::Component {
             component_name: ComponentName("fake".to_string()),
@@ -906,7 +805,7 @@ impl ComponentService for ComponentServiceNoOp {
         &self,
         _component_id: &ComponentId,
         _version: Option<u64>,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<Vec<u8>, ComponentError> {
         Ok(vec![])
     }
@@ -915,7 +814,7 @@ impl ComponentService for ComponentServiceNoOp {
         &self,
         _component_id: &ComponentId,
         _version: Option<u64>,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<ByteStream, ComponentError> {
         Ok(ByteStream::empty())
     }
@@ -924,7 +823,7 @@ impl ComponentService for ComponentServiceNoOp {
         &self,
         _component_id: &ComponentId,
         _version: Option<u64>,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<Option<Vec<u8>>, ComponentError> {
         Ok(None)
     }
@@ -933,7 +832,7 @@ impl ComponentService for ComponentServiceNoOp {
         &self,
         _project_id: Option<ProjectId>,
         _component_name: Option<ComponentName>,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<Vec<crate::model::Component>, ComponentError> {
         Ok(vec![])
     }
@@ -941,7 +840,7 @@ impl ComponentService for ComponentServiceNoOp {
     async fn get_by_project(
         &self,
         _project_id: &ProjectId,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<Vec<crate::model::Component>, ComponentError> {
         Ok(vec![])
     }
@@ -949,7 +848,7 @@ impl ComponentService for ComponentServiceNoOp {
     async fn get_by_version(
         &self,
         _component_id: &VersionedComponentId,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<Option<crate::model::Component>, ComponentError> {
         Ok(None)
     }
@@ -957,7 +856,7 @@ impl ComponentService for ComponentServiceNoOp {
     async fn get_latest_version(
         &self,
         _component_id: &ComponentId,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<Option<crate::model::Component>, ComponentError> {
         Ok(None)
     }
@@ -965,7 +864,7 @@ impl ComponentService for ComponentServiceNoOp {
     async fn get(
         &self,
         _component_id: &ComponentId,
-        _auth: &AccountAuthorisation,
+        _auth: &CloudAuthCtx,
     ) -> Result<Vec<crate::model::Component>, ComponentError> {
         Ok(vec![])
     }

@@ -10,7 +10,7 @@ fn main() {
     let out_dir = var_os("OUT_DIR").unwrap();
     let manifest_dir = var_os("CARGO_MANIFEST_DIR").unwrap();
 
-    let rel_path = RelativePath::new("../openapi/cloud-spec.yaml");
+    let rel_path = RelativePath::new("../openapi/golem-cloud-service.yaml");
     let yaml_path = rel_path.to_logical_path(manifest_dir.clone());
 
     println!("Output directory: {:?}", out_dir);
@@ -23,14 +23,14 @@ fn main() {
         std::fs::create_dir_all(Path::new(&manifest_dir).join("openapi")).unwrap();
         copy_if_different(
             yaml_path.clone(),
-            Path::new(&manifest_dir).join("openapi/cloud-spec.yaml"),
+            Path::new(&manifest_dir).join("openapi/golem-cloud-service.yaml"),
         )
         .unwrap();
 
         println!("cargo::rerun-if-changed=build.rs");
-        println!("cargo::rerun-if-changed=openapi/cloud-spec.yaml");
+        println!("cargo::rerun-if-changed=openapi/golem-cloud-service.yaml");
     } else {
-        let crate_yaml_path = Path::new(&manifest_dir).join("openapi/cloud-spec.yaml");
+        let crate_yaml_path = Path::new(&manifest_dir).join("openapi/golem-cloud-service.yaml");
         generate(crate_yaml_path, out_dir);
     }
 }

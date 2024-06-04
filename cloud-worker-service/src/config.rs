@@ -1,12 +1,52 @@
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
+use golem_common::config::RetryConfig;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use http::Uri;
 use serde::Deserialize;
+use url::Url;
+use uuid::Uuid;
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CloudServiceConfig {
+    pub host: String,
+    pub port: u16,
+    pub access_token: Uuid,
+    pub retries: RetryConfig,
+}
+
+impl CloudServiceConfig {
+    pub fn url(&self) -> Url {
+        Url::parse(&format!("http://{}:{}", self.host, self.port))
+            .expect("Failed to parse CloudService URL")
+    }
+
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build CloudService URI")
+    }
+}
+
+impl Default for CloudServiceConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 8080,
+            access_token: Uuid::new_v4(),
+            retries: RetryConfig::default(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct WorkerServiceCloudConfig {
     pub base_config: WorkerServiceBaseConfig,
     pub cloud_specific_config: CloudSpecificWorkerServiceConfig,
+    pub cloud_service: CloudServiceConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -45,9 +85,16 @@ impl WorkerServiceCloudConfig {
             .extract()
             .expect("Failed to parse cloud specific worker service config");
 
+        let cloud_service: CloudServiceConfig = Figment::new()
+            .merge(Toml::file(common_file))
+            .merge(env_prefix.clone())
+            .extract_inner("cloud_service")
+            .expect("Failed to parse cloud service config");
+
         WorkerServiceCloudConfig {
             base_config,
             cloud_specific_config,
+            cloud_service,
         }
     }
 }
@@ -141,10 +188,16 @@ mod tests {
         std::env::set_var("GOLEM__REDIS__DATABASE", "1");
         std::env::set_var("GOLEM__ENVIRONMENT", "dev");
         std::env::set_var("GOLEM__WORKSPACE", "release");
+        std::env::set_var("GOLEM__CLOUD_SERVICE__HOST", "localhost");
+        std::env::set_var("GOLEM__CLOUD_SERVICE__PORT", "7899");
         std::env::set_var("GOLEM__COMPONENT_SERVICE__HOST", "localhost");
         std::env::set_var("GOLEM__COMPONENT_SERVICE__PORT", "1234");
         std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "localhost");
         std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
+        std::env::set_var(
+            "GOLEM__CLOUD_SERVICE__ACCESS_TOKEN",
+            "5C832D93-FF85-4A8F-9803-513950FDFDB1",
+        );
         std::env::set_var(
             "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
             "5C832D93-FF85-4A8F-9803-513950FDFDB1",

@@ -6,7 +6,7 @@
 # in SSM, to something that shard-manager is specifically looking for.
 # The right side values here are available through chamber that reads from SSM.
 echo "Running in environment ${ENVIRONMENT}"
-source <(chamber env golem-app/gateway-service/${ENVIRONMENT}) # FIXME
+source <(chamber env golem-app/worker-service/${ENVIRONMENT})
 source <(chamber env golem-app/infra-outputs/${ENVIRONMENT})
 # Custom names
 export GOLEM__REDIS__HOST=$REDIS_HOST

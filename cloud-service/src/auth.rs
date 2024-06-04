@@ -1,6 +1,7 @@
 use golem_common::model::AccountId;
 
-use crate::model::{Role, Token};
+use crate::model::Token;
+use cloud_common::model::Role;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct AccountAuthorisation {

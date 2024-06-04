@@ -11,7 +11,6 @@ use crate::service::Services;
 mod account;
 mod account_summary;
 mod auth;
-mod component;
 mod grant;
 mod healthcheck;
 mod limits;
@@ -55,8 +54,6 @@ enum ApiTags {
     /// - `CreateProjectGrants` allows creating new grants for the project
     /// - `DeleteProjectGrants` allows deleting existing grants of the project
     ProjectPolicy,
-    /// The component API provides endpoint to upload, download and find Golem components (WASM components with associated metadata).
-    Component,
     /// The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
     Token,
 }
@@ -85,7 +82,6 @@ type ApiServices = (
     project::ProjectApi,
     project_grant::ProjectGrantApi,
     project_policy::ProjectPolicyApi,
-    component::ComponentApi,
     token::TokenApi,
 );
 
@@ -127,10 +123,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             project_policy::ProjectPolicyApi {
                 auth_service: services.auth_service.clone(),
                 project_policy_service: services.project_policy_service.clone(),
-            },
-            component::ComponentApi {
-                auth_service: services.auth_service.clone(),
-                component_service: services.component_service.clone(),
             },
             token::TokenApi {
                 auth_service: services.auth_service.clone(),

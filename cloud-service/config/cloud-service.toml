@@ -18,17 +18,6 @@ database = "golem"
 #username
 #password
 
-[components.store]
-type = "Local" # Local, S3
-
-[components.compilation]
-type = "Disabled"
-
-[components.store.config]
-object_prefix = ""
-#bucket_name
-#root_path
-
 [plans.default]
 plan_id = "80b56370-1ed4-4d90-864b-e8809641995d" # default plan id
 project_limit = 100

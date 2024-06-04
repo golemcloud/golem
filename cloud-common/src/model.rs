@@ -251,3 +251,93 @@ impl TryFrom<cloud_api_grpc::proto::golem::cloud::project::GetProjectActionsSucc
         })
     }
 }
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    serde::Serialize,
+    serde::Deserialize,
+    Enum,
+    EnumIter,
+)]
+pub enum Role {
+    Admin,
+    MarketingAdmin,
+    ViewProject,
+    DeleteProject,
+    CreateProject,
+    InstanceServer,
+}
+
+impl Role {
+    pub fn all() -> Vec<Role> {
+        Role::iter().collect::<Vec<Role>>()
+    }
+
+    pub fn all_project_roles() -> Vec<Role> {
+        vec![Role::ViewProject, Role::DeleteProject, Role::CreateProject]
+    }
+}
+
+impl From<Role> for i32 {
+    fn from(value: Role) -> Self {
+        match value {
+            Role::Admin => 0,
+            Role::MarketingAdmin => 1,
+            Role::ViewProject => 2,
+            Role::DeleteProject => 3,
+            Role::CreateProject => 4,
+            Role::InstanceServer => 5,
+        }
+    }
+}
+
+impl TryFrom<i32> for Role {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Role::Admin),
+            1 => Ok(Role::MarketingAdmin),
+            2 => Ok(Role::ViewProject),
+            3 => Ok(Role::DeleteProject),
+            4 => Ok(Role::CreateProject),
+            5 => Ok(Role::InstanceServer),
+            _ => Err(format!("Invalid role: {}", value)),
+        }
+    }
+}
+
+impl FromStr for Role {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Admin" => Ok(Role::Admin),
+            "MarketingAdmin" => Ok(Role::MarketingAdmin),
+            "ViewProject" => Ok(Role::ViewProject),
+            "DeleteProject" => Ok(Role::DeleteProject),
+            "CreateProject" => Ok(Role::CreateProject),
+            "InstanceServer" => Ok(Role::InstanceServer),
+            _ => Err(format!("Unknown role id: {}", s)),
+        }
+    }
+}
+
+impl Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Role::Admin => write!(f, "Admin"),
+            Role::MarketingAdmin => write!(f, "MarketingAdmin"),
+            Role::ViewProject => write!(f, "ViewProject"),
+            Role::DeleteProject => write!(f, "DeleteProject"),
+            Role::CreateProject => write!(f, "CreateProject"),
+            Role::InstanceServer => write!(f, "InstanceServer"),
+        }
+    }
+}

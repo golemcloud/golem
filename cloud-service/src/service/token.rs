@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use cloud_common::model::Role;
 use cloud_common::model::TokenId;
 use cloud_common::model::TokenSecret;
 use golem_common::model::AccountId;
@@ -9,7 +10,7 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::auth::AccountAuthorisation;
-use crate::model::{Role, Token, UnsafeToken};
+use crate::model::{Token, UnsafeToken};
 use crate::repo::token::TokenRepo;
 use crate::repo::RepoError;
 use crate::service::oauth2_token::{OAuth2TokenError, OAuth2TokenService};

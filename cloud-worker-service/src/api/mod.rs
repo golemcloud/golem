@@ -53,8 +53,8 @@ pub fn make_open_api_service(
             ApiCertificateApi::new(services.certificate_service),
             ApiDomainApi::new(services.domain_service),
         ),
-        "Golem Worker Service API",
-        "1.0",
+        "Golem API",
+        "2.0",
     )
 }
 

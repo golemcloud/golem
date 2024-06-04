@@ -1,10 +1,3 @@
-use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_component_service_base::service::component_compilation::{
-    ComponentCompilationService, ComponentCompilationServiceDefault,
-    ComponentCompilationServiceDisabled,
-};
-use golem_service_base::config::ComponentStoreConfig;
-use golem_service_base::service::component_object_store;
 use std::sync::Arc;
 
 use crate::config::{CloudServiceConfig, DbConfig};
@@ -15,7 +8,6 @@ pub mod account;
 pub mod account_grant;
 pub mod account_summary;
 pub mod auth;
-pub mod component;
 pub mod login;
 pub mod oauth2;
 pub mod oauth2_github_client;
@@ -43,7 +35,6 @@ pub struct Services {
     pub oauth2_service: Arc<dyn oauth2::OAuth2Service + Sync + Send>,
     pub token_service: Arc<dyn token::TokenService + Sync + Send>,
     pub login_service: Arc<dyn login::LoginService + Sync + Send>,
-    pub component_service: Arc<dyn component::ComponentService + Sync + Send>,
     pub project_auth_service: Arc<dyn project_auth::ProjectAuthorisationService + Sync + Send>,
     pub project_service: Arc<dyn project::ProjectService + Sync + Send>,
     pub project_policy_service: Arc<dyn project_policy::ProjectPolicyService + Sync + Send>,
@@ -77,9 +68,10 @@ impl Services {
                 repositories.account_repo.clone(),
                 repositories.account_workers_repo.clone(),
                 repositories.account_connections_repo.clone(),
+                repositories.account_components_repo.clone(),
+                repositories.account_used_storage_repo.clone(),
                 repositories.account_uploads_repo.clone(),
                 repositories.project_repo.clone(),
-                repositories.component_repo.clone(),
                 repositories.account_fuel_repo.clone(),
             ));
 
@@ -153,22 +145,11 @@ impl Services {
                 repositories.project_policy_repo.clone(),
             ));
 
-        let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
-            match config.components.store.clone() {
-                ComponentStoreConfig::S3(c) => {
-                    Arc::new(component_object_store::AwsS3ComponentObjectStore::new(&c).await)
-                }
-                ComponentStoreConfig::Local(c) => {
-                    Arc::new(component_object_store::FsComponentObjectStore::new(&c)?)
-                }
-            };
-
         let project_auth_service: Arc<dyn project_auth::ProjectAuthorisationService + Sync + Send> =
             Arc::new(project_auth::ProjectAuthorisationServiceDefault::new(
                 repositories.project_repo.clone(),
                 project_grant_service.clone(),
                 project_policy_service.clone(),
-                repositories.component_repo.clone(),
             ));
 
         let project_service: Arc<dyn project::ProjectService + Sync + Send> =
@@ -176,28 +157,6 @@ impl Services {
                 repositories.project_repo.clone(),
                 project_auth_service.clone(),
                 plan_limit_service.clone(),
-                repositories.component_repo.clone(),
-            ));
-
-        let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
-            match config.components.compilation.clone() {
-                ComponentCompilationConfig::Enabled(config) => {
-                    Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
-                }
-                ComponentCompilationConfig::Disabled => {
-                    Arc::new(ComponentCompilationServiceDisabled)
-                }
-            };
-
-        let component_service: Arc<dyn component::ComponentService + Sync + Send> =
-            Arc::new(component::ComponentServiceDefault::new(
-                repositories.account_uploads_repo.clone(),
-                repositories.component_repo.clone(),
-                plan_limit_service.clone(),
-                object_store.clone(),
-                project_service.clone(),
-                project_auth_service.clone(),
-                compilation_service,
             ));
 
         Ok(Services {
@@ -216,7 +175,6 @@ impl Services {
             project_service,
             token_service,
             login_service,
-            component_service,
         })
     }
 
@@ -260,9 +218,6 @@ impl Services {
         let project_grant_service: Arc<dyn project_grant::ProjectGrantService + Sync + Send> =
             Arc::new(project_grant::ProjectGrantServiceNoOp::default());
 
-        let component_service: Arc<dyn component::ComponentService + Sync + Send> =
-            Arc::new(component::ComponentServiceNoOp::default());
-
         let project_auth_service: Arc<dyn project_auth::ProjectAuthorisationService + Sync + Send> =
             Arc::new(project_auth::ProjectAuthorisationServiceNoOp::default());
 
@@ -285,7 +240,6 @@ impl Services {
             project_service,
             login_service,
             token_service,
-            component_service,
         }
     }
 }

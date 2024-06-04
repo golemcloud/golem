@@ -3,17 +3,19 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use crate::auth::AccountAuthorisation;
-use crate::model::{Plan, ResourceLimits, Role};
+use crate::model::{Plan, ResourceLimits};
 use crate::repo::account::AccountRepo;
+use crate::repo::account_components::AccountComponentsRepo;
 use crate::repo::account_connections::AccountConnectionsRepo;
 use crate::repo::account_fuel::AccountFuelRepo;
 use crate::repo::account_uploads::AccountUploadsRepo;
+use crate::repo::account_used_storage::AccountUsedStorageRepo;
 use crate::repo::account_workers::AccountWorkersRepo;
-use crate::repo::component::ComponentRepo;
 use crate::repo::plan::PlanRepo;
 use crate::repo::project::ProjectRepo;
 use crate::repo::RepoError;
 use async_trait::async_trait;
+use cloud_common::model::Role;
 use golem_common::model::AccountId;
 use golem_common::model::{ComponentId, ProjectId};
 
@@ -88,34 +90,9 @@ pub trait PlanLimitService {
         project_id: &ProjectId,
     ) -> Result<LimitResult, PlanLimitError>;
 
-    async fn get_component_limits(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<LimitResult, PlanLimitError>;
-
     /// Check Limits.
 
     async fn check_project_limit(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<CheckLimitResult, PlanLimitError>;
-
-    async fn check_component_limit(
-        &self,
-        project_id: &ProjectId,
-    ) -> Result<CheckLimitResult, PlanLimitError>;
-
-    async fn check_worker_limit(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<CheckLimitResult, PlanLimitError>;
-
-    async fn check_storage_limit(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<CheckLimitResult, PlanLimitError>;
-
-    async fn check_upload_limit(
         &self,
         account_id: &AccountId,
     ) -> Result<CheckLimitResult, PlanLimitError>;
@@ -131,6 +108,14 @@ pub trait PlanLimitService {
     async fn record_fuel_consumption(
         &self,
         updates: HashMap<AccountId, i64>,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), PlanLimitError>;
+
+    async fn update_component_limit(
+        &self,
+        account_id: &AccountId,
+        count: i32,
+        size: i64,
         auth: &AccountAuthorisation,
     ) -> Result<(), PlanLimitError>;
 
@@ -154,9 +139,10 @@ pub struct PlanLimitServiceDefault {
     account_repo: Arc<dyn AccountRepo + Sync + Send>,
     account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send>,
     account_connections_repo: Arc<dyn AccountConnectionsRepo + Send + Sync>,
+    account_components_repo: Arc<dyn AccountComponentsRepo + Sync + Send>,
+    account_used_storage_repo: Arc<dyn AccountUsedStorageRepo + Sync + Send>,
     account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send>,
     project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
     account_fuel_repo: Arc<dyn AccountFuelRepo + Sync + Send>,
 }
 
@@ -182,16 +168,6 @@ impl PlanLimitService for PlanLimitServiceDefault {
         Ok(result)
     }
 
-    async fn get_component_limits(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<LimitResult, PlanLimitError> {
-        let project_id = self.get_project_id(component_id).await?;
-        let account_id = self.get_account_id(&project_id).await?;
-        let result = self.get_account_limits(&account_id).await?;
-        Ok(result)
-    }
-
     async fn check_project_limit(
         &self,
         account_id: &AccountId,
@@ -206,83 +182,6 @@ impl PlanLimitService for PlanLimitServiceDefault {
             account_id: account_id.clone(),
             count,
             limit: limits.plan.plan_data.project_limit.into(),
-        })
-    }
-
-    async fn check_component_limit(
-        &self,
-        project_id: &ProjectId,
-    ) -> Result<CheckLimitResult, PlanLimitError> {
-        let account_id = self.get_account_id(project_id).await?;
-        let limits = self.get_account_limits(&account_id).await?;
-        let projects = self.project_repo.get_own(&account_id.value).await?;
-        let project_ids = projects.into_iter().map(|p| p.project_id).collect();
-        let num_components = self
-            .component_repo
-            .get_count_by_projects(project_ids)
-            .await?;
-
-        let count = num_components
-            .try_into()
-            .map_err(|_| PlanLimitError::internal("Failed to convert component count"))?;
-
-        Ok(CheckLimitResult {
-            account_id,
-            count,
-            limit: limits.plan.plan_data.component_limit.into(),
-        })
-    }
-
-    async fn check_worker_limit(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<CheckLimitResult, PlanLimitError> {
-        let project_id = self.get_project_id(component_id).await?;
-        let account_id = self.get_account_id(&project_id).await?;
-        let plan = self.get_plan(&account_id).await?;
-        let num_workers = self.account_workers_repo.get(&account_id).await?;
-
-        Ok(CheckLimitResult {
-            account_id,
-            count: num_workers.into(),
-            limit: plan.plan_data.worker_limit.into(),
-        })
-    }
-
-    async fn check_storage_limit(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<CheckLimitResult, PlanLimitError> {
-        let plan = self.get_plan(account_id).await?;
-        let projects = self.project_repo.get_own(&account_id.value).await?;
-        let project_ids = projects.into_iter().map(|p| p.project_id).collect();
-        let count = self
-            .component_repo
-            .get_size_by_projects(project_ids)
-            .await?;
-
-        let count = count
-            .try_into()
-            .map_err(|_| PlanLimitError::internal("Failed to convert storage count"))?;
-
-        Ok(CheckLimitResult {
-            account_id: account_id.clone(),
-            count,
-            limit: plan.plan_data.storage_limit.into(),
-        })
-    }
-
-    async fn check_upload_limit(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<CheckLimitResult, PlanLimitError> {
-        let plan = self.get_plan(account_id).await?;
-        let num_uploads = self.account_uploads_repo.get(account_id).await?;
-
-        Ok(CheckLimitResult {
-            account_id: account_id.clone(),
-            count: num_uploads.into(),
-            limit: plan.plan_data.monthly_upload_limit.into(),
         })
     }
 
@@ -313,6 +212,82 @@ impl PlanLimitService for PlanLimitServiceDefault {
             self.account_fuel_repo.update(&account_id, update).await?;
         }
         Ok(())
+    }
+
+    async fn update_component_limit(
+        &self,
+        account_id: &AccountId,
+        count: i32,
+        size: i64,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), PlanLimitError> {
+        self.check_authorization(account_id, auth)?;
+
+        if size > 50000000 {
+            return Err(PlanLimitError::LimitExceeded(
+                "Component size limit exceeded (limit: 50MB)".into(),
+            ));
+        }
+
+        let plan = self.get_plan(account_id).await?;
+
+        let num_components = self.account_components_repo.get(account_id).await?;
+
+        let component_limit = CheckLimitResult {
+            account_id: account_id.clone(),
+            count: num_components as i64,
+            limit: plan.plan_data.component_limit.into(),
+        };
+
+        if !component_limit.add(count as i64).in_limit() {
+            return Err(PlanLimitError::LimitExceeded(format!(
+                "Component limit exceeded (limit: {})",
+                component_limit.limit
+            )));
+        }
+
+        let num_uploads = self.account_uploads_repo.get(account_id).await?;
+
+        let upload_limit = CheckLimitResult {
+            account_id: account_id.clone(),
+            count: num_uploads as i64,
+            limit: plan.plan_data.monthly_upload_limit.into(),
+        };
+
+        if !upload_limit.add(size).in_limit() {
+            return Err(PlanLimitError::LimitExceeded(format!(
+                "Upload limit exceeded for account: {} (limit: {} MB)",
+                upload_limit.account_id.value,
+                upload_limit.limit / 1000000
+            )));
+        }
+
+        let used_storage = self.account_used_storage_repo.get(account_id).await?;
+
+        let storage_limit = CheckLimitResult {
+            account_id: account_id.clone(),
+            count: used_storage,
+            limit: plan.plan_data.storage_limit.into(),
+        };
+
+        if !storage_limit.add(size).in_limit() {
+            Err(PlanLimitError::LimitExceeded(format!(
+                "Storage limit exceeded for account: {} (limit: {} MB)",
+                storage_limit.account_id.value,
+                storage_limit.limit / 1000000
+            )))
+        } else {
+            self.account_components_repo
+                .update(account_id, count)
+                .await?;
+            self.account_used_storage_repo
+                .update(account_id, size)
+                .await?;
+            self.account_uploads_repo
+                .update(account_id, size as i32)
+                .await?;
+            Ok(())
+        }
     }
 
     async fn update_worker_limit(
@@ -391,9 +366,10 @@ impl PlanLimitServiceDefault {
         account_repo: Arc<dyn AccountRepo + Sync + Send>,
         account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send>,
         account_connections_repo: Arc<dyn AccountConnectionsRepo + Send + Sync>,
+        account_components_repo: Arc<dyn AccountComponentsRepo + Sync + Send>,
+        account_used_storage_repo: Arc<dyn AccountUsedStorageRepo + Sync + Send>,
         account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send>,
         project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-        component_repo: Arc<dyn ComponentRepo + Sync + Send>,
         account_fuel_repo: Arc<dyn AccountFuelRepo + Sync + Send>,
     ) -> Self {
         PlanLimitServiceDefault {
@@ -401,9 +377,10 @@ impl PlanLimitServiceDefault {
             account_repo,
             account_workers_repo,
             account_connections_repo,
+            account_components_repo,
+            account_used_storage_repo,
             account_uploads_repo,
             project_repo,
-            component_repo,
             account_fuel_repo,
         }
     }
@@ -427,21 +404,6 @@ impl PlanLimitServiceDefault {
             })
         } else {
             Err(PlanLimitError::ProjectIdNotFound(project_id.clone()))
-        }
-    }
-
-    async fn get_project_id(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<ProjectId, PlanLimitError> {
-        if let Some(component) = self
-            .component_repo
-            .get_latest_version(&component_id.0)
-            .await?
-        {
-            Ok(ProjectId(component.project_id))
-        } else {
-            Err(PlanLimitError::ComponentIdNotFound(component_id.clone()))
         }
     }
 
@@ -485,66 +447,12 @@ impl PlanLimitService for PlanLimitServiceNoOp {
         })
     }
 
-    async fn get_component_limits(
-        &self,
-        _component_id: &ComponentId,
-    ) -> Result<LimitResult, PlanLimitError> {
-        Ok(LimitResult {
-            account_id: AccountId::from(""),
-            plan: Plan::default(),
-        })
-    }
-
     async fn check_project_limit(
         &self,
         _account_id: &AccountId,
     ) -> Result<CheckLimitResult, PlanLimitError> {
         Ok(CheckLimitResult {
             account_id: AccountId::from(""),
-            count: 0,
-            limit: 0,
-        })
-    }
-
-    async fn check_component_limit(
-        &self,
-        _project_id: &ProjectId,
-    ) -> Result<CheckLimitResult, PlanLimitError> {
-        Ok(CheckLimitResult {
-            account_id: AccountId::from(""),
-            count: 0,
-            limit: 0,
-        })
-    }
-
-    async fn check_worker_limit(
-        &self,
-        _component_id: &ComponentId,
-    ) -> Result<CheckLimitResult, PlanLimitError> {
-        Ok(CheckLimitResult {
-            account_id: AccountId::from(""),
-            count: 0,
-            limit: 0,
-        })
-    }
-
-    async fn check_upload_limit(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<CheckLimitResult, PlanLimitError> {
-        Ok(CheckLimitResult {
-            account_id: account_id.clone(),
-            count: 0,
-            limit: 0,
-        })
-    }
-
-    async fn check_storage_limit(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<CheckLimitResult, PlanLimitError> {
-        Ok(CheckLimitResult {
-            account_id: account_id.clone(),
             count: 0,
             limit: 0,
         })
@@ -564,6 +472,16 @@ impl PlanLimitService for PlanLimitServiceNoOp {
     async fn record_fuel_consumption(
         &self,
         _updates: HashMap<AccountId, i64>,
+        _auth: &AccountAuthorisation,
+    ) -> Result<(), PlanLimitError> {
+        Ok(())
+    }
+
+    async fn update_component_limit(
+        &self,
+        _account_id: &AccountId,
+        _count: i32,
+        _size: i64,
         _auth: &AccountAuthorisation,
     ) -> Result<(), PlanLimitError> {
         Ok(())

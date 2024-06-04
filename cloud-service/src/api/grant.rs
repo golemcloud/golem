@@ -9,9 +9,9 @@ use crate::api::ApiTags;
 use crate::model::*;
 use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
 use crate::service::auth::{AuthService, AuthServiceError};
-use golem_service_base::model::{ErrorBody, ErrorsBody};
-
 use cloud_common::auth::GolemSecurityScheme;
+use cloud_common::model::Role;
+use golem_service_base::model::{ErrorBody, ErrorsBody};
 
 #[derive(ApiResponse)]
 pub enum GrantError {

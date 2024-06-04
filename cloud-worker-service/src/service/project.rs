@@ -1,18 +1,17 @@
 use std::fmt::Display;
 
+use crate::config::CloudServiceConfig;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::project::cloud_project_service_client::CloudProjectServiceClient;
 use cloud_api_grpc::proto::golem::cloud::project::project_error::Error;
 use cloud_api_grpc::proto::golem::cloud::project::{
-    get_project_actions_response, get_project_response, GetComponentProjectActionsRequest,
-    GetProjectActionsRequest, GetProjectRequest,
+    get_project_actions_response, get_project_response, GetProjectActionsRequest, GetProjectRequest,
 };
 use cloud_common::model::{ProjectActions, ProjectAuthorisedActions, TokenSecret};
 use golem_common::config::RetryConfig;
+use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
-use golem_common::model::{AccountId, ComponentId};
 use golem_common::retries::with_retries;
-use golem_worker_service_base::app_config::ComponentServiceConfig;
 use http::Uri;
 use tonic::Status;
 use tracing::info;
@@ -26,19 +25,13 @@ pub trait ProjectService {
     async fn get(
         &self,
         project_id: &ProjectId,
-        request_ctx: &TokenSecret,
+        token: &TokenSecret,
     ) -> Result<ProjectView, ProjectError>;
 
     async fn get_actions(
         &self,
         project_id: &ProjectId,
-        request_ctx: &TokenSecret,
-    ) -> Result<ProjectAuthorisedActions, ProjectError>;
-
-    async fn get_component_actions(
-        &self,
-        component_id: &ComponentId,
-        request_ctx: &TokenSecret,
+        token: &TokenSecret,
     ) -> Result<ProjectAuthorisedActions, ProjectError>;
 }
 
@@ -49,7 +42,7 @@ pub struct ProjectServiceDefault {
 }
 
 impl ProjectServiceDefault {
-    pub fn new(config: &ComponentServiceConfig) -> Self {
+    pub fn new(config: &CloudServiceConfig) -> Self {
         Self {
             uri: config.uri(),
             retry_config: config.retries.clone(),
@@ -89,52 +82,6 @@ impl ProjectService for ProjectServiceDefault {
                             Ok(project.try_into()?)
                         }
                         Some(get_project_response::Result::Error(error)) => Err(error.into()),
-                    }
-                })
-            },
-            ProjectError::is_retriable,
-        )
-        .await
-    }
-
-    async fn get_component_actions(
-        &self,
-        component_id: &ComponentId,
-        token: &TokenSecret,
-    ) -> Result<ProjectAuthorisedActions, ProjectError> {
-        let desc = format!("Getting component: {} project actions", component_id);
-        info!("{}", &desc);
-        with_retries(
-            &desc,
-            "project",
-            "get-component-actions",
-            &self.retry_config,
-            &(self.uri.clone(), component_id.clone(), token.clone()),
-            |(uri, id, token)| {
-                Box::pin(async move {
-                    let mut client = CloudProjectServiceClient::connect(uri.as_http_02()).await?;
-                    let request = authorised_request(
-                        GetComponentProjectActionsRequest {
-                            component_id: Some(id.clone().into()),
-                        },
-                        &token.value,
-                    );
-
-                    let response = client
-                        .get_component_project_actions(request)
-                        .await?
-                        .into_inner();
-
-                    match response.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(get_project_actions_response::Result::Success(response)) => {
-                            let actions = response.try_into()?;
-
-                            Ok(actions)
-                        }
-                        Some(get_project_actions_response::Result::Error(error)) => {
-                            Err(error.into())
-                        }
                     }
                 })
             },
@@ -293,18 +240,6 @@ impl ProjectService for NoOpProjectService {
     ) -> Result<ProjectAuthorisedActions, ProjectError> {
         Ok(ProjectAuthorisedActions {
             project_id: project_id.clone(),
-            owner_account_id: AccountId::from(""),
-            actions: ProjectActions::empty(),
-        })
-    }
-
-    async fn get_component_actions(
-        &self,
-        component_id: &ComponentId,
-        _: &TokenSecret,
-    ) -> Result<ProjectAuthorisedActions, ProjectError> {
-        Ok(ProjectAuthorisedActions {
-            project_id: ProjectId(component_id.0),
             owner_account_id: AccountId::from(""),
             actions: ProjectActions::empty(),
         })

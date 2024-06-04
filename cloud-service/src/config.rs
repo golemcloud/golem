@@ -2,14 +2,13 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use cloud_common::model::PlanId;
+use cloud_common::model::Role;
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
-use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_service_base::config::{ComponentStoreConfig, ComponentStoreLocalConfig};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::model::{Plan, PlanData, Role};
+use crate::model::{Plan, PlanData};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CloudServiceConfig {
@@ -21,7 +20,6 @@ pub struct CloudServiceConfig {
     pub grpc_port: u16,
     pub db: DbConfig,
     pub plans: PlansConfig,
-    pub components: ComponentsConfig,
     pub ed_dsa: EdDsaConfig,
     pub accounts: AccountsConfig,
     pub oauth2: OAuth2Config,
@@ -48,7 +46,6 @@ impl Default for CloudServiceConfig {
             grpc_port: 8081,
             db: DbConfig::default(),
             plans: PlansConfig::default(),
-            components: ComponentsConfig::default(),
             ed_dsa: EdDsaConfig::default(),
             accounts: AccountsConfig::default(),
             oauth2: OAuth2Config::default(),
@@ -67,24 +64,6 @@ impl Default for EdDsaConfig {
         EdDsaConfig {
             private_key: "".to_string(),
             public_key: "".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct ComponentsConfig {
-    pub store: ComponentStoreConfig,
-    pub compilation: ComponentCompilationConfig,
-}
-
-impl Default for ComponentsConfig {
-    fn default() -> Self {
-        ComponentsConfig {
-            store: ComponentStoreConfig::Local(ComponentStoreLocalConfig {
-                root_path: "components".to_string(),
-                object_prefix: "".to_string(),
-            }),
-            compilation: ComponentCompilationConfig::default(),
         }
     }
 }
@@ -234,8 +213,6 @@ mod tests {
         );
         std::env::set_var("GOLEM__ED_DSA__PRIVATE_KEY", "x1234");
         std::env::set_var("GOLEM__ED_DSA__PUBLIC_KEY", "x1234");
-        std::env::set_var("GOLEM__COMPONENTS__STORE__TYPE", "S3");
-        std::env::set_var("GOLEM__COMPONENTS__STORE__CONFIG__BUCKET_NAME", "bucket");
 
         // The rest can be loaded from the toml
         let _ = super::CloudServiceConfig::new();

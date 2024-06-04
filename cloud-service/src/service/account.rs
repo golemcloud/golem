@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloud_common::model::PlanId;
+use cloud_common::model::Role;
 use golem_common::model::AccountId;
 use tracing::{error, info};
 
 use crate::auth::AccountAuthorisation;
-use crate::model::{Account, AccountData, Plan, Role};
+use crate::model::{Account, AccountData, Plan};
 use crate::repo::account::{AccountRecord, AccountRepo};
 use crate::repo::RepoError;
 use crate::service::plan::{PlanError, PlanService};
@@ -296,8 +297,8 @@ mod tests {
     use golem_common::model::AccountId;
 
     use crate::auth::AccountAuthorisation;
-    use crate::model::Role;
     use crate::service::account::{check_authorized, check_root};
+    use cloud_common::model::Role;
 
     #[test]
     pub fn test_check_authorized() {

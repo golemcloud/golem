@@ -3,6 +3,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cloud_common::model::Role;
 use cloud_common::model::{ProjectAction, ProjectGrantId, ProjectPolicyId};
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
@@ -10,7 +11,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::auth::AccountAuthorisation;
-use crate::model::{ProjectGrant, ProjectPolicy, Role};
+use crate::model::{ProjectGrant, ProjectPolicy};
 use crate::repo::project::ProjectRepo;
 use crate::repo::project_grant::{ProjectGrantRecord, ProjectGrantRepo};
 use crate::repo::project_policy::ProjectPolicyRepo;

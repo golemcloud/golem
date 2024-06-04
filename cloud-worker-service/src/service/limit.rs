@@ -4,6 +4,7 @@ use golem_common::model::AccountId;
 use golem_service_base::model::{ResourceLimits, WorkerId};
 use std::fmt::Display;
 
+use crate::config::CloudServiceConfig;
 use cloud_api_grpc::proto::golem::cloud::limit::cloud_limits_service_client::CloudLimitsServiceClient;
 use cloud_api_grpc::proto::golem::cloud::limit::limits_error::Error;
 use cloud_api_grpc::proto::golem::cloud::limit::{
@@ -12,7 +13,6 @@ use cloud_api_grpc::proto::golem::cloud::limit::{
 };
 use golem_common::config::RetryConfig;
 use golem_common::retries::with_retries;
-use golem_worker_service_base::app_config::ComponentServiceConfig;
 use http::Uri;
 use tonic::Status;
 use tracing::info;
@@ -157,7 +157,7 @@ pub struct LimitServiceDefault {
 }
 
 impl LimitServiceDefault {
-    pub fn new(config: &ComponentServiceConfig) -> Self {
+    pub fn new(config: &CloudServiceConfig) -> Self {
         Self {
             uri: config.uri(),
             access_token: config.access_token,

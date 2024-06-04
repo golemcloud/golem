@@ -8,10 +8,12 @@ import public "golem/cloud/limit/batch_update_resource_limits.proto";
 import public "golem/cloud/limit/limits_error.proto";
 import public "golem/common/resource_limits.proto";
 import public "golem/worker/worker_id.proto";
+import public "golem/component/component_id.proto";
 
 service CloudLimitsService {
   rpc UpdateWorkerLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
   rpc UpdateWorkerConnectionLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
+  rpc UpdateComponentLimit (UpdateComponentLimitRequest) returns (UpdateComponentLimitResponse);
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
   rpc BatchUpdateResourceLimits (BatchUpdateResourceLimitsRequest) returns (BatchUpdateResourceLimitsResponse);
 }
@@ -45,6 +47,20 @@ message UpdateWorkerLimitRequest {
 }
 
 message UpdateWorkerLimitResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.cloud.limit.LimitsError error = 2;
+  }
+}
+
+message UpdateComponentLimitRequest {
+  golem.common.AccountId accountId = 1;
+  golem.component.ComponentId component_id = 2;
+  int32 count = 3;
+  int64 size = 4;
+}
+
+message UpdateComponentLimitResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.cloud.limit.LimitsError error = 2;

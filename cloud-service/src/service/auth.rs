@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use cloud_common::model::TokenSecret;
 
 use crate::auth::AccountAuthorisation;
-use crate::model::Role;
 use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
 use crate::service::token::{TokenService, TokenServiceError};
+use cloud_common::model::Role;
 
 #[derive(Debug, Clone)]
 pub enum AuthServiceError {

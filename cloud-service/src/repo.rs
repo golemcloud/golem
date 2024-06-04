@@ -1,11 +1,12 @@
 use crate::repo::account::{AccountRepo, DbAccountRepo};
+use crate::repo::account_components::{AccountComponentsRepo, DbAccountComponentsRepo};
 use crate::repo::account_connections::{AccountConnectionsRepo, DbAccountConnectionsRepo};
 use crate::repo::account_fuel::{AccountFuelRepo, DbAccountFuelRepo};
 use crate::repo::account_grant::{AccountGrantRepo, DbAccountGrantRepo};
 use crate::repo::account_summary::{AccountSummaryRepo, DbAccountSummaryRepo};
 use crate::repo::account_uploads::{AccountUploadsRepo, DbAccountUploadsRepo};
+use crate::repo::account_used_storage::{AccountUsedStorageRepo, DbAccountUsedStorageRepo};
 use crate::repo::account_workers::{AccountWorkersRepo, DbAccountWorkerRepo};
-use crate::repo::component::{ComponentRepo, DbComponentRepo};
 use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
 use crate::repo::plan::{DbPlanRepo, PlanRepo};
 use crate::repo::project::{DbProjectRepo, ProjectRepo};
@@ -17,13 +18,14 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 pub mod account;
+pub mod account_components;
 pub mod account_connections;
 pub mod account_fuel;
 pub mod account_grant;
 pub mod account_summary;
 pub mod account_uploads;
+pub mod account_used_storage;
 pub mod account_workers;
-pub mod component;
 pub mod oauth2_token;
 pub mod plan;
 pub mod project;
@@ -58,13 +60,14 @@ pub struct Repositories {
     pub account_grant_repo: Arc<dyn AccountGrantRepo + Send + Sync>,
     pub account_connections_repo: Arc<dyn AccountConnectionsRepo + Send + Sync>,
     pub account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send>,
+    pub account_components_repo: Arc<dyn AccountComponentsRepo + Sync + Send>,
+    pub account_used_storage_repo: Arc<dyn AccountUsedStorageRepo + Sync + Send>,
     pub account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send>,
     pub account_fuel_repo: Arc<dyn AccountFuelRepo + Sync + Send>,
     pub oauth2_token_repo: Arc<dyn OAuth2TokenRepo + Sync + Send>,
     pub project_policy_repo: Arc<dyn ProjectPolicyRepo + Sync + Send>,
     pub project_grant_repo: Arc<dyn ProjectGrantRepo + Sync + Send>,
     pub project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-    pub component_repo: Arc<dyn ComponentRepo + Sync + Send>,
     pub token_repo: Arc<dyn TokenRepo + Sync + Send>,
 }
 
@@ -87,8 +90,14 @@ impl Repositories {
         let account_connections_repo: Arc<dyn AccountConnectionsRepo + Send + Sync> =
             Arc::new(DbAccountConnectionsRepo::new(db_pool.clone()));
 
+        let account_components_repo: Arc<dyn AccountComponentsRepo + Sync + Send> =
+            Arc::new(DbAccountComponentsRepo::new(db_pool.clone()));
+
         let account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send> =
             Arc::new(DbAccountWorkerRepo::new(db_pool.clone()));
+
+        let account_used_storage_repo: Arc<dyn AccountUsedStorageRepo + Sync + Send> =
+            Arc::new(DbAccountUsedStorageRepo::new(db_pool.clone()));
 
         let account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send> =
             Arc::new(DbAccountUploadsRepo::new(db_pool.clone()));
@@ -105,9 +114,6 @@ impl Repositories {
         let project_repo: Arc<dyn ProjectRepo + Sync + Send> =
             Arc::new(DbProjectRepo::new(db_pool.clone()));
 
-        let component_repo: Arc<dyn ComponentRepo + Sync + Send> =
-            Arc::new(DbComponentRepo::new(db_pool.clone()));
-
         let token_repo: Arc<dyn TokenRepo + Sync + Send> =
             Arc::new(DbTokenRepo::new(db_pool.clone()));
 
@@ -118,13 +124,14 @@ impl Repositories {
             account_grant_repo,
             account_connections_repo,
             account_workers_repo,
+            account_components_repo,
+            account_used_storage_repo,
             account_uploads_repo,
             account_fuel_repo,
             oauth2_token_repo,
             project_policy_repo,
             project_grant_repo,
             project_repo,
-            component_repo,
             token_repo,
         }
     }
@@ -150,6 +157,12 @@ impl Repositories {
         let account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send> =
             Arc::new(DbAccountWorkerRepo::new(db_pool.clone()));
 
+        let account_components_repo: Arc<dyn AccountComponentsRepo + Sync + Send> =
+            Arc::new(DbAccountComponentsRepo::new(db_pool.clone()));
+
+        let account_used_storage_repo: Arc<dyn AccountUsedStorageRepo + Sync + Send> =
+            Arc::new(DbAccountUsedStorageRepo::new(db_pool.clone()));
+
         let account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send> =
             Arc::new(DbAccountUploadsRepo::new(db_pool.clone()));
 
@@ -165,9 +178,6 @@ impl Repositories {
         let project_repo: Arc<dyn ProjectRepo + Sync + Send> =
             Arc::new(DbProjectRepo::new(db_pool.clone()));
 
-        let component_repo: Arc<dyn ComponentRepo + Sync + Send> =
-            Arc::new(DbComponentRepo::new(db_pool.clone()));
-
         let token_repo: Arc<dyn TokenRepo + Sync + Send> =
             Arc::new(DbTokenRepo::new(db_pool.clone()));
 
@@ -178,13 +188,14 @@ impl Repositories {
             account_grant_repo,
             account_connections_repo,
             account_workers_repo,
+            account_components_repo,
+            account_used_storage_repo,
             account_uploads_repo,
             account_fuel_repo,
             oauth2_token_repo,
             project_policy_repo,
             project_grant_repo,
             project_repo,
-            component_repo,
             token_repo,
         }
     }

@@ -1,0 +1,45 @@
+enable_tracing_console = false
+enable_json_log = false
+
+#workspace
+#environment
+
+http_port = 8083
+grpc_port = 9090
+
+[db]
+type = "Postgres" # Postgres, Sqlite
+
+[db.config]
+max_connections = 10
+host = "localhost"
+port = 5432
+database = "golem_component"
+#username
+#password
+
+[component_store]
+type = "Local"
+
+[component_store.config]
+object_prefix = ""
+root_path = "../data/component_store"
+
+[compilation]
+type = "Enabled"
+
+[compilation.config]
+host = "localhost"
+port = 9091
+
+
+[cloud_service]
+# host
+# port
+# access_token
+
+[cloud_service.retries]
+max_attempts = 3
+min_delay = "100ms"
+max_delay = "1s"
+multiplier = 3

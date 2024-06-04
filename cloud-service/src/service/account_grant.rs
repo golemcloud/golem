@@ -5,9 +5,9 @@ use golem_common::model::AccountId;
 use tracing::error;
 
 use crate::auth::AccountAuthorisation;
-use crate::model::Role;
 use crate::repo::account_grant::AccountGrantRepo;
 use crate::repo::RepoError;
+use cloud_common::model::Role;
 
 #[derive(Debug, Clone)]
 pub enum AccountGrantServiceError {

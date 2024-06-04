@@ -4,8 +4,9 @@ use std::sync::Arc;
 use cloud_api_grpc::proto::golem::cloud::limit::cloud_limits_service_server::CloudLimitsService;
 use cloud_api_grpc::proto::golem::cloud::limit::{
     batch_update_resource_limits_response, get_resource_limits_response,
-    update_worker_limit_response, BatchUpdateResourceLimitsRequest,
-    BatchUpdateResourceLimitsResponse, GetResourceLimitsRequest, GetResourceLimitsResponse,
+    update_component_limit_response, update_worker_limit_response,
+    BatchUpdateResourceLimitsRequest, BatchUpdateResourceLimitsResponse, GetResourceLimitsRequest,
+    GetResourceLimitsResponse, UpdateComponentLimitRequest, UpdateComponentLimitResponse,
     UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
 };
 use cloud_api_grpc::proto::golem::cloud::limit::{limits_error, LimitsError};
@@ -171,10 +172,43 @@ impl LimitsGrpcApi {
 
         Ok(())
     }
+
+    async fn update_component_limit(
+        &self,
+        request: UpdateComponentLimitRequest,
+        metadata: MetadataMap,
+    ) -> Result<(), LimitsError> {
+        let auth = self.auth(metadata).await?;
+        let account_id: AccountId = request
+            .account_id
+            .map(|id| id.into())
+            .ok_or_else(|| bad_request_error("Missing account id"))?;
+
+        self.plan_limit_service
+            .update_component_limit(&account_id, request.count, request.size, &auth)
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
 impl CloudLimitsService for LimitsGrpcApi {
+    async fn update_component_limit(
+        &self,
+        request: Request<UpdateComponentLimitRequest>,
+    ) -> Result<Response<UpdateComponentLimitResponse>, Status> {
+        let (m, _, r) = request.into_parts();
+        match self.update_component_limit(r, m).await {
+            Ok(_) => Ok(Response::new(UpdateComponentLimitResponse {
+                result: Some(update_component_limit_response::Result::Success(Empty {})),
+            })),
+            Err(err) => Ok(Response::new(UpdateComponentLimitResponse {
+                result: Some(update_component_limit_response::Result::Error(err)),
+            })),
+        }
+    }
+
     async fn update_worker_limit(
         &self,
         request: Request<UpdateWorkerLimitRequest>,

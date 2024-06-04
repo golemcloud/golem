@@ -25,14 +25,14 @@ impl<DB: Database> DbAccountWorkerRepo<DB> {
 }
 
 #[derive(sqlx::FromRow)]
-struct AccountInstances {
+struct AccountWorkers {
     counter: i32,
 }
 
 #[async_trait]
 impl AccountWorkersRepo for DbAccountWorkerRepo<sqlx::Postgres> {
     async fn get(&self, id: &AccountId) -> Result<i32, RepoError> {
-        sqlx::query_as::<_, AccountInstances>(
+        sqlx::query_as::<_, AccountWorkers>(
             "select counter from account_workers where account_id = $1",
         )
         .bind(id.value.clone())
@@ -59,7 +59,7 @@ impl AccountWorkersRepo for DbAccountWorkerRepo<sqlx::Postgres> {
         .execute(&mut *transaction)
         .await?;
 
-        let result = sqlx::query_as::<_, AccountInstances>(
+        let result = sqlx::query_as::<_, AccountWorkers>(
             "select counter from account_workers where account_id = $1",
         )
         .bind(id.value.clone())
@@ -84,7 +84,7 @@ impl AccountWorkersRepo for DbAccountWorkerRepo<sqlx::Postgres> {
 #[async_trait]
 impl AccountWorkersRepo for DbAccountWorkerRepo<sqlx::Sqlite> {
     async fn get(&self, id: &AccountId) -> Result<i32, RepoError> {
-        sqlx::query_as::<_, AccountInstances>(
+        sqlx::query_as::<_, AccountWorkers>(
             "select counter from account_workers where account_id = $1",
         )
         .bind(id.value.clone())
@@ -111,7 +111,7 @@ impl AccountWorkersRepo for DbAccountWorkerRepo<sqlx::Sqlite> {
         .execute(&mut *transaction)
         .await?;
 
-        let result = sqlx::query_as::<_, AccountInstances>(
+        let result = sqlx::query_as::<_, AccountWorkers>(
             "select counter from account_workers where account_id = $1",
         )
         .bind(id.value.clone())

@@ -79,12 +79,13 @@ pub struct ApiServices {
 pub async fn get_api_services(
     config: &WorkerServiceCloudConfig,
 ) -> Result<ApiServices, std::io::Error> {
-    let project_service: Arc<dyn ProjectService + Sync + Send> = Arc::new(
-        ProjectServiceDefault::new(&config.base_config.component_service),
-    );
+    let project_service: Arc<dyn ProjectService + Sync + Send> =
+        Arc::new(ProjectServiceDefault::new(&config.cloud_service));
 
-    let auth_service: Arc<dyn AuthService + Sync + Send> =
-        Arc::new(CloudAuthService::new(project_service.clone()));
+    let auth_service: Arc<dyn AuthService + Sync + Send> = Arc::new(CloudAuthService::new(
+        project_service.clone(),
+        config.base_config.component_service.clone(),
+    ));
 
     let definition_repo: Arc<
         dyn ApiDefinitionRepo<CloudNamespace, HttpApiDefinition> + Sync + Send,
@@ -237,9 +238,8 @@ pub async fn get_api_services(
             certificate_repo.clone(),
         ));
 
-    let limit_service: Arc<dyn LimitService + Sync + Send> = Arc::new(LimitServiceDefault::new(
-        &config.base_config.component_service,
-    ));
+    let limit_service: Arc<dyn LimitService + Sync + Send> =
+        Arc::new(LimitServiceDefault::new(&config.cloud_service));
 
     let routing_table_service: Arc<
         dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,

@@ -1,6 +1,5 @@
 use crate::grpcapi::account::AccountGrpcApi;
 use crate::grpcapi::account_summary::AccountSummaryGrpcApi;
-use crate::grpcapi::component::ComponentGrpcApi;
 use crate::grpcapi::grant::GrantGrpcApi;
 use crate::grpcapi::limits::LimitsGrpcApi;
 use crate::grpcapi::login::LoginGrpcApi;
@@ -19,7 +18,6 @@ use cloud_api_grpc::proto::golem::cloud::projectgrant::cloud_project_grant_servi
 use cloud_api_grpc::proto::golem::cloud::projectpolicy::cloud_project_policy_service_server::CloudProjectPolicyServiceServer;
 use cloud_api_grpc::proto::golem::cloud::token::cloud_token_service_server::CloudTokenServiceServer;
 use cloud_common::model::TokenSecret as ModelTokenSecret;
-use golem_api_grpc::proto::golem::component::component_service_server::ComponentServiceServer;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use tonic::metadata::MetadataMap;
@@ -27,7 +25,6 @@ use tonic::transport::{Error, Server};
 
 mod account;
 mod account_summary;
-mod component;
 mod grant;
 mod limits;
 mod login;
@@ -78,9 +75,6 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         .set_serving::<CloudProjectPolicyServiceServer<ProjectPolicyGrpcApi>>()
         .await;
     health_reporter
-        .set_serving::<ComponentServiceServer<ComponentGrpcApi>>()
-        .await;
-    health_reporter
         .set_serving::<CloudTokenServiceServer<TokenGrpcApi>>()
         .await;
 
@@ -129,10 +123,6 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         .add_service(CloudProjectPolicyServiceServer::new(ProjectPolicyGrpcApi {
             auth_service: services.auth_service.clone(),
             project_policy_service: services.project_policy_service.clone(),
-        }))
-        .add_service(ComponentServiceServer::new(ComponentGrpcApi {
-            auth_service: services.auth_service.clone(),
-            component_service: services.component_service.clone(),
         }))
         .add_service(CloudTokenServiceServer::new(TokenGrpcApi {
             auth_service: services.auth_service.clone(),

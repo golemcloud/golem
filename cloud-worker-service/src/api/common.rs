@@ -21,7 +21,6 @@ pub enum ApiTags {
     ApiDeployment,
     ApiDomain,
     ApiCertificate,
-    /// The worker API allows to launch new workers, query and manipulate their status, and invoke their exported functions.
     Worker,
 }
 

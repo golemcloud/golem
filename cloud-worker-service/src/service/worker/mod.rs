@@ -50,6 +50,18 @@ impl From<AuthServiceError> for WorkerError {
     }
 }
 
+impl From<LimitError> for WorkerError {
+    fn from(error: LimitError) -> Self {
+        match error {
+            LimitError::Unauthorized(string) => WorkerError::Unauthorized(string),
+            LimitError::LimitExceeded(string) => WorkerError::Forbidden(string),
+            LimitError::Internal(e) => {
+                WorkerError::Base(BaseWorkerServiceError::Internal(anyhow::Error::msg(e)))
+            }
+        }
+    }
+}
+
 #[async_trait]
 pub trait WorkerService {
     async fn create(
@@ -544,9 +556,7 @@ fn convert_metadata(
 #[derive(Clone)]
 pub struct WorkerNamespace {
     pub account_id: AccountId,
-    // pub component_limits: LimitResult,
     pub resource_limits: ResourceLimits,
-    // pub worker_limit_result: CheckLimitResult,
 }
 
 impl WorkerNamespace {
@@ -554,18 +564,6 @@ impl WorkerNamespace {
         WorkerRequestMetadata {
             account_id: Some(self.account_id.clone()),
             limits: Some(self.resource_limits.clone()),
-        }
-    }
-}
-
-impl From<LimitError> for WorkerError {
-    fn from(error: LimitError) -> Self {
-        match error {
-            LimitError::Unauthorized(string) => WorkerError::Unauthorized(string),
-            LimitError::LimitExceeded(string) => WorkerError::Forbidden(string),
-            LimitError::Internal(e) => {
-                WorkerError::Base(BaseWorkerServiceError::Internal(anyhow::Error::msg(e)))
-            }
         }
     }
 }

@@ -14,9 +14,9 @@ use tonic::{Request, Response, Status};
 
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
-use crate::model::Role;
 use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
 use crate::service::auth::{AuthService, AuthServiceError};
+use cloud_common::model::Role;
 
 impl From<AuthServiceError> for GrantError {
     fn from(value: AuthServiceError) -> Self {

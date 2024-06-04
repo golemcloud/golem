@@ -24,24 +24,8 @@ use golem_service_base::stream::ByteStream;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::auth::AccountAuthorisation;
-use crate::grpcapi::get_authorisation_token;
-use crate::service::auth::{AuthService, AuthServiceError};
+use crate::service::auth::{get_authorisation_token, CloudAuthCtx};
 use crate::service::component;
-
-impl From<AuthServiceError> for ComponentError {
-    fn from(value: AuthServiceError) -> Self {
-        let error = match value {
-            AuthServiceError::InvalidToken(error) => {
-                component_error::Error::Unauthorized(ErrorBody { error })
-            }
-            AuthServiceError::Unexpected(error) => {
-                component_error::Error::Unauthorized(ErrorBody { error })
-            }
-        };
-        ComponentError { error: Some(error) }
-    }
-}
 
 impl From<component::ComponentError> for ComponentError {
     fn from(value: component::ComponentError) -> Self {
@@ -69,7 +53,7 @@ impl From<component::ComponentError> for ComponentError {
             }
             component::ComponentError::UnknownComponentId(_)
             | component::ComponentError::UnknownVersionedComponentId(_)
-            | component::ComponentError::UnknownProjectId(_) => {
+            | component::ComponentError::UnknownProject(_) => {
                 component_error::Error::NotFound(ErrorBody {
                     error: value.to_string(),
                 })
@@ -96,18 +80,19 @@ fn internal_error(error: &str) -> ComponentError {
 }
 
 pub struct ComponentGrpcApi {
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
-    pub component_service: Arc<dyn component::ComponentService + Sync + Send>,
+    component_service: Arc<dyn component::ComponentService + Sync + Send>,
 }
 
 impl ComponentGrpcApi {
-    async fn auth(&self, metadata: MetadataMap) -> Result<AccountAuthorisation, ComponentError> {
+    pub fn new(
+        component_service: Arc<dyn crate::service::component::ComponentService + Sync + Send>,
+    ) -> Self {
+        Self { component_service }
+    }
+
+    fn auth(&self, metadata: MetadataMap) -> Result<CloudAuthCtx, ComponentError> {
         match get_authorisation_token(metadata) {
-            Some(t) => self
-                .auth_service
-                .authorization(&t)
-                .await
-                .map_err(|e| e.into()),
+            Some(t) => Ok(CloudAuthCtx::new(t)),
             None => Err(ComponentError {
                 error: Some(component_error::Error::Unauthorized(ErrorBody {
                     error: "Missing token".into(),
@@ -121,7 +106,7 @@ impl ComponentGrpcApi {
         request: GetComponentRequest,
         metadata: MetadataMap,
     ) -> Result<Vec<Component>, ComponentError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let id: ComponentId = request
             .component_id
             .and_then(|id| id.try_into().ok())
@@ -135,7 +120,7 @@ impl ComponentGrpcApi {
         request: GetVersionedComponentRequest,
         metadata: MetadataMap,
     ) -> Result<Option<Component>, ComponentError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
 
         let id: ComponentId = request
             .component_id
@@ -161,7 +146,7 @@ impl ComponentGrpcApi {
         request: GetComponentsRequest,
         metadata: MetadataMap,
     ) -> Result<Vec<Component>, ComponentError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let project_id: Option<ProjectId> = request.project_id.and_then(|id| id.try_into().ok());
         let name: Option<golem_service_base::model::ComponentName> = request
             .component_name
@@ -178,7 +163,7 @@ impl ComponentGrpcApi {
         request: GetLatestComponentRequest,
         metadata: MetadataMap,
     ) -> Result<Component, ComponentError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let id: ComponentId = request
             .component_id
             .and_then(|id| id.try_into().ok())
@@ -202,7 +187,7 @@ impl ComponentGrpcApi {
         request: DownloadComponentRequest,
         metadata: MetadataMap,
     ) -> Result<ByteStream, ComponentError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let id: ComponentId = request
             .component_id
             .and_then(|id| id.try_into().ok())
@@ -221,7 +206,7 @@ impl ComponentGrpcApi {
         data: Vec<u8>,
         metadata: MetadataMap,
     ) -> Result<Component, ComponentError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let project_id: Option<ProjectId> = request.project_id.and_then(|id| id.try_into().ok());
         let name = golem_service_base::model::ComponentName(request.component_name);
         let result = self
@@ -237,7 +222,7 @@ impl ComponentGrpcApi {
         data: Vec<u8>,
         metadata: MetadataMap,
     ) -> Result<Component, ComponentError> {
-        let auth = self.auth(metadata).await?;
+        let auth = self.auth(metadata)?;
         let id: ComponentId = request
             .component_id
             .and_then(|id| id.try_into().ok())
