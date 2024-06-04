@@ -127,7 +127,7 @@ impl BenchmarkReport {
 // The files have contents expected to be in json format that correspond to `BenchmarkResult`.
 fn main() -> Result<(), Box<dyn Error>> {
     let params = CliParams::parse();
-    let previous_bench_mark_results = params.benchmark_previous.map(|prev|load_json(prev.as_str())?);
+    let previous_bench_mark_results = params.benchmark_previous.map(|prev|load_json(prev.as_str()).expect("Failed to read the previous benchmark results possibly due to change in schema"));
     let current_bench_mark_results = load_json(params.benchmark_current.as_str())?;
 
     let report = if let Some(prev) = previous_bench_mark_results {
