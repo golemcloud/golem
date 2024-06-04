@@ -1,12 +1,14 @@
 {
   "compilerOptions": {
-    "target": "es6",
+    "target": "ES2017",
     "outDir": "./test/out",
     "rootDir": "../",
     "lib": ["es2022", "esnext.disposable", "dom"],
     "baseUrl": ".",
+    // "importHelpers": true,
     "paths": {
       "golem-ts": ["../lib"]
+
     },
     "moduleResolution": "node",
   },
