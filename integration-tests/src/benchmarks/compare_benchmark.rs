@@ -11,6 +11,7 @@ fn load_json(file_path: &str) -> Result<BenchmarkResult, Box<dyn Error>> {
     let file = File::open(file_path)?;
     let reader = BufReader::new(file);
     let data: BenchmarkResult = serde_json::from_reader(reader)?;
+    dbg!(data.clone());
     Ok(data)
 }
 
@@ -33,7 +34,7 @@ fn calculate_mean_avg_time(json: &BenchmarkResult) -> HashMap<RunConfig, u64> {
     hashmap_results
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct ComparisonResult {
     result: HashMap<RunConfig, Comparison>
 }
@@ -48,8 +49,8 @@ impl ComparisonResult {
         for (run_config, avg1) in previous_avg {
             let avg2 = current_avg.get(&run_config).unwrap();
             comparison.insert(run_config, Comparison {
-                previous_avg: *avg1 as f64,
-                current_avg: *avg2 as f64
+                previous_avg: avg1,
+                current_avg: avg2.clone(),
             });
         }
 
@@ -59,10 +60,10 @@ impl ComparisonResult {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct Comparison {
-    previous_avg: f64,
-    current_avg: f64
+    previous_avg: u64,
+    current_avg: u64
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -84,6 +85,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let comparison_result =
         ComparisonResult::from_results(&previous_bench_mark_results, &current_bench_mark_results);
+
+    dbg!(comparison_result.clone());
 
     println!("{}", serde_json::to_string(&comparison_result)?);
 

@@ -62,7 +62,7 @@ pub struct RunConfig {
 
 pub type ResultKey = String;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DurationResult {
     pub avg: Duration,
     pub min: Duration,
@@ -105,7 +105,7 @@ impl Default for DurationResult {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CountResult {
     pub avg: u64,
     pub min: u64,
@@ -415,7 +415,7 @@ impl BenchmarkResult {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkRunResult {
     pub duration_results: HashMap<ResultKey, DurationResult>,
     pub count_results: HashMap<ResultKey, CountResult>,

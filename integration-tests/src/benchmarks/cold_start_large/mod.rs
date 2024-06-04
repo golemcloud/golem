@@ -17,7 +17,7 @@ use golem_common::model::WorkerId;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, BenchmarkResult, RunConfig};
-use crate::benchmarks::{cleanup_iteration, get_worker_ids, run_benchmark, run_echo, setup_benchmark, setup_iteration, start, BenchmarkContext, IterationContext, get_benchmark_results};
+use crate::benchmarks::{cleanup_iteration, get_worker_ids, run_echo, setup_benchmark, setup_iteration, start, BenchmarkContext, IterationContext, get_benchmark_results};
 
 pub struct ColdStartEchoLarge {
     config: RunConfig,
