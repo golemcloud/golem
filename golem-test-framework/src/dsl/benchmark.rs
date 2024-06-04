@@ -53,7 +53,7 @@ pub struct BenchmarkConfig {
     pub length: Vec<usize>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Hash, PartialEq, Eq)]
 pub struct RunConfig {
     pub cluster_size: usize,
     pub size: usize,

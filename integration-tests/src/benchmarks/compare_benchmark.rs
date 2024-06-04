@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs::File;
 use std::io::BufReader;
+use clap::Parser;
 use golem_test_framework::dsl::benchmark::{BenchmarkResult, RunConfig};
 
 
@@ -23,10 +24,9 @@ fn calculate_mean_avg_time(json: &BenchmarkResult) -> HashMap<RunConfig, u64> {
 
         for duration in benchmark_result.duration_results.values() {
             total_avg_secs += duration.avg.as_secs();
-            // Add other workers as needed
         }
 
-       let avg = total_avg_secs / benchmark_result.duration_results.values().len() as u64
+       let avg = total_avg_secs / benchmark_result.duration_results.values().len() as u64;
         hashmap_results.insert(run_config.clone(), avg);
     }
 
@@ -38,24 +38,54 @@ struct ComparisonResult {
     result: HashMap<RunConfig, Comparison>
 }
 
+impl ComparisonResult {
+    fn from_results(previous: &BenchmarkResult, current: &BenchmarkResult) -> Self {
+        let previous_avg = calculate_mean_avg_time(previous);
+        let current_avg = calculate_mean_avg_time(current);
+
+        let mut comparison = HashMap::new();
+
+        for (run_config, avg1) in previous_avg {
+            let avg2 = current_avg.get(&run_config).unwrap();
+            comparison.insert(run_config, Comparison {
+                previous_avg: *avg1 as f64,
+                current_avg: *avg2 as f64
+            });
+        }
+
+        ComparisonResult {
+            result: comparison
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Comparison {
     previous_avg: f64,
     current_avg: f64
 }
 
+#[derive(Parser, Debug, Clone)]
+#[command()]
+pub struct CliParams {
+    #[arg(long)]
+    pub benchmark_previous: String,
+    #[arg(long)]
+    pub benchmark_current: String,
+
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let file1_path = "file1.json";
-    let file2_path = "file2.json";
 
-    let json1 = load_json(file1_path)?;
-    let json2 = load_json(file2_path)?;
+    let params = CliParams::parse();
 
-    let mean_avg_time1 = calculate_mean_avg_time(&json1);
-    let mean_avg_time2 = calculate_mean_avg_time(&json2);
+    let previous_bench_mark_results = load_json(params.benchmark_previous.as_str())?;
+    let current_bench_mark_results = load_json(params.benchmark_current.as_str())?;
 
-    println!("Mean average time of all workers in file1: {}", mean_avg_time1);
-    println!("Mean average time of all workers in file2: {}", mean_avg_time2);
+    let comparison_result =
+        ComparisonResult::from_results(&previous_bench_mark_results, &current_bench_mark_results);
+
+    println!("{}", serde_json::to_string(&comparison_result)?);
 
     Ok(())
 }
