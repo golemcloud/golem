@@ -32,17 +32,18 @@ use crate::cloud::clients::project_grant::{ProjectGrantClient, ProjectGrantClien
 use crate::cloud::clients::token::{TokenClient, TokenClientLive};
 use crate::cloud::clients::worker::WorkerClientLive;
 use crate::cloud::clients::CloudAuthentication;
-use crate::cloud::model::ProjectId;
+use crate::cloud::model::{ProjectId, ProjectRef};
 use crate::cloud::service::account::{AccountService, AccountServiceLive};
 use crate::cloud::service::certificate::{CertificateService, CertificateServiceLive};
 use crate::cloud::service::domain::{DomainService, DomainServiceLive};
 use crate::cloud::service::grant::{GrantService, GrantServiceLive};
 use crate::cloud::service::policy::{ProjectPolicyService, ProjectPolicyServiceLive};
-use crate::cloud::service::project::{ProjectService, ProjectServiceLive};
+use crate::cloud::service::project::{CloudProjectResolver, ProjectService, ProjectServiceLive};
 use crate::cloud::service::project_grant::{ProjectGrantService, ProjectGrantServiceLive};
 use crate::cloud::service::token::{TokenService, TokenServiceLive};
 use crate::factory::{FactoryWithAuth, ServiceFactory};
 use crate::model::GolemError;
+use crate::service::project::ProjectResolver;
 use golem_cloud_client::{Context, Security};
 use url::Url;
 
@@ -121,7 +122,7 @@ impl CloudServiceFactory {
     pub fn project_service(
         &self,
         auth: &CloudAuthentication,
-    ) -> Result<Box<dyn ProjectService + Send + Sync>, GolemError> {
+    ) -> Result<Box<dyn ProjectService + Send + Sync + 'static>, GolemError> {
         Ok(Box::new(ProjectServiceLive {
             account_id: auth.account_id(),
             client: self.project_client(auth)?,
@@ -277,16 +278,29 @@ impl CloudServiceFactory {
 
 impl ServiceFactory for CloudServiceFactory {
     type SecurityContext = CloudAuthentication;
+    type ProjectRef = ProjectRef;
     type ProjectContext = ProjectId;
 
     fn with_auth(
         &self,
         auth: &Self::SecurityContext,
-    ) -> FactoryWithAuth<Self::ProjectContext, Self::SecurityContext> {
+    ) -> FactoryWithAuth<Self::ProjectRef, Self::ProjectContext, Self::SecurityContext> {
         FactoryWithAuth {
             auth: auth.clone(),
             factory: Box::new(self.clone()),
         }
+    }
+
+    fn project_resolver(
+        &self,
+        auth: &Self::SecurityContext,
+    ) -> Result<
+        Box<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
+        GolemError,
+    > {
+        Ok(Box::new(CloudProjectResolver {
+            service: self.project_service(auth)?,
+        }))
     }
 
     fn component_client(

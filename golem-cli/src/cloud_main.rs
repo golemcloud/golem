@@ -95,7 +95,7 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
             subcommand
                 .handle(
                     factory.component_service(&auth)?.as_ref(),
-                    factory.project_service(&auth)?.as_ref(),
+                    factory.project_resolver(&auth)?.as_ref(),
                 )
                 .await
         }
@@ -104,7 +104,7 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
                 .handle(
                     cmd.format,
                     factory.worker_service(&auth)?.as_ref(),
-                    factory.project_service(&auth)?.as_ref(),
+                    factory.project_resolver(&auth)?.as_ref(),
                 )
                 .await
         }
@@ -168,7 +168,7 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
             subcommand
                 .handle(
                     factory.api_definition_service(&auth)?.as_ref(),
-                    factory.project_service(&auth)?.as_ref(),
+                    factory.project_resolver(&auth)?.as_ref(),
                 )
                 .await
         }
@@ -176,7 +176,7 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
             subcommand
                 .handle(
                     factory.api_deployment_service(&auth)?.as_ref(),
-                    factory.project_service(&auth)?.as_ref(),
+                    factory.project_resolver(&auth)?.as_ref(),
                 )
                 .await
         }

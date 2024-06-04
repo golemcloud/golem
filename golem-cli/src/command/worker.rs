@@ -12,27 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command::ComponentRefSplit;
 use clap::builder::ValueParser;
 use clap::Subcommand;
 use golem_client::model::ScanCursor;
 
 use crate::model::{
-    ComponentIdOrName, Format, GolemError, GolemResult, IdempotencyKey, JsonValueParser,
-    WorkerName, WorkerUpdateMode,
+    Format, GolemError, GolemResult, IdempotencyKey, JsonValueParser, WorkerName, WorkerUpdateMode,
 };
-use crate::oss::model::OssContext;
 use crate::parse_key_val;
+use crate::service::project::ProjectResolver;
 use crate::service::worker::WorkerService;
 
 #[derive(Subcommand, Debug)]
 #[command()]
-pub enum WorkerSubcommand {
+pub enum WorkerSubcommand<ComponentRef: clap::Args> {
     /// Creates a new idle worker
     #[command()]
     Add {
         /// The Golem component to use for the worker, identified by either its name or its component ID
         #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
+        component_id_or_name: ComponentRef,
 
         /// Name of the newly created worker
         #[arg(short, long)]
@@ -56,7 +56,7 @@ pub enum WorkerSubcommand {
     InvokeAndAwait {
         /// The Golem component the worker to be invoked belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
+        component_id_or_name: ComponentRef,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -95,7 +95,7 @@ pub enum WorkerSubcommand {
     Invoke {
         /// The Golem component the worker to be invoked belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
+        component_id_or_name: ComponentRef,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -130,7 +130,7 @@ pub enum WorkerSubcommand {
     Connect {
         /// The Golem component the worker to be connected to belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
+        component_id_or_name: ComponentRef,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -142,7 +142,7 @@ pub enum WorkerSubcommand {
     Interrupt {
         /// The Golem component the worker to be interrupted belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
+        component_id_or_name: ComponentRef,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -156,7 +156,7 @@ pub enum WorkerSubcommand {
     SimulatedCrash {
         /// The Golem component the worker to be crashed belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
+        component_id_or_name: ComponentRef,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -168,7 +168,7 @@ pub enum WorkerSubcommand {
     Delete {
         /// The Golem component the worker to be deleted belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
+        component_id_or_name: ComponentRef,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -180,7 +180,7 @@ pub enum WorkerSubcommand {
     Get {
         /// The Golem component the worker to be retrieved belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
+        component_id_or_name: ComponentRef,
 
         /// Name of the worker
         #[arg(short, long)]
@@ -191,7 +191,7 @@ pub enum WorkerSubcommand {
     List {
         /// The Golem component the workers to be retrieved belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
+        component_id_or_name: ComponentRef,
 
         /// Filter for worker metadata in form of `property op value`.
         ///
@@ -220,7 +220,7 @@ pub enum WorkerSubcommand {
     Update {
         /// The Golem component of the worker, identified by either its name or its component ID
         #[command(flatten)]
-        component_id_or_name: ComponentIdOrName,
+        component_id_or_name: ComponentRef,
 
         /// Name of the worker to update
         #[arg(short, long)]
@@ -236,12 +236,16 @@ pub enum WorkerSubcommand {
     },
 }
 
-impl WorkerSubcommand {
-    pub async fn handle(
+impl<ComponentRef: clap::Args> WorkerSubcommand<ComponentRef> {
+    pub async fn handle<ProjectRef: Send + Sync + 'static, ProjectContext: Send + Sync>(
         self,
         format: Format,
-        service: &(dyn WorkerService<ProjectContext = OssContext> + Send + Sync),
-    ) -> Result<GolemResult, GolemError> {
+        service: &(dyn WorkerService<ProjectContext = ProjectContext> + Send + Sync),
+        projects: &(dyn ProjectResolver<ProjectRef, ProjectContext> + Send + Sync),
+    ) -> Result<GolemResult, GolemError>
+    where
+        ComponentRef: ComponentRefSplit<ProjectRef>,
+    {
         match self {
             WorkerSubcommand::Add {
                 component_id_or_name,
@@ -249,8 +253,10 @@ impl WorkerSubcommand {
                 env,
                 args,
             } => {
+                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
-                    .add(component_id_or_name, worker_name, env, args, None)
+                    .add(component_id_or_name, worker_name, env, args, project_id)
                     .await
             }
             WorkerSubcommand::IdempotencyKey {} => service.idempotency_key().await,
@@ -263,6 +269,8 @@ impl WorkerSubcommand {
                 wave,
                 use_stdio,
             } => {
+                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
                     .invoke_and_await(
                         format,
@@ -273,7 +281,7 @@ impl WorkerSubcommand {
                         parameters,
                         wave,
                         use_stdio,
-                        None,
+                        project_id,
                     )
                     .await
             }
@@ -285,6 +293,8 @@ impl WorkerSubcommand {
                 parameters,
                 wave,
             } => {
+                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
                     .invoke(
                         component_id_or_name,
@@ -293,7 +303,7 @@ impl WorkerSubcommand {
                         function,
                         parameters,
                         wave,
-                        None,
+                        project_id,
                     )
                     .await
             }
@@ -301,38 +311,52 @@ impl WorkerSubcommand {
                 component_id_or_name,
                 worker_name,
             } => {
+                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
-                    .connect(component_id_or_name, worker_name, None)
+                    .connect(component_id_or_name, worker_name, project_id)
                     .await
             }
             WorkerSubcommand::Interrupt {
                 component_id_or_name,
                 worker_name,
             } => {
+                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
-                    .interrupt(component_id_or_name, worker_name, None)
+                    .interrupt(component_id_or_name, worker_name, project_id)
                     .await
             }
             WorkerSubcommand::SimulatedCrash {
                 component_id_or_name,
                 worker_name,
             } => {
+                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
-                    .simulated_crash(component_id_or_name, worker_name, None)
+                    .simulated_crash(component_id_or_name, worker_name, project_id)
                     .await
             }
             WorkerSubcommand::Delete {
                 component_id_or_name,
                 worker_name,
             } => {
+                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
-                    .delete(component_id_or_name, worker_name, None)
+                    .delete(component_id_or_name, worker_name, project_id)
                     .await
             }
             WorkerSubcommand::Get {
                 component_id_or_name,
                 worker_name,
-            } => service.get(component_id_or_name, worker_name, None).await,
+            } => {
+                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service
+                    .get(component_id_or_name, worker_name, project_id)
+                    .await
+            }
             WorkerSubcommand::List {
                 component_id_or_name,
                 filter,
@@ -340,8 +364,17 @@ impl WorkerSubcommand {
                 cursor,
                 precise,
             } => {
+                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
-                    .list(component_id_or_name, filter, count, cursor, precise, None)
+                    .list(
+                        component_id_or_name,
+                        filter,
+                        count,
+                        cursor,
+                        precise,
+                        project_id,
+                    )
                     .await
             }
             WorkerSubcommand::Update {
@@ -350,13 +383,15 @@ impl WorkerSubcommand {
                 target_version,
                 mode,
             } => {
+                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
                     .update(
                         component_id_or_name,
                         worker_name,
                         target_version,
                         mode,
-                        None,
+                        project_id,
                     )
                     .await
             }

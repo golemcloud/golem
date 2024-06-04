@@ -12,17 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::model::{ProjectId, ProjectRef};
-use crate::cloud::service::project::ProjectService;
 use crate::model::{
     ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult, PathBufOrStdin,
 };
 use crate::service::api_definition::ApiDefinitionService;
+use crate::service::project::ProjectResolver;
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 #[command()]
-pub enum ApiDefinitionSubcommand {
+pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
     /// Lists all api definitions
     #[command()]
     List {
@@ -110,11 +109,11 @@ pub enum ApiDefinitionSubcommand {
     },
 }
 
-impl ApiDefinitionSubcommand {
-    pub async fn handle(
+impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDefinitionSubcommand<ProjectRef> {
+    pub async fn handle<ProjectContext>(
         self,
-        service: &(dyn ApiDefinitionService<ProjectContext = ProjectId> + Send + Sync),
-        projects: &(dyn ProjectService + Send + Sync),
+        service: &(dyn ApiDefinitionService<ProjectContext = ProjectContext> + Send + Sync),
+        projects: &(dyn ProjectResolver<ProjectRef, ProjectContext> + Send + Sync),
     ) -> Result<GolemResult, GolemError> {
         match self {
             ApiDefinitionSubcommand::Get {

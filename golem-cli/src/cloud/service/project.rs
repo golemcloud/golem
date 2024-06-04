@@ -15,6 +15,7 @@
 use crate::cloud::clients::project::ProjectClient;
 use crate::cloud::model::{AccountId, ProjectId, ProjectRef};
 use crate::model::{GolemError, GolemResult};
+use crate::service::project::ProjectResolver;
 use async_trait::async_trait;
 use golem_cloud_client::model::Project;
 use indoc::formatdoc;
@@ -115,5 +116,19 @@ impl ProjectService for ProjectServiceLive {
             }
             ProjectRef::Default => Ok(None),
         }
+    }
+}
+
+pub struct CloudProjectResolver {
+    pub service: Box<dyn ProjectService + Send + Sync>,
+}
+
+#[async_trait]
+impl ProjectResolver<ProjectRef, ProjectId> for CloudProjectResolver {
+    async fn resolve_id_or_default(
+        &self,
+        project_ref: ProjectRef,
+    ) -> Result<ProjectId, GolemError> {
+        self.service.resolve_id_or_default(project_ref).await
     }
 }
