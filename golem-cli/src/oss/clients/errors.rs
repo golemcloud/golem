@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::ResponseContentErrorMapper;
 use golem_client::api::{
     ApiDefinitionError, ApiDeploymentError, ComponentError, HealthCheckError, WorkerError,
 };
@@ -25,10 +26,6 @@ use golem_client::model::{
     GolemErrorWorkerNotFound, PromiseId, WorkerId, WorkerServiceErrorsBody,
 };
 use itertools::Itertools;
-
-pub trait ResponseContentErrorMapper {
-    fn map(self) -> String;
-}
 
 impl ResponseContentErrorMapper for ComponentError {
     fn map(self) -> String {
@@ -232,7 +229,7 @@ mod tests {
     };
     use uuid::Uuid;
 
-    use crate::clients::errors::ResponseContentErrorMapper;
+    use crate::oss::clients::errors::ResponseContentErrorMapper;
 
     #[test]
     fn api_definition_error_409() {

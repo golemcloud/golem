@@ -1,7 +1,7 @@
-use crate::model::component::function_result_types;
+use crate::model::component::{function_result_types, Component};
 use crate::model::wave::{type_to_analysed, type_wave_compatible};
 use crate::model::GolemError;
-use golem_client::model::{Component, InvokeResult, Type};
+use golem_client::model::{InvokeResult, Type};
 use golem_wasm_rpc::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value;
@@ -94,10 +94,11 @@ impl InvokeResultView {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::component::Component;
     use crate::model::invoke_result_view::InvokeResultView;
     use crate::model::wave::type_to_analysed;
     use golem_client::model::{
-        Component, ComponentMetadata, Export, ExportFunction, FunctionResult, InvokeResult,
+        ComponentMetadata, Export, ExportFunction, FunctionResult, InvokeResult,
         ProtectedComponentId, ResourceMode, Type, TypeBool, TypeHandle, UserComponentId,
         VersionedComponentId,
     };
@@ -147,6 +148,7 @@ mod tests {
                     results: func_res,
                 })],
             },
+            project_id: None,
         };
 
         InvokeResultView::try_parse_or_json(InvokeResult { result: json }, &component, "func_name")

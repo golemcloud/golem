@@ -17,16 +17,20 @@ pub mod invoke_result_view;
 pub mod text;
 pub mod wave;
 
+use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use crate::cloud::model::AccountId;
 use crate::model::text::TextFormat;
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Command, Error, FromArgMatches};
 use derive_more::{Display, FromStr};
+use golem_client::model::{ApiSite, ScanCursor};
 use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
@@ -42,6 +46,19 @@ pub enum GolemResult {
 impl GolemResult {
     pub fn err(s: String) -> Result<GolemResult, GolemError> {
         Err(GolemError(s))
+    }
+
+    pub fn print(self, format: Format) {
+        match self {
+            GolemResult::Ok(r) => r.println(&format),
+            GolemResult::Str(s) => println!("{s}"),
+            GolemResult::Json(json) => match format {
+                Format::Json | Format::Text => {
+                    println!("{}", serde_json::to_string_pretty(&json).unwrap())
+                }
+                Format::Yaml => println!("{}", serde_yaml::to_string(&json).unwrap()),
+            },
+        }
     }
 }
 
@@ -78,9 +95,11 @@ impl From<reqwest::header::InvalidHeaderValue> for GolemError {
     }
 }
 
-impl<T: crate::clients::errors::ResponseContentErrorMapper> From<golem_client::Error<T>>
-    for GolemError
-{
+pub trait ResponseContentErrorMapper {
+    fn map(self) -> String;
+}
+
+impl<T: ResponseContentErrorMapper> From<golem_client::Error<T>> for GolemError {
     fn from(value: golem_client::Error<T>) -> Self {
         match value {
             golem_client::Error::Reqwest(error) => GolemError::from(error),
@@ -89,10 +108,66 @@ impl<T: crate::clients::errors::ResponseContentErrorMapper> From<golem_client::E
                 GolemError(format!("Unexpected serialization error: {error}"))
             }
             golem_client::Error::Item(data) => {
-                let error_str = crate::clients::errors::ResponseContentErrorMapper::map(data);
+                let error_str = ResponseContentErrorMapper::map(data);
                 GolemError(error_str)
             }
             golem_client::Error::Unexpected { code, data } => {
+                match String::from_utf8(Vec::from(data)) {
+                    Ok(data_string) => GolemError(format!(
+                        "Unexpected http error. Code: {code}, content: {data_string}."
+                    )),
+                    Err(_) => GolemError(format!(
+                        "Unexpected http error. Code: {code}, can't parse content as string."
+                    )),
+                }
+            }
+        }
+    }
+}
+
+impl<T: ResponseContentErrorMapper> From<golem_cloud_client::Error<T>> for GolemError {
+    fn from(value: golem_cloud_client::Error<T>) -> Self {
+        match value {
+            golem_cloud_client::Error::Reqwest(error) => GolemError::from(error),
+            golem_cloud_client::Error::ReqwestHeader(invalid_header) => {
+                GolemError::from(invalid_header)
+            }
+            golem_cloud_client::Error::Serde(error) => {
+                GolemError(format!("Unexpected serialization error: {error}"))
+            }
+            golem_cloud_client::Error::Item(data) => {
+                let error_str = ResponseContentErrorMapper::map(data);
+                GolemError(error_str)
+            }
+            golem_cloud_client::Error::Unexpected { code, data } => {
+                match String::from_utf8(Vec::from(data)) {
+                    Ok(data_string) => GolemError(format!(
+                        "Unexpected http error. Code: {code}, content: {data_string}."
+                    )),
+                    Err(_) => GolemError(format!(
+                        "Unexpected http error. Code: {code}, can't parse content as string."
+                    )),
+                }
+            }
+        }
+    }
+}
+
+impl<T: ResponseContentErrorMapper> From<golem_cloud_worker_client::Error<T>> for GolemError {
+    fn from(value: golem_cloud_worker_client::Error<T>) -> Self {
+        match value {
+            golem_cloud_worker_client::Error::Reqwest(error) => GolemError::from(error),
+            golem_cloud_worker_client::Error::ReqwestHeader(invalid_header) => {
+                GolemError::from(invalid_header)
+            }
+            golem_cloud_worker_client::Error::Serde(error) => {
+                GolemError(format!("Unexpected serialization error: {error}"))
+            }
+            golem_cloud_worker_client::Error::Item(data) => {
+                let error_str = ResponseContentErrorMapper::map(data);
+                GolemError(error_str)
+            }
+            golem_cloud_worker_client::Error::Unexpected { code, data } => {
                 match String::from_utf8(Vec::from(data)) {
                     Ok(data_string) => GolemError(format!(
                         "Unexpected http error. Code: {code}, content: {data_string}."
@@ -344,6 +419,249 @@ impl FromStr for WorkerUpdateMode {
             _ => Err(format!(
                 "Unknown mode: {s}. Expected one of \"auto\", \"manual\""
             )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerMetadata {
+    #[serde(rename = "workerId")]
+    pub worker_id: golem_client::model::WorkerId,
+    #[serde(rename = "accountId")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub account_id: Option<AccountId>,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+    pub status: golem_client::model::WorkerStatus,
+    #[serde(rename = "componentVersion")]
+    pub component_version: u64,
+    #[serde(rename = "retryCount")]
+    pub retry_count: u64,
+    #[serde(rename = "pendingInvocationCount")]
+    pub pending_invocation_count: u64,
+    pub updates: Vec<golem_client::model::UpdateRecord>,
+    #[serde(rename = "createdAt")]
+    pub created_at: DateTime<Utc>,
+    #[serde(rename = "lastError")]
+    pub last_error: Option<String>,
+}
+
+impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
+    fn from(value: golem_client::model::WorkerMetadata) -> Self {
+        let golem_client::model::WorkerMetadata {
+            worker_id,
+            args,
+            env,
+            status,
+            component_version,
+            retry_count,
+            pending_invocation_count,
+            updates,
+            created_at,
+            last_error,
+        } = value;
+
+        WorkerMetadata {
+            worker_id,
+            account_id: None,
+            args,
+            env,
+            status,
+            component_version,
+            retry_count,
+            pending_invocation_count,
+            updates,
+            created_at,
+            last_error,
+        }
+    }
+}
+
+pub fn to_oss_worker_id(
+    id: golem_cloud_worker_client::model::WorkerId,
+) -> golem_client::model::WorkerId {
+    golem_client::model::WorkerId {
+        component_id: id.component_id,
+        worker_name: id.worker_name,
+    }
+}
+
+pub fn to_oss_worker_status(
+    s: golem_cloud_worker_client::model::WorkerStatus,
+) -> golem_client::model::WorkerStatus {
+    match s {
+        golem_cloud_worker_client::model::WorkerStatus::Running => {
+            golem_client::model::WorkerStatus::Running
+        }
+        golem_cloud_worker_client::model::WorkerStatus::Idle => {
+            golem_client::model::WorkerStatus::Idle
+        }
+        golem_cloud_worker_client::model::WorkerStatus::Suspended => {
+            golem_client::model::WorkerStatus::Suspended
+        }
+        golem_cloud_worker_client::model::WorkerStatus::Interrupted => {
+            golem_client::model::WorkerStatus::Interrupted
+        }
+        golem_cloud_worker_client::model::WorkerStatus::Retrying => {
+            golem_client::model::WorkerStatus::Retrying
+        }
+        golem_cloud_worker_client::model::WorkerStatus::Failed => {
+            golem_client::model::WorkerStatus::Failed
+        }
+        golem_cloud_worker_client::model::WorkerStatus::Exited => {
+            golem_client::model::WorkerStatus::Exited
+        }
+    }
+}
+
+fn to_oss_update_record(
+    r: golem_cloud_worker_client::model::UpdateRecord,
+) -> golem_client::model::UpdateRecord {
+    fn to_oss_pending_update(
+        u: golem_cloud_worker_client::model::PendingUpdate,
+    ) -> golem_client::model::PendingUpdate {
+        golem_client::model::PendingUpdate {
+            timestamp: u.timestamp,
+            target_version: u.target_version,
+        }
+    }
+    fn to_oss_successful_update(
+        u: golem_cloud_worker_client::model::SuccessfulUpdate,
+    ) -> golem_client::model::SuccessfulUpdate {
+        golem_client::model::SuccessfulUpdate {
+            timestamp: u.timestamp,
+            target_version: u.target_version,
+        }
+    }
+    fn to_oss_failed_update(
+        u: golem_cloud_worker_client::model::FailedUpdate,
+    ) -> golem_client::model::FailedUpdate {
+        golem_client::model::FailedUpdate {
+            timestamp: u.timestamp,
+            target_version: u.target_version,
+            details: u.details,
+        }
+    }
+
+    match r {
+        golem_cloud_worker_client::model::UpdateRecord::PendingUpdate(pu) => {
+            golem_client::model::UpdateRecord::PendingUpdate(to_oss_pending_update(pu))
+        }
+        golem_cloud_worker_client::model::UpdateRecord::SuccessfulUpdate(su) => {
+            golem_client::model::UpdateRecord::SuccessfulUpdate(to_oss_successful_update(su))
+        }
+        golem_cloud_worker_client::model::UpdateRecord::FailedUpdate(fu) => {
+            golem_client::model::UpdateRecord::FailedUpdate(to_oss_failed_update(fu))
+        }
+    }
+}
+
+impl From<golem_cloud_worker_client::model::WorkerMetadata> for WorkerMetadata {
+    fn from(value: golem_cloud_worker_client::model::WorkerMetadata) -> Self {
+        let golem_cloud_worker_client::model::WorkerMetadata {
+            worker_id,
+            account_id,
+            args,
+            env,
+            status,
+            component_version,
+            retry_count,
+            pending_invocation_count,
+            updates,
+            created_at,
+            last_error,
+        } = value;
+
+        WorkerMetadata {
+            worker_id: to_oss_worker_id(worker_id),
+            account_id: Some(AccountId::new(account_id)),
+            args,
+            env,
+            status: to_oss_worker_status(status),
+            component_version,
+            retry_count,
+            pending_invocation_count,
+            updates: updates.into_iter().map(to_oss_update_record).collect(),
+            created_at,
+            last_error,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkersMetadataResponse {
+    pub workers: Vec<WorkerMetadata>,
+    pub cursor: Option<ScanCursor>,
+}
+
+impl From<golem_client::model::WorkersMetadataResponse> for WorkersMetadataResponse {
+    fn from(value: golem_client::model::WorkersMetadataResponse) -> Self {
+        WorkersMetadataResponse {
+            cursor: value.cursor,
+            workers: value.workers.into_iter().map(|m| m.into()).collect(),
+        }
+    }
+}
+
+impl From<golem_cloud_worker_client::model::WorkersMetadataResponse> for WorkersMetadataResponse {
+    fn from(value: golem_cloud_worker_client::model::WorkersMetadataResponse) -> Self {
+        WorkersMetadataResponse {
+            cursor: value.cursor.map(|c| golem_client::model::ScanCursor {
+                cursor: c,
+                layer: 0,
+            }), // TODO: unify cloud and OSS
+            workers: value.workers.into_iter().map(|m| m.into()).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiDeployment {
+    #[serde(rename = "apiDefinitionId")]
+    pub api_definition_id: String,
+    pub version: String,
+    #[serde(rename = "projectId")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
+    pub site: ApiSite,
+}
+
+impl From<golem_client::model::ApiDeployment> for ApiDeployment {
+    fn from(value: golem_client::model::ApiDeployment) -> Self {
+        let golem_client::model::ApiDeployment {
+            api_definition_id,
+            version,
+            site,
+        } = value;
+
+        ApiDeployment {
+            api_definition_id,
+            version,
+            project_id: None,
+            site,
+        }
+    }
+}
+
+impl From<golem_cloud_worker_client::model::ApiDeployment> for ApiDeployment {
+    fn from(value: golem_cloud_worker_client::model::ApiDeployment) -> Self {
+        let golem_cloud_worker_client::model::ApiDeployment {
+            api_definition_id,
+            version,
+            project_id,
+            site: golem_cloud_worker_client::model::ApiSite { host, subdomain },
+        } = value;
+
+        ApiDeployment {
+            api_definition_id,
+            version,
+            project_id: Some(project_id),
+            site: ApiSite {
+                host,
+                subdomain: Some(subdomain),
+            },
         }
     }
 }
