@@ -1,11 +1,14 @@
 {
   "compilerOptions": {
     "target": "es6",
-    "module": "nodenext",                                
-    "moduleResolution": "nodenext",
-    "rootDir": "src/",
-    "outDir": "./out",
-    "lib": ["es2022", "esnext.disposable", "dom"]
+    "outDir": "./test/out",
+    "rootDir": "../",
+    "lib": ["es2022", "esnext.disposable", "dom"],
+    "baseUrl": ".",
+    "paths": {
+      "golem-ts": ["../lib"]
+    },
+    "moduleResolution": "node",
   },
   "include": [
     "src/**/*.ts"

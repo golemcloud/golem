@@ -14,6 +14,12 @@
 
 import { getIdempotenceMode, getOplogPersistenceLevel, getRetryPolicy, markBeginOperation, markEndOperation, OplogIndex, PersistenceLevel, RetryPolicy, setIdempotenceMode, setOplogPersistenceLevel, setRetryPolicy } from "./bindgen/bindgen";
 
+
+// @ts-ignore
+Symbol.dispose ??= Symbol("Symbol.dispose");
+// @ts-ignore
+Symbol.asyncDispose ??= Symbol("Symbol.asyncDispose");
+
 export class PersistenceLevelGuard implements Disposable {
   constructor(private originalLevel: PersistenceLevel) {}
 

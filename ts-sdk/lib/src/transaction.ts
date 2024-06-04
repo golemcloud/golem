@@ -228,7 +228,7 @@ export function infallibleTransaction<In, Out, Err>(
   );
 }
 
-function infallibleTransaction2<Out>(f: (tx: InfallibleTransactionState) => Out) : Out {
+export function infallibleTransaction2<Out>(f: (tx: InfallibleTransactionState) => Out) : Out {
   using _atomic = markAtomicOperation();
   const beginOplogIndex = getOplogIndex();
   const tx = new InfallibleTransactionState(beginOplogIndex);
