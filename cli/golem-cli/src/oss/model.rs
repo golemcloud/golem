@@ -12,20 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod clients;
-pub mod cloud;
-pub mod examples;
-pub mod factory;
-pub mod model;
-pub mod oss;
-pub mod service;
-pub mod stubgen;
+use std::fmt::{Display, Formatter};
 
-pub fn parse_key_val(
-    s: &str,
-) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let pos = s
-        .find('=')
-        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
-    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+#[derive(Debug, Clone, Copy)]
+pub struct OssContext {}
+
+impl OssContext {
+    pub const EMPTY: OssContext = OssContext {};
+}
+
+impl Display for OssContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "OSS context")
+    }
 }

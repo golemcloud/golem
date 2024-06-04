@@ -12,20 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod clients;
-pub mod cloud;
-pub mod examples;
-pub mod factory;
-pub mod model;
-pub mod oss;
-pub mod service;
-pub mod stubgen;
-
-pub fn parse_key_val(
-    s: &str,
-) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let pos = s
-        .find('=')
-        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
-    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
-}
+pub mod api_definition;
+pub mod api_deployment;
+pub mod certificate;
+pub mod domain;
+pub mod errors;
+pub mod health_check;

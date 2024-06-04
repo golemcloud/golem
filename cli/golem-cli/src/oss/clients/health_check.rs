@@ -12,20 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod clients;
-pub mod cloud;
-pub mod examples;
-pub mod factory;
-pub mod model;
-pub mod oss;
-pub mod service;
-pub mod stubgen;
+use crate::clients::health_check::HealthCheckClient;
+use async_trait::async_trait;
+use golem_client::model::VersionInfo;
+use tracing::debug;
 
-pub fn parse_key_val(
-    s: &str,
-) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    let pos = s
-        .find('=')
-        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
-    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+use crate::model::GolemError;
+
+#[derive(Clone)]
+pub struct HealthCheckClientLive<C: golem_client::api::HealthCheckClient + Sync + Send> {
+    pub client: C,
+}
+
+#[async_trait]
+impl<C: golem_client::api::HealthCheckClient + Sync + Send> HealthCheckClient
+    for HealthCheckClientLive<C>
+{
+    async fn version(&self) -> Result<VersionInfo, GolemError> {
+        debug!("Getting server version");
+
+        Ok(self.client.version().await?)
+    }
 }

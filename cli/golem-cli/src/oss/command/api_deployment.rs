@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::clients::api_deployment::ApiDeploymentClient;
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
-use async_trait::async_trait;
+use crate::oss::model::OssContext;
+use crate::service::api_deployment::ApiDeploymentService;
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
@@ -63,44 +63,23 @@ pub enum ApiDeploymentSubcommand {
     },
 }
 
-#[async_trait]
-pub trait ApiDeploymentHandler {
-    async fn handle(&self, subcommand: ApiDeploymentSubcommand) -> Result<GolemResult, GolemError>;
-}
+impl ApiDeploymentSubcommand {
+    pub async fn handle(
+        self,
+        service: &(dyn ApiDeploymentService<ProjectContext = OssContext> + Send + Sync),
+    ) -> Result<GolemResult, GolemError> {
+        let ctx = &OssContext::EMPTY;
 
-pub struct ApiDeploymentHandlerLive<C: ApiDeploymentClient + Send + Sync> {
-    pub client: C,
-}
-
-#[async_trait]
-impl<C: ApiDeploymentClient + Send + Sync> ApiDeploymentHandler for ApiDeploymentHandlerLive<C> {
-    async fn handle(&self, subcommand: ApiDeploymentSubcommand) -> Result<GolemResult, GolemError> {
-        match subcommand {
+        match self {
             ApiDeploymentSubcommand::Deploy {
                 id,
                 version,
                 host,
                 subdomain,
-            } => {
-                let deployment = self.client.deploy(&id, &version, &host, subdomain).await?;
-
-                Ok(GolemResult::Ok(Box::new(deployment)))
-            }
-            ApiDeploymentSubcommand::Get { site } => {
-                let deployment = self.client.get(&site).await?;
-
-                Ok(GolemResult::Ok(Box::new(deployment)))
-            }
-            ApiDeploymentSubcommand::List { id } => {
-                let deployments = self.client.list(&id).await?;
-
-                Ok(GolemResult::Ok(Box::new(deployments)))
-            }
-            ApiDeploymentSubcommand::Delete { site } => {
-                let res = self.client.delete(&site).await?;
-
-                Ok(GolemResult::Str(res))
-            }
+            } => service.deploy(id, version, host, subdomain, ctx).await,
+            ApiDeploymentSubcommand::Get { site } => service.get(site).await,
+            ApiDeploymentSubcommand::List { id } => service.list(id, ctx).await,
+            ApiDeploymentSubcommand::Delete { site } => service.delete(site).await,
         }
     }
 }
