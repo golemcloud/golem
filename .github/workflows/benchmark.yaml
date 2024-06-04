@@ -48,15 +48,31 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           WORKFLOW_ID: ${{ github.run_id }}
         run: |
-          echo "Workflow id is $WORKFLOW_ID";
-          WORKFLOW_ID=$WORKFLOW_ID
-          curl -L \
-          -X POST \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer $GITHUB_TOKEN" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          https://api.github.com/repos/afsalthaj/golem-timeline/issues/$ISSUE_NUMBER/comments \
-          -d "{\"body\":\"### Cold Storage Large: \n PR Avg Runtime: 94ms, \n Existing Avg Runtime: 100ms \n RunID: $WORKFLOW_ID \"}"
+          if git show origin/github_pages:benchmark_cold_storage_large2.json > benchmark_cold_start_large_previous.json; then
+            echo "Workflow id is $WORKFLOW_ID";
+            echo "Running comparison"
+            ./target/debug/compare_benchmark --benchmark-previous benchmark_cold_start_large_previous.json --benchmark-current benchmark_cold_start_large.json > benchmark_cold_start_large.comparison.json
+            # Read the content of benchmark_cold_start_large.comparison.json into a variable
+            COMPARISON_JSON=$(<benchmark_cold_start_large.comparison.json)
+            WORKFLOW_ID=$WORKFLOW_ID
+            curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/afsalthaj/golem-timeline/issues/$ISSUE_NUMBER/comments \
+            -d "{\"body\":\"## Benchmark Results: \n ### Cold Storage Large \n ``` \n $COMPARISON_JSON \n ``` \n RunID: $WORKFLOW_ID \"}"
+          else
+            echo "Workflow id is $WORKFLOW_ID";
+            WORKFLOW_ID=$WORKFLOW_ID
+            curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/afsalthaj/golem-timeline/issues/$ISSUE_NUMBER/comments \
+            -d "{\"body\":\"### Cold Storage Large: \n PR Avg Runtime: 94ms, \n RunID: $WORKFLOW_ID \"}"
+          fi
       - name: Copy benchmark result
         env:
           PR_NUMBER: ${{ github.event.issue.number }}
