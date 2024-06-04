@@ -18,7 +18,7 @@ fn load_json(file_path: &str) -> Result<BenchmarkResult, Box<dyn Error>> {
 fn calculate_mean_avg_time(json: &BenchmarkResult) -> HashMap<RunConfig, u64> {
     let mut total_avg_secs = 0;
 
-    let mut hashmap_results = HashMap::new();
+    let mut run_config_to_avg_time = HashMap::new();
 
 
     for (run_config, benchmark_result) in &json.results {
@@ -28,34 +28,45 @@ fn calculate_mean_avg_time(json: &BenchmarkResult) -> HashMap<RunConfig, u64> {
         }
 
        let avg = total_avg_secs / benchmark_result.duration_results.values().len() as u64;
-        hashmap_results.insert(run_config.clone(), avg);
+        run_config_to_avg_time.insert(run_config.clone(), avg);
     }
 
-    hashmap_results
+    run_config_to_avg_time
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ComparisonResults {
+    result: Vec<ComparisonResult>
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ComparisonResult {
-    result: HashMap<RunConfig, Comparison>
+    run_config: RunConfig,
+    comparison: Comparison
 }
 
-impl ComparisonResult {
+impl ComparisonResults {
     fn from_results(previous: &BenchmarkResult, current: &BenchmarkResult) -> Self {
         let previous_avg = calculate_mean_avg_time(previous);
         let current_avg = calculate_mean_avg_time(current);
 
-        let mut comparison = HashMap::new();
+        let mut comparison_results = Vec::new();
 
-        for (run_config, avg1) in previous_avg {
-            let avg2 = current_avg.get(&run_config).unwrap();
-            comparison.insert(run_config, Comparison {
-                previous_avg: avg1,
-                current_avg: avg2.clone(),
+        for (run_config, previous_avg_time) in previous_avg {
+            let current_avg_time = current_avg.get(&run_config).unwrap();
+            let comparison = Comparison {
+                previous_avg: previous_avg_time,
+                current_avg: current_avg_time.clone()
+            };
+
+            comparison_results.push(ComparisonResult {
+                run_config: run_config.clone(),
+                comparison
             });
         }
 
-        ComparisonResult {
-            result: comparison
+        ComparisonResults {
+            result: comparison_results
         }
     }
 }
@@ -84,7 +95,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let current_bench_mark_results = load_json(params.benchmark_current.as_str())?;
 
     let comparison_result =
-        ComparisonResult::from_results(&previous_bench_mark_results, &current_bench_mark_results);
+        ComparisonResults::from_results(&previous_bench_mark_results, &current_bench_mark_results);
 
     dbg!(comparison_result.clone());
 
