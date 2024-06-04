@@ -75,10 +75,10 @@ pub struct CliParams {
 
 }
 
+// The entry point to compare two benchmark results.
+// The files have contents expected to be in json format that correspond to `BenchmarkResult`.
 fn main() -> Result<(), Box<dyn Error>> {
-
     let params = CliParams::parse();
-
     let previous_bench_mark_results = load_json(params.benchmark_previous.as_str())?;
     let current_bench_mark_results = load_json(params.benchmark_current.as_str())?;
 
