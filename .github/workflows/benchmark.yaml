@@ -1,16 +1,18 @@
-name: Benchmark Job
+name: On Demand Benchmark
 on:
   issue_comment:
     types: [created]
 
 jobs:
   run-benchmark:
-    runs-on: ubuntu-latest-large
+    if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, '/run-benchmark') }}
+    permissions: write-all
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: true
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -35,5 +37,34 @@ jobs:
         run: cargo make build
       - name: Run Benchmark
         run: |
-          ./target/debug/benchmark_cold_start_large --quiet --json spawned > benchmark_cold_start_large.txt
+          ./target/debug/benchmark_cold_start_large --quiet --json spawned > benchmark_cold_start_large.json
           echo "Benchmark finished"
+      - name: Run Benchmark
+        run: |
+          echo "Running Benchmark Job"
+      - name: Post results as a comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          WORKFLOW_ID: ${{ github.run_id }}
+        run: |
+          echo "Workflow id is $WORKFLOW_ID";
+          WORKFLOW_ID=$WORKFLOW_ID
+          curl -L \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer $GITHUB_TOKEN" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/afsalthaj/golem-timeline/issues/$ISSUE_NUMBER/comments \
+          -d "{\"body\":\"### Cold Storage Large: \n PR Avg Runtime: 94ms, \n Existing Avg Runtime: 100ms \n RunID: $WORKFLOW_ID \"}"
+      - name: Copy benchmark result
+        env:
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          mkdir -p ./benchmark-data
+          cp benchmark_cold_start_large.json benchmark-data/benchmark_cold_start_large.json
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark_cold_storage_large1.json
+          path: benchmark-data/

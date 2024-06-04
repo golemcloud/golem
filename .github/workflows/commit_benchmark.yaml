@@ -1,0 +1,61 @@
+name: Commit Benchmark Results
+on:
+  issue_comment:
+    types: [ created ]
+
+jobs:
+  commit-results:
+    if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, '/commit-benchmark') }}
+    runs-on: ubuntu-latest
+    permissions: write-all
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: 'Download artifact'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            console.log("Running...");
+            let comment_body = "${{ github.event.comment.body }}";
+            let run_id = comment_body.replace("/commit-benchmark ", '').trim();
+            console.log("The benchmark run-id is " + run_id);
+            console.log("Download the benchmark results from the artifactory of " + run_id  + " ..");
+            let allArtifacts = await github.rest.actions.listWorkflowRunArtifacts({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               run_id: run_id
+            });
+            let matchArtifact = allArtifacts.data.artifacts.filter((artifact) => {
+              return artifact.name == "benchmark_cold_storage_large1.json"
+            })[0];
+            let download = await github.rest.actions.downloadArtifact({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               artifact_id: matchArtifact.id,
+               archive_format: 'zip',
+            });
+            let fs = require('fs');
+            fs.writeFileSync(`${process.env.GITHUB_WORKSPACE}/benchmark_cold_storage_large1.json.zip`, Buffer.from(download.data));
+      - name: 'Unzip artifact'
+        run: unzip benchmark_cold_storage_large1.json.zip
+      - name: 'Comment on PR'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            let fs = require('fs');
+            let issue_number = fs.readFileSync('./benchmark_cold_storage_large1.json');
+            console.log(String(issue_number));
+      - name: Commit and push benchmark results
+        uses: EndBug/add-and-commit@v9
+        with:
+          branch: github_pages
+          message: Add benchmark results
+          add: benchmark_cold_storage_large1.json
+          new_branch: github_pages
+          push: origin github_pages --force
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
