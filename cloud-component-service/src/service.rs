@@ -29,7 +29,7 @@ impl Services {
     pub async fn new(config: &ComponentServiceConfig) -> Result<Services, String> {
         let component_repo: Arc<dyn ComponentRepo + Sync + Send> = match config.db.clone() {
             DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c)
+                let db_pool = db::create_postgres_pool(&c, &config.workspace)
                     .await
                     .map_err(|e| e.to_string())?;
                 Arc::new(DbComponentRepo::new(db_pool.clone().into()))

@@ -9,13 +9,9 @@ use url::Url;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct DbSqliteConfig {
-    pub database: String,
-    pub max_connections: u32,
-}
-
-#[derive(Clone, Debug, Deserialize)]
 pub struct ComponentServiceConfig {
+    pub environment: String,
+    pub workspace: String,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
     pub http_port: u16,
@@ -50,7 +46,12 @@ pub struct DbPostgresConfig {
     pub password: String,
     pub port: u16,
     pub max_connections: u32,
-    pub schema: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DbSqliteConfig {
+    pub database: String,
+    pub max_connections: u32,
 }
 
 impl ComponentServiceConfig {
@@ -66,6 +67,8 @@ impl ComponentServiceConfig {
 impl Default for ComponentServiceConfig {
     fn default() -> Self {
         Self {
+            environment: "dev".to_string(),
+            workspace: "release".to_string(),
             enable_tracing_console: false,
             enable_json_log: false,
             http_port: 8081,

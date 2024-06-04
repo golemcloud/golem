@@ -28,20 +28,22 @@ impl From<&DbSqliteConfig> for SqliteConnectOptions {
 
 pub async fn create_postgres_pool(
     config: &DbPostgresConfig,
+    workspace: &str,
 ) -> Result<Pool<Postgres>, Box<dyn Error>> {
-    let schema = config.schema.clone().unwrap_or("public".to_string());
     info!(
         "DB Pool: postgresql://{}:{}/{}?currentSchema={}",
-        config.host, config.port, config.database, schema
+        config.host, config.port, config.database, workspace
     );
     let conn_options = PgConnectOptions::from(config);
+
+    let w = workspace.to_string();
 
     PgPoolOptions::new()
         .max_connections(config.max_connections)
         .after_connect(move |conn, _meta| {
-            let s = schema.clone();
+            let w = w.clone();
             Box::pin(async move {
-                let sql = format!("SET SCHEMA '{}';", s);
+                let sql = format!("SET SCHEMA '{}';", w);
                 conn.execute(sqlx::query(&sql)).await?;
                 Ok(())
             })
@@ -51,8 +53,11 @@ pub async fn create_postgres_pool(
         .map_err(|e| e.into())
 }
 
-pub async fn postgres_migrate(config: &DbPostgresConfig) -> Result<(), Box<dyn Error>> {
-    let schema = config.schema.clone().unwrap_or("public".to_string());
+pub async fn postgres_migrate(
+    config: &DbPostgresConfig,
+    workspace: &str,
+) -> Result<(), Box<dyn Error>> {
+    let schema = workspace;
     info!(
         "DB migration: postgresql://{}:{}/{}?currentSchema={}",
         config.host, config.port, config.database, schema
