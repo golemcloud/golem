@@ -3,9 +3,9 @@ import { GolemTsApi } from './interfaces/golem-ts-api.js';
 
 export const api: typeof GolemTsApi  = {
     process: (a: bigint) =>  {
-        let result = infallibleTransaction(tx => {
-            let resultA = tx.execute(operationOne, a);
-            let resultB = resultA.flatMap(a => tx.execute(operationTwo, a));
+        const result = infallibleTransaction(tx => {
+            const resultA = tx.execute(operationOne, a);
+            const resultB = resultA.flatMap(a => tx.execute(operationTwo, a));
             return resultB
         });
         if (result.isOk) {
@@ -16,32 +16,32 @@ export const api: typeof GolemTsApi  = {
         }
     },
     processFallible: (a: bigint) =>  {
-        type Error = OperationErrors<[typeof operationOne, typeof operationTwo]>;
-        let result = fallibleTransaction<string, Error>(tx => {
-            let resultA = tx.execute(operationOne, a);
-            let resultB = resultA.flatMap(num => tx.execute(operationTwo, num));
+        type Error = OperationErrors<[typeof neverFailsOperation, typeof alwaysFailsOperation]>;
+        const result = fallibleTransaction<bigint, Error>(tx => {
+            const resultA = tx.execute(neverFailsOperation, a);
+            const resultB = resultA.flatMap(num => tx.execute(alwaysFailsOperation, num));
             return resultB;
           });
 
         if (result.isOk) {
-            return result.value;
+            return result.value.toString();
         } else {
-            console.log(`Error: ${result.error}`);
-            return "Error";
+            const message = typeof result.error === "string" ? result.error : JSON.stringify(result.error);
+            return `Error ${message}`;
         }
     }
 }
 
 const operationOne: Operation<bigint, bigint, string> = operation(
     (input: bigint) => {
-      let random = Math.floor(Math.random() * 10);
-      if (random < 5) {
-        console.log(`OperationOne | input: ${input} | random ${random} | negative input detected`)
-        return Result.err("input cannot be negative");
-      } else {
-        console.log(`OperationOne | incrementing input by 1`)
-        return Result.ok(input + BigInt(1));
-      }
+        const random = Math.floor(Math.random() * 10);
+        if (random < 5) {
+            console.log(`OperationOne | input: ${input} | random ${random} | negative input detected`)
+            return Result.err("input cannot be negative");
+        } else {
+            console.log(`OperationOne | incrementing input by 1`)
+            return Result.ok(input + BigInt(1));
+        }
     },
     (input, result) => {
       console.log(`Compensating operationOne | input: ${input}, result: ${result}`);
@@ -51,7 +51,7 @@ const operationOne: Operation<bigint, bigint, string> = operation(
   
 const operationTwo = operation( 
     (input: bigint) => {
-        let random = Math.floor(Math.random() * 10);
+        const random = Math.floor(Math.random() * 10);
         if (random < 8) {
             console.log(`OperationTwo | input: ${input} | input too large`)
             return Result.err( {
@@ -68,3 +68,24 @@ const operationTwo = operation(
         return Result.unit()
     }
 );
+
+const neverFailsOperation = operation<bigint, bigint, string>( 
+    (input: bigint) => {
+        console.log(`SuccessOperation | input: ${input}`);
+        return Result.ok(input);
+    }, 
+    (_input, _result) => {
+        console.log("neverFailsOperation");
+        return Result.unit()
+    }
+)
+
+const alwaysFailsOperation = operation<bigint, bigint, string>( (input: bigint) => {
+    console.log(`FailOperation | input: ${input}`);
+        return Result.err("Always fails");
+    },
+    (_input, _result) => {
+        console.log("alwaysFailsOperation");
+        return Result.unit()
+    }
+)
