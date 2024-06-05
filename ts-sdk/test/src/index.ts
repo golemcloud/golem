@@ -1,13 +1,27 @@
-import { infallibleTransaction, infallibleTransaction2, operation, Result } from 'golem-ts';
+import { fallibleTransactionOperations, infallibleTransaction, operation, Result } from 'golem-ts';
 import { GolemTsApi } from './interfaces/golem-ts-api.js';
 
 export const api: typeof GolemTsApi  = {
     process: (a: bigint) =>  {
-        let result = infallibleTransaction2(tx => {
+        let result = infallibleTransaction(tx => {
             let resultA = tx.execute(operationOne, a);
             let resultB = resultA.flatMap(a => tx.execute(operationTwo, a));
             return resultB
         });
+        if (result.isOk) {
+            return result.value;
+        } else {
+            console.log(`Error: ${result.error}`);
+            return "Error";
+        }
+    },
+    process2: (a: bigint) =>  {
+        let result = fallibleTransactionOperations<[typeof operationOne, typeof operationTwo]>(tx => {
+            let resultA = tx.execute(operationOne, a);
+            let resultB = resultA.flatMap(num => tx.execute(operationTwo, num));
+            return resultB;
+          });
+
         if (result.isOk) {
             return result.value;
         } else {

@@ -13,29 +13,8 @@
 // limitations under the License.
 
 import { getOplogIndex, setOplogIndex, OplogIndex } from "./bindgen/bindgen";
-import { markAtomicOperation } from "./guard";
+import { executeWithDrop, markAtomicOperation } from "./guard";
 import { Result } from "./result";
-
-/// A unified interface for the different types of transactions. Using it can make the code
-/// easier to switch between different transactional guarantees but is more constrained in
-/// terms of error types.
-export interface Transaction<Err>{
-  /**
-   * Execute an operation from the context of the transaction. 
-   */
-  execute<OpIn, OpOut>(
-    operation: Operation<OpIn, OpOut, Err>,
-    input: OpIn
-  ): Result<OpOut, Err>;
-
-  /**
-   * Fail the entire transaction with the given error. This will attempt to rollback all the operations
-   */
-  fail(error: Err): Result<void, Err>;
-
-  // fn run<Out>(f: impl FnOnce(&mut Self) -> Result<Out, Err>) -> TransactionResult<Out, Err>;
-  run<Out>(f: (tx: Transaction<Err>) => Result<Out, Err>): TransactionResult<Out, Err>;
-}
 
 export interface Operation<In, Out, Err> {
   execute(input: In): Result<Out, Err>;
@@ -56,50 +35,7 @@ class OperationImpl<In, Out, Err> implements Operation<In, Out, Err> {
   ) {}
 }
 
-// class InfallibleTransactionState<In, Err> {
-//   private compensations: (() => void) [] = [];
-//   private err: boolean = false;
-
-//   constructor(
-//     public readonly value: In,
-//     private readonly beginOplogIndex: OplogIndex
-//   ) {}
-
-//   execute<Out, Err2>(
-//     operation: Operation<In, Out, Err2>
-//   ): Result<Out, Err2>
-//    {
-//     if (this.err) {
-//       throw new Error("Transaction is in a failed state");
-//     }
-//     const result = operation.execute(this.value);
-//     if (result.isOk) {
-//       this.compensations.push(() => {
-//         const compensationResult = operation.compensate(this.value, result.value);
-//         if (compensationResult.isErr) {
-//           throw new Error("Compensation action failed " + compensationResult.error);
-//         }
-//       })
-//       return result;
-//     } else {
-//       this.err = true;
-//       this.retry();
-//       throw new Error("Unreachable");
-//     }
-//   }
-
-//   retry(): void {
-//     // Rollback all the compensations in reverse order
-//     for (let i = this.compensations.length - 1; i >= 0; i--) {
-//       this.compensations[i]();
-//     }
-//     setOplogIndex(this.beginOplogIndex);
-//   }
-
-// }
-
-
-class InfallibleTransactionState {
+class InfallibleTransaction {
   private compensations: (() => void) [] = [];
 
   constructor(
@@ -128,80 +64,71 @@ class InfallibleTransactionState {
     }
   }
 
-  retry(): void {
+  private retry(): void {
+    console.log("Executing compensations");
     // Rollback all the compensations in reverse order
     for (let i = this.compensations.length - 1; i >= 0; i--) {
-      this.compensations[i]();
+      console.log("Compensating operation ", i)
+      try {
+        this.compensations[i]();
+      } catch (e) {
+        console.log("Compensation failed", e)
+        throw e;
+      }
+      console.log("Compensated operation ", i)
     }
+    console.log("Retrying transaction from ", this.beginOplogIndex);
     setOplogIndex(this.beginOplogIndex);
   }
 }
 
-class InfallibleTransaction<In, Out, Err> {
-  private operations: Operation<any, any, any>[] = [];
-  private compensations: (() => void) [] = [];
 
-  constructor(
-    operation: Operation<In, Out, Err>,
-  ) {
-    this.operations.push(operation);
+class FallibleTransaction<Err> {
+  private compensations: (() => Result<void, Err>) [] = [];
+
+  constructor() {}
+
+  execute<In, Out, OpErr extends Err>(
+    operation: Operation<In, Out, OpErr>,
+    input: In,
+  ) : Result<Out, Err> {
+    const result = operation.execute(input);
+    if (result.isOk) {
+      this.compensations.push(
+        () => {
+          return operation.compensate(input, result.value) 
+        }
+      );
+      return  result;
+    } else {
+      return result;
+    }
   }
 
-  next<NextOut, NextErr>(operation: Operation<Out, NextOut, NextErr>): InfallibleTransaction<In, NextOut, Err | NextErr> {
-    console.log("Adding new operation to the transaction")
-    this.operations.push(operation);
-    return this as unknown as InfallibleTransaction<In, NextOut, Err | NextErr>;
-  }
-
-  execute(input: In): Result<Out, Err> {
-    let index = getOplogIndex();
-    using _atomic = markAtomicOperation();
-
-    console.log(`Executing transaction with ${this.operations.length} steps`)
-    let currentInput: any = input;
-    let currentOutput: any;
-
-    for (const operation of this.operations) {
-      const result = operation.execute(currentInput);
-      if (result.isOk) {
-        console.log("Operation succeeded")
-        this.compensations.push(() => {
-          const compensationResult = operation.compensate(input, result.value);
-          if (compensationResult.isErr) {
-            throw new Error("Compensation action failed");
-          }
-          return Result.unit()
-        });
-        currentInput = result.value;
-        currentOutput = result.value;
-      } else {
-        console.log("Operation failed")
-        this.retry(index)
-        throw new Error("Unreachable code")
+  onFailure(error: Err): TransactionFailure<Err>{
+    for (let i = this.compensations.length - 1; i >= 0; i--) {
+      const compensationResult = this.compensations[i]();
+      if (compensationResult.isErr) {
+        return {
+          type: "FailedAndRolledBackPartially",
+          error,
+          compensationFailure: compensationResult.error
+        }
       }
     }
-
-    console.log("Transaction completed successfully")
-
-    return Result.ok(currentOutput) as Result<Out, Err>;
-  }
-
-  private retry(index: OplogIndex): void {
-    console.log("Retrying transaction")
-    // Rollback all the compensations in reverse order
-    for (let i = this.compensations.length - 1; i >= 0; i--) {
-      this.compensations[i]();
+    return {
+      type: "FailedAndRolledBackCompletely",
+      error 
     }
-    console.log("Setting oplog index to the beginning", index);
-    setOplogIndex(index);
   }
 }
+
 
 export type TransactionResult<Out, Err> = Result<Out, TransactionFailure<Err>>;
 
 export type TransactionFailure<Err> =
   | { type: "FailedAndRolledBackCompletely"; error: Err }
-  | { type: "FailedAndRolledBackPartially"; failure: Err; compensationFailure: Err };
+  | { type: "FailedAndRolledBackPartially"; error: Err; compensationFailure: Err };
 
 /// InfallibleTransaction is a sequence of operations that are executed in a way that if any of the
 /// operations or the underlying Golem executor fails, the whole transaction is going to
@@ -213,186 +140,50 @@ export type TransactionFailure<Err> =
 ///
 /// Fatal errors (panic) and external executor failures are currently cannot perform the
 /// rollback actions.
-// export function infallibleTransaction<Err>(): Transaction<Err>{
-//   return new InfallibleTransaction(
-//     getOplogIndex(),
-//     markAtomicOperation()
-//   );
-// }
-export function infallibleTransaction<In, Out, Err>(
-  operation: Operation<In, Out, Err>
-): InfallibleTransaction<In, Out, Err> {
-  console.log("Creating new transaction")
-  return new InfallibleTransaction(
-    operation, 
-  );
-}
-
-export function infallibleTransaction2<Out>(f: (tx: InfallibleTransactionState) => Out) : Out {
-  using _atomic = markAtomicOperation();
+export function infallibleTransaction<Out>(f: (tx: InfallibleTransaction) => Out) : Out {
+  const guard = markAtomicOperation();
   const beginOplogIndex = getOplogIndex();
-  const tx = new InfallibleTransactionState(beginOplogIndex);
-  const result = f(tx);
-  return result
+  const tx = new InfallibleTransaction(beginOplogIndex);
+  return executeWithDrop([guard], () => f(tx));
 }
 
-// function testInfallible() {
-//   let res = infallibleTransaction2(tx => {
-//     let res = tx.execute(operationOne, 1);
+export function fallibleTransaction<Out, Err>(f: (tx: FallibleTransaction<Err>) => Result<Out, Err>) : TransactionResult<Out, Err> {
+  const guard = markAtomicOperation();
+  const tx = new FallibleTransaction<Err>();
+  const execute = () => {
+    let result = f(tx);
+    if (result.isOk){
+      return Result.ok(result.value);
+    } else {
+      return Result.err(tx.onFailure(result.error));
+    }
+  };
+  return executeWithDrop([guard], execute);
+}
 
-//   })
-// }
+type ExtractOperationError<T> = T extends Operation<any, any, infer Err> ? Err : never;
 
-// export class InfallibleTransaction<Err> implements Transaction<Err> {
-//   private compensations: CompensationAction<void>[] = [];
+type UnionOfOperationErrors<T extends (Operation<any, any, any> | any)[]> = T[number] extends Operation<any, any, infer Err>
+  ? Err
+: NonOperationTypes<T>;
 
-//   constructor(
-//     private beginOplogIndex: OplogIndex,
-//     private atomicRegion: AtomicOperationGuard
-//   ) {}
+type NonOperationTypes<T extends (Operation<any, any, any> | any)[]> = T[number] extends Operation<any, any, any>
+  ? never
+  : T[number];
 
-//   execute<OpIn, OpOut>(
-//     operation: Operation<OpIn, OpOut, Err>,
-//     input: OpIn
-//   ): Result<OpOut, Err> {
-//     const result = operation.execute(input);
-//     if (result.isOk) {
-//       this.compensations.push(
-//         // Compensations cannot fail in infallible transactions.
-//         new CompensationAction(() => {
-//           const compensationResult = operation.compensate(input, result.value);
-//           if (compensationResult.isErr) {
-//             throw new Error("Compensation action failed");
-//           }
-//           return Result.unit()
-//         })
-//       );
-//       return result;
-//     } else {
-//       this.retry();
-//       throw new Error("Unreachable code");
-//     }
-//   }
+type ExtractOperationOutput<T> = T extends Operation<any, infer Out, any> ? Out : never;
 
-//   fail<Err>(error: Err): Result<void, Err> {
-//     this.retry();
-//     return Result.err(error);
-//   }
+type LastOperationOutput<T extends (Operation<any, any, any> | any)[]> = T extends [...any[], infer Last]
+  ? Last extends Operation<any, any, any>
+    ? ExtractOperationOutput<Last>
+    : never
+  : never;
 
-//   run<Out>(f: (tx: Transaction<Err>) => Result<Out, Err>): TransactionResult<Out, Err> {
-//     return Result.ok(f(this).unwrap())
-//   }
-
-//   retry(): void {
-//     // Rollback all the compensations in reverse order
-//     for (let i = this.compensations.length - 1; i >= 0; i--) {
-//       this.compensations[i].execute();
-//     }
-//     setOplogIndex(this.beginOplogIndex);
-//   }
-// }
-
-
-// export class FallibleTransaction<Err> implements Transaction<Err> {
-//   private compensations: CompensationAction<Err>[] = [];
-
-//   constructor(
-//     private beginOplogIndex: OplogIndex,
-//     private atomicRegion: AtomicOperationGuard
-//   ) {}
-
-//   execute<OpIn, OpOut>(
-//     operation: Operation<OpIn, OpOut, Err>,
-//     input: OpIn
-//   ): Result<OpOut, Err> {
-//     const result = operation.execute(input);
-//     if (result.isOk) {
-//       this.compensations.push(
-//         new CompensationAction(() => 
-//           operation.compensate(input, result.value)
-//         )
-//       );
-//     } 
-//     return result;
-//   }
-
-//   fail(error: Err): Result<void, Err> {
-//     throw new Error("Method not implemented.");
-//   }
-
-// }
-
-
-
-// function infallibleTransactionTest() {
-//   let tx = infallibleTransaction<string | number>();
-//   let result = tx.execute(operationOne, 1).flatMap(res => tx.execute(operationTwo, res));
-
-//   return result;
-// }
-
-// function seqTransaction() {
-//   let tx = infallibleTransaction(operationOne).next(operationTwo);
-//   let result = tx.execute(1);
-//   return result;
-// }
-
-// function something() {
-//   let n = 1;
-//   const result = n > -1 ? Result.ok(n) : Result.err("n is negative");
-
-//   return result.flatMap(val => {
-//     console.log(val);
-//     if (val > 0) {
-//       return Result.ok(val);
-//     } else {
-//       return Result.err(-1);
-//     }
-//   })
-// }
-  
-
-// export function fallibleTransaction<Out, Err>(
-//   f: (tx: FallibleTransaction<Err>) => Result<Out, Err>
-// ): TransactionResult<Out, Err> {
-//   const transaction = new FallibleTransaction<Err>();
-//   const result = f(transaction);
-//   if (result.ok) {
-//     return Ok(result.val);
-//   } else if (result.err) {
-//     return Err(transaction.onFail(result.val));
-//   }
-// }
-
-// export class FallibleTransaction<Err> implements Transaction<Err>{
-//   private compensations: CompensationAction<Err>[] = [];
-
-//   execute<OpIn, OpOut>(
-//     operation: Operation<OpIn, OpOut, Err>,
-//     input: OpIn
-//   ): Result<OpOut, Err> {
-//     const result = operation.execute(input);
-//     if (result.ok) {
-//       this.compensations.push(
-//         new CompensationAction(() => operation.compensate(input, result.val))
-//       );
-//     }
-//     return result;
-//   }
-
-//   fail(failure: Err): TransactionFailure<Err> {
-//     for (const compensationAction of this.compensations.slice().reverse()) {
-//       const compensationResult = compensationAction.execute();
-//       if (compensationResult.err) {
-//         return {
-//           type: "FailedAndRolledBackPartially",
-//           failure,
-//           compensationFailure: compensationResult.val,
-//         };
-//       }
-//     }
-//     return { type: "FailedAndRolledBackCompletely", error: failure };
-//   }
-// }
-
-
+export function fallibleTransactionOperations<
+  Operations extends any[],
+  Out = LastOperationOutput<Operations>
+>(
+  f: (tx: FallibleTransaction<UnionOfOperationErrors<Operations>>) => Result<Out, UnionOfOperationErrors<Operations>>
+): TransactionResult<Out, UnionOfOperationErrors<Operations>> {
+  return fallibleTransaction(f);
+}

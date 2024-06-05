@@ -14,35 +14,31 @@
 
 import { getIdempotenceMode, getOplogPersistenceLevel, getRetryPolicy, markBeginOperation, markEndOperation, OplogIndex, PersistenceLevel, RetryPolicy, setIdempotenceMode, setOplogPersistenceLevel, setRetryPolicy } from "./bindgen/bindgen";
 
-
-// @ts-ignore
-Symbol.dispose ??= Symbol("Symbol.dispose");
-// @ts-ignore
-Symbol.asyncDispose ??= Symbol("Symbol.asyncDispose");
-
-export class PersistenceLevelGuard implements Disposable {
+export class PersistenceLevelGuard {
   constructor(private originalLevel: PersistenceLevel) {}
 
-  [Symbol.dispose]() {
+  drop() {
+    console.log("Dropping PersistenceLevelGuard!")
     setOplogPersistenceLevel(this.originalLevel);
   }
 }
 
-export function usePersistenceLevel(level: PersistenceLevel): PersistenceLevelGuard {
+export function usePersistenceLevel(level: PersistenceLevel) {
   const originalLevel = getOplogPersistenceLevel();
   setOplogPersistenceLevel(level);
   return new PersistenceLevelGuard(originalLevel);
 }
 
 export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => R): R {
-  using _guard = usePersistenceLevel(level);
-  return f();
+  const guard = usePersistenceLevel(level);
+  return executeWithDrop([guard], f);
 }
 
-export class IdempotenceModeGuard implements Disposable {
+export class IdempotenceModeGuard {
   constructor(private original: boolean) {}
 
-  [Symbol.dispose]() {
+  drop() {
+    console.log("Dropping RetryPolicyGuard!")
     setIdempotenceMode(this.original);
   }
 }
@@ -54,15 +50,16 @@ export function useIdempotenceMode(mode: boolean): IdempotenceModeGuard {
 }
 
 export function withIdempotenceMode<R>(mode: boolean, f: () => R): R {
-  using _guard = useIdempotenceMode(mode);
-  return f();
+  const guard = useIdempotenceMode(mode);
+  return executeWithDrop([guard], f);
 }
 
 
-export class RetryPolicyGuard implements Disposable {
+export class RetryPolicyGuard {
   constructor(private original: RetryPolicy) {}
 
-  [Symbol.dispose]() {
+  drop() {
+    console.log("Dropping RetryPolicyGuard!")
     setRetryPolicy(this.original);
   }
 }
@@ -74,15 +71,15 @@ export function useRetryPolicy(policy: RetryPolicy): RetryPolicyGuard {
 }
 
 export function withRetryPolicy<R>(policy: RetryPolicy, f: () => R): R {
-  using _guard = useRetryPolicy(policy);
-  return f();
+  const guard = useRetryPolicy(policy);
+  return executeWithDrop([guard], f);
 }
 
-export class AtomicOperationGuard implements Disposable {
+export class AtomicOperationGuard {
   constructor(private begin: OplogIndex) {}
 
-  [Symbol.dispose]() {
-    console.log("Disposing AtomicOperationGuard!!!")
+  drop() {
+    console.log("Dropping AtomicOperationGuard!")
     markEndOperation(this.begin);
   }
 }
@@ -93,6 +90,47 @@ export function markAtomicOperation(): AtomicOperationGuard {
 }
 
 export function atomically<T>(f: () => T): T {
-  using _guard = markAtomicOperation();
-  return f();
+  let guard = markAtomicOperation();
+  return executeWithDrop([guard], f);
+}
+
+
+export function executeWithDrop<Resource extends {drop: () => void}, R>(
+  resources: [Resource],
+  fn: () => R
+): R {
+  let dropped = false;
+  try {
+    const result = fn();
+    console.log("Dropping resources 1!")
+    dropAll(resources);
+    dropped = true;
+    return result
+  } finally {
+    if (!dropped) {
+      console.log("Dropping resources 2!")
+      dropAll(resources);
+    }
+  }
+}
+
+function dropAll<Resource extends {drop: () => void}>(resources: [Resource]) {
+  console.log("dropAll!")
+  const errors = [];
+  for (const resource of resources) {
+    try {
+      resource.drop();
+    } catch (e) {
+      errors.push(e);
+    }
+  }
+  if (errors.length > 0) {
+    throw new DropError(errors);
+  }
+}
+
+class DropError extends Error {
+  constructor(public errors: Error[]) {
+    super("Error dropping resources", { cause: errors[0] });
+  }
 }
