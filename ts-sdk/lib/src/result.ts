@@ -295,12 +295,3 @@ function assertErrorInstanceOf<T, E, C extends abstract new (..._: any) => any>(
 }
 
 
-// function pipe<T, E, T2, E2>(
-//   this: Result<T, E>,
-//   f: (value: T) => Result<T2, E2>,
-// ): Result<T2, E2>;
-// function pipe<T, E, T2, E2, T3, E3>(
-//   this: Result<T, E>,
-//   f: (value: T) => Result<T2, E2>,
-//   g: (value: T2) => Result<T3, E3>,
-// ): Result<T3, E3>;
