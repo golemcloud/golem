@@ -13,12 +13,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     match params {
         CliReportParams::CompareBenchmarks(args) => {
             let final_report = BenchmarkComparisonReport::from(args.files)?;
-            println!("{}", serde_json::to_string(&final_report)?);
+            println!("{}", serde_json::to_string_pretty(&final_report)?);
         }
         CliReportParams::GetReport(args) => {
             let final_report = BenchmarkReport::from(args.files)?;
 
-            println!("{}", serde_json::to_string(&final_report)?);
+            println!("{}", serde_json::to_string_pretty(&final_report)?);
         }
     }
 
