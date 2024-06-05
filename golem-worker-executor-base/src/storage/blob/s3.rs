@@ -62,6 +62,9 @@ impl S3BlobStorage {
             BlobStorageNamespace::CompilationCache => &self.config.compilation_cache_bucket,
             BlobStorageNamespace::CustomStorage(_account_id) => &self.config.custom_data_bucket,
             BlobStorageNamespace::OplogPayload { .. } => &self.config.oplog_payload_bucket,
+            BlobStorageNamespace::CompressedOplog { level, .. } => {
+                &self.config.compressed_oplog_buckets[*level]
+            }
         }
     }
 
@@ -94,6 +97,24 @@ impl S3BlobStorage {
                     Path::new(&self.config.object_prefix)
                         .join(account_id_string)
                         .join(worker_id_string)
+                        .to_path_buf()
+                }
+            }
+            BlobStorageNamespace::CompressedOplog {
+                account_id,
+                component_id,
+                ..
+            } => {
+                let account_id_string = account_id.to_string();
+                let component_id_string = component_id.to_string();
+                if self.config.object_prefix.is_empty() {
+                    Path::new(&account_id_string)
+                        .join(component_id_string)
+                        .to_path_buf()
+                } else {
+                    Path::new(&self.config.object_prefix)
+                        .join(account_id_string)
+                        .join(component_id_string)
                         .to_path_buf()
                 }
             }
@@ -200,7 +221,7 @@ impl S3BlobStorage {
 
 #[async_trait]
 impl BlobStorage for S3BlobStorage {
-    async fn get(
+    async fn get_raw(
         &self,
         target_label: &'static str,
         op_label: &'static str,
@@ -246,7 +267,7 @@ impl BlobStorage for S3BlobStorage {
         }
     }
 
-    async fn get_slice(
+    async fn get_raw_slice(
         &self,
         target_label: &'static str,
         op_label: &'static str,
@@ -383,7 +404,7 @@ impl BlobStorage for S3BlobStorage {
         }
     }
 
-    async fn put(
+    async fn put_raw(
         &self,
         target_label: &'static str,
         op_label: &'static str,

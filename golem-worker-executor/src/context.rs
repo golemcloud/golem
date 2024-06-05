@@ -19,8 +19,8 @@ use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -91,7 +91,7 @@ impl ExternalOperations<Context> for Context {
 
     async fn set_worker_status<T: HasAll<Context> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        worker_id: &OwnedWorkerId,
         status: WorkerStatus,
     ) -> Result<(), GolemError> {
         DurableWorkerCtx::<Context>::set_worker_status(this, worker_id, status).await
@@ -99,14 +99,14 @@ impl ExternalOperations<Context> for Context {
 
     async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        worker_id: &OwnedWorkerId,
     ) -> Option<LastError> {
         DurableWorkerCtx::<Context>::get_last_error_and_retry_count(this, worker_id).await
     }
 
     async fn compute_latest_worker_status<T: HasAll<Context> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
     ) -> Result<WorkerStatusRecord, GolemError> {
         DurableWorkerCtx::<Context>::compute_latest_worker_status(this, worker_id, metadata).await
@@ -295,8 +295,7 @@ impl WorkerCtx for Context {
     type PublicState = PublicDurableWorkerState<Context>;
 
     async fn create(
-        worker_id: WorkerId,
-        account_id: AccountId,
+        owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
@@ -320,8 +319,7 @@ impl WorkerCtx for Context {
         execution_status: Arc<RwLock<ExecutionStatus>>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
-            worker_id,
-            account_id,
+            owned_worker_id,
             promise_service,
             events,
             worker_service,

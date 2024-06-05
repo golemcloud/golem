@@ -24,15 +24,15 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 
-pub use compressed::CompressedOplogArchive;
-pub use compressed::CompressedOplogArchiveService;
+pub use blob::BlobOplogArchiveService;
+pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, OplogPayload, UpdateDescription, WrappedFunctionType,
 };
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, ScanCursor,
-    Timestamp, WorkerId,
+    AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+    ScanCursor, Timestamp, WorkerId,
 };
 use golem_common::serialization::{serialize, try_deserialize};
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
@@ -40,6 +40,7 @@ pub use primary::PrimaryOplogService;
 
 use crate::error::GolemError;
 
+mod blob;
 mod compressed;
 mod multilayer;
 mod primary;
@@ -67,24 +68,20 @@ mod tests;
 pub trait OplogService: Debug {
     async fn create(
         &self,
-        account_id: &AccountId,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
     ) -> Arc<dyn Oplog + Send + Sync + 'static>;
-    async fn open(
-        &self,
-        account_id: &AccountId,
-        worker_id: &WorkerId,
-    ) -> Arc<dyn Oplog + Send + Sync + 'static>;
+    async fn open(&self, owned_worker_id: &OwnedWorkerId)
+        -> Arc<dyn Oplog + Send + Sync + 'static>;
 
-    async fn get_first_index(&self, worker_id: &WorkerId) -> OplogIndex;
-    async fn get_last_index(&self, worker_id: &WorkerId) -> OplogIndex;
+    async fn get_first_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
+    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
 
-    async fn delete(&self, worker_id: &WorkerId);
+    async fn delete(&self, owned_worker_id: &OwnedWorkerId);
 
     async fn read(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry>;
@@ -92,12 +89,12 @@ pub trait OplogService: Debug {
     /// Reads an inclusive range of entries from the oplog
     async fn read_range(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         start_idx: OplogIndex,
         last_idx: OplogIndex,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         self.read(
-            worker_id,
+            owned_worker_id,
             start_idx,
             Into::<u64>::into(last_idx) - Into::<u64>::into(start_idx) + 1,
         )
@@ -106,25 +103,26 @@ pub trait OplogService: Debug {
 
     async fn read_prefix(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         last_idx: OplogIndex,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.read_range(worker_id, OplogIndex::INITIAL, last_idx)
+        self.read_range(owned_worker_id, OplogIndex::INITIAL, last_idx)
             .await
     }
 
     /// Checks whether the oplog exists in the oplog, without opening it
-    async fn exists(&self, worker_id: &WorkerId) -> bool;
+    async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool;
 
     /// Scans the oplog for all workers belonging to the given component, in a paginated way.
     ///
     /// Pages can be empty. This operation is slow and is not locking the oplog.
     async fn scan_for_component(
         &self,
+        account_id: &AccountId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError>;
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError>;
 }
 
 /// An open oplog providing write access

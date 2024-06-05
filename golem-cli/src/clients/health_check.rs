@@ -12,29 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::GolemError;
 use async_trait::async_trait;
 use golem_client::model::VersionInfo;
-use tracing::debug;
-
-use crate::model::GolemError;
 
 #[async_trait]
 pub trait HealthCheckClient {
     async fn version(&self) -> Result<VersionInfo, GolemError>;
-}
-
-#[derive(Clone)]
-pub struct HealthCheckClientLive<C: golem_client::api::HealthCheckClient + Sync + Send> {
-    pub client: C,
-}
-
-#[async_trait]
-impl<C: golem_client::api::HealthCheckClient + Sync + Send> HealthCheckClient
-    for HealthCheckClientLive<C>
-{
-    async fn version(&self) -> Result<VersionInfo, GolemError> {
-        debug!("Getting server version");
-
-        Ok(self.client.version().await?)
-    }
 }

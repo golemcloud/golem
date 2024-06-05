@@ -83,7 +83,7 @@ impl WorkerApi {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service
-            .delete(&worker_id, &EmptyAuthCtx {})
+            .delete(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
             .await?;
 
         Ok(Json(DeleteWorkerResponse {}))
@@ -168,7 +168,13 @@ impl WorkerApi {
 
         let result = self
             .worker_service
-            .complete_promise(&worker_id, oplog_idx, data, &EmptyAuthCtx {})
+            .complete_promise(
+                &worker_id,
+                oplog_idx,
+                data,
+                empty_worker_metadata(),
+                &EmptyAuthCtx {},
+            )
             .await?;
 
         Ok(Json(result))
@@ -191,6 +197,7 @@ impl WorkerApi {
             .interrupt(
                 &worker_id,
                 recover_immediately.0.unwrap_or(false),
+                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
             .await?;
@@ -211,7 +218,7 @@ impl WorkerApi {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
         let result = self
             .worker_service
-            .get_metadata(&worker_id, &EmptyAuthCtx {})
+            .get_metadata(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
             .await?;
 
         Ok(Json(result))
@@ -254,6 +261,7 @@ impl WorkerApi {
                 cursor.unwrap_or_default(),
                 count.0.unwrap_or(50),
                 precise.0.unwrap_or(false),
+                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
             .await?;
@@ -279,6 +287,7 @@ impl WorkerApi {
                 params.cursor.clone().unwrap_or_default(),
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),
+                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
             .await?;
@@ -299,7 +308,7 @@ impl WorkerApi {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service
-            .resume(&worker_id, &EmptyAuthCtx {})
+            .resume(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
             .await?;
 
         Ok(Json(ResumeResponse {}))
@@ -323,6 +332,7 @@ impl WorkerApi {
                 &worker_id,
                 params.mode.clone().into(),
                 params.target_version,
+                empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
             .await?;

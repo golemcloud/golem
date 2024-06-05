@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tracing::debug;
 
-use golem_common::model::{AccountId, IdempotencyKey, WorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
 
 use crate::error::GolemError;
 use crate::services::events::Events;
@@ -40,24 +40,22 @@ use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 pub trait Rpc {
-    async fn create_demand(&self, worker_id: &WorkerId) -> Box<dyn RpcDemand>;
+    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand>;
 
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
     ) -> Result<WitValue, RpcError>;
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
     ) -> Result<(), RpcError>;
 }
 
@@ -168,47 +166,43 @@ impl Drop for LoggingDemand {
 /// Rpc implementation simply calling the public Golem Worker API for invocation
 #[async_trait]
 impl Rpc for RemoteInvocationRpc {
-    async fn create_demand(&self, worker_id: &WorkerId) -> Box<dyn RpcDemand> {
-        let demand = LoggingDemand::new(worker_id.clone());
+    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
+        let demand = LoggingDemand::new(owned_worker_id.worker_id());
         Box::new(demand)
     }
 
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
     ) -> Result<WitValue, RpcError> {
         Ok(self
             .worker_proxy
             .invoke_and_await(
-                worker_id,
+                owned_worker_id,
                 idempotency_key,
                 function_name,
                 function_params,
-                account_id,
             )
             .await?)
     }
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
     ) -> Result<(), RpcError> {
         Ok(self
             .worker_proxy
             .invoke(
-                worker_id,
+                owned_worker_id,
                 idempotency_key,
                 function_name,
                 function_params,
-                account_id,
             )
             .await?)
     }
@@ -460,32 +454,33 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
-    async fn create_demand(&self, worker_id: &WorkerId) -> Box<dyn RpcDemand> {
-        let demand = LoggingDemand::new(worker_id.clone());
+    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
+        let demand = LoggingDemand::new(owned_worker_id.worker_id());
         Box::new(demand)
     }
 
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
     ) -> Result<WitValue, RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
-        if self.shard_service().check_worker(worker_id).is_ok() {
-            debug!("Invoking local worker {worker_id} function {function_name} with parameters {function_params:?}");
+        if self
+            .shard_service()
+            .check_worker(&owned_worker_id.worker_id)
+            .is_ok()
+        {
+            debug!("Invoking local worker function {function_name} with parameters {function_params:?}");
 
             let input_values = function_params
                 .into_iter()
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker =
-                Worker::get_or_create(self, worker_id, None, None, None, account_id.clone())
-                    .await?;
+            let worker = Worker::get_or_create(self, owned_worker_id, None, None, None).await?;
 
             let result_values = invoke_and_await(
                 worker,
@@ -499,11 +494,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         } else {
             self.remote_rpc
                 .invoke_and_await(
-                    worker_id,
+                    owned_worker_id,
                     Some(idempotency_key),
                     function_name,
                     function_params,
-                    account_id,
                 )
                 .await
         }
@@ -511,25 +505,26 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
     ) -> Result<(), RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
-        if self.shard_service().check_worker(worker_id).is_ok() {
-            debug!("Invoking local worker {worker_id} function {function_name} with parameters {function_params:?} without awaiting for the result");
+        if self
+            .shard_service()
+            .check_worker(&owned_worker_id.worker_id())
+            .is_ok()
+        {
+            debug!("Invoking local worker function {function_name} with parameters {function_params:?} without awaiting for the result");
 
             let input_values = function_params
                 .into_iter()
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker =
-                Worker::get_or_create(self, worker_id, None, None, None, account_id.clone())
-                    .await?;
+            let worker = Worker::get_or_create(self, owned_worker_id, None, None, None).await?;
 
             invoke(
                 worker,
@@ -543,11 +538,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         } else {
             self.remote_rpc
                 .invoke(
-                    worker_id,
+                    owned_worker_id,
                     Some(idempotency_key),
                     function_name,
                     function_params,
-                    account_id,
                 )
                 .await
         }
@@ -576,28 +570,26 @@ impl RpcMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl Rpc for RpcMock {
-    async fn create_demand(&self, _worker_id: &WorkerId) -> Box<dyn RpcDemand> {
+    async fn create_demand(&self, _owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
         Box::new(())
     }
 
     async fn invoke_and_await(
         &self,
-        _worker_id: &WorkerId,
+        _owned_worker_id: &OwnedWorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
-        _account_id: &AccountId,
     ) -> Result<WitValue, RpcError> {
         unimplemented!()
     }
 
     async fn invoke(
         &self,
-        _worker_id: &WorkerId,
+        _owned_worker_id: &OwnedWorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
-        _account_id: &AccountId,
     ) -> Result<(), RpcError> {
         unimplemented!()
     }

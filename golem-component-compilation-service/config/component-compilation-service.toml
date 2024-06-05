@@ -29,6 +29,7 @@ object_prefix = ""
 compilation_cache_bucket = "compilation-cache"
 custom_data_bucket = "custom-data"
 oplog_payload_bucket = "oplog-payload"
+compressed_oplog_buckets = ["oplog-archive-1"]
 
 [blob_storage.config.retries]
 max_attempts = 3

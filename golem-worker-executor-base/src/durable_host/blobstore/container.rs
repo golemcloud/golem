@@ -68,7 +68,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         end: u64,
     ) -> anyhow::Result<Result<Resource<IncomingValue>, Error>> {
         record_host_function_call("blobstore::container::container", "get_data");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
+
         let container_name = self
             .as_wasi_view()
             .table()
@@ -108,7 +109,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         data: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::container::container", "write_data");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
+
         let container_name = self
             .as_wasi_view()
             .table()
@@ -144,7 +146,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
     ) -> anyhow::Result<Result<Resource<StreamObjectNames>, Error>> {
         record_host_function_call("blobstore::container::container", "list_objects");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
+
         let container_name = self
             .as_wasi_view()
             .table()
@@ -179,7 +182,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
     ) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::container::container", "delete_object");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
+
         let container_name = self
             .as_wasi_view()
             .table()
@@ -210,7 +214,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         names: Vec<ObjectName>,
     ) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::container::container", "delete_objects");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
+
         let container_name = self
             .as_wasi_view()
             .table()
@@ -241,7 +246,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
     ) -> anyhow::Result<Result<bool, Error>> {
         record_host_function_call("blobstore::container::container", "has_object");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
+
         let container_name = self
             .as_wasi_view()
             .table()
@@ -272,7 +278,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
     ) -> anyhow::Result<Result<ObjectMetadata, Error>> {
         record_host_function_call("blobstore::container::container", "object_info");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
+
         let container_name = self
             .as_wasi_view()
             .table()
@@ -311,7 +318,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
 
     async fn clear(&mut self, container: Resource<Container>) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::container::container", "clear");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
+
         let container_name = self
             .as_wasi_view()
             .table()

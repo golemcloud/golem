@@ -23,7 +23,7 @@ use tokio::sync::RwLock;
 
 use crate::error::GolemError;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{ComponentId, ScanCursor, WorkerId};
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
@@ -54,53 +54,54 @@ impl CompressedOplogArchiveService {
 
 #[async_trait]
 impl OplogArchiveService for CompressedOplogArchiveService {
-    async fn open(&self, worker_id: &WorkerId) -> Arc<dyn OplogArchive + Send + Sync> {
+    async fn open(&self, owned_worker_id: &OwnedWorkerId) -> Arc<dyn OplogArchive + Send + Sync> {
         Arc::new(CompressedOplogArchive::new(
-            worker_id.clone(),
+            owned_worker_id.worker_id(),
             self.indexed_storage.clone(),
             self.level,
         ))
     }
 
-    async fn delete(&self, worker_id: &WorkerId) {
+    async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
         self.indexed_storage
             .with("compressed_oplog", "delete")
-            .delete(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &Self::compressed_oplog_key(worker_id))
+            .delete(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &Self::compressed_oplog_key(&owned_worker_id.worker_id))
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to drop compressed oplog for worker {worker_id} in indexed storage: {err}")
+                panic!("failed to drop compressed oplog for worker {owned_worker_id} in indexed storage: {err}")
             });
     }
 
     async fn read(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idx: golem_common::model::oplog::OplogIndex,
         n: u64,
     ) -> BTreeMap<golem_common::model::oplog::OplogIndex, OplogEntry> {
-        let archive = self.open(worker_id).await;
+        let archive = self.open(owned_worker_id).await;
         archive.read(idx, n).await
     }
 
-    async fn exists(&self, worker_id: &WorkerId) -> bool {
+    async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool {
         self.indexed_storage
             .with("compressed_oplog", "exists")
             .exists(
                 IndexedStorageNamespace::CompressedOpLog { level: self.level },
-                &Self::compressed_oplog_key(worker_id),
+                &Self::compressed_oplog_key(&owned_worker_id.worker_id),
             )
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to check if compressed oplog exists for worker {worker_id} in indexed storage: {err}")
+                panic!("failed to check if compressed oplog exists for worker {owned_worker_id} in indexed storage: {err}")
             })
     }
 
     async fn scan_for_component(
         &self,
+        account_id: &AccountId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
         let (cursor, keys) = self
             .indexed_storage
             .with("compressed_oplog", "scan")
@@ -118,7 +119,10 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         Ok((
             ScanCursor { cursor, layer: 0 },
             keys.into_iter()
-                .map(|key| PrimaryOplogService::get_worker_id_from_key(&key, component_id))
+                .map(|key| OwnedWorkerId {
+                    worker_id: PrimaryOplogService::get_worker_id_from_key(&key, component_id),
+                    account_id: account_id.clone(),
+                })
                 .collect(),
         ))
     }
@@ -160,7 +164,7 @@ impl CompressedOplogArchive {
     async fn read_and_cache_chunk(&self, idx: OplogIndex) -> Result<Option<OplogIndex>, String> {
         if let Some((last_idx, chunk)) = self
             .indexed_storage
-            .with_entity("compressed_oplog", "create", "compressed_entry")
+            .with_entity("compressed_oplog", "read", "compressed_entry")
             .closest::<CompressedOplogChunk>(
                 IndexedStorageNamespace::CompressedOpLog { level: self.level },
                 &self.key,
@@ -234,7 +238,7 @@ impl OplogArchive for CompressedOplogArchive {
                 // We allow to have a gap on the right side of the query - as we cannot guarantee
                 // that the 'n' parameter is exactly matches the available number of elements. However,
                 // there must not be any gaps in the middle.
-                if let Some(idx) = self.indexed_storage.with_entity("compressed_oplog", "get_first_index", "compressed_entry")
+                if let Some(idx) = self.indexed_storage.with_entity("compressed_oplog", "read", "compressed_entry")
                     .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key)
                     .await
                     .unwrap_or_else(|err| {
@@ -245,7 +249,7 @@ impl OplogArchive for CompressedOplogArchive {
                     break;
                 }
             } else {
-                // We go newer towards older entries so if we didn't fetch the chunk we reached the
+                // We never go towards older entries so if we didn't fetch the chunk we reached the
                 // boundary of this layer
                 break;
             }
@@ -330,9 +334,9 @@ impl OplogArchive for CompressedOplogArchive {
 }
 
 #[derive(Debug, Clone, Encode, Decode)]
-struct CompressedOplogChunk {
-    count: u64,
-    compressed_data: Vec<u8>,
+pub struct CompressedOplogChunk {
+    pub count: u64,
+    pub compressed_data: Vec<u8>,
 }
 
 impl CompressedOplogChunk {

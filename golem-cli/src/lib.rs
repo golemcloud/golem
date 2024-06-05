@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod api_definition;
-pub mod api_deployment;
 pub mod clients;
-pub mod component;
+pub mod cloud;
+pub mod command;
 pub mod examples;
+pub mod factory;
 pub mod model;
-pub mod version;
-pub mod worker;
+pub mod oss;
+pub mod service;
+pub mod stubgen;
 
 pub fn parse_key_val(
     s: &str,

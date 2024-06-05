@@ -35,7 +35,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         key: Key,
     ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
         record_host_function_call("keyvalue::eventual", "get");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.owned_worker_id.account_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -79,7 +79,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         outgoing_value: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
         record_host_function_call("keyvalue::eventual", "set");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.owned_worker_id.account_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -126,7 +126,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         key: Key,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
         record_host_function_call("keyvalue::eventual", "delete");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.owned_worker_id.account_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -162,7 +162,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         key: Key,
     ) -> anyhow::Result<Result<bool, Resource<Error>>> {
         record_host_function_call("keyvalue::eventual", "exists");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.owned_worker_id.account_id();
         let bucket = self
             .as_wasi_view()
             .table()

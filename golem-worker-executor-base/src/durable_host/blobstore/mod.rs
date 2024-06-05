@@ -36,7 +36,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         record_host_function_call("blobstore::blobstore", "create_container");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
         let name_clone = name.clone();
         let result: Result<u64, anyhow::Error> = Durability::<Ctx, u64, SerializableError>::wrap(
             self,
@@ -76,7 +76,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         record_host_function_call("blobstore::blobstore", "get_container");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
         let result = Durability::<Ctx, Option<u64>, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
@@ -103,7 +103,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::blobstore", "delete_container");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
@@ -126,7 +126,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<bool, Error>> {
         record_host_function_call("blobstore::blobstore", "container_exists");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
         let result = Durability::<Ctx, bool, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
@@ -150,7 +150,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::blobstore", "copy_object");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
@@ -178,7 +178,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         record_host_function_call("blobstore::blobstore", "move_object");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.state.owned_worker_id.account_id();
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,

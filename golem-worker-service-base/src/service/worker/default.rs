@@ -60,7 +60,12 @@ pub trait WorkerService<AuthCtx> {
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<ConnectWorkerStream>;
 
-    async fn delete(&self, worker_id: &WorkerId, auth_ctx: &AuthCtx) -> WorkerResult<()>;
+    async fn delete(
+        &self,
+        worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<()>;
 
     async fn invoke_and_await_function(
         &self,
@@ -120,6 +125,7 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         oplog_id: u64,
         data: Vec<u8>,
+        metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<bool>;
 
@@ -127,12 +133,14 @@ pub trait WorkerService<AuthCtx> {
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
+        metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata>;
 
@@ -143,22 +151,30 @@ pub trait WorkerService<AuthCtx> {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
+        metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)>;
 
-    async fn resume(&self, worker_id: &WorkerId, auth_ctx: &AuthCtx) -> WorkerResult<()>;
+    async fn resume(
+        &self,
+        worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<()>;
 
     async fn update(
         &self,
         worker_id: &WorkerId,
         update_mode: UpdateMode,
         target_version: ComponentVersion,
+        metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn get_component_for_worker(
         &self,
         worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> Result<Component, WorkerServiceError>;
 }
@@ -296,16 +312,25 @@ where
         Ok(stream)
     }
 
-    async fn delete(&self, worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<()> {
+    async fn delete(
+        &self,
+        worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<()> {
         self.retry_on_invalid_shard_id(
             worker_id,
-            worker_id,
-            |worker_executor_client, worker_id| {
+            &(worker_id, metadata),
+            |worker_executor_client, (worker_id, metadata)| {
                 Box::pin(async move {
                     let response = worker_executor_client
-                        .delete_worker(golem_api_grpc::proto::golem::worker::WorkerId::from(
-                            worker_id.clone(),
-                        ))
+                        .delete_worker(
+                            golem_api_grpc::proto::golem::workerexecutor::DeleteWorkerRequest {
+                                worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(
+                                    (*worker_id).clone(),
+                                )),
+                                account_id: metadata.account_id.clone().map(|id| id.into()),
+                            })
                         .await
                         .map_err(|err| {
                             GolemError::RuntimeError(GolemErrorRuntimeError {
@@ -369,7 +394,7 @@ where
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<TypedResult> {
         let component_details = self
-            .try_get_component_for_worker(worker_id, auth_ctx)
+            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
             .await?;
 
         let function_type = component_details
@@ -428,7 +453,7 @@ where
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult> {
         let component_details = self
-            .try_get_component_for_worker(worker_id, auth_ctx)
+            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
             .await?;
         let function_type = component_details
             .metadata
@@ -503,7 +528,7 @@ where
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         let component_details = self
-            .try_get_component_for_worker(worker_id, auth_ctx)
+            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
             .await?;
         let function_type = component_details
             .metadata
@@ -544,7 +569,7 @@ where
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         let component_details = self
-            .try_get_component_for_worker(worker_id, auth_ctx)
+            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
             .await?;
         let function_type = component_details
             .metadata
@@ -615,6 +640,7 @@ where
         worker_id: &WorkerId,
         oplog_id: u64,
         data: Vec<u8>,
+        metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<bool> {
         let promise_id = PromiseId {
@@ -625,13 +651,14 @@ where
         let result = self
             .retry_on_invalid_shard_id(
                 worker_id,
-                &(promise_id, data),
-                |worker_executor_client, (promise_id, data)| {
+                &(promise_id, data, metadata),
+                |worker_executor_client, (promise_id, data, metadata)| {
                     Box::pin(async move {
                         let response = worker_executor_client
                             .complete_promise(CompletePromiseRequest {
                                 promise_id: Some(promise_id.clone().into()),
                                 data: data.clone(),
+                                account_id: metadata.account_id.clone().map(|id| id.into()),
                             })
                             .await
                             .map_err(|err| {
@@ -669,17 +696,19 @@ where
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
+        metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         self.retry_on_invalid_shard_id(
             worker_id,
-            worker_id,
-            |worker_executor_client, worker_id| {
+            &(worker_id, metadata),
+            |worker_executor_client, (worker_id, metadata)| {
                 Box::pin(async move {
                     let response = worker_executor_client
                         .interrupt_worker(InterruptWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
+                            worker_id: Some((*worker_id).clone().into()),
                             recover_immediately,
+                            account_id: metadata.account_id.clone().map(|id| id.into()),
                         })
                         .await
                         .map_err(|err| {
@@ -710,15 +739,19 @@ where
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata> {
         let metadata = self.retry_on_invalid_shard_id(
             worker_id,
-            worker_id,
-            |worker_executor_client, worker_id| {
+            &(worker_id, metadata),
+            |worker_executor_client, (worker_id, metadata)| {
                 Box::pin(async move {
                     let response = worker_executor_client.get_worker_metadata(
-                        golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id.clone())
+                        golem_api_grpc::proto::golem::workerexecutor::GetWorkerMetadataRequest {
+                            worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from((*worker_id).clone())),
+                            account_id: metadata.account_id.clone().map(|id| id.into()),
+                        }
                     ).await.map_err(|err| {
                         GolemError::RuntimeError(GolemErrorRuntimeError {
                             details: err.to_string(),
@@ -753,6 +786,7 @@ where
         cursor: ScanCursor,
         count: u64,
         precise: bool,
+        metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         if filter.clone().is_some_and(is_filter_with_running_status) {
@@ -762,20 +796,34 @@ where
 
             Ok((None, result.into_iter().take(count as usize).collect()))
         } else {
-            self.find_metadata_internal(component_id, filter, cursor, count, precise, auth_ctx)
-                .await
+            self.find_metadata_internal(
+                component_id,
+                filter,
+                cursor,
+                count,
+                precise,
+                metadata,
+                auth_ctx,
+            )
+            .await
         }
     }
 
-    async fn resume(&self, worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<()> {
+    async fn resume(
+        &self,
+        worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<()> {
         self.retry_on_invalid_shard_id(
             worker_id,
-            worker_id,
-            |worker_executor_client, worker_id| {
+            &(worker_id, metadata),
+            |worker_executor_client, (worker_id, metadata)| {
                 Box::pin(async move {
                     let response = worker_executor_client
                         .resume_worker(ResumeWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
+                            worker_id: Some((*worker_id).clone().into()),
+                            account_id: metadata.account_id.clone().map(|id| id.into()),
                         })
                         .await
                         .map_err(|err| {
@@ -808,18 +856,20 @@ where
         worker_id: &WorkerId,
         update_mode: UpdateMode,
         target_version: ComponentVersion,
+        metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         self.retry_on_invalid_shard_id(
             worker_id,
-            worker_id,
-            |worker_executor_client, worker_id| {
+            &(worker_id, metadata),
+            |worker_executor_client, (worker_id, metadata)| {
                 Box::pin(async move {
                     let response = worker_executor_client
                         .update_worker(UpdateWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
+                            worker_id: Some((*worker_id).clone().into()),
                             mode: update_mode.into(),
                             target_version,
+                            account_id: metadata.account_id.clone().map(|id| id.into()),
                         })
                         .await
                         .map_err(|err| {
@@ -850,9 +900,11 @@ where
     async fn get_component_for_worker(
         &self,
         worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> Result<Component, WorkerServiceError> {
-        self.try_get_component_for_worker(worker_id, auth_ctx).await
+        self.try_get_component_for_worker(worker_id, metadata, auth_ctx)
+            .await
     }
 }
 
@@ -863,9 +915,13 @@ where
     async fn try_get_component_for_worker(
         &self,
         worker_id: &WorkerId,
+        request_metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> Result<Component, WorkerServiceError> {
-        match self.get_metadata(worker_id, auth_ctx).await {
+        match self
+            .get_metadata(worker_id, request_metadata, auth_ctx)
+            .await
+        {
             Ok(metadata) => {
                 let component_version = metadata.component_version;
                 let component_details = self
@@ -1229,11 +1285,12 @@ where
         cursor: ScanCursor,
         count: u64,
         precise: bool,
+        metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         let result = self.execute_with_random_client(
-            &(component_id.clone(), filter.clone(), cursor, count, precise),
-            |worker_executor_client, (component_id, filter, cursor, count, precise)| {
+            &(component_id.clone(), filter.clone(), cursor, count, precise, metadata),
+            |worker_executor_client, (component_id, filter, cursor, count, precise, metadata)| {
                 Box::pin(async move {
                     let component_id: golem_api_grpc::proto::golem::component::ComponentId =
                         component_id.clone().into();
@@ -1244,6 +1301,7 @@ where
                             cursor: Some(cursor.clone().into()),
                             count: *count,
                             precise: *precise,
+                            account_id: metadata.account_id.clone().map(|id| id.into()),
                         }
                     ).await.map_err(|err| {
                         GolemError::RuntimeError(GolemErrorRuntimeError {
@@ -1344,7 +1402,12 @@ where
         )))
     }
 
-    async fn delete(&self, _worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<()> {
+    async fn delete(
+        &self,
+        _worker_id: &WorkerId,
+        _metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<()> {
         Ok(())
     }
 
@@ -1422,6 +1485,7 @@ where
         _worker_id: &WorkerId,
         _oplog_id: u64,
         _data: Vec<u8>,
+        _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<bool> {
         Ok(true)
@@ -1431,6 +1495,7 @@ where
         &self,
         _worker_id: &WorkerId,
         _recover_immediately: bool,
+        _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         Ok(())
@@ -1439,6 +1504,7 @@ where
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
+        _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata> {
         Ok(WorkerMetadata {
@@ -1462,12 +1528,18 @@ where
         _cursor: ScanCursor,
         _count: u64,
         _precise: bool,
+        _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         Ok((None, vec![]))
     }
 
-    async fn resume(&self, _worker_id: &WorkerId, _auth_ctx: &AuthCtx) -> WorkerResult<()> {
+    async fn resume(
+        &self,
+        _worker_id: &WorkerId,
+        _metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<()> {
         Ok(())
     }
 
@@ -1476,6 +1548,7 @@ where
         _worker_id: &WorkerId,
         _update_mode: UpdateMode,
         _target_version: ComponentVersion,
+        _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         Ok(())
@@ -1484,6 +1557,7 @@ where
     async fn get_component_for_worker(
         &self,
         worker_id: &WorkerId,
+        _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Component> {
         let worker_id = golem_common::model::WorkerId {

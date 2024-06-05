@@ -288,7 +288,7 @@ impl BlobStoreService for DefaultBlobStoreService {
     ) -> anyhow::Result<Vec<u8>> {
         let data = self
             .blob_storage
-            .get_slice(
+            .get_raw_slice(
                 "blob_store",
                 "get_data",
                 BlobStorageNamespace::CustomStorage(account_id),
@@ -404,7 +404,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         data: Vec<u8>,
     ) -> anyhow::Result<()> {
         self.blob_storage
-            .put(
+            .put_raw(
                 "blob_store",
                 "write_data",
                 BlobStorageNamespace::CustomStorage(account_id),

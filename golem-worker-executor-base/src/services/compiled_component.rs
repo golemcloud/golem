@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::time::Instant;
+use tracing::debug;
 use wasmtime::component::Component;
 
 use golem_common::model::ComponentId;
@@ -66,7 +68,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
     ) -> Result<Option<Component>, GolemError> {
         match self
             .blob_storage
-            .get(
+            .get_raw(
                 "compiled_component",
                 "get",
                 BlobStorageNamespace::CompilationCache,
@@ -76,6 +78,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         {
             Ok(None) => Ok(None),
             Ok(Some(bytes)) => {
+                let start = Instant::now();
                 let component = unsafe {
                     Component::deserialize(engine, &bytes).map_err(|err| {
                         GolemError::component_download_failed(
@@ -85,6 +88,15 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                         )
                     })?
                 };
+                let end = Instant::now();
+
+                let load_time = end.duration_since(start);
+                debug!(
+                    "Loaded precompiled image for {} in {}ms",
+                    component_id,
+                    load_time.as_millis(),
+                );
+
                 Ok(Some(component))
             }
             Err(err) => Err(GolemError::component_download_failed(
@@ -105,7 +117,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             .serialize()
             .expect("Could not serialize component");
         self.blob_storage
-            .put(
+            .put_raw(
                 "compiled_component",
                 "put",
                 BlobStorageNamespace::CompilationCache,

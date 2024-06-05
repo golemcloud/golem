@@ -220,6 +220,7 @@ pub struct OplogConfig {
     pub max_operations_before_commit: u64,
     pub max_payload_size: usize,
     pub indexed_storage_layers: usize,
+    pub blob_storage_layers: usize,
     pub entry_count_limit: u64,
     #[serde(with = "humantime_serde")]
     pub archive_interval: Duration,
@@ -257,6 +258,7 @@ pub struct S3BlobStorageConfig {
     pub compilation_cache_bucket: String,
     pub custom_data_bucket: String,
     pub oplog_payload_bucket: String,
+    pub compressed_oplog_buckets: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -349,6 +351,7 @@ impl Default for S3BlobStorageConfig {
             oplog_payload_bucket: "oplog-payload".to_string(),
             object_prefix: "".to_string(),
             aws_endpoint_url: None,
+            compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
         }
     }
 }
@@ -375,6 +378,7 @@ impl Default for OplogConfig {
             max_operations_before_commit: 128,
             max_payload_size: 64 * 1024,
             indexed_storage_layers: 2,
+            blob_storage_layers: 1,
             entry_count_limit: 1024,
             archive_interval: Duration::from_secs(60 * 60 * 24), // 24 hours
         }

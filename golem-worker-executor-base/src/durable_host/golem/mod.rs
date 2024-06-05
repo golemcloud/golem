@@ -35,7 +35,7 @@ use crate::preview2::golem::api::host::{
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{ComponentId, PromiseId, ScanCursor, WorkerId};
+use golem_common::model::{ComponentId, OwnedWorkerId, PromiseId, ScanCursor, WorkerId};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
@@ -133,7 +133,10 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         Ok(self
             .public_state
             .promise_service
-            .create(&self.worker_id, OplogIndex::from_u64(oplog_idx))
+            .create(
+                &self.owned_worker_id.worker_id,
+                OplogIndex::from_u64(oplog_idx),
+            )
             .await
             .into())
     }
@@ -209,7 +212,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     ) -> Result<golem::rpc::types::Uri, anyhow::Error> {
         record_host_function_call("golem::api", "get_self_uri");
         let uri = golem_wasm_rpc::golem::rpc::types::Uri::golem_uri(
-            &self.state.worker_id,
+            &self.owned_worker_id.worker_id,
             Some(&function_name),
         );
         Ok(golem::rpc::types::Uri { value: uri.value })
@@ -254,14 +257,11 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                 .add_and_commit(OplogEntry::jump(jump))
                 .await;
 
-            debug!(
-                "Interrupting live execution of {} for jumping from {jump_source} to {jump_target}",
-                self.worker_id
-            );
+            debug!("Interrupting live execution for jumping from {jump_source} to {jump_target}",);
             Err(InterruptKind::Jump.into())
         } else {
             // In replay mode we never have to do anything here
-            debug!("Ignoring replayed set_oplog_index for {}", self.worker_id);
+            debug!("Ignoring replayed set_oplog_index");
             Ok(())
         }
     }
@@ -269,23 +269,14 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
         if self.state.is_live() {
             let timeout = Duration::from_secs(1);
-            debug!(
-                "Worker {} committing oplog to {} replicas",
-                self.worker_id, replicas
-            );
+            debug!("Worker committing oplog to {replicas} replicas");
             loop {
                 // Applying a timeout to make sure the worker remains interruptible
                 if self.state.oplog.wait_for_replicas(replicas, timeout).await {
-                    debug!(
-                        "Worker {} committed oplog to {} replicas",
-                        self.worker_id, replicas
-                    );
+                    debug!("Worker committed oplog to {replicas} replicas");
                     return Ok(());
                 } else {
-                    debug!(
-                        "Worker {} failed to commit oplog to {} replicas, retrying",
-                        self.worker_id, replicas
-                    );
+                    debug!("Worker failed to commit oplog to {replicas} replicas, retrying",);
                 }
 
                 if let Some(kind) = self.check_interrupt() {
@@ -317,12 +308,12 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             {
                 Some(end_index) => {
                     debug!(
-                        "Worker {}'s atomic operation starting at {} is already committed at {}",
-                        self.worker_id, begin_index, end_index
+                        "Worker's atomic operation starting at {} is already committed at {}",
+                        begin_index, end_index
                     );
                 }
                 None => {
-                    debug!("Worker {}'s atomic operation starting at {} is not committed, ignoring persisted entries", self.worker_id, begin_index);
+                    debug!("Worker's atomic operation starting at {} is not committed, ignoring persisted entries",  begin_index);
 
                     // We need to jump to the end of the oplog
                     self.state.last_replayed_index = self.state.replay_target;
@@ -403,8 +394,8 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         }
         self.state.persistence_level = new_persistence_level.into();
         debug!(
-            "Worker {}'s oplog persistence level is set to {:?}",
-            self.worker_id, self.state.persistence_level
+            "Worker's oplog persistence level is set to {:?}",
+            self.state.persistence_level
         );
         Ok(())
     }
@@ -450,6 +441,8 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         record_host_function_call("golem::api", "update_worker");
 
         let worker_id: WorkerId = worker_id.into();
+        let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.account_id, &worker_id);
+
         let mode = match mode {
             UpdateMode::Automatic => golem_api_grpc::proto::golem::worker::UpdateMode::Automatic,
             UpdateMode::SnapshotBased => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
@@ -462,7 +455,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
                 Box::pin(async move {
                     ctx.state
                         .worker_proxy
-                        .update(&worker_id, target_version, mode, &ctx.state.account_id)
+                        .update(&owned_worker_id, target_version, mode)
                         .await
                 })
             },

@@ -24,7 +24,7 @@ use tracing::{info, warn, Instrument};
 
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{WorkerId, WorkerStatus};
+use golem_common::model::{OwnedWorkerId, WorkerId, WorkerStatus};
 use golem_common::retries::get_delay;
 
 use crate::model::{InterruptKind, LastError, TrapType};
@@ -54,7 +54,7 @@ pub trait RecoveryManagement {
     /// performed, and `trap_type` distinguishes errors, interrupts and exit signals.
     async fn schedule_recovery_on_trap(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         retry_config: &RetryConfig,
         previous_tries: u64,
         trap_type: &TrapType,
@@ -66,7 +66,7 @@ pub trait RecoveryManagement {
     /// and exited workers can never.
     async fn schedule_recovery_on_startup(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         retry_config: &RetryConfig,
         last_error: &Option<LastError>,
     ) -> RecoveryDecision;
@@ -399,14 +399,16 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 
     async fn schedule_recovery(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         decision: RecoveryDecision,
     ) -> RecoveryDecision {
         match decision {
             RecoveryDecision::Immediate => {
                 // NOTE: Even immediate recovery must be spawned to allow the original worker to get dropped first
                 let clone = self.clone();
-                let worker_id_clone = worker_id.clone();
+                let owned_worker_id_clone = owned_worker_id.clone();
+                let worker_id_clone = owned_worker_id.worker_id();
+
                 let handle = tokio::spawn(
                     async move {
                         clone
@@ -418,27 +420,30 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                             Some(f) => f(worker_id_clone.clone()),
                             None => {
                                 let interrupted =
-                                    clone.is_marked_as_interrupted(&worker_id_clone).await;
+                                    clone.is_marked_as_interrupted(&owned_worker_id_clone).await;
                                 if !interrupted {
                                     info!(
                                     "Initiating immediate recovery for worker: {worker_id_clone}"
                                 );
-                                    recover_worker(&clone, &worker_id_clone).await;
+                                    recover_worker(&clone, &owned_worker_id_clone).await;
                                 }
                             }
                         }
                     }
                     .in_current_span(),
                 );
-                self.cancel_scheduled_recovery(worker_id).await;
+                self.cancel_scheduled_recovery(&owned_worker_id.worker_id)
+                    .await;
                 self.scheduled_recoveries
                     .lock()
                     .await
-                    .insert(worker_id.clone(), handle);
+                    .insert(owned_worker_id.worker_id(), handle);
             }
             RecoveryDecision::Delayed(duration) => {
                 let clone = self.clone();
-                let worker_id_clone = worker_id.clone();
+                let owned_worker_id_clone = owned_worker_id.clone();
+                let worker_id_clone = owned_worker_id.worker_id();
+
                 let handle = tokio::spawn(
                     async move {
                         tokio::time::sleep(duration).await;
@@ -451,23 +456,24 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
                             Some(f) => f(worker_id_clone.clone()),
                             None => {
                                 let interrupted =
-                                    clone.is_marked_as_interrupted(&worker_id_clone).await;
+                                    clone.is_marked_as_interrupted(&owned_worker_id_clone).await;
                                 if !interrupted {
                                     info!(
                                     "Initiating scheduled recovery for worker: {worker_id_clone}"
                                 );
-                                    recover_worker(&clone, &worker_id_clone).await;
+                                    recover_worker(&clone, &owned_worker_id_clone).await;
                                 }
                             }
                         }
                     }
                     .in_current_span(),
                 );
-                self.cancel_scheduled_recovery(worker_id).await;
+                self.cancel_scheduled_recovery(&owned_worker_id.worker_id)
+                    .await;
                 self.scheduled_recoveries
                     .lock()
                     .await
-                    .insert(worker_id.clone(), handle);
+                    .insert(owned_worker_id.worker_id(), handle);
             }
             RecoveryDecision::None => {}
         }
@@ -481,9 +487,9 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
         }
     }
 
-    async fn is_marked_as_interrupted(&self, worker_id: &WorkerId) -> bool {
-        let worker_metadata = self.worker_service().get(worker_id).await;
-        Ctx::compute_latest_worker_status(self, worker_id, &worker_metadata)
+    async fn is_marked_as_interrupted(&self, owned_worker_id: &OwnedWorkerId) -> bool {
+        let worker_metadata = self.worker_service().get(owned_worker_id).await;
+        Ctx::compute_latest_worker_status(self, owned_worker_id, &worker_metadata)
             .await
             .map(|s| s.status == WorkerStatus::Interrupted)
             .unwrap_or(false)
@@ -494,13 +500,13 @@ impl<Ctx: WorkerCtx> RecoveryManagementDefault<Ctx> {
 impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
     async fn schedule_recovery_on_trap(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         retry_config: &RetryConfig,
         previous_tries: u64,
         trap_type: &TrapType,
     ) -> RecoveryDecision {
         self.schedule_recovery(
-            worker_id,
+            owned_worker_id,
             self.get_recovery_decision_on_trap(retry_config, previous_tries, trap_type),
         )
         .await
@@ -508,42 +514,41 @@ impl<Ctx: WorkerCtx> RecoveryManagement for RecoveryManagementDefault<Ctx> {
 
     async fn schedule_recovery_on_startup(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         retry_config: &RetryConfig,
         previous_error: &Option<LastError>,
     ) -> RecoveryDecision {
         self.schedule_recovery(
-            worker_id,
+            owned_worker_id,
             self.get_recovery_decision_on_startup(retry_config, previous_error),
         )
         .await
     }
 }
 
-async fn recover_worker<Ctx: WorkerCtx, T>(this: &T, worker_id: &WorkerId)
+async fn recover_worker<Ctx: WorkerCtx, T>(this: &T, owned_worker_id: &OwnedWorkerId)
 where
     T: HasAll<Ctx> + Clone + Send + Sync + 'static,
 {
-    info!("Recovering worker: {worker_id}");
+    info!("Recovering worker");
 
-    match this.worker_service().get(worker_id).await {
+    match this.worker_service().get(owned_worker_id).await {
         Some(worker) => {
             let worker_details = Worker::get_or_create_with_config(
                 this,
-                &worker_id.clone(),
+                owned_worker_id,
                 worker.args,
                 worker.env,
                 Some(worker.last_known_status.component_version),
-                worker.account_id,
             )
             .await;
 
             if let Err(e) = worker_details {
-                warn!("Failed to recover worker {}: {:?}", worker_id, e);
+                warn!("Failed to recover worker: {:?}", e);
             }
         }
         None => {
-            warn!("Worker {} not found", worker_id);
+            warn!("Worker not found");
         }
     }
 }
@@ -582,7 +587,7 @@ impl RecoveryManagementMock {
 impl RecoveryManagement for RecoveryManagementMock {
     async fn schedule_recovery_on_trap(
         &self,
-        _worker_id: &WorkerId,
+        _owned_worker_id: &OwnedWorkerId,
         _retry_config: &RetryConfig,
         _previous_tries: u64,
         _trap_type: &TrapType,
@@ -592,7 +597,7 @@ impl RecoveryManagement for RecoveryManagementMock {
 
     async fn schedule_recovery_on_startup(
         &self,
-        _worker_id: &WorkerId,
+        _owned_worker_id: &OwnedWorkerId,
         _retry_config: &RetryConfig,
         _previous_error: &Option<LastError>,
     ) -> RecoveryDecision {
@@ -618,8 +623,8 @@ mod tests {
     use golem_common::config::RetryConfig;
     use golem_common::model::oplog::WorkerError;
     use golem_common::model::{
-        AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, WorkerId,
-        WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+        AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+        WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
 
     use crate::error::GolemError;
@@ -839,7 +844,7 @@ mod tests {
 
         async fn set_worker_status<T: HasAll<Self> + Send + Sync>(
             _this: &T,
-            _worker_id: &WorkerId,
+            _owned_worker_id: &OwnedWorkerId,
             _status: WorkerStatus,
         ) -> Result<(), GolemError> {
             unimplemented!()
@@ -847,14 +852,14 @@ mod tests {
 
         async fn get_last_error_and_retry_count<T: HasAll<Self> + Send + Sync>(
             _this: &T,
-            _worker_id: &WorkerId,
+            _owned_worker_id: &OwnedWorkerId,
         ) -> Option<LastError> {
             unimplemented!()
         }
 
         async fn compute_latest_worker_status<T: HasAll<Self> + Send + Sync>(
             _this: &T,
-            _worker_id: &WorkerId,
+            _owned_worker_id: &OwnedWorkerId,
             _metadata: &Option<WorkerMetadata>,
         ) -> Result<WorkerStatusRecord, GolemError> {
             unimplemented!()
@@ -895,8 +900,7 @@ mod tests {
         type PublicState = EmptyPublicState;
 
         async fn create(
-            _worker_id: WorkerId,
-            _account_id: AccountId,
+            _owned_worker_id: OwnedWorkerId,
             _promise_service: Arc<dyn PromiseService + Send + Sync>,
             _events: Arc<Events>,
             _worker_service: Arc<dyn WorkerService + Send + Sync>,
@@ -920,7 +924,7 @@ mod tests {
             _execution_status: Arc<RwLock<ExecutionStatus>>,
         ) -> Result<Self, GolemError> {
             Ok(EmptyContext {
-                worker_id: create_test_id(),
+                worker_id: create_test_id().worker_id,
                 public_state: EmptyPublicState,
                 rpc,
                 worker_proxy,
@@ -1029,12 +1033,19 @@ mod tests {
         )
     }
 
-    fn create_test_id() -> WorkerId {
+    fn create_test_id() -> OwnedWorkerId {
         let uuid = uuid::Uuid::parse_str("14e55083-2ff5-44ec-a414-595a748b19a0").unwrap();
 
-        WorkerId {
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+        let worker_id = WorkerId {
             component_id: ComponentId(uuid),
             worker_name: "test-worker".to_string(),
+        };
+        OwnedWorkerId {
+            account_id,
+            worker_id,
         }
     }
 
@@ -1053,7 +1064,7 @@ mod tests {
             .schedule_recovery_on_startup(&test_id, &RetryConfig::default(), &None)
             .await;
         let (id, elapsed) = receiver.recv().await.unwrap();
-        assert_eq!(id, test_id);
+        assert_eq!(id, test_id.worker_id);
         assert!(elapsed.as_millis() < 100, "elapsed time was {:?}", elapsed);
     }
 

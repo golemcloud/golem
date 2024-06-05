@@ -46,7 +46,7 @@ impl InMemoryBlobStorage {
 
 #[async_trait]
 impl BlobStorage for InMemoryBlobStorage {
-    async fn get(
+    async fn get_raw(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
@@ -92,7 +92,7 @@ impl BlobStorage for InMemoryBlobStorage {
         }))
     }
 
-    async fn put(
+    async fn put_raw(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,

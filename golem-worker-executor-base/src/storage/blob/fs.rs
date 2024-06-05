@@ -72,6 +72,16 @@ impl FileSystemBlobStorage {
                 result.push(account_id.to_string());
                 result.push(worker_id.to_string());
             }
+            BlobStorageNamespace::CompressedOplog {
+                account_id,
+                component_id,
+                level,
+            } => {
+                result.push("compressed_oplog");
+                result.push(account_id.to_string());
+                result.push(component_id.to_string());
+                result.push(level.to_string());
+            }
         }
 
         result.push(path);
@@ -89,7 +99,7 @@ impl FileSystemBlobStorage {
 
 #[async_trait]
 impl BlobStorage for FileSystemBlobStorage {
-    async fn get(
+    async fn get_raw(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
@@ -135,7 +145,7 @@ impl BlobStorage for FileSystemBlobStorage {
         }
     }
 
-    async fn put(
+    async fn put_raw(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,

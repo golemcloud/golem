@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use golem_common::model::WorkerId;
+use golem_common::model::OwnedWorkerId;
 #[cfg(any(feature = "mocks", test))]
 use tracing::info;
 use tracing::{error, warn};
@@ -29,12 +29,12 @@ use crate::workerctx::WorkerCtx;
 #[async_trait]
 pub trait WorkerActivator {
     /// Makes sure an already existing worker is active in a background task. Returns immediately
-    async fn activate_worker(&self, worker_id: &WorkerId);
+    async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId);
 
     /// Makes sure an already existing worker is active in a background task. If
     /// it was already active, it deactivates it first, so it is guaranteed that its recovery
     /// runs. Returns immediately
-    async fn reactivate_worker(&self, worker_id: &WorkerId);
+    async fn reactivate_worker(&self, owned_worker_id: &OwnedWorkerId);
 }
 
 pub struct LazyWorkerActivator {
@@ -61,19 +61,19 @@ impl Default for LazyWorkerActivator {
 
 #[async_trait]
 impl WorkerActivator for LazyWorkerActivator {
-    async fn activate_worker(&self, worker_id: &WorkerId) {
+    async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId) {
         let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
         match maybe_worker_activator {
-            Some(worker_activator) => worker_activator.activate_worker(worker_id).await,
-            None => warn!("WorkerActivator is disabled, not activating instance: {worker_id}"),
+            Some(worker_activator) => worker_activator.activate_worker(owned_worker_id).await,
+            None => warn!("WorkerActivator is disabled, not activating instance"),
         }
     }
 
-    async fn reactivate_worker(&self, worker_id: &WorkerId) {
+    async fn reactivate_worker(&self, owned_worker_id: &OwnedWorkerId) {
         let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
         match maybe_worker_activator {
-            Some(worker_activator) => worker_activator.reactivate_worker(worker_id).await,
-            None => warn!("WorkerActivator is disabled, not reactivating instance: {worker_id}"),
+            Some(worker_activator) => worker_activator.reactivate_worker(owned_worker_id).await,
+            None => warn!("WorkerActivator is disabled, not reactivating instance"),
         }
     }
 }
@@ -97,43 +97,41 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerActivator<Ctx, Svcs> {
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator
     for DefaultWorkerActivator<Ctx, Svcs>
 {
-    async fn activate_worker(&self, worker_id: &WorkerId) {
-        let metadata = self.all.worker_service().get(worker_id).await;
+    async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId) {
+        let metadata = self.all.worker_service().get(owned_worker_id).await;
         match metadata {
             Some(metadata) => {
                 Worker::activate(
                     &self.all,
-                    worker_id,
+                    owned_worker_id,
                     metadata.args,
                     metadata.env,
                     Some(metadata.last_known_status.component_version),
-                    metadata.account_id,
                 )
                 .await
             }
             None => {
-                error!("WorkerActivator::activate_worker: worker {worker_id} not found")
+                error!("WorkerActivator::activate_worker: worker not found")
             }
         }
     }
 
-    async fn reactivate_worker(&self, worker_id: &WorkerId) {
-        let metadata = self.all.worker_service().get(worker_id).await;
+    async fn reactivate_worker(&self, owned_worker_id: &OwnedWorkerId) {
+        let metadata = self.all.worker_service().get(owned_worker_id).await;
         match metadata {
             Some(metadata) => {
-                self.all.active_workers().remove(worker_id);
+                self.all.active_workers().remove(&owned_worker_id.worker_id);
                 Worker::activate(
                     &self.all,
-                    worker_id,
+                    owned_worker_id,
                     metadata.args,
                     metadata.env,
                     Some(metadata.last_known_status.component_version),
-                    metadata.account_id,
                 )
                 .await
             }
             None => {
-                error!("WorkerActivator::reactivate_worker: worker {worker_id} not found")
+                error!("WorkerActivator::reactivate_worker: worker not found")
             }
         }
     }
@@ -159,11 +157,11 @@ impl WorkerActivatorMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl WorkerActivator for WorkerActivatorMock {
-    async fn activate_worker(&self, worker_id: &WorkerId) {
-        info!("WorkerActivatorMock::activate_worker {worker_id}");
+    async fn activate_worker(&self, _owned_worker_id: &OwnedWorkerId) {
+        info!("WorkerActivatorMock::activate_worker");
     }
 
-    async fn reactivate_worker(&self, worker_id: &WorkerId) {
-        info!("WorkerActivatorMock::reactivate_worker {worker_id}");
+    async fn reactivate_worker(&self, _owned_worker_id: &OwnedWorkerId) {
+        info!("WorkerActivatorMock::reactivate_worker");
     }
 }

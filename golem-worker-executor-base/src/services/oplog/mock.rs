@@ -16,7 +16,7 @@ use crate::error::GolemError;
 use crate::services::oplog::{Oplog, OplogService};
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AccountId, ComponentId, ScanCursor, WorkerId};
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -43,52 +43,48 @@ impl OplogServiceMock {
 impl OplogService for OplogServiceMock {
     async fn create(
         &self,
-        _account_id: &AccountId,
-        _worker_id: &WorkerId,
+        _owned_worker_id: &OwnedWorkerId,
         _initial_entry: OplogEntry,
     ) -> Arc<dyn Oplog + Send + Sync> {
         unimplemented!()
     }
 
-    async fn open(
-        &self,
-        _account_id: &AccountId,
-        _worker_id: &WorkerId,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    async fn open(&self, _owned_worker_id: &OwnedWorkerId) -> Arc<dyn Oplog + Send + Sync> {
         unimplemented!()
     }
 
-    async fn get_first_index(&self, _worker_id: &WorkerId) -> OplogIndex {
+    async fn get_first_index(&self, _owned_worker_id: &OwnedWorkerId) -> OplogIndex {
         unimplemented!()
     }
 
-    async fn get_last_index(&self, _worker_id: &WorkerId) -> OplogIndex {
+    async fn get_last_index(&self, _owned_worker_id: &OwnedWorkerId) -> OplogIndex {
         unimplemented!()
     }
 
-    async fn delete(&self, _worker_id: &WorkerId) {
+    async fn delete(&self, _owned_worker_id: &OwnedWorkerId) {
         unimplemented!()
     }
 
     async fn read(
         &self,
-        _worker_id: &WorkerId,
+        _owned_worker_id: &OwnedWorkerId,
         _idx: OplogIndex,
         _n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         unimplemented!()
     }
 
-    async fn exists(&self, _worker_id: &WorkerId) -> bool {
+    async fn exists(&self, _owned_worker_id: &OwnedWorkerId) -> bool {
         unimplemented!()
     }
 
     async fn scan_for_component(
         &self,
+        _account_id: &AccountId,
         _component_id: &ComponentId,
         _cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<WorkerId>), GolemError> {
+    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
         unimplemented!()
     }
 }
