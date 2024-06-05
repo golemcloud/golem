@@ -44,17 +44,17 @@ jobs:
           # Create a dummy benchmark result
           mkdir -p ./benchmark-data-current
           
-          # Replace these with original commands
-          cp temporary.json benchmark-data-current/benchmark_cold_storage_small.json
-          cp temporary.json benchmark-data-current/benchmark_cold_storage_medium.json
-          cp temporary.json benchmark-data-current/benchmark_cold_storage_large.json
-          cp temporary.json benchmark-data-current/unavailable.json
-          cp temporary.json benchmark-data-current/unavailable2.json
-          
+          ./target/debug/benchmark_cold_start_large --quiet --json spawned > benchmark-data-current/benchmark_cold_storage_large.json
+          ./target/debug/benchmark_cold_start_medium --quiet --json spawned > benchmark-data-current/benchmark_cold_storage_medium.json
+          ./target/debug/benchmark_cold_start_small --quiet --json spawned > benchmark-data-current/benchmark_cold_storage_small.json
+          ./target/debug/benchmark_durability_overhead --quiet --json spawned > benchmark-data-current/benchmark_durability_overhead.json
+          ./target/debug/benchmark_latency_large --quiet --json spawned > benchmark-data-current/benchmark_latency_large.json
+          ./target/debug/benchmark_latency_medium --quiet --json spawned > benchmark-data-current/benchmark_latency_medium.json
+          ./target/debug/benchmark_latency_small --quiet --json spawned > benchmark-data-current/benchmark_latency_small.json
+                
           echo "Finished Running Benchmark Jobs"
           
-          # Define the files to check
-          files=("benchmark_cold_storage_large.json" "benchmark_cold_storage_small.json" "benchmark_cold_storage_medium.json" "unavailable.json" "unavailable2.json")
+          files=$(ls benchmark-data-current)
           
           echo "Checking the following files if it already exists in a previous benchmark run"
           for str in ${files[@]}; do
@@ -67,7 +67,7 @@ jobs:
           get_report_command="./benchmark/target/debug/benchmark_report get-report"
           echo "Starting to pull the existing benchmark results if exists"
           
-          if git fetch origin master:master && [[ ! "$COMMENT_BODY" =~ refresh ]]; then                              
+          if git fetch origin main:main && [[ ! "$COMMENT_BODY" =~ refresh ]]; then                              
              # Check each file
              for file in "${files[@]}"; do
                 if git checkout master -- "benchmark-data/$file"; then
