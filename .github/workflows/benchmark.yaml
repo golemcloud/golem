@@ -9,10 +9,16 @@ jobs:
     permissions: write-all
     runs-on: ubuntu-latest
     steps:
+      - id: 'get-branch'
+        run: echo ::set-output name=branch::$(gh pr view $PR_NO --repo $REPO --json headRefName --jq '.headRefName')
+        env:
+          REPO: ${{ github.repository }}
+          PR_NO: ${{ github.event.issue.number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: true
+          ref: ${{ steps.get-branch.outputs.branch }}
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -42,11 +48,12 @@ jobs:
           cp temporary.json benchmark-data-current/benchmark_cold_storage_medium.json
           cp temporary.json benchmark-data-current/benchmark_cold_storage_large.json
           cp temporary.json benchmark-data-current/unavailable.json
+          cp temporary.json benchmark-data-current/unavailable2.json
           
           echo "Finished Running Benchmark Jobs"
           
           # Define the files to check
-          files=("benchmark_cold_storage_large.json" "benchmark_cold_storage_small.json" "benchmark_cold_storage_medium.json" "unavailable.json")
+          files=("benchmark_cold_storage_large.json" "benchmark_cold_storage_small.json" "benchmark_cold_storage_medium.json" "unavailable.json" "unavailable2.json")
           
           echo "Checking the following files if it already exists in a previous benchmark run"
           for str in ${files[@]}; do
@@ -59,10 +66,10 @@ jobs:
           get_report_command="./benchmark/target/debug/benchmark_report get-report"
           echo "Starting to pull the existing benchmark results if exists"
           
-          if git fetch origin github_pages:github_pages && [[ ! "$COMMENT_BODY" =~ refresh ]]; then                              
+          if git fetch origin master:master && [[ ! "$COMMENT_BODY" =~ refresh ]]; then                              
              # Check each file
              for file in "${files[@]}"; do
-                if git checkout github_pages -- "benchmark-data/$file"; then
+                if git checkout master -- "benchmark-data/$file"; then
                   present_files+=("$file")
                   compare_command="$compare_command --files $file=$(pwd)/benchmark-data/$file,$(pwd)/benchmark-data-current/$file"
                 else
@@ -116,16 +123,21 @@ jobs:
         run: |
           # Removing the old benchmark data
           rm -rf benchmark-data
+          rm -rf benchmark_comparison.md
+          rm -rf report.md
           # Moving the current benchmark data to benchmark-data
           mv benchmark-data-current benchmark-data
       - name: Commit and push benchmark results temporarily
-        uses: EndBug/add-and-commit@v9
-        env:
-          PR_NUMBER: ${{ github.event.issue.number }}
-        with:
-          branch: benchmark_result_tmp_${{github.event.issue.number}}
-          message: Add benchmark results
-          add: benchmark-data
-          new_branch: benchmark_result_tmp_${{github.event.issue.number}}
-          push: origin benchmark_result_tmp_${{github.event.issue.number}} --force
+        run: |
+          git branch -a
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git pull 
+          git add benchmark-data
+          git commit -m "Adding benchmarking data"
+          if git push; then
+            echo "Successfully pushed the benchmark data"
+          else
+            echo "Benchmark data hasn't been pushed probably due to zero changes"
+          fi
 
