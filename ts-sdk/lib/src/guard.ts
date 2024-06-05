@@ -99,18 +99,10 @@ export function executeWithDrop<Resource extends {drop: () => void}, R>(
   resources: [Resource],
   fn: () => R
 ): R {
-  let dropped = false;
   try {
-    const result = fn();
-    console.log("Dropping resources 1!")
-    dropAll(resources);
-    dropped = true;
-    return result
+    return fn();
   } finally {
-    if (!dropped) {
-      console.log("Dropping resources 2!")
-      dropAll(resources);
-    }
+    dropAll(resources);
   }
 }
 
