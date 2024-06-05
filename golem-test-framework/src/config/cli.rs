@@ -99,7 +99,7 @@ pub struct CliParams {
     #[arg(long, default_value = "false")]
     pub verbose: bool,
     #[arg(long, default_value = "false")]
-    pub json: bool
+    pub json: bool,
 }
 
 impl CliParams {
