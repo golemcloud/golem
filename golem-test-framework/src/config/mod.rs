@@ -45,7 +45,6 @@ pub trait TestDependencies {
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
 
     fn kill_all(&self) {
-        dbg!("By any chance");
         self.worker_executor_cluster().kill_all();
         self.worker_service().kill();
         self.component_compilation_service().kill();
