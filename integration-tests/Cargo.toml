@@ -20,6 +20,7 @@ clap = { workspace = true }
 console-subscriber = { workspace = true }
 ctor = { workspace = true }
 golem-wasm-rpc = { workspace = true }
+plotters = "0.3.6"
 poem = { version = "2.0.0", features = ["prometheus", "opentelemetry", "test"] }
 rand = { workspace = true }
 reqwest = { workspace = true }
@@ -80,4 +81,4 @@ path = "src/benchmarks/throughput.rs"
 
 [[bin]]
 name = "compare_benchmark"
-path = "src/benchmarks/report/compare_benchmark.rs"
+path = "src/benchmarks/report/benchmark_report.rs"
