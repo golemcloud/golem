@@ -16,21 +16,19 @@ use async_trait::async_trait;
 
 use crate::clients::api_deployment::ApiDeploymentClient;
 use crate::cloud::model::ProjectId;
-use golem_cloud_worker_client::model::ApiSite;
+use golem_cloud_client::model::ApiSite;
 use itertools::Itertools;
 use tracing::info;
 
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, ApiDeployment, GolemError};
 
 #[derive(Clone)]
-pub struct ApiDeploymentClientLive<
-    C: golem_cloud_worker_client::api::ApiDeploymentClient + Sync + Send,
-> {
+pub struct ApiDeploymentClientLive<C: golem_cloud_client::api::ApiDeploymentClient + Sync + Send> {
     pub client: C,
 }
 
 #[async_trait]
-impl<C: golem_cloud_worker_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClient
+impl<C: golem_cloud_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClient
     for ApiDeploymentClientLive<C>
 {
     type ProjectContext = ProjectId;
@@ -50,7 +48,7 @@ impl<C: golem_cloud_worker_client::api::ApiDeploymentClient + Sync + Send> ApiDe
                 .map_or("".to_string(), |s| format!("subdomain {}", s))
         );
 
-        let deployment = golem_cloud_worker_client::model::ApiDeployment {
+        let deployment = golem_cloud_client::model::ApiDeployment {
             api_definition_id: api_definition_id.0.to_string(),
             version: version.0.to_string(),
             project_id: project.0,

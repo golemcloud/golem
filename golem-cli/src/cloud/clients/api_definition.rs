@@ -18,9 +18,7 @@ use std::io::Read;
 
 use async_trait::async_trait;
 
-use golem_cloud_worker_client::model::{
-    GolemWorkerBinding, HttpApiDefinition, MethodPattern, Route,
-};
+use golem_cloud_client::model::{GolemWorkerBinding, HttpApiDefinition, MethodPattern, Route};
 
 use crate::clients::api_definition::ApiDefinitionClient;
 use crate::cloud::model::ProjectId;
@@ -30,9 +28,7 @@ use tracing::info;
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, PathBufOrStdin};
 
 #[derive(Clone)]
-pub struct ApiDefinitionClientLive<
-    C: golem_cloud_worker_client::api::ApiDefinitionClient + Sync + Send,
-> {
+pub struct ApiDefinitionClientLive<C: golem_cloud_client::api::ApiDefinitionClient + Sync + Send> {
     pub client: C,
 }
 
@@ -55,7 +51,7 @@ impl Display for Action {
 }
 
 async fn create_or_update_api_definition<
-    C: golem_cloud_worker_client::api::ApiDefinitionClient + Sync + Send,
+    C: golem_cloud_client::api::ApiDefinitionClient + Sync + Send,
 >(
     action: Action,
     client: &C,
@@ -154,7 +150,7 @@ fn to_oss_http_api_definition(d: HttpApiDefinition) -> golem_client::model::Http
 }
 
 #[async_trait]
-impl<C: golem_cloud_worker_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClient
+impl<C: golem_cloud_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClient
     for ApiDefinitionClientLive<C>
 {
     type ProjectContext = ProjectId;

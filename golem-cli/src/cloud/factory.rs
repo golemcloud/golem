@@ -19,11 +19,11 @@ use crate::clients::health_check::HealthCheckClient;
 use crate::clients::worker::WorkerClient;
 use crate::cloud::auth::{Auth, AuthLive};
 use crate::cloud::clients::account::{AccountClient, AccountClientLive};
+use crate::cloud::clients::api_definition::ApiDefinitionClientLive;
+use crate::cloud::clients::api_deployment::ApiDeploymentClientLive;
+use crate::cloud::clients::certificate::{CertificateClient, CertificateClientLive};
 use crate::cloud::clients::component::ComponentClientLive;
-use crate::cloud::clients::gateway::api_definition::ApiDefinitionClientLive;
-use crate::cloud::clients::gateway::api_deployment::ApiDeploymentClientLive;
-use crate::cloud::clients::gateway::certificate::{CertificateClient, CertificateClientLive};
-use crate::cloud::clients::gateway::domain::{DomainClient, DomainClientLive};
+use crate::cloud::clients::domain::{DomainClient, DomainClientLive};
 use crate::cloud::clients::grant::{GrantClient, GrantClientLive};
 use crate::cloud::clients::login::{LoginClient, LoginClientLive};
 use crate::cloud::clients::policy::{ProjectPolicyClient, ProjectPolicyClientLive};
@@ -95,16 +95,11 @@ impl CloudServiceFactory {
         })
     }
 
-    fn worker_context(
-        &self,
-        auth: &CloudAuthentication,
-    ) -> Result<golem_cloud_worker_client::Context, GolemError> {
-        Ok(golem_cloud_worker_client::Context {
+    fn worker_context(&self, auth: &CloudAuthentication) -> Result<Context, GolemError> {
+        Ok(Context {
             base_url: self.gateway_url.clone(),
             client: self.client()?,
-            security_token: golem_cloud_worker_client::Security::Bearer(
-                auth.0.secret.value.to_string(),
-            ),
+            security_token: Security::Bearer(auth.0.secret.value.to_string()),
         })
     }
 
@@ -238,7 +233,7 @@ impl CloudServiceFactory {
         auth: &CloudAuthentication,
     ) -> Result<Box<dyn CertificateClient + Send + Sync>, GolemError> {
         Ok(Box::new(CertificateClientLive {
-            client: golem_cloud_worker_client::api::ApiCertificateClientLive {
+            client: golem_cloud_client::api::ApiCertificateClientLive {
                 context: self.worker_context(auth)?,
             },
         }))
@@ -259,7 +254,7 @@ impl CloudServiceFactory {
         auth: &CloudAuthentication,
     ) -> Result<Box<dyn DomainClient + Send + Sync>, GolemError> {
         Ok(Box::new(DomainClientLive {
-            client: golem_cloud_worker_client::api::ApiDomainClientLive {
+            client: golem_cloud_client::api::ApiDomainClientLive {
                 context: self.worker_context(auth)?,
             },
         }))
@@ -322,7 +317,7 @@ impl ServiceFactory for CloudServiceFactory {
         auth: &Self::SecurityContext,
     ) -> Result<Box<dyn WorkerClient + Send + Sync>, GolemError> {
         Ok(Box::new(WorkerClientLive {
-            client: golem_cloud_worker_client::api::WorkerClientLive {
+            client: golem_cloud_client::api::WorkerClientLive {
                 context: self.worker_context(auth)?,
             },
             context: self.worker_context(auth)?,
@@ -338,7 +333,7 @@ impl ServiceFactory for CloudServiceFactory {
         GolemError,
     > {
         Ok(Box::new(ApiDefinitionClientLive {
-            client: golem_cloud_worker_client::api::ApiDefinitionClientLive {
+            client: golem_cloud_client::api::ApiDefinitionClientLive {
                 context: self.worker_context(auth)?,
             },
         }))
@@ -352,7 +347,7 @@ impl ServiceFactory for CloudServiceFactory {
         GolemError,
     > {
         Ok(Box::new(ApiDeploymentClientLive {
-            client: golem_cloud_worker_client::api::ApiDeploymentClientLive {
+            client: golem_cloud_client::api::ApiDeploymentClientLive {
                 context: self.worker_context(auth)?,
             },
         }))
@@ -368,13 +363,11 @@ impl ServiceFactory for CloudServiceFactory {
                     context: self.context(auth)?,
                 },
             }),
-            Box::new(
-                crate::cloud::clients::gateway::health_check::HealthCheckClientLive {
-                    client: golem_cloud_worker_client::api::HealthCheckClientLive {
-                        context: self.worker_context(auth)?,
-                    },
+            Box::new(crate::cloud::clients::health_check::HealthCheckClientLive {
+                client: golem_cloud_client::api::HealthCheckClientLive {
+                    context: self.worker_context(auth)?,
                 },
-            ),
+            }),
         ])
     }
 }

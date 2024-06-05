@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::clients::gateway::certificate::CertificateClient;
+use crate::cloud::clients::certificate::CertificateClient;
 use crate::cloud::model::ProjectRef;
 use crate::cloud::service::project::ProjectService;
 use crate::model::{GolemError, GolemResult, PathBufOrStdin};
 use async_trait::async_trait;
-use golem_cloud_worker_client::model::CertificateRequest;
+use golem_cloud_client::model::CertificateRequest;
 use std::fs::File;
 use std::io;
 use std::io::{BufReader, Read};

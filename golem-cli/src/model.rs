@@ -153,34 +153,6 @@ impl<T: ResponseContentErrorMapper> From<golem_cloud_client::Error<T>> for Golem
     }
 }
 
-impl<T: ResponseContentErrorMapper> From<golem_cloud_worker_client::Error<T>> for GolemError {
-    fn from(value: golem_cloud_worker_client::Error<T>) -> Self {
-        match value {
-            golem_cloud_worker_client::Error::Reqwest(error) => GolemError::from(error),
-            golem_cloud_worker_client::Error::ReqwestHeader(invalid_header) => {
-                GolemError::from(invalid_header)
-            }
-            golem_cloud_worker_client::Error::Serde(error) => {
-                GolemError(format!("Unexpected serialization error: {error}"))
-            }
-            golem_cloud_worker_client::Error::Item(data) => {
-                let error_str = ResponseContentErrorMapper::map(data);
-                GolemError(error_str)
-            }
-            golem_cloud_worker_client::Error::Unexpected { code, data } => {
-                match String::from_utf8(Vec::from(data)) {
-                    Ok(data_string) => GolemError(format!(
-                        "Unexpected http error. Code: {code}, content: {data_string}."
-                    )),
-                    Err(_) => GolemError(format!(
-                        "Unexpected http error. Code: {code}, can't parse content as string."
-                    )),
-                }
-            }
-        }
-    }
-}
-
 impl Display for GolemError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let GolemError(s) = self;
@@ -478,9 +450,7 @@ impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
     }
 }
 
-pub fn to_oss_worker_id(
-    id: golem_cloud_worker_client::model::WorkerId,
-) -> golem_client::model::WorkerId {
+pub fn to_oss_worker_id(id: golem_cloud_client::model::WorkerId) -> golem_client::model::WorkerId {
     golem_client::model::WorkerId {
         component_id: id.component_id,
         worker_name: id.worker_name,
@@ -488,38 +458,36 @@ pub fn to_oss_worker_id(
 }
 
 pub fn to_oss_worker_status(
-    s: golem_cloud_worker_client::model::WorkerStatus,
+    s: golem_cloud_client::model::WorkerStatus,
 ) -> golem_client::model::WorkerStatus {
     match s {
-        golem_cloud_worker_client::model::WorkerStatus::Running => {
+        golem_cloud_client::model::WorkerStatus::Running => {
             golem_client::model::WorkerStatus::Running
         }
-        golem_cloud_worker_client::model::WorkerStatus::Idle => {
-            golem_client::model::WorkerStatus::Idle
-        }
-        golem_cloud_worker_client::model::WorkerStatus::Suspended => {
+        golem_cloud_client::model::WorkerStatus::Idle => golem_client::model::WorkerStatus::Idle,
+        golem_cloud_client::model::WorkerStatus::Suspended => {
             golem_client::model::WorkerStatus::Suspended
         }
-        golem_cloud_worker_client::model::WorkerStatus::Interrupted => {
+        golem_cloud_client::model::WorkerStatus::Interrupted => {
             golem_client::model::WorkerStatus::Interrupted
         }
-        golem_cloud_worker_client::model::WorkerStatus::Retrying => {
+        golem_cloud_client::model::WorkerStatus::Retrying => {
             golem_client::model::WorkerStatus::Retrying
         }
-        golem_cloud_worker_client::model::WorkerStatus::Failed => {
+        golem_cloud_client::model::WorkerStatus::Failed => {
             golem_client::model::WorkerStatus::Failed
         }
-        golem_cloud_worker_client::model::WorkerStatus::Exited => {
+        golem_cloud_client::model::WorkerStatus::Exited => {
             golem_client::model::WorkerStatus::Exited
         }
     }
 }
 
 fn to_oss_update_record(
-    r: golem_cloud_worker_client::model::UpdateRecord,
+    r: golem_cloud_client::model::UpdateRecord,
 ) -> golem_client::model::UpdateRecord {
     fn to_oss_pending_update(
-        u: golem_cloud_worker_client::model::PendingUpdate,
+        u: golem_cloud_client::model::PendingUpdate,
     ) -> golem_client::model::PendingUpdate {
         golem_client::model::PendingUpdate {
             timestamp: u.timestamp,
@@ -527,7 +495,7 @@ fn to_oss_update_record(
         }
     }
     fn to_oss_successful_update(
-        u: golem_cloud_worker_client::model::SuccessfulUpdate,
+        u: golem_cloud_client::model::SuccessfulUpdate,
     ) -> golem_client::model::SuccessfulUpdate {
         golem_client::model::SuccessfulUpdate {
             timestamp: u.timestamp,
@@ -535,7 +503,7 @@ fn to_oss_update_record(
         }
     }
     fn to_oss_failed_update(
-        u: golem_cloud_worker_client::model::FailedUpdate,
+        u: golem_cloud_client::model::FailedUpdate,
     ) -> golem_client::model::FailedUpdate {
         golem_client::model::FailedUpdate {
             timestamp: u.timestamp,
@@ -545,21 +513,21 @@ fn to_oss_update_record(
     }
 
     match r {
-        golem_cloud_worker_client::model::UpdateRecord::PendingUpdate(pu) => {
+        golem_cloud_client::model::UpdateRecord::PendingUpdate(pu) => {
             golem_client::model::UpdateRecord::PendingUpdate(to_oss_pending_update(pu))
         }
-        golem_cloud_worker_client::model::UpdateRecord::SuccessfulUpdate(su) => {
+        golem_cloud_client::model::UpdateRecord::SuccessfulUpdate(su) => {
             golem_client::model::UpdateRecord::SuccessfulUpdate(to_oss_successful_update(su))
         }
-        golem_cloud_worker_client::model::UpdateRecord::FailedUpdate(fu) => {
+        golem_cloud_client::model::UpdateRecord::FailedUpdate(fu) => {
             golem_client::model::UpdateRecord::FailedUpdate(to_oss_failed_update(fu))
         }
     }
 }
 
-impl From<golem_cloud_worker_client::model::WorkerMetadata> for WorkerMetadata {
-    fn from(value: golem_cloud_worker_client::model::WorkerMetadata) -> Self {
-        let golem_cloud_worker_client::model::WorkerMetadata {
+impl From<golem_cloud_client::model::WorkerMetadata> for WorkerMetadata {
+    fn from(value: golem_cloud_client::model::WorkerMetadata) -> Self {
+        let golem_cloud_client::model::WorkerMetadata {
             worker_id,
             account_id,
             args,
@@ -604,8 +572,8 @@ impl From<golem_client::model::WorkersMetadataResponse> for WorkersMetadataRespo
     }
 }
 
-impl From<golem_cloud_worker_client::model::WorkersMetadataResponse> for WorkersMetadataResponse {
-    fn from(value: golem_cloud_worker_client::model::WorkersMetadataResponse) -> Self {
+impl From<golem_cloud_client::model::WorkersMetadataResponse> for WorkersMetadataResponse {
+    fn from(value: golem_cloud_client::model::WorkersMetadataResponse) -> Self {
         WorkersMetadataResponse {
             cursor: value.cursor.map(|c| golem_client::model::ScanCursor {
                 cursor: c,
@@ -645,13 +613,13 @@ impl From<golem_client::model::ApiDeployment> for ApiDeployment {
     }
 }
 
-impl From<golem_cloud_worker_client::model::ApiDeployment> for ApiDeployment {
-    fn from(value: golem_cloud_worker_client::model::ApiDeployment) -> Self {
-        let golem_cloud_worker_client::model::ApiDeployment {
+impl From<golem_cloud_client::model::ApiDeployment> for ApiDeployment {
+    fn from(value: golem_cloud_client::model::ApiDeployment) -> Self {
+        let golem_cloud_client::model::ApiDeployment {
             api_definition_id,
             version,
             project_id,
-            site: golem_cloud_worker_client::model::ApiSite { host, subdomain },
+            site: golem_cloud_client::model::ApiSite { host, subdomain },
         } = value;
 
         ApiDeployment {

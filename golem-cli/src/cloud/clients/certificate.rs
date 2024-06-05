@@ -14,7 +14,7 @@
 
 use crate::cloud::model::ProjectId;
 use async_trait::async_trait;
-use golem_cloud_worker_client::model::{Certificate, CertificateRequest};
+use golem_cloud_client::model::{Certificate, CertificateRequest};
 use uuid::Uuid;
 
 use crate::model::GolemError;
@@ -36,14 +36,12 @@ pub trait CertificateClient {
     ) -> Result<String, GolemError>;
 }
 
-pub struct CertificateClientLive<
-    C: golem_cloud_worker_client::api::ApiCertificateClient + Sync + Send,
-> {
+pub struct CertificateClientLive<C: golem_cloud_client::api::ApiCertificateClient + Sync + Send> {
     pub client: C,
 }
 
 #[async_trait]
-impl<C: golem_cloud_worker_client::api::ApiCertificateClient + Sync + Send> CertificateClient
+impl<C: golem_cloud_client::api::ApiCertificateClient + Sync + Send> CertificateClient
     for CertificateClientLive<C>
 {
     async fn get(

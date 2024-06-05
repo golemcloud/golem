@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::clients::gateway::domain::DomainClient;
+use crate::cloud::clients::domain::DomainClient;
 use crate::cloud::model::ProjectRef;
 use crate::cloud::service::project::ProjectService;
 use crate::model::{GolemError, GolemResult};

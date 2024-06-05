@@ -35,6 +35,6 @@ impl<C: golem_cloud_client::api::HealthCheckClient + Sync + Send> HealthCheckCli
     async fn version(&self) -> Result<VersionInfo, GolemError> {
         debug!("Getting server version");
 
-        Ok(to_oss_version_info(self.client.version_get().await?))
+        Ok(to_oss_version_info(self.client.version().await?))
     }
 }
