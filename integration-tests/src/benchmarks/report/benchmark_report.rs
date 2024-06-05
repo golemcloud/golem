@@ -13,24 +13,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     match params {
         CliReportParams::CompareBenchmarks(args) => {
             let final_report = BenchmarkComparisonReport::from(args.files)?;
-            println!(
-                "{}",
-                to_markdown(
-                    "Benchmark Comparison Report",
-                    &serde_json::to_value(final_report).unwrap()
-                )
-            );
+            println!("{}", &final_report.to_markdown_table());
         }
         CliReportParams::GetReport(args) => {
             let final_report = BenchmarkReport::from(args.files)?;
 
-            println!(
-                "{}",
-                to_markdown(
-                    "Benchmark Report",
-                    &serde_json::to_value(final_report).unwrap()
-                )
-            );
+            println!("{}", &final_report.to_markdown_table());
         }
     }
 
@@ -76,6 +64,29 @@ impl BenchmarkComparisonReport {
             results: comparison_results,
         })
     }
+
+    pub fn to_markdown_table(&self) -> String {
+        let mut table = vec![];
+        table.push("| Benchmark Type | Cluster Size | Size | Length | Previous Avg Time | Current Avg Time |".to_string());
+        table.push("|---------------|--------------|------|--------|-------------------|------------------|".to_string());
+
+        for report in self.results.iter() {
+            for run_config_report in report.comparison_results.results.iter() {
+                table.push(format!(
+                    r#"| {} | {} | {} | {} | {} | {} |"#,
+                    report.benchmark_type.0,
+                    run_config_report.run_config.cluster_size,
+                    run_config_report.run_config.size,
+                    run_config_report.run_config.length,
+                    run_config_report.comparison.previous_avg,
+                    run_config_report.comparison.current_avg
+                ));
+            }
+        }
+
+        let table_str = table.join("\\n");
+        wrap_with_title("Benchmark Comparison Report", &table_str)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -90,6 +101,28 @@ struct BenchmarkReport {
 }
 
 impl BenchmarkReport {
+    pub fn to_markdown_table(&self) -> String {
+        let mut table = vec![];
+        table.push("| Benchmark Type | Cluster Size | Size | Length | Avg Time |".to_string());
+        table.push("|---------------|--------------|------|--------|----------|".to_string());
+
+        for report in self.results.iter() {
+            for run_config_report in report.report.results.iter() {
+                table.push(format!(
+                    "| {} | {} | {} | {} | {} |",
+                    report.benchmark_type.0,
+                    run_config_report.run_config.cluster_size,
+                    run_config_report.run_config.size,
+                    run_config_report.run_config.length,
+                    run_config_report.avg_time
+                ));
+            }
+        }
+
+        let table_str = table.join("\\n");
+        wrap_with_title("Benchmark Report", &table_str)
+    }
+
     pub fn from(input: Vec<(BenchmarkType, BenchmarkFile)>) -> Result<BenchmarkReport, String> {
         let mut benchmark_results: Vec<BenchmarkReportPerBenchmarkType> = vec![];
         for (benchmark_type, file) in input {
@@ -183,8 +216,7 @@ struct BenchmarkResultFiles {
 struct BenchmarkFile(String);
 
 mod internal {
-    use golem_test_framework::dsl::benchmark::{BenchmarkResult, RunConfig};
-    use serde_json::Value;
+    use super::*;
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
@@ -215,19 +247,8 @@ mod internal {
         run_config_to_avg_time
     }
 
-    pub fn to_markdown(title: &str, value: &Value) -> String {
-        format!(
-            r#"
-## {}
-
-```
-{}
-
-```
-"#,
-            title,
-            serde_json::to_string_pretty(value).unwrap()
-        )
+    pub fn wrap_with_title(title: &str, table: &String) -> String {
+        format!(r#"\n## {}\n{}\n"#, title, table)
     }
 }
 
