@@ -9,6 +9,7 @@ jobs:
     permissions: write-all
     runs-on: ubuntu-latest
     steps:
+      # https://github.com/actions/checkout/issues/331#issuecomment-1567674767
       - id: 'get-branch'
         run: echo ::set-output name=branch::$(gh pr view $PR_NO --repo $REPO --json headRefName --jq '.headRefName')
         env:
