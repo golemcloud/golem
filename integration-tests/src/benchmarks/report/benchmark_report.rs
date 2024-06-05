@@ -13,12 +13,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     match params {
         CliReportParams::CompareBenchmarks(args) => {
             let final_report = BenchmarkComparisonReport::from(args.files)?;
-            println!("{}", serde_json::to_string_pretty(&final_report)?);
+            println!(
+                "{}",
+                to_markdown(
+                    "Benchmark Comparison Report",
+                    &serde_json::to_value(final_report).unwrap()
+                )
+            );
         }
         CliReportParams::GetReport(args) => {
             let final_report = BenchmarkReport::from(args.files)?;
 
-            println!("{}", serde_json::to_string_pretty(&final_report)?);
+            println!(
+                "{}",
+                to_markdown(
+                    "Benchmark Report",
+                    &serde_json::to_value(final_report).unwrap()
+                )
+            );
         }
     }
 
@@ -172,6 +184,7 @@ struct BenchmarkFile(String);
 
 mod internal {
     use golem_test_framework::dsl::benchmark::{BenchmarkResult, RunConfig};
+    use serde_json::Value;
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
@@ -200,6 +213,21 @@ mod internal {
         }
 
         run_config_to_avg_time
+    }
+
+    pub fn to_markdown(title: &str, value: &Value) -> String {
+        format!(
+            r#"
+## {}
+
+```
+{}
+
+```
+"#,
+            title,
+            serde_json::to_string_pretty(value).unwrap()
+        )
     }
 }
 
