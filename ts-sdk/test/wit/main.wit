@@ -2,7 +2,7 @@ package golem:ts;
 
 interface api {
   process: func(a: u64) -> string;
-  process2: func(a: u64) -> string;
+  process-fallible: func(a: u64) -> string;
 }
 
 world test {

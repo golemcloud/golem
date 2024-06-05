@@ -1,4 +1,4 @@
-import { fallibleTransactionOperations, infallibleTransaction, operation, Result } from 'golem-ts';
+import { fallibleTransaction, infallibleTransaction, Operation, operation, OperationErrors, Result } from 'golem-ts';
 import { GolemTsApi } from './interfaces/golem-ts-api.js';
 
 export const api: typeof GolemTsApi  = {
@@ -15,8 +15,9 @@ export const api: typeof GolemTsApi  = {
             return "Error";
         }
     },
-    process2: (a: bigint) =>  {
-        let result = fallibleTransactionOperations<[typeof operationOne, typeof operationTwo]>(tx => {
+    processFallible: (a: bigint) =>  {
+        type Error = OperationErrors<[typeof operationOne, typeof operationTwo]>;
+        let result = fallibleTransaction<string, Error>(tx => {
             let resultA = tx.execute(operationOne, a);
             let resultB = resultA.flatMap(num => tx.execute(operationTwo, num));
             return resultB;
@@ -31,7 +32,7 @@ export const api: typeof GolemTsApi  = {
     }
 }
 
-const operationOne = operation(
+const operationOne: Operation<bigint, bigint, string> = operation(
     (input: bigint) => {
       let random = Math.floor(Math.random() * 10);
       if (random < 5) {
