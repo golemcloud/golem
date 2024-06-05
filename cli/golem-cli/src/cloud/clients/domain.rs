@@ -14,7 +14,7 @@
 
 use crate::cloud::model::ProjectId;
 use async_trait::async_trait;
-use golem_cloud_worker_client::model::{ApiDomain, DomainRequest};
+use golem_cloud_client::model::{ApiDomain, DomainRequest};
 
 use crate::model::GolemError;
 
@@ -31,12 +31,12 @@ pub trait DomainClient {
     async fn delete(&self, project_id: ProjectId, domain_name: &str) -> Result<String, GolemError>;
 }
 
-pub struct DomainClientLive<C: golem_cloud_worker_client::api::ApiDomainClient + Sync + Send> {
+pub struct DomainClientLive<C: golem_cloud_client::api::ApiDomainClient + Sync + Send> {
     pub client: C,
 }
 
 #[async_trait]
-impl<C: golem_cloud_worker_client::api::ApiDomainClient + Sync + Send> DomainClient
+impl<C: golem_cloud_client::api::ApiDomainClient + Sync + Send> DomainClient
     for DomainClientLive<C>
 {
     async fn get(&self, project_id: ProjectId) -> Result<Vec<ApiDomain>, GolemError> {

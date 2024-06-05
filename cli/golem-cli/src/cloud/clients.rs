@@ -13,9 +13,12 @@
 // limitations under the License.
 
 pub mod account;
+pub mod api_definition;
+pub mod api_deployment;
+pub mod certificate;
 pub mod component;
+pub mod domain;
 pub mod errors;
-pub mod gateway;
 pub mod grant;
 pub mod health_check;
 pub mod login;

@@ -18,13 +18,13 @@ use crate::clients::worker::WorkerClient;
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::model::ScanCursor;
-use golem_cloud_worker_client::model::{
+use golem_cloud_client::model::{
     CallingConvention, FilterComparator, InvokeParameters, InvokeResult, StringFilterComparator,
     WorkerAndFilter, WorkerCreatedAtFilter, WorkerCreationRequest, WorkerEnvFilter, WorkerFilter,
     WorkerNameFilter, WorkerNotFilter, WorkerOrFilter, WorkerStatus, WorkerStatusFilter,
     WorkerVersionFilter, WorkersMetadataRequest,
 };
-use golem_cloud_worker_client::Context;
+use golem_cloud_client::Context;
 use native_tls::TlsConnector;
 use serde::Deserialize;
 use tokio::{task, time};
@@ -39,7 +39,7 @@ use crate::model::{
 };
 
 #[derive(Clone)]
-pub struct WorkerClientLive<C: golem_cloud_worker_client::api::WorkerClient + Sync + Send> {
+pub struct WorkerClientLive<C: golem_cloud_client::api::WorkerClient + Sync + Send> {
     pub client: C,
     pub context: Context,
     pub allow_insecure: bool,
@@ -167,9 +167,7 @@ fn to_cloud_worker_filter(f: golem_client::model::WorkerFilter) -> WorkerFilter 
 }
 
 #[async_trait]
-impl<C: golem_cloud_worker_client::api::WorkerClient + Sync + Send> WorkerClient
-    for WorkerClientLive<C>
-{
+impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerClientLive<C> {
     async fn new_worker(
         &self,
         name: WorkerName,
@@ -527,10 +525,8 @@ impl<C: golem_cloud_worker_client::api::WorkerClient + Sync + Send> WorkerClient
     ) -> Result<(), GolemError> {
         info!("Updating worker {name} of {}", component_id.0);
         let update_mode = match mode {
-            WorkerUpdateMode::Automatic => {
-                golem_cloud_worker_client::model::WorkerUpdateMode::Automatic
-            }
-            WorkerUpdateMode::Manual => golem_cloud_worker_client::model::WorkerUpdateMode::Manual,
+            WorkerUpdateMode::Automatic => golem_cloud_client::model::WorkerUpdateMode::Automatic,
+            WorkerUpdateMode::Manual => golem_cloud_client::model::WorkerUpdateMode::Manual,
         };
 
         let _ = self
@@ -538,7 +534,7 @@ impl<C: golem_cloud_worker_client::api::WorkerClient + Sync + Send> WorkerClient
             .update_worker(
                 &component_id.0,
                 &name.0,
-                &golem_cloud_worker_client::model::UpdateWorkerRequest {
+                &golem_cloud_client::model::UpdateWorkerRequest {
                     mode: update_mode,
                     target_version,
                 },

@@ -20,7 +20,7 @@ use colored::Colorize;
 use golem_cloud_client::model::{
     Account, Project, ProjectGrant, ProjectPolicy, Token, UnsafeToken,
 };
-use golem_cloud_worker_client::model::{ApiDomain, Certificate};
+use golem_cloud_client::model::{ApiDomain, Certificate};
 use indoc::printdoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
