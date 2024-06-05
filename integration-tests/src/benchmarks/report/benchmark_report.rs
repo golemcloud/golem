@@ -1,9 +1,9 @@
+use clap::Parser;
+use golem_test_framework::dsl::benchmark::{BenchmarkResult, RunConfig};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use clap::{Args, Parser, Subcommand, ValueEnum};
-use golem_test_framework::dsl::benchmark::{BenchmarkResult, RunConfig};
-use plotters::prelude::*;
-use cli_params::{CliReportParams};
+
+use cli_params::CliReportParams;
 use internal::*;
 
 // The entry point to create reports from benchmarks
@@ -19,7 +19,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             let final_report = BenchmarkReport::from(args.files)?;
 
             println!("{}", serde_json::to_string(&final_report)?);
-
         }
     }
 
@@ -28,37 +27,41 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ComparisonForAllRunConfigs {
-    results: Vec<ComparisonPerRunConfig>
+    results: Vec<ComparisonPerRunConfig>,
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ComparisonPerRunConfig {
     run_config: RunConfig,
-    comparison: Comparison
+    comparison: Comparison,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct BenchmarkComparisonReport {
-    results: Vec<ComparisonReportPerBenchmarkType>
+    results: Vec<ComparisonReportPerBenchmarkType>,
 }
 
 impl BenchmarkComparisonReport {
-    pub fn from(input: Vec<(BenchmarkType, BenchmarkResultFiles)>) -> Result<BenchmarkComparisonReport, String> {
+    pub fn from(
+        input: Vec<(BenchmarkType, BenchmarkResultFiles)>,
+    ) -> Result<BenchmarkComparisonReport, String> {
         let mut comparison_results: Vec<ComparisonReportPerBenchmarkType> = vec![];
         for (benchmark_type, files) in input {
             let previous_bench_mark_results = load_json(files.previous_file.0.as_str())?;
             let current_bench_mark_results = load_json(files.current_file.0.as_str())?;
 
-            let report =
-                ComparisonReportPerBenchmarkType {
-                    benchmark_type: benchmark_type.clone(),
-                    comparison_results: ComparisonForAllRunConfigs::from_results(&previous_bench_mark_results, &current_bench_mark_results)
-                };
+            let report = ComparisonReportPerBenchmarkType {
+                benchmark_type: benchmark_type.clone(),
+                comparison_results: ComparisonForAllRunConfigs::from_results(
+                    &previous_bench_mark_results,
+                    &current_bench_mark_results,
+                ),
+            };
 
             comparison_results.push(report);
         }
 
         Ok(BenchmarkComparisonReport {
-            results: comparison_results
+            results: comparison_results,
         })
     }
 }
@@ -66,12 +69,12 @@ impl BenchmarkComparisonReport {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ComparisonReportPerBenchmarkType {
     benchmark_type: BenchmarkType,
-    comparison_results: ComparisonForAllRunConfigs
+    comparison_results: ComparisonForAllRunConfigs,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct BenchmarkReport {
-    results: Vec<BenchmarkReportPerBenchmarkType>
+    results: Vec<BenchmarkReportPerBenchmarkType>,
 }
 
 impl BenchmarkReport {
@@ -86,22 +89,22 @@ impl BenchmarkReport {
             for (run_config, avg_time) in run_config_to_avg_time {
                 report_results.push(BenchmarkReportPerRunConfig {
                     run_config,
-                    avg_time
+                    avg_time,
                 });
             }
 
             let report = BenchmarkReportPerBenchmarkType {
                 benchmark_type,
                 report: BenchmarkReportForAllRunConfigs {
-                    results: report_results
-                }
+                    results: report_results,
+                },
             };
 
             benchmark_results.push(report);
         }
 
         Ok(BenchmarkReport {
-            results: benchmark_results
+            results: benchmark_results,
         })
     }
 }
@@ -109,19 +112,18 @@ impl BenchmarkReport {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct BenchmarkReportPerBenchmarkType {
     benchmark_type: BenchmarkType,
-    report: BenchmarkReportForAllRunConfigs
-
+    report: BenchmarkReportForAllRunConfigs,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct BenchmarkReportForAllRunConfigs {
-    results: Vec<BenchmarkReportPerRunConfig>
+    results: Vec<BenchmarkReportPerRunConfig>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct BenchmarkReportPerRunConfig {
     run_config: RunConfig,
-    avg_time: u64
+    avg_time: u64,
 }
 
 impl ComparisonForAllRunConfigs {
@@ -135,17 +137,17 @@ impl ComparisonForAllRunConfigs {
             let current_avg_time = current_avg.get(&run_config).unwrap();
             let comparison = Comparison {
                 previous_avg: previous_avg_time,
-                current_avg: current_avg_time.clone()
+                current_avg: *current_avg_time,
             };
 
             comparison_results.push(ComparisonPerRunConfig {
                 run_config: run_config.clone(),
-                comparison
+                comparison,
             });
         }
 
         ComparisonForAllRunConfigs {
-            results: comparison_results
+            results: comparison_results,
         }
     }
 }
@@ -153,7 +155,7 @@ impl ComparisonForAllRunConfigs {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Comparison {
     previous_avg: u64,
-    current_avg: u64
+    current_avg: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -162,23 +164,24 @@ struct BenchmarkType(String);
 #[derive(Debug, Clone)]
 struct BenchmarkResultFiles {
     previous_file: BenchmarkFile,
-    current_file: BenchmarkFile
+    current_file: BenchmarkFile,
 }
 
 #[derive(Debug, Clone)]
 struct BenchmarkFile(String);
 
-
 mod internal {
+    use golem_test_framework::dsl::benchmark::{BenchmarkResult, RunConfig};
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
-    use golem_test_framework::dsl::benchmark::{BenchmarkResult, RunConfig};
 
     pub fn load_json(file_path: &str) -> Result<BenchmarkResult, String> {
-        let file = File::open(file_path).map_err(|err| format!("Failed to open file {}. {}", file_path, err))?;
+        let file = File::open(file_path)
+            .map_err(|err| format!("Failed to open file {}. {}", file_path, err))?;
         let reader = BufReader::new(file);
-        let data: BenchmarkResult = serde_json::from_reader(reader).map_err(|err| format!("Failed to read JSON from {}. {}", file_path, err))?;
+        let data: BenchmarkResult = serde_json::from_reader(reader)
+            .map_err(|err| format!("Failed to read JSON from {}. {}", file_path, err))?;
         Ok(data)
     }
 
@@ -187,9 +190,7 @@ mod internal {
 
         let mut run_config_to_avg_time = HashMap::new();
 
-
         for (run_config, benchmark_result) in &json.results {
-
             for duration in benchmark_result.duration_results.values() {
                 total_avg_secs += duration.avg.as_secs();
             }
@@ -200,21 +201,18 @@ mod internal {
 
         run_config_to_avg_time
     }
-
 }
 
 mod cli_params {
+    use crate::{BenchmarkFile, BenchmarkResultFiles, BenchmarkType};
     use clap::Parser;
-    use crate::{BenchmarkType, BenchmarkResultFiles, BenchmarkFile};
-
 
     #[derive(Parser)]
     #[command()]
     pub enum CliReportParams {
         CompareBenchmarks(BenchmarkComparisonReportArgs),
-        GetReport(BenchmarkReportArgs)
+        GetReport(BenchmarkReportArgs),
     }
-
 
     #[derive(Parser)]
     pub struct BenchmarkComparisonReportArgs {
@@ -228,16 +226,18 @@ mod cli_params {
         pub files: Vec<(BenchmarkType, BenchmarkFile)>,
     }
 
-
     pub fn parse_comparison_details(
         s: &str,
-    ) -> Result<(BenchmarkType, BenchmarkResultFiles), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    ) -> Result<
+        (BenchmarkType, BenchmarkResultFiles),
+        Box<dyn std::error::Error + Send + Sync + 'static>,
+    > {
         let pos = s
             .find('=')
             .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{}`", s))?;
         let (label, files_str) = s.split_at(pos);
         let files_str = &files_str[1..]; // skip the '='
-        let files: Vec<&str> = files_str.split(",").collect();
+        let files: Vec<&str> = files_str.split(',').collect();
 
         if files.len() != 2 {
             return Err(format!("Expected two files, found {}", files.len()).into());
@@ -248,19 +248,25 @@ mod cli_params {
                 if prev.is_empty() || curr.is_empty() {
                     Err("Empty file names".into())
                 } else {
-                    Ok((BenchmarkType(label.to_string()), BenchmarkResultFiles {
-                        previous_file: BenchmarkFile(prev.trim().to_string()),
-                        current_file: BenchmarkFile(curr.trim().to_string())
-                    }))
+                    Ok((
+                        BenchmarkType(label.to_string()),
+                        BenchmarkResultFiles {
+                            previous_file: BenchmarkFile(prev.trim().to_string()),
+                            current_file: BenchmarkFile(curr.trim().to_string()),
+                        },
+                    ))
                 }
             }
-            _ => return Err("Expected two files comma separated. Example: large_storage=file1,file2".into()),
+            _ => {
+                Err("Expected two files comma separated. Example: large_storage=file1,file2".into())
+            }
         }
     }
 
     pub fn parse_benchmark_file(
         s: &str,
-    ) -> Result<(BenchmarkType, BenchmarkFile), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    ) -> Result<(BenchmarkType, BenchmarkFile), Box<dyn std::error::Error + Send + Sync + 'static>>
+    {
         let pos = s
             .find('=')
             .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{}`", s))?;
@@ -268,10 +274,12 @@ mod cli_params {
         let files_str = &files_str[1..]; // skip the '='
 
         if files_str.is_empty() {
-            return Err("Empty file name".into());
+            Err("Empty file name".into())
         } else {
-            Ok((BenchmarkType(label.to_string()), BenchmarkFile(files_str.trim().to_string())))
+            Ok((
+                BenchmarkType(label.to_string()),
+                BenchmarkFile(files_str.trim().to_string()),
+            ))
         }
     }
-
 }

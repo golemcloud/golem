@@ -70,7 +70,7 @@ impl Benchmark for ColdStartEchoLarge {
                     get_worker_ids(context.worker_ids.len(), component_id, "warmup-worker"),
                     benchmark_context.deps.clone(),
                 )
-                    .await
+                .await
             }
         }
     }
