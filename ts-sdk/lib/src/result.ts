@@ -131,7 +131,7 @@ export namespace Result {
   }
 
   /**
-   * 
+   * Create a result from a function that may throw an error.
    */
   export function tryCatch<T>(f: () => T): Result<T, unknown> {
     try {
