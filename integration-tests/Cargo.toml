@@ -80,5 +80,5 @@ name = "benchmark_throughput"
 path = "src/benchmarks/throughput.rs"
 
 [[bin]]
-name = "compare_benchmark"
+name = "benchmark_report"
 path = "src/benchmarks/report/benchmark_report.rs"
