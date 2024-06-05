@@ -19,16 +19,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.get-branch.outputs.branch }}
+          submodules: recursive
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: benchmark-tests
+          cache-all-crates: true
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.3
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.29.0
+        with:
+          redis-version: latest
+          auto-start: false
       - name: Build Benchmark Report Job
         run: |
-          echo "Building benchmark report job"
-          cargo build --manifest-path=benchmark/Cargo.toml
+          echo "Building all targets including benchmark-report job"
+          cargo build
       - name: Run Benchmark
         run: |
           echo "Running all benchmark jobs and saving to files"
@@ -63,8 +79,8 @@ jobs:
           # Initialize arrays to store present and absent files
           present_files=()
           absent_files=()
-          compare_command="./benchmark/target/debug/benchmark_report compare-benchmarks"
-          get_report_command="./benchmark/target/debug/benchmark_report get-report"
+          compare_command="./target/debug/benchmark_report compare-benchmarks"
+          get_report_command="./target/debug/benchmark_report get-report"
           echo "Starting to pull the existing benchmark results if exists"
           
           if git fetch origin main:main && [[ ! "$COMMENT_BODY" =~ refresh ]]; then                              
