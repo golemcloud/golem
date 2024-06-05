@@ -17,4 +17,3 @@ pub mod api_deployment;
 pub mod certificate;
 pub mod domain;
 pub mod errors;
-pub mod health_check;
