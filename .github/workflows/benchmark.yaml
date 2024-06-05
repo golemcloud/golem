@@ -18,69 +18,114 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: debug
-          cache-all-crates: true
-          save-if: true
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v1
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build all targets
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make build
+      - name: Build Benchmark Report Job
+        run: |
+          echo "Building benchmark report job"
+          cargo build --manifest-path=benchmark/Cargo.toml
       - name: Run Benchmark
         run: |
-          ./target/debug/benchmark_cold_start_large --quiet --json spawned > benchmark_cold_start_large.json
-          echo "Benchmark finished"
-      - name: Run Benchmark
-        run: |
-          echo "Running Benchmark Job"
+          echo "Running all benchmark jobs and saving to files"
       - name: Post results as a comment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           WORKFLOW_ID: ${{ github.run_id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          if git show origin/github_pages:benchmark_cold_storage_large2.json > benchmark_cold_start_large_previous.json; then
-            echo "Workflow id is $WORKFLOW_ID";
-            echo "Running comparison"
-            ./target/debug/compare_benchmark --benchmark-previous benchmark_cold_start_large_previous.json --benchmark-current benchmark_cold_start_large.json > benchmark_cold_start_large.comparison.json
-            # Read the content of benchmark_cold_start_large.comparison.json into a variable
-            COMPARISON_JSON=$(<benchmark_cold_start_large.comparison.json)
-            WORKFLOW_ID=$WORKFLOW_ID
-            curl -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/afsalthaj/golem-timeline/issues/$ISSUE_NUMBER/comments \
-            -d "{\"body\":\"## Benchmark Results: \n ### Cold Storage Large \n ``` \n $COMPARISON_JSON \n ``` \n RunID: $WORKFLOW_ID \"}"
+          #! /bin/bash
+          
+          # Create a dummy benchmark result
+          mkdir -p ./benchmark-data-current
+          
+          # Replace these with original commands
+          cp temporary.json benchmark-data-current/benchmark_cold_storage_small.json
+          cp temporary.json benchmark-data-current/benchmark_cold_storage_medium.json
+          cp temporary.json benchmark-data-current/benchmark_cold_storage_large.json
+          cp temporary.json benchmark-data-current/unavailable.json
+          
+          echo "Finished Running Benchmark Jobs"
+          
+          # Define the files to check
+          files=("benchmark_cold_storage_large.json" "benchmark_cold_storage_small.json" "benchmark_cold_storage_medium.json" "unavailable.json")
+          
+          echo "Checking the following files if it already exists in a previous benchmark run"
+          for str in ${files[@]}; do
+            echo $str
+          done
+          # Initialize arrays to store present and absent files
+          present_files=()
+          absent_files=()
+          compare_command="./benchmark/target/debug/benchmark_report compare-benchmarks"
+          get_report_command="./benchmark/target/debug/benchmark_report get-report"
+          echo "Starting to pull the existing benchmark results if exists"
+          
+          if git fetch origin github_pages:github_pages && [[ ! "$COMMENT_BODY" =~ refresh ]]; then                              
+             # Check each file
+             for file in "${files[@]}"; do
+                if git checkout github_pages -- "benchmark-data/$file"; then
+                  present_files+=("$file")
+                  compare_command="$compare_command --files $file=$(pwd)/benchmark-data/$file,$(pwd)/benchmark-data-current/$file"
+                else
+                  absent_files+=("$file")
+                  get_report_command="$get_report_command --files $file=$(pwd)/benchmark-data-current/$file"
+                fi
+             done
           else
-            echo "Workflow id is $WORKFLOW_ID";
-            WORKFLOW_ID=$WORKFLOW_ID
-            curl -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/afsalthaj/golem-timeline/issues/$ISSUE_NUMBER/comments \
-            -d "{\"body\":\"### Cold Storage Large: \n PR Avg Runtime: 94ms, \n RunID: $WORKFLOW_ID \"}"
+            for file in "${files[@]}"; do
+                absent_files+=("$file")
+                get_report_command="$get_report_command --files $file=$(pwd)/benchmark-data-current/$file"
+             done
           fi
-      - name: Copy benchmark result
+          
+          echo $compare_command
+          echo $get_report_command
+          
+          # If there are present files, run the comparison
+            if [ ${#present_files[@]} -ne 0 ]; then
+               echo "Running comparison with command: $compare_command"
+               $compare_command > benchmark_comparison.md
+               COMPARISON_MD=$(<benchmark_comparison.md)
+               curl -L \
+               -X POST \
+               -H "Accept: application/vnd.github+json" \
+               -H "Authorization: Bearer $GITHUB_TOKEN" \
+               -H "X-GitHub-Api-Version: 2022-11-28" \
+               https://api.github.com/repos/afsalthaj/golem-timeline/issues/$ISSUE_NUMBER/comments \
+               -d "{\"body\":\"$COMPARISON_MD \n RunID: $WORKFLOW_ID \"}"
+            fi
+          
+          # Process absent files
+          if [ ${#absent_files[@]} -ne 0 ]; then
+               echo "Running report"
+               $get_report_command > report.md
+               echo "Successfully ran the report command"
+               REPORT_MD=$(<report.md)
+               echo "$REPORT_MD"
+               curl -L \
+               -X POST \
+               -H "Accept: application/vnd.github+json" \
+               -H "Authorization: Bearer $GITHUB_TOKEN" \
+               -H "X-GitHub-Api-Version: 2022-11-28" \
+               https://api.github.com/repos/afsalthaj/golem-timeline/issues/$ISSUE_NUMBER/comments \
+               -d "{\"body\":\"$REPORT_MD \n RunID: $WORKFLOW_ID \"}"
+          fi
+          
+          echo "Done processing files."
+
+      - name: "Move benchmark-data-current to benchmark-data"
+        run: |
+          # Removing the old benchmark data
+          rm -rf benchmark-data
+          # Moving the current benchmark data to benchmark-data
+          mv benchmark-data-current benchmark-data
+      - name: Commit and push benchmark results temporarily
+        uses: EndBug/add-and-commit@v9
         env:
           PR_NUMBER: ${{ github.event.issue.number }}
-        run: |
-          mkdir -p ./benchmark-data
-          cp benchmark_cold_start_large.json benchmark-data/benchmark_cold_start_large.json
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
         with:
-          name: benchmark_cold_storage_large1.json
-          path: benchmark-data/
+          branch: benchmark_result_tmp_${{github.event.issue.number}}
+          message: Add benchmark results
+          add: benchmark-data
+          new_branch: benchmark_result_tmp_${{github.event.issue.number}}
+          push: origin benchmark_result_tmp_${{github.event.issue.number}} --force
+
