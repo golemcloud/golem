@@ -1,0 +1,166 @@
+name: On Demand Benchmark
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  run-benchmark:
+    if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, '/run-benchmark') }}
+    permissions: write-all
+    runs-on: ubuntu-latest
+    steps:
+      # https://github.com/actions/checkout/issues/331#issuecomment-1567674767
+      - id: 'get-branch'
+        run: echo ::set-output name=branch::$(gh pr view $PR_NO --repo $REPO --json headRefName --jq '.headRefName')
+        env:
+          REPO: ${{ github.repository }}
+          PR_NO: ${{ github.event.issue.number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: benchmark-tests
+          cache-all-crates: true
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.3
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.29.0
+        with:
+          redis-version: latest
+          auto-start: false
+      - name: Build Benchmark Report Job
+        run: |
+          echo "Building all targets including benchmark-report job"
+          cargo build
+      - name: Run Benchmark
+        run: |
+          echo "Running all benchmark jobs and saving to files"
+      - name: Run benchmark and report
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          WORKFLOW_ID: ${{ github.run_id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          #! /bin/bash
+          
+          # Create a dummy benchmark result
+          mkdir -p ./benchmark-data-current
+          
+          ./target/debug/benchmark_cold_start_large --quiet --json spawned > benchmark-data-current/benchmark_cold_start_large.json
+          ./target/debug/benchmark_cold_start_medium --quiet --json spawned > benchmark-data-current/benchmark_cold_start_medium.json
+          ./target/debug/benchmark_cold_start_small --quiet --json spawned > benchmark-data-current/benchmark_cold_start_small.json
+          ./target/debug/benchmark_cold_start_large spawned --component-compilation-disabled --quiet --json > benchmark-data-current/benchmark_cold_start_large_no_compilation.json
+          ./target/debug/benchmark_cold_start_medium spawned --component-compilation-disabled --quiet --json > benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
+          ./target/debug/benchmark_cold_start_small spawned --component-compilation-disabled --quiet --json > benchmark-data-current/benchmark_cold_start_small_no_compilation.json
+          ./target/debug/benchmark_durability_overhead --quiet --json spawned > benchmark-data-current/benchmark_durability_overhead.json
+          ./target/debug/benchmark_latency_large --quiet --json spawned > benchmark-data-current/benchmark_latency_large.json
+          ./target/debug/benchmark_latency_medium --quiet --json spawned > benchmark-data-current/benchmark_latency_medium.json
+          ./target/debug/benchmark_latency_small --quiet --json spawned > benchmark-data-current/benchmark_latency_small.json
+          ./target/debug/benchmark_suspend_worker --quiet --json spawned > benchmark-data-current/benchmark_suspend_worker.json
+          ./target/debug/benchmark_throughput --quiet --json spawned > benchmark-data-current/benchmark_throughput.json
+          
+                
+          echo "Finished Running Benchmark Jobs"
+          
+          files=$(ls benchmark-data-current)
+          
+          echo "Checking the following files if it already exists in a previous benchmark run"
+          for str in ${files[@]}; do
+            echo $str
+          done
+          # Initialize arrays to store present and absent files
+          present_files=()
+          absent_files=()
+          compare_command="./target/debug/benchmark_report compare-benchmarks"
+          get_report_command="./target/debug/benchmark_report get-report"
+          echo "Starting to pull the existing benchmark results if exists"
+          
+          if git fetch origin main:main && [[ ! "$COMMENT_BODY" =~ refresh ]]; then                              
+             # Check each file
+             for file in "${files[@]}"; do
+                if git checkout master -- "benchmark-data/$file"; then
+                  present_files+=("$file")
+                  compare_command="$compare_command --files $file=$(pwd)/benchmark-data/$file,$(pwd)/benchmark-data-current/$file"
+                else
+                  absent_files+=("$file")
+                  get_report_command="$get_report_command --files $file=$(pwd)/benchmark-data-current/$file"
+                fi
+             done
+          else
+            for file in "${files[@]}"; do
+                absent_files+=("$file")
+                get_report_command="$get_report_command --files $file=$(pwd)/benchmark-data-current/$file"
+             done
+          fi
+          
+          echo $compare_command
+          echo $get_report_command
+          
+          # If there are present files, run the comparison
+            if [ ${#present_files[@]} -ne 0 ]; then
+               echo "Running comparison with command: $compare_command"
+               $compare_command > benchmark_comparison.md
+               COMPARISON_MD=$(<benchmark_comparison.md)
+               curl -L \
+               -X POST \
+               -H "Accept: application/vnd.github+json" \
+               -H "Authorization: Bearer $GITHUB_TOKEN" \
+               -H "X-GitHub-Api-Version: 2022-11-28" \
+               https://api.github.com/repos/golemcloud/golem/issues/$ISSUE_NUMBER/comments \
+               -d "{\"body\":\"$COMPARISON_MD \n RunID: $WORKFLOW_ID \"}"
+            fi
+          
+          # Process absent files
+          if [ ${#absent_files[@]} -ne 0 ]; then
+               echo "Running report"
+               $get_report_command > report.md
+               echo "Successfully ran the report command"
+               REPORT_MD=$(<report.md)
+               echo "$REPORT_MD"
+               curl -L \
+               -X POST \
+               -H "Accept: application/vnd.github+json" \
+               -H "Authorization: Bearer $GITHUB_TOKEN" \
+               -H "X-GitHub-Api-Version: 2022-11-28" \
+               https://api.github.com/repos/golemcloud/golem/issues/$ISSUE_NUMBER/comments \
+               -d "{\"body\":\"$REPORT_MD \n RunID: $WORKFLOW_ID \"}"
+          fi
+          
+          echo "Done processing files."
+
+      - name: "Move benchmark-data-current to benchmark-data"
+        run: |
+          # Removing the old benchmark data
+          rm -rf benchmark-data
+          rm -rf benchmark_comparison.md
+          rm -rf report.md
+          # Moving the current benchmark data to benchmark-data
+          mv benchmark-data-current benchmark-data
+      - name: Commit and push benchmark results (not report) back to PR branch
+        run: |
+          git branch -a
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git pull 
+          git add benchmark-data
+          git commit -m "Adding benchmarking data"
+          if git push; then
+            echo "Successfully pushed the benchmark data"
+          else
+            echo "Benchmark data hasn't been pushed probably due to zero changes"
+          fi
+

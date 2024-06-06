@@ -44,7 +44,7 @@ impl SpawnedComponentService {
         out_level: Level,
         err_level: Level,
     ) -> Self {
-        println!("Starting golem-component-service process");
+        info!("Starting golem-component-service process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled golem-component-service at {executable:?}");

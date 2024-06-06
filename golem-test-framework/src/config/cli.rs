@@ -98,6 +98,8 @@ pub struct CliParams {
     pub quiet: bool,
     #[arg(long, default_value = "false")]
     pub verbose: bool,
+    #[arg(long, default_value = "false")]
+    pub json: bool,
 }
 
 impl CliParams {

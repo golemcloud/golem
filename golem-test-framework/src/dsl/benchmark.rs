@@ -19,7 +19,7 @@ use cli_table::format::{Border, Separator};
 use cli_table::{format::Justify, Cell, CellStruct, Style, Table};
 use colored::Colorize;
 use itertools::Itertools;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -53,7 +53,7 @@ pub struct BenchmarkConfig {
     pub length: Vec<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub struct RunConfig {
     pub cluster_size: usize,
     pub size: usize,
@@ -62,7 +62,7 @@ pub struct RunConfig {
 
 pub type ResultKey = String;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DurationResult {
     pub avg: Duration,
     pub min: Duration,
@@ -105,7 +105,7 @@ impl Default for DurationResult {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CountResult {
     pub avg: u64,
     pub min: u64,
@@ -363,10 +363,10 @@ impl Display for BenchmarkResultView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkResult {
-    runs: Vec<RunConfig>,
-    results: Vec<(RunConfig, BenchmarkRunResult)>,
+    pub runs: Vec<RunConfig>,
+    pub results: Vec<(RunConfig, BenchmarkRunResult)>,
 }
 
 impl BenchmarkResult {
@@ -415,10 +415,10 @@ impl BenchmarkResult {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkRunResult {
-    duration_results: HashMap<ResultKey, DurationResult>,
-    count_results: HashMap<ResultKey, CountResult>,
+    pub duration_results: HashMap<ResultKey, DurationResult>,
+    pub count_results: HashMap<ResultKey, CountResult>,
 }
 
 impl Default for BenchmarkRunResult {

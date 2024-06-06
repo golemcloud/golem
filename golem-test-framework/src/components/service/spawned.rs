@@ -40,7 +40,7 @@ impl SpawnedService {
         out_level: Level,
         err_level: Level,
     ) -> Self {
-        println!("Starting {name} process");
+        info!("Starting {name} process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled {name} at {executable:?}");
