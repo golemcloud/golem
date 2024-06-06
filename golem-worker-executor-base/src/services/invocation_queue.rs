@@ -16,7 +16,6 @@ use anyhow::anyhow;
 use golem_wasm_rpc::Value;
 use std::collections::{HashMap, VecDeque};
 use std::ops::DerefMut;
-use std::sync::Weak;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
@@ -278,7 +277,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
             *running = Some(RunningInvocationQueue::new(
                 this.owned_worker_id.clone(),
                 this.queue.clone(),
-                Arc::downgrade(&this),
+                this.clone(),
                 this.oplog(),
                 this.execution_status.clone(),
                 instance,
@@ -681,7 +680,7 @@ impl RunningInvocationQueue {
     pub fn new<Ctx: WorkerCtx>(
         owned_worker_id: OwnedWorkerId,
         queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
-        parent: Weak<InvocationQueue<Ctx>>,
+        parent: Arc<InvocationQueue<Ctx>>,
         oplog: Arc<dyn Oplog + Send + Sync>,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         instance: wasmtime::component::Instance,
@@ -762,7 +761,7 @@ impl RunningInvocationQueue {
         mut receiver: UnboundedReceiver<()>,
         active: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
         owned_worker_id: OwnedWorkerId,
-        parent: Weak<InvocationQueue<Ctx>>,
+        parent: Arc<InvocationQueue<Ctx>>, // parent must not be dropped until the invocation_loop is running
         instance: wasmtime::component::Instance,
         store: async_mutex::Mutex<Store<Ctx>>,
     ) {
@@ -777,9 +776,7 @@ impl RunningInvocationQueue {
                 Ok(decision) => decision,
                 Err(err) => {
                     warn!("Failed to start the worker: {err}");
-                    if let Some(parent) = parent.upgrade() {
-                        parent.stop().await;
-                    }
+                    parent.stop().await;
                     store.data_mut().set_suspended();
                     return; // early return, we can't retry this
                 }
@@ -917,43 +914,39 @@ impl RunningInvocationQueue {
 
                             match result {
                                 Ok(InvokeResult::Succeeded { output, .. }) =>
-                                    if let Some(parent) = parent.upgrade() {
-                                        if let Some(bytes) = Self::decode_snapshot_result(output) {
-                                            match store
-                                                .data_mut()
-                                                .get_public_state()
-                                                .oplog()
-                                                .create_snapshot_based_update_description(
-                                                    target_version,
-                                                    &bytes,
-                                                )
-                                                .await
-                                            {
-                                                Ok(update_description) => {
-                                                    // Enqueue the update
-                                                    parent.enqueue_update(update_description).await;
+                                    if let Some(bytes) = Self::decode_snapshot_result(output) {
+                                        match store
+                                            .data_mut()
+                                            .get_public_state()
+                                            .oplog()
+                                            .create_snapshot_based_update_description(
+                                                target_version,
+                                                &bytes,
+                                            )
+                                            .await
+                                        {
+                                            Ok(update_description) => {
+                                                // Enqueue the update
+                                                parent.enqueue_update(update_description).await;
 
-                                                    // Make sure to update the pending updates queue
-                                                    store.data_mut().update_pending_updates().await;
+                                                // Make sure to update the pending updates queue
+                                                store.data_mut().update_pending_updates().await;
 
-                                                    // Reactivate the worker
-                                                    final_decision = RecoveryDecision::Immediate;
+                                                // Reactivate the worker
+                                                final_decision = RecoveryDecision::Immediate;
 
-                                                    // Stop processing the queue to avoid race conditions
-                                                    true
-                                                }
-                                                Err(error) => {
-                                                    Self::fail_update(target_version, format!("failed to store the snapshot for manual update: {error}"), store).await;
-                                                    false
-                                                }
+                                                // Stop processing the queue to avoid race conditions
+                                                true
                                             }
-                                        } else {
-                                            Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store).await;
-                                            false
+                                            Err(error) => {
+                                                Self::fail_update(target_version, format!("failed to store the snapshot for manual update: {error}"), store).await;
+                                                false
+                                            }
                                         }
                                     } else {
-                                        panic!("Parent invocation queue was unexpectedly dropped")
-                                    }
+                                        Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store).await;
+                                        false
+                                    },
                                 Ok(InvokeResult::Failed { error, .. }) => {
                                     Self::fail_update(
                                         target_version,
@@ -1003,24 +996,18 @@ impl RunningInvocationQueue {
 
         match final_decision {
             RecoveryDecision::Immediate => {
-                if let Some(parent) = parent.upgrade() {
-                    debug!("Invocation queue loop triggering restart immediately");
-                    let _ = InvocationQueue::restart(parent).await; // TODO: what to do with error here?
-                }
+                debug!("Invocation queue loop triggering restart immediately");
+                let _ = InvocationQueue::restart(parent).await; // TODO: what to do with error here?
             }
             RecoveryDecision::Delayed(delay) => {
                 debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
                 tokio::time::sleep(delay).await;
-                if let Some(parent) = parent.upgrade() {
-                    debug!("Invocation queue loop triggering restart after delay");
-                    let _ = InvocationQueue::restart(parent).await; // TODO: what to do with error here?
-                }
+                debug!("Invocation queue loop triggering restart after delay");
+                let _ = InvocationQueue::restart(parent).await; // TODO: what to do with error here?
             }
             RecoveryDecision::None => {
-                if let Some(parent) = parent.upgrade() {
-                    debug!("Invocation queue loop notifying parent about being stopped");
-                    parent.stop().await;
-                }
+                debug!("Invocation queue loop notifying parent about being stopped");
+                parent.stop().await;
             }
         }
     }

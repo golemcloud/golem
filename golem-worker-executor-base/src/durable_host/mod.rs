@@ -319,6 +319,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn store_worker_status(&self, status: WorkerStatus) {
+        debug!("store_worker_status {status:?}");
+
         self.update_worker_status(|s| s.status = status.clone())
             .await;
         if status == WorkerStatus::Idle

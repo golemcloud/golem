@@ -340,22 +340,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
 
         let should_interrupt = match &worker_status.status {
-            WorkerStatus::Running | WorkerStatus::Suspended | WorkerStatus::Retrying => true,
-            WorkerStatus::Exited
-            | WorkerStatus::Failed
-            | WorkerStatus::Idle
-            | WorkerStatus::Interrupted => false,
+            WorkerStatus::Idle
+            | WorkerStatus::Running
+            | WorkerStatus::Suspended
+            | WorkerStatus::Retrying => true,
+            WorkerStatus::Exited | WorkerStatus::Failed | WorkerStatus::Interrupted => false,
         };
 
         if should_interrupt {
             let worker = worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
-            InvocationQueue::start_if_needed(worker.clone()).await?; // TODO: no need to start?
 
             if let Some(mut await_interrupted) =
                 worker.set_interrupting(InterruptKind::Interrupt).await
             {
                 await_interrupted.recv().await.unwrap();
             }
+
+            worker.stop().await;
+        } else {
+            debug!(
+                "Not interrupting because it's status is {:?}",
+                worker_status.status
+            );
         }
 
         Ctx::on_worker_deleted(self, &worker_id).await?;
@@ -428,7 +434,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             WorkerStatus::Running => {
                 let worker =
                     worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
-                InvocationQueue::start_if_needed(worker.clone()).await?; // TODO: no need to start?
 
                 worker
                     .set_interrupting(if request.recover_immediately {
@@ -438,6 +443,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     })
                     .await;
 
+                worker.stop().await;
                 // Explicitly drop from the active worker cache - this will drop websocket connections etc.
                 self.active_workers().remove(&worker_id);
             }
@@ -561,7 +567,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let calling_convention = request.calling_convention();
 
-        let worker = self.get_or_create_pending(request).await?;
+        let worker = self.get_or_create(request).await?;
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
