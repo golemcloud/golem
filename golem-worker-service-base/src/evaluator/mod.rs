@@ -506,14 +506,13 @@ mod internal {
             "No variables found in the context".to_string(),
         ))?;
 
-        let analysed_function = runtime
-            .analysed_functions
-            .iter()
-            .find(|f| f.name == *function_name)
-            .ok_or(EvaluationError::Message(format!(
-                "The function {} is not found at Runtime",
-                function_name
-            )))?;
+        let analysed_function =
+            runtime
+                .find_function(function_name)
+                .ok_or(EvaluationError::Message(format!(
+                    "The function {} is not found at Runtime",
+                    function_name
+                )))?;
 
         let worker_variables = variables.get(&Path::from_key("worker")).map_err(|_| {
             EvaluationError::Message("No worker variables found in the context".to_string())
@@ -555,7 +554,7 @@ mod internal {
         let worker_request = WorkerRequest {
             component_id,
             worker_name,
-            function_name: analysed_function.name.clone(),
+            function_name: analysed_function.fqn,
             function_params: json_params,
             idempotency_key,
         };

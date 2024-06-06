@@ -84,7 +84,7 @@ mod internal {
             .invoke_and_await_function_typed_value(
                 &worker_id,
                 worker_request_params.idempotency_key,
-                worker_request_params.function_name,
+                worker_request_params.function_name.to_string(),
                 Value::Array(invoke_parameters_values),
                 &CallingConvention::Component,
                 empty_worker_metadata(),

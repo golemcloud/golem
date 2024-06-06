@@ -1865,18 +1865,27 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
 components:
   schemas:
-    ApiDeployment:
+    ApiDefinitionInfo:
       type: object
       properties:
-        apiDefinitionId:
+        id:
           type: string
         version:
           type: string
+      required:
+      - id
+      - version
+    ApiDeployment:
+      type: object
+      properties:
+        apiDefinitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiDefinitionInfo'
         site:
           $ref: '#/components/schemas/ApiSite'
       required:
-      - apiDefinitionId
-      - version
+      - apiDefinitions
       - site
     ApiSite:
       type: object

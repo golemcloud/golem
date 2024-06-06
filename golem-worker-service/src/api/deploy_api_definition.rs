@@ -12,7 +12,7 @@ use tracing::log::info;
 
 use golem_worker_service_base::api::ApiDeployment;
 use golem_worker_service_base::api_definition;
-use golem_worker_service_base::service::api_definition::ApiDefinitionKey;
+use golem_worker_service_base::service::api_definition::ApiDefinitionIdWithVersion;
 use golem_worker_service_base::service::api_deployment::ApiDeploymentService;
 
 pub struct ApiDeploymentApi {
@@ -32,17 +32,20 @@ impl ApiDeploymentApi {
         &self,
         payload: Json<ApiDeployment>,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
-        info!(
-            "Deploy API definition - id: {}, version: {}, site: {}",
-            payload.api_definition_id, payload.version, payload.site
-        );
+        let api_definition_infos = payload
+            .api_definitions
+            .iter()
+            .map(|k| ApiDefinitionIdWithVersion {
+                id: k.id.clone(),
+                version: k.version.clone(),
+            })
+            .collect::<Vec<ApiDefinitionIdWithVersion>>();
+
+        info!("Deploy API definitions at site: {}", payload.site);
 
         let api_deployment = api_definition::ApiDeployment {
-            api_definition_id: ApiDefinitionKey {
-                namespace: CommonNamespace::default(),
-                id: payload.api_definition_id.clone(),
-                version: payload.version.clone(),
-            },
+            namespace: CommonNamespace::default(),
+            api_definition_keys: api_definition_infos,
             site: payload.site.clone(),
         };
 

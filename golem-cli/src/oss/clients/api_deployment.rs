@@ -16,10 +16,10 @@ use async_trait::async_trait;
 use itertools::Itertools;
 
 use crate::clients::api_deployment::ApiDeploymentClient;
-use golem_client::model::ApiSite;
+use golem_client::model::{ApiDefinitionInfo, ApiSite};
 use tracing::info;
 
-use crate::model::{ApiDefinitionId, ApiDefinitionVersion, ApiDeployment, GolemError};
+use crate::model::{ApiDefinitionId, ApiDefinitionIdWithVersion, ApiDeployment, GolemError};
 use crate::oss::model::OssContext;
 
 #[derive(Clone)]
@@ -35,22 +35,28 @@ impl<C: golem_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClien
 
     async fn deploy(
         &self,
-        api_definition_id: &ApiDefinitionId,
-        version: &ApiDefinitionVersion,
+        definitions: Vec<ApiDefinitionIdWithVersion>,
         host: &str,
         subdomain: Option<String>,
         _project: &Self::ProjectContext,
     ) -> Result<ApiDeployment, GolemError> {
         info!(
-            "Deploying definition {api_definition_id}/{version}, host {host} {}",
+            "Deploying definitions to host {host} {}",
             subdomain
                 .clone()
                 .map_or("".to_string(), |s| format!("subdomain {}", s))
         );
 
+        let api_definition_infos = definitions
+            .iter()
+            .map(|d| ApiDefinitionInfo {
+                id: d.id.0.clone(),
+                version: d.version.0.clone(),
+            })
+            .collect::<Vec<_>>();
+
         let deployment = golem_client::model::ApiDeployment {
-            api_definition_id: api_definition_id.0.to_string(),
-            version: version.0.to_string(),
+            api_definitions: api_definition_infos,
             site: ApiSite {
                 host: host.to_string(),
                 subdomain,
