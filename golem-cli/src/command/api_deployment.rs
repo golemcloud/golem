@@ -12,17 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::clients::api_deployment::ApiDeploymentClient;
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
-use async_trait::async_trait;
+use crate::service::api_deployment::ApiDeploymentService;
+use crate::service::project::ProjectResolver;
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 #[command()]
-pub enum ApiDeploymentSubcommand {
+pub enum ApiDeploymentSubcommand<ProjectRef: clap::Args> {
     /// Create or update deployment
     #[command()]
     Deploy {
+        /// The newly created component's owner project
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
         /// Api definition id
         #[arg(short, long)]
         id: ApiDefinitionId,
@@ -49,6 +53,10 @@ pub enum ApiDeploymentSubcommand {
     /// List api deployment for api definition
     #[command()]
     List {
+        /// The newly created component's owner project
+        #[command(flatten)]
+        project_ref: ProjectRef,
+
         /// Api definition id
         #[arg(short, long)]
         id: ApiDefinitionId,
@@ -63,44 +71,31 @@ pub enum ApiDeploymentSubcommand {
     },
 }
 
-#[async_trait]
-pub trait ApiDeploymentHandler {
-    async fn handle(&self, subcommand: ApiDeploymentSubcommand) -> Result<GolemResult, GolemError>;
-}
-
-pub struct ApiDeploymentHandlerLive<C: ApiDeploymentClient + Send + Sync> {
-    pub client: C,
-}
-
-#[async_trait]
-impl<C: ApiDeploymentClient + Send + Sync> ApiDeploymentHandler for ApiDeploymentHandlerLive<C> {
-    async fn handle(&self, subcommand: ApiDeploymentSubcommand) -> Result<GolemResult, GolemError> {
-        match subcommand {
+impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDeploymentSubcommand<ProjectRef> {
+    pub async fn handle<ProjectContext>(
+        self,
+        service: &(dyn ApiDeploymentService<ProjectContext = ProjectContext> + Send + Sync),
+        projects: &(dyn ProjectResolver<ProjectRef, ProjectContext> + Send + Sync),
+    ) -> Result<GolemResult, GolemError> {
+        match self {
             ApiDeploymentSubcommand::Deploy {
+                project_ref,
                 id,
                 version,
                 host,
                 subdomain,
             } => {
-                let deployment = self.client.deploy(&id, &version, &host, subdomain).await?;
-
-                Ok(GolemResult::Ok(Box::new(deployment)))
+                let project_id = projects.resolve_id_or_default(project_ref).await?;
+                service
+                    .deploy(id, version, host, subdomain, &project_id)
+                    .await
             }
-            ApiDeploymentSubcommand::Get { site } => {
-                let deployment = self.client.get(&site).await?;
-
-                Ok(GolemResult::Ok(Box::new(deployment)))
+            ApiDeploymentSubcommand::Get { site } => service.get(site).await,
+            ApiDeploymentSubcommand::List { project_ref, id } => {
+                let project_id = projects.resolve_id_or_default(project_ref).await?;
+                service.list(id, &project_id).await
             }
-            ApiDeploymentSubcommand::List { id } => {
-                let deployments = self.client.list(&id).await?;
-
-                Ok(GolemResult::Ok(Box::new(deployments)))
-            }
-            ApiDeploymentSubcommand::Delete { site } => {
-                let res = self.client.delete(&site).await?;
-
-                Ok(GolemResult::Str(res))
-            }
+            ApiDeploymentSubcommand::Delete { site } => service.delete(site).await,
         }
     }
 }

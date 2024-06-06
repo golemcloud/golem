@@ -12,83 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::{ApiDefinitionId, ApiDefinitionVersion, ApiDeployment, GolemError};
 use async_trait::async_trait;
-
-use golem_client::model::{ApiDeployment, ApiSite};
-use tracing::info;
-
-use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError};
 
 #[async_trait]
 pub trait ApiDeploymentClient {
+    type ProjectContext;
+
     async fn deploy(
         &self,
         api_definition_id: &ApiDefinitionId,
         version: &ApiDefinitionVersion,
         host: &str,
         subdomain: Option<String>,
+        project: &Self::ProjectContext,
     ) -> Result<ApiDeployment, GolemError>;
     async fn list(
         &self,
         api_definition_id: &ApiDefinitionId,
+        project: &Self::ProjectContext,
     ) -> Result<Vec<ApiDeployment>, GolemError>;
     async fn get(&self, site: &str) -> Result<ApiDeployment, GolemError>;
     async fn delete(&self, site: &str) -> Result<String, GolemError>;
-}
-
-#[derive(Clone)]
-pub struct ApiDeploymentClientLive<C: golem_client::api::ApiDeploymentClient + Sync + Send> {
-    pub client: C,
-}
-
-#[async_trait]
-impl<C: golem_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClient
-    for ApiDeploymentClientLive<C>
-{
-    async fn deploy(
-        &self,
-        api_definition_id: &ApiDefinitionId,
-        version: &ApiDefinitionVersion,
-        host: &str,
-        subdomain: Option<String>,
-    ) -> Result<ApiDeployment, GolemError> {
-        info!(
-            "Deploying definition {api_definition_id}/{version}, host {host} {}",
-            subdomain
-                .clone()
-                .map_or("".to_string(), |s| format!("subdomain {}", s))
-        );
-
-        let deployment = ApiDeployment {
-            api_definition_id: api_definition_id.0.to_string(),
-            version: version.0.to_string(),
-            site: ApiSite {
-                host: host.to_string(),
-                subdomain,
-            },
-        };
-
-        Ok(self.client.deploy(&deployment).await?)
-    }
-
-    async fn list(
-        &self,
-        api_definition_id: &ApiDefinitionId,
-    ) -> Result<Vec<ApiDeployment>, GolemError> {
-        info!("List api deployments with definition {api_definition_id}");
-
-        Ok(self.client.list_deployments(&api_definition_id.0).await?)
-    }
-
-    async fn get(&self, site: &str) -> Result<ApiDeployment, GolemError> {
-        info!("Getting api deployment for site {site}");
-
-        Ok(self.client.get_deployment(site).await?)
-    }
-
-    async fn delete(&self, site: &str) -> Result<String, GolemError> {
-        info!("Deleting api deployment for site {site}");
-
-        Ok(self.client.delete_deployment(site).await?)
-    }
 }
