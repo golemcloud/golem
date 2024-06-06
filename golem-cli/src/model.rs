@@ -321,7 +321,6 @@ impl FromStr for ApiDefinitionIdWithVersion {
 
         Ok(ApiDefinitionIdWithVersion { id, version })
     }
-
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
@@ -660,4 +659,3 @@ impl From<golem_cloud_client::model::ApiDeployment> for ApiDeployment {
         }
     }
 }
-

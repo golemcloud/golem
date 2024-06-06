@@ -47,11 +47,13 @@ impl<C: golem_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymentClien
                 .map_or("".to_string(), |s| format!("subdomain {}", s))
         );
 
-      let api_definition_infos =
-          definitions.iter().map(|d| ApiDefinitionInfo {
-              id: d.id.0.clone(),
-              version: d.version.0.clone(),
-          }).collect::<Vec<_>>();
+        let api_definition_infos = definitions
+            .iter()
+            .map(|d| ApiDefinitionInfo {
+                id: d.id.0.clone(),
+                version: d.version.0.clone(),
+            })
+            .collect::<Vec<_>>();
 
         let deployment = golem_client::model::ApiDeployment {
             api_definitions: api_definition_infos,

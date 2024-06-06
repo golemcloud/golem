@@ -48,7 +48,10 @@ impl<C: golem_cloud_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymen
         );
 
         if api_definitions.len() > 1 {
-            Err(GolemError("Multiple API definitions in a deployment is not supported in Golem Cloud yet".to_string()))
+            Err(GolemError(
+                "Multiple API definitions in a deployment is not supported in Golem Cloud yet"
+                    .to_string(),
+            ))
         } else {
             let api_definition_id = api_definitions[0].id.0.clone();
             let version = api_definitions[0].version.0.clone();
