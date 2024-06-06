@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ApiDefinitionId, ApiDefinitionVersion, ApiDeployment, GolemError};
+use crate::model::{ApiDefinitionId, ApiDefinitionIdWithVersion, ApiDeployment, GolemError};
 use async_trait::async_trait;
 
 #[async_trait]
@@ -21,8 +21,7 @@ pub trait ApiDeploymentClient {
 
     async fn deploy(
         &self,
-        api_definition_id: &ApiDefinitionId,
-        version: &ApiDefinitionVersion,
+        api_definitions: Vec<ApiDefinitionIdWithVersion>,
         host: &str,
         subdomain: Option<String>,
         project: &Self::ProjectContext,
