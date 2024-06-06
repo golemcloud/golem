@@ -24,12 +24,12 @@ use crate::cloud::model::{
 use crate::command::api_definition::ApiDefinitionSubcommand;
 use crate::command::api_deployment::ApiDeploymentSubcommand;
 use crate::command::component::ComponentSubCommand;
+use crate::command::profile::ProfileSubCommand;
 use crate::command::worker::WorkerSubcommand;
 use crate::model::Format;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
-use std::path::PathBuf;
 use uuid::Uuid;
 
 pub mod account;
@@ -176,22 +176,30 @@ pub enum CloudCommand {
         #[command(subcommand)]
         subcommand: DomainSubcommand,
     },
+
+    /// Manage profiles
+    #[command()]
+    Profile {
+        #[command(subcommand)]
+        subcommand: ProfileSubCommand,
+    },
+
+    /// Interactively creates default profile
+    #[command()]
+    Init {},
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None, rename_all = "kebab-case")]
+#[command(author, version, about = "Command line interface for Golem Cloud.", long_about = None, rename_all = "kebab-case")]
 pub struct GolemCloudCommand {
-    #[arg(short = 'D', long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
-    pub config_directory: Option<PathBuf>,
-
     #[arg(short = 'T', long)]
     pub auth_token: Option<Uuid>,
 
     #[command(flatten)]
     pub verbosity: Verbosity,
 
-    #[arg(short = 'F', long, default_value = "text")]
-    pub format: Format,
+    #[arg(short = 'F', long)]
+    pub format: Option<Format>,
 
     #[command(subcommand)]
     pub command: CloudCommand,
