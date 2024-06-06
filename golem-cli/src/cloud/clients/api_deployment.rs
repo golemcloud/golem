@@ -20,7 +20,7 @@ use golem_cloud_client::model::ApiSite;
 use itertools::Itertools;
 use tracing::info;
 
-use crate::model::{ApiDefinitionId, ApiDefinitionVersion, ApiDeployment, GolemError};
+use crate::model::{ApiDefinitionId, ApiDefinitionIdWithVersion, ApiDeployment, GolemError};
 
 #[derive(Clone)]
 pub struct ApiDeploymentClientLive<C: golem_cloud_client::api::ApiDeploymentClient + Sync + Send> {
@@ -35,30 +35,38 @@ impl<C: golem_cloud_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymen
 
     async fn deploy(
         &self,
-        api_definition_id: &ApiDefinitionId,
-        version: &ApiDefinitionVersion,
+        api_definitions: Vec<ApiDefinitionIdWithVersion>,
         host: &str,
         subdomain: Option<String>,
         project: &Self::ProjectContext,
     ) -> Result<ApiDeployment, GolemError> {
         info!(
-            "Deploying definition {api_definition_id}/{version}, host {host} {}",
+            "Deploying definitions to host {host} {}",
             subdomain
                 .clone()
                 .map_or("".to_string(), |s| format!("subdomain {}", s))
         );
 
-        let deployment = golem_cloud_client::model::ApiDeployment {
-            api_definition_id: api_definition_id.0.to_string(),
-            version: version.0.to_string(),
-            project_id: project.0,
-            site: ApiSite {
-                host: host.to_string(),
-                subdomain: subdomain.expect("Subdomain is mandatory"), // TODO: unify OSS and cloud
-            },
-        };
+        if api_definitions.len() > 1 {
+            Err(GolemError(
+                "Multiple API definitions in a deployment is not supported in Golem Cloud yet"
+                    .to_string(),
+            ))
+        } else {
+            let api_definition_id = api_definitions[0].id.0.clone();
+            let version = api_definitions[0].version.0.clone();
+            let deployment = golem_cloud_client::model::ApiDeployment {
+                api_definition_id,
+                version,
+                project_id: project.0,
+                site: ApiSite {
+                    host: host.to_string(),
+                    subdomain: subdomain.expect("Subdomain is mandatory"), // TODO: unify OSS and cloud
+                },
+            };
 
-        Ok(self.client.deploy(&deployment).await?.into())
+            Ok(self.client.deploy(&deployment).await?.into())
+        }
     }
 
     async fn list(

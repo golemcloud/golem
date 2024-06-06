@@ -16,7 +16,7 @@ use golem_worker_service_base::repo::api_definition_repo::{
 use golem_worker_service_base::service::api_definition::{
     ApiDefinitionService, ApiDefinitionServiceDefault,
 };
-use golem_worker_service_base::service::api_definition_lookup::ApiDefinitionLookup;
+use golem_worker_service_base::service::api_definition_lookup::ApiDefinitionsLookup;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::component::{ComponentServiceNoop, RemoteComponentService};
@@ -54,7 +54,7 @@ pub struct Services {
     >,
     pub deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send>,
     pub http_definition_lookup_service:
-        Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
+        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     pub worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     pub api_definition_validator_service: Arc<
@@ -173,7 +173,7 @@ impl Services {
             Arc::new(InMemoryDeployment::default());
 
         let definition_lookup_service: Arc<
-            dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
+            dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         > = Arc::new(CustomRequestDefinitionLookupDefault::new(
             definition_repo.clone(),
             deployment_repo.clone(),

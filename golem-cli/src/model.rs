@@ -30,7 +30,7 @@ use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Command, Error, FromArgMatches};
 use derive_more::{Display, FromStr};
-use golem_client::model::{ApiSite, ScanCursor};
+use golem_client::model::{ApiDefinitionInfo, ApiSite, ScanCursor};
 use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
@@ -290,6 +290,36 @@ pub struct IdempotencyKey(pub String); // TODO: Validate
 impl IdempotencyKey {
     pub fn fresh() -> Self {
         IdempotencyKey(Uuid::new_v4().to_string())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ApiDefinitionIdWithVersion {
+    pub id: ApiDefinitionId,
+    pub version: ApiDefinitionVersion,
+}
+
+impl Display for ApiDefinitionIdWithVersion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.id, self.version)
+    }
+}
+
+impl FromStr for ApiDefinitionIdWithVersion {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() != 2 {
+            return Err(format!(
+                "Invalid api definition id with version: {s}. Expected format: <id>/<version>"
+            ));
+        }
+
+        let id = ApiDefinitionId(parts[0].to_string());
+        let version = ApiDefinitionVersion(parts[1].to_string());
+
+        Ok(ApiDefinitionIdWithVersion { id, version })
     }
 }
 
@@ -586,9 +616,8 @@ impl From<golem_cloud_client::model::WorkersMetadataResponse> for WorkersMetadat
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiDeployment {
-    #[serde(rename = "apiDefinitionId")]
-    pub api_definition_id: String,
-    pub version: String,
+    #[serde(rename = "apiDefinitions")]
+    pub api_definitions: Vec<ApiDefinitionInfo>,
     #[serde(rename = "projectId")]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
@@ -598,17 +627,10 @@ pub struct ApiDeployment {
 
 impl From<golem_client::model::ApiDeployment> for ApiDeployment {
     fn from(value: golem_client::model::ApiDeployment) -> Self {
-        let golem_client::model::ApiDeployment {
-            api_definition_id,
-            version,
-            site,
-        } = value;
-
         ApiDeployment {
-            api_definition_id,
-            version,
+            api_definitions: value.api_definitions,
             project_id: None,
-            site,
+            site: value.site,
         }
     }
 }
@@ -622,9 +644,13 @@ impl From<golem_cloud_client::model::ApiDeployment> for ApiDeployment {
             site: golem_cloud_client::model::ApiSite { host, subdomain },
         } = value;
 
-        ApiDeployment {
-            api_definition_id,
+        let api_definitions = vec![ApiDefinitionInfo {
+            id: api_definition_id,
             version,
+        }];
+
+        ApiDeployment {
+            api_definitions,
             project_id: Some(project_id),
             site: ApiSite {
                 host,
