@@ -196,10 +196,8 @@ fn api_deployment_delete(
     let _: ApiDeployment = cli.run(&[
         "api-deployment",
         "deploy",
-        &cfg.arg('i', "id"),
-        &definition.id,
-        &cfg.arg('V', "version"),
-        &definition.version,
+        &cfg.arg('d', "definition"),
+        &format!("{}:{}", definition.id, definition.version),
         &cfg.arg('H', "host"),
         &host,
         &cfg.arg('s', "subdomain"),
