@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
+use crate::model::{ApiDefinitionId, ApiDefinitionIdWithVersion, GolemError, GolemResult};
 use crate::service::api_deployment::ApiDeploymentService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
@@ -27,13 +27,9 @@ pub enum ApiDeploymentSubcommand<ProjectRef: clap::Args> {
         #[command(flatten)]
         project_ref: ProjectRef,
 
-        /// Api definition id
-        #[arg(short, long)]
-        id: ApiDefinitionId,
-
-        /// Api definition version
-        #[arg(short = 'V', long)]
-        version: ApiDefinitionVersion,
+        /// Api definition id with version
+        #[arg(short = 'd', long = "definition")]
+        definitions: Vec<ApiDefinitionIdWithVersion>,
 
         #[arg(short = 'H', long)]
         host: String,
@@ -80,14 +76,13 @@ impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDeploymentSubcommand<Pro
         match self {
             ApiDeploymentSubcommand::Deploy {
                 project_ref,
-                id,
-                version,
+                definitions,
                 host,
                 subdomain,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
                 service
-                    .deploy(id, version, host, subdomain, &project_id)
+                    .deploy(definitions, host, subdomain, &project_id)
                     .await
             }
             ApiDeploymentSubcommand::Get { site } => service.get(site).await,
