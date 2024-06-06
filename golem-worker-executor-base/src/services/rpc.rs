@@ -13,11 +13,10 @@
 // limitations under the License.
 
 use std::fmt::{Display, Formatter};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use golem_common::cache::PendingOrFinal;
 use golem_wasm_rpc::{Value, WitValue};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
@@ -27,17 +26,18 @@ use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
 
 use crate::error::GolemError;
 use crate::services::events::Events;
+use crate::services::invocation_queue::InvocationQueue;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
-    active_workers, blob_store, component, golem_config, key_value, oplog, promise, recovery,
-    scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration,
-    HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
-    HasInvocationQueue, HasKeyValueService, HasOplogService, HasPromiseService,
-    HasRecoveryManagement, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
+    shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
+    HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
+    HasKeyValueService, HasOplogService, HasPromiseService, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
     HasWorkerProxy, HasWorkerService,
 };
-use crate::worker::{invoke, invoke_and_await, Worker};
+use crate::worker::{invoke, invoke_and_await};
 use crate::workerctx::WorkerCtx;
 
 #[async_trait]
@@ -228,7 +228,6 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
     oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
-    recovery_management: Arc<Mutex<Option<Arc<dyn recovery::RecoveryManagement + Send + Sync>>>>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
     events: Arc<Events>,
@@ -254,7 +253,6 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
             oplog_service: self.oplog_service.clone(),
-            recovery_management: self.recovery_management.clone(),
             scheduler_service: self.scheduler_service.clone(),
             worker_activator: self.worker_activator.clone(),
             events: self.events.clone(),
@@ -353,17 +351,6 @@ impl<Ctx: WorkerCtx> HasOplogService for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasRecoveryManagement for DirectWorkerInvocationRpc<Ctx> {
-    fn recovery_management(&self) -> Arc<dyn recovery::RecoveryManagement + Send + Sync> {
-        self.recovery_management
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .clone()
-    }
-}
-
 impl<Ctx: WorkerCtx> HasRpc for DirectWorkerInvocationRpc<Ctx> {
     fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
         Arc::new(self.clone())
@@ -379,6 +366,12 @@ impl<Ctx: WorkerCtx> HasExtraDeps<Ctx> for DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> HasShardService for DirectWorkerInvocationRpc<Ctx> {
     fn shard_service(&self) -> Arc<dyn shard::ShardService + Send + Sync> {
         self.shard_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasShardManagerService for DirectWorkerInvocationRpc<Ctx> {
+    fn shard_manager_service(&self) -> Arc<dyn shard_manager::ShardManagerService + Send + Sync> {
+        self.shard_manager_service.clone()
     }
 }
 
@@ -438,19 +431,11 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             key_value_service,
             blob_store_service,
             oplog_service,
-            recovery_management: Arc::new(Mutex::new(None)),
             scheduler_service,
             worker_activator,
             events,
             extra_deps,
         }
-    }
-
-    pub fn set_recovery_management(
-        &self,
-        recovery_management: Arc<dyn recovery::RecoveryManagement + Send + Sync>,
-    ) {
-        *self.recovery_management.lock().unwrap() = Some(recovery_management);
     }
 }
 
@@ -482,14 +467,12 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker = Worker::get_or_create_pending(self, owned_worker_id).await?;
-            let invocation_queue = match worker {
-                PendingOrFinal::Pending(pending_worker) => pending_worker.invocation_queue.clone(),
-                PendingOrFinal::Final(worker) => worker.public_state.invocation_queue(),
-            };
+            let worker =
+                crate::worker::get_or_create(self, owned_worker_id, None, None, None).await?;
+            InvocationQueue::start_if_needed(worker.clone()).await?;
 
             let result_values = invoke_and_await(
-                invocation_queue,
+                worker,
                 idempotency_key,
                 golem_common::model::CallingConvention::Component,
                 function_name,
@@ -530,14 +513,12 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker = Worker::get_or_create_pending(self, owned_worker_id).await?;
-            let invocation_queue = match worker {
-                PendingOrFinal::Pending(pending_worker) => pending_worker.invocation_queue.clone(),
-                PendingOrFinal::Final(worker) => worker.public_state.invocation_queue(),
-            };
+            let worker =
+                crate::worker::get_or_create(self, owned_worker_id, None, None, None).await?;
+            InvocationQueue::start_if_needed(worker.clone()).await?;
 
             invoke(
-                invocation_queue,
+                worker,
                 idempotency_key,
                 golem_common::model::CallingConvention::Component,
                 function_name,

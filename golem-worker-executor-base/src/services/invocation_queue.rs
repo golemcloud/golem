@@ -12,33 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
 use golem_wasm_rpc::Value;
 use std::collections::{HashMap, VecDeque};
 use std::ops::DerefMut;
 use std::sync::Weak;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
+use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::{debug, span, warn, Instrument, Level};
-use wasmtime::Store;
+use tracing::{debug, info, span, warn, Instrument, Level};
+use wasmtime::{Store, UpdateDeadline};
 
 use crate::error::GolemError;
-use crate::invocation::invoke_worker;
-use crate::model::{InterruptKind, LookupResult, TrapType};
-use crate::services::events::{Event, Events};
+use crate::invocation::{invoke_worker, InvokeResult};
+use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
+use crate::services::events::Event;
 use crate::services::oplog::{Oplog, OplogOps};
-use crate::services::worker_activator::WorkerActivator;
-use crate::services::{HasInvocationQueue, HasOplog};
-use crate::worker::Worker;
+use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
+use crate::services::{
+    All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
+    HasExtraDeps, HasInvocationQueue, HasKeyValueService, HasOplog, HasOplogService,
+    HasPromiseService, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorkerEnumerationService,
+    HasWorkerProxy, HasWorkerService, UsesAllDeps,
+};
+use crate::worker::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+    CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, Timestamp,
+    TimestampedWorkerInvocation, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 
 /// Per-worker invocation queue service
@@ -54,26 +62,76 @@ use golem_common::model::{
 ///
 /// Every worker invocation should be done through this service.
 pub struct InvocationQueue<Ctx: WorkerCtx> {
-    worker_id: WorkerId,
+    owned_worker_id: OwnedWorkerId,
+
     oplog: Arc<dyn Oplog + Send + Sync>,
-    worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+    event_service: Arc<dyn WorkerEventService + Send + Sync>, // TODO: rename
+
+    deps: All<Ctx>,
+
     queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
     pending_updates: Arc<RwLock<VecDeque<TimestampedUpdateDescription>>>,
-    running: Arc<Mutex<Option<RunningInvocationQueue<Ctx>>>>,
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
-    events: Arc<Events>,
+    execution_status: Arc<RwLock<ExecutionStatus>>,
+    initial_worker_metadata: WorkerMetadata,
+
+    running: Arc<Mutex<Option<RunningInvocationQueue>>>,
+}
+
+impl<Ctx: WorkerCtx> HasOplog for InvocationQueue<Ctx> {
+    fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
+        self.oplog.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> UsesAllDeps for InvocationQueue<Ctx> {
+    type Ctx = Ctx;
+
+    fn all(&self) -> &All<Self::Ctx> {
+        &self.deps
+    }
+}
+
+impl<Ctx: WorkerCtx> Drop for InvocationQueue<Ctx> {
+    fn drop(&mut self) {
+        debug!(
+            "Dropping InvocationQueue {}",
+            self.owned_worker_id.worker_id.to_string()
+        );
+    }
 }
 
 impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
-    pub fn new(
-        worker_id: WorkerId,
-        oplog: Arc<dyn Oplog + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
-        events: Arc<Events>,
-        initial_pending_invocations: &[TimestampedWorkerInvocation],
-        initial_pending_updates: &[TimestampedUpdateDescription],
-        initial_invocation_results: &HashMap<IdempotencyKey, OplogIndex>,
-    ) -> Self {
+    pub async fn new<T: HasAll<Ctx>>(
+        deps: &T,
+        owned_worker_id: OwnedWorkerId,
+        worker_args: Option<Vec<String>>,
+        worker_env: Option<Vec<(String, String)>>,
+        component_version: Option<u64>,
+    ) -> Result<Self, GolemError> {
+        let worker_metadata = Self::get_or_create_worker_metadata(
+            deps,
+            &owned_worker_id,
+            component_version,
+            worker_args,
+            worker_env,
+        )
+        .await?;
+        let oplog = deps.oplog_service().open(&owned_worker_id).await;
+
+        let initial_pending_invocations = worker_metadata
+            .last_known_status
+            .pending_invocations
+            .clone();
+        let initial_pending_updates = worker_metadata
+            .last_known_status
+            .pending_updates
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let initial_invocation_results =
+            worker_metadata.last_known_status.invocation_results.clone();
+
         let queue = Arc::new(RwLock::new(VecDeque::from_iter(
             initial_pending_invocations.iter().cloned(),
         )));
@@ -92,32 +150,151 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         )));
         let running = Arc::new(Mutex::new(None));
 
-        InvocationQueue {
-            worker_id,
+        let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
+            last_known_status: worker_metadata.last_known_status.clone(),
+        }));
+
+        Ok(InvocationQueue {
+            owned_worker_id,
             oplog,
-            worker_activator,
+            event_service: Arc::new(WorkerEventServiceDefault::new(
+                deps.config().limits.event_broadcast_capacity,
+                deps.config().limits.event_history_size,
+            )),
+            deps: All::from_other(deps),
             queue,
             pending_updates,
-            running,
             invocation_results,
-            events,
-        }
+            running,
+            execution_status,
+            initial_worker_metadata: worker_metadata,
+        })
     }
 
-    pub async fn attach(this: Arc<InvocationQueue<Ctx>>, worker: Arc<Worker<Ctx>>) {
+    pub async fn start_if_needed(this: Arc<InvocationQueue<Ctx>>) -> Result<(), GolemError> {
         let mut running = this.running.lock().await;
-        assert!(running.is_none());
-        *running = Some(RunningInvocationQueue::new(
-            worker,
-            this.queue.clone(),
-            Arc::downgrade(&this),
-            this.worker_activator.clone(),
-        ));
+        if running.is_none() {
+            debug!("Starting worker");
+            // TODO: split/refactor
+
+            let component_id = this.owned_worker_id.component_id();
+            let worker_metadata = this.get_metadata().await?;
+
+            let component_version = worker_metadata
+                .last_known_status
+                .pending_updates
+                .front()
+                .map_or(
+                    worker_metadata.last_known_status.component_version,
+                    |update| {
+                        let target_version = *update.description.target_version();
+                        info!(
+                            "Attempting {} update from {} to version {target_version}",
+                            match update.description {
+                                UpdateDescription::Automatic { .. } => "automatic",
+                                UpdateDescription::SnapshotBased { .. } => "snapshot based",
+                            },
+                            worker_metadata.last_known_status.component_version
+                        );
+                        target_version
+                    },
+                );
+            let component = this
+                .component_service()
+                .get(&this.engine(), &component_id, component_version)
+                .await?;
+
+            let context = Ctx::create(
+                OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
+                this.promise_service(),
+                this.events(),
+                this.worker_service(),
+                this.worker_enumeration_service(),
+                this.key_value_service(),
+                this.blob_store_service(),
+                this.event_service.clone(),
+                this.active_workers(),
+                this.oplog_service(),
+                this.oplog.clone(),
+                Arc::downgrade(&this),
+                this.scheduler_service(),
+                this.rpc(),
+                this.worker_proxy(),
+                this.extra_deps(),
+                this.config(),
+                WorkerConfig::new(
+                    worker_metadata.worker_id.clone(),
+                    worker_metadata.last_known_status.component_version,
+                    worker_metadata.args.clone(),
+                    worker_metadata.env.clone(),
+                    worker_metadata.last_known_status.deleted_regions.clone(),
+                ),
+                this.execution_status.clone(),
+            )
+            .await?;
+
+            let mut store = Store::new(&this.engine(), context);
+            store.set_epoch_deadline(this.config().limits.epoch_ticks);
+            let worker_id_clone = worker_metadata.worker_id.clone();
+            store.epoch_deadline_callback(move |mut store| {
+                let current_level = store.get_fuel().unwrap_or(0);
+                if store.data().is_out_of_fuel(current_level as i64) {
+                    debug!("{worker_id_clone} ran out of fuel, borrowing more");
+                    store.data_mut().borrow_fuel_sync();
+                }
+
+                match store.data_mut().check_interrupt() {
+                    Some(kind) => Err(kind.into()),
+                    None => Ok(UpdateDeadline::Yield(1)),
+                }
+            });
+
+            store.set_fuel(i64::MAX as u64)?;
+            store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
+
+            store.limiter_async(|ctx| ctx.resource_limiter());
+
+            let instance_pre = this.linker().instantiate_pre(&component).map_err(|e| {
+                GolemError::worker_creation_failed(
+                    this.owned_worker_id.worker_id(),
+                    format!(
+                        "Failed to pre-instantiate worker {}: {e}",
+                        this.owned_worker_id
+                    ),
+                )
+            })?;
+
+            let instance = instance_pre
+                .instantiate_async(&mut store)
+                .await
+                .map_err(|e| {
+                    GolemError::worker_creation_failed(
+                        this.owned_worker_id.worker_id(),
+                        format!("Failed to instantiate worker {}: {e}", this.owned_worker_id),
+                    )
+                })?;
+            let store = async_mutex::Mutex::new(store);
+
+            *running = Some(RunningInvocationQueue::new(
+                this.owned_worker_id.clone(),
+                this.queue.clone(),
+                Arc::downgrade(&this),
+                this.oplog(),
+                this.execution_status.clone(),
+                instance,
+                store,
+            ));
+        } else {
+            debug!("Worker is already running");
+        }
+
+        Ok(())
     }
 
-    pub async fn detach(&self) {
+    pub async fn stop(&self) {
         let mut running = self.running.lock().await;
         if let Some(running) = running.take() {
+            debug!("Stopping running worker");
             let queued_items = running
                 .queue
                 .write()
@@ -125,6 +302,69 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
                 .drain(..)
                 .collect::<VecDeque<_>>();
             *self.queue.write().unwrap() = queued_items;
+
+            // TODO: save last known status?
+            // TODO: make sure the loop is stopped (probably it's already implemented?)
+        } else {
+            debug!("Worker was already stopped");
+        }
+    }
+
+    pub async fn restart(this: Arc<InvocationQueue<Ctx>>) -> Result<(), GolemError> {
+        // TODO
+        this.stop().await;
+        Self::start_if_needed(this).await
+    }
+
+    pub fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync> {
+        self.event_service.clone()
+    }
+
+    pub async fn get_metadata(&self) -> Result<WorkerMetadata, GolemError> {
+        let updated_status = self
+            .execution_status
+            .read()
+            .unwrap()
+            .last_known_status()
+            .clone();
+        let result = self.initial_worker_metadata.clone();
+        Ok(WorkerMetadata {
+            last_known_status: updated_status,
+            ..result
+        })
+    }
+
+    /// Marks the worker as interrupting - this should eventually make the worker interrupted.
+    /// There are several interruption modes but not all of them are supported by all worker
+    /// executor implementations.
+    ///
+    /// - `Interrupt` means that the worker should be interrupted as soon as possible, and it should
+    ///    remain interrupted.
+    /// - `Restart` is a simulated crash, the worker gets automatically restarted after it got interrupted,
+    ///    but only if the worker context supports recovering workers.
+    /// - `Suspend` means that the worker should be moved out of memory and stay in suspended state,
+    ///    automatically resumed when the worker is needed again. This only works if the worker context
+    ///    supports recovering workers.
+    pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
+        let mut execution_status = self.execution_status.write().unwrap();
+        let current_execution_status = execution_status.clone();
+        match current_execution_status {
+            ExecutionStatus::Running { last_known_status } => {
+                let (sender, receiver) = tokio::sync::broadcast::channel(1);
+                *execution_status = ExecutionStatus::Interrupting {
+                    interrupt_kind,
+                    await_interruption: Arc::new(sender),
+                    last_known_status,
+                };
+                Some(receiver)
+            }
+            ExecutionStatus::Suspended { .. } => None,
+            ExecutionStatus::Interrupting {
+                await_interruption, ..
+            } => {
+                let receiver = await_interruption.subscribe();
+                Some(receiver)
+            }
         }
     }
 
@@ -150,7 +390,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
             None => {
                 debug!(
                     "Worker {} is initializing, persisting pending invocation",
-                    self.worker_id
+                    self.owned_worker_id
                 );
                 let invocation = WorkerInvocation::ExportedFunction {
                     idempotency_key,
@@ -266,8 +506,8 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
             },
         );
         debug!("Stored invocation success for {key}");
-        self.events.publish(Event::InvocationCompleted {
-            worker_id: self.worker_id.clone(),
+        self.events().publish(Event::InvocationCompleted {
+            worker_id: self.owned_worker_id.worker_id(),
             idempotency_key: key.clone(),
             result: Ok(result),
         });
@@ -289,8 +529,8 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         );
         let golem_error = trap_type.as_golem_error();
         if let Some(golem_error) = golem_error {
-            self.events.publish(Event::InvocationCompleted {
-                worker_id: self.worker_id.clone(),
+            self.events().publish(Event::InvocationCompleted {
+                worker_id: self.owned_worker_id.worker_id(),
                 idempotency_key: key.clone(),
                 result: Err(golem_error),
             });
@@ -306,13 +546,15 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         match self.lookup_invocation_result(key).await {
             LookupResult::Interrupted => LookupResult::Interrupted,
             LookupResult::New | LookupResult::Pending => {
-                self.events
+                self.events()
                     .wait_for(|event| match event {
                         Event::InvocationCompleted {
                             worker_id,
                             idempotency_key,
                             result,
-                        } if *worker_id == self.worker_id && idempotency_key == key => {
+                        } if *worker_id == self.owned_worker_id.worker_id
+                            && idempotency_key == key =>
+                        {
                             Some(LookupResult::Complete(result.clone()))
                         }
                         _ => None,
@@ -363,25 +605,88 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
             }
         }
     }
+
+    async fn get_or_create_worker_metadata<
+        T: HasWorkerService + HasComponentService + HasConfig + HasOplogService,
+    >(
+        this: &T,
+        owned_worker_id: &OwnedWorkerId,
+        component_version: Option<u64>,
+        worker_args: Option<Vec<String>>,
+        worker_env: Option<Vec<(String, String)>>,
+    ) -> Result<WorkerMetadata, GolemError> {
+        let component_id = owned_worker_id.component_id();
+
+        let component_version = match component_version {
+            Some(component_version) => component_version,
+            None => {
+                this.component_service()
+                    .get_latest_version(&component_id)
+                    .await?
+            }
+        };
+
+        match this.worker_service().get(owned_worker_id).await {
+            None => {
+                let initial_status =
+                    calculate_last_known_status(this, owned_worker_id, &None).await?;
+                let worker_metadata = WorkerMetadata {
+                    worker_id: owned_worker_id.worker_id(),
+                    args: worker_args.unwrap_or_default(),
+                    env: worker_env.unwrap_or_default(),
+                    account_id: owned_worker_id.account_id(),
+                    created_at: Timestamp::now_utc(),
+                    last_known_status: WorkerStatusRecord {
+                        component_version,
+                        ..initial_status
+                    },
+                };
+                this.worker_service().add(&worker_metadata).await?;
+                Ok(worker_metadata)
+            }
+            Some(previous_metadata) => Ok(WorkerMetadata {
+                last_known_status: calculate_last_known_status(
+                    this,
+                    owned_worker_id,
+                    &Some(previous_metadata.clone()),
+                )
+                .await?,
+                ..previous_metadata
+            }),
+        }
+    }
 }
 
-struct RunningInvocationQueue<Ctx: WorkerCtx> {
+struct RunningInvocationQueue {
+    owned_worker_id: OwnedWorkerId,
+
     _handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<()>,
     queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
-    worker: Weak<Worker<Ctx>>,
+    execution_status: Arc<RwLock<ExecutionStatus>>,
+
+    oplog: Arc<dyn Oplog + Send + Sync>,
 }
 
-impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
-    pub fn new(
-        worker: Arc<Worker<Ctx>>,
+impl Drop for RunningInvocationQueue {
+    fn drop(&mut self) {
+        debug!(
+            "Dropping RunningInvocationQueue {}",
+            self.owned_worker_id.worker_id.to_string()
+        );
+    }
+}
+
+impl RunningInvocationQueue {
+    pub fn new<Ctx: WorkerCtx>(
+        owned_worker_id: OwnedWorkerId,
         queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
         parent: Weak<InvocationQueue<Ctx>>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        oplog: Arc<dyn Oplog + Send + Sync>,
+        execution_status: Arc<RwLock<ExecutionStatus>>,
+        instance: wasmtime::component::Instance,
+        store: async_mutex::Mutex<Store<Ctx>>,
     ) -> Self {
-        let owned_worker_id = worker.metadata.owned_worker_id();
-
-        let worker = Arc::downgrade(&worker);
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
 
         // Preload
@@ -389,26 +694,28 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
             sender.send(()).unwrap();
         }
 
-        let worker_clone = worker.clone();
         let active_clone = queue.clone();
+        let owned_worker_id_clone = owned_worker_id.clone();
         let handle = tokio::task::spawn(async move {
             RunningInvocationQueue::invocation_loop(
                 receiver,
                 active_clone,
-                worker_clone,
-                owned_worker_id,
+                owned_worker_id_clone,
                 parent,
-                worker_activator,
+                instance,
+                store,
             )
             .in_current_span()
             .await;
         });
 
         RunningInvocationQueue {
+            owned_worker_id,
             _handle: Some(handle),
             sender,
             queue,
-            worker,
+            oplog,
+            execution_status,
         }
     }
 
@@ -439,15 +746,10 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
             timestamp: entry.timestamp(),
             invocation,
         };
-        if let Some(worker) = self.worker.upgrade() {
-            if worker.store.try_lock().is_none() {
-                debug!(
-                    "Worker {} is busy, persisting pending invocation",
-                    worker.metadata.worker_id
-                );
-                // The worker is currently busy, so we write the pending worker invocation to the oplog
-                worker.public_state.oplog().add_and_commit(entry).await;
-            }
+        if self.execution_status.read().unwrap().is_running() {
+            debug!("Worker is busy, persisting pending invocation",);
+            // The worker is currently busy, so we write the pending worker invocation to the oplog
+            self.oplog.add_and_commit(entry).await;
         }
         self.queue
             .write()
@@ -456,27 +758,46 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
         self.sender.send(()).unwrap()
     }
 
-    async fn invocation_loop(
+    async fn invocation_loop<Ctx: WorkerCtx>(
         mut receiver: UnboundedReceiver<()>,
         active: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
-        worker: Weak<Worker<Ctx>>,
         owned_worker_id: OwnedWorkerId,
         parent: Weak<InvocationQueue<Ctx>>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        instance: wasmtime::component::Instance,
+        store: async_mutex::Mutex<Store<Ctx>>,
     ) {
-        debug!("Invocation queue loop started");
+        debug!("Invocation queue loop preparing the instance");
 
-        while receiver.recv().await.is_some() {
-            let message = active
-                .write()
-                .unwrap()
-                .pop_front()
-                .expect("Message should be present");
-            if let Some(worker) = worker.upgrade() {
+        let mut final_decision = {
+            let mut store = store.lock().await;
+            let prepare_result =
+                Ctx::prepare_instance(&owned_worker_id.worker_id, &instance, &mut *store).await;
+            debug!("prepare_instance resulted in {prepare_result:?}");
+            match prepare_result {
+                Ok(decision) => decision,
+                Err(err) => {
+                    warn!("Failed to start the worker: {err}");
+                    if let Some(parent) = parent.upgrade() {
+                        parent.stop().await;
+                    }
+                    store.data_mut().set_suspended();
+                    return; // early return, we can't retry this
+                }
+            }
+        };
+
+        if final_decision == RecoveryDecision::None {
+            debug!("Invocation queue loop started");
+
+            // Exits when RunningInvocationQueue is dropped
+            while receiver.recv().await.is_some() {
+                let message = active
+                    .write()
+                    .unwrap()
+                    .pop_front()
+                    .expect("Message should be present");
                 debug!("Invocation queue processing {message:?}");
 
-                let instance = &worker.instance;
-                let store = &worker.store;
                 let mut store_mutex = store.lock().await;
                 let store = store_mutex.deref_mut();
 
@@ -494,7 +815,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                             idempotency_key = invocation_key.to_string(),
                             function = full_function_name
                         );
-                        async {
+                        let do_break = async {
                             store
                                 .data_mut()
                                 .set_current_idempotency_key(invocation_key)
@@ -515,18 +836,57 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                             // the invocation writes the invocation start oplog entry
                             store.data_mut().update_pending_invocations().await;
 
-                            let _ = invoke_worker(
-                                full_function_name,
-                                function_input,
+                            let result = invoke_worker(
+                                full_function_name.clone(),
+                                function_input.clone(),
                                 store,
-                                instance,
+                                &instance,
                                 calling_convention,
-                                true, // Invocation queue is always initialized _after_ the worker recovery
+                                true, // We are always in live mode at this point
                             )
                             .await;
+
+                            match result {
+                                Ok(InvokeResult::Succeeded {
+                                    output,
+                                    consumed_fuel,
+                                }) => {
+                                    store
+                                        .data_mut()
+                                        .on_invocation_success(
+                                            &full_function_name,
+                                            &function_input,
+                                            consumed_fuel,
+                                            output,
+                                        )
+                                        .await
+                                        .unwrap(); // TODO: handle this error
+                                    false // do not break
+                                }
+                                _ => {
+                                    let trap_type = match result {
+                                        Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
+                                        Err(error) => {
+                                            Some(TrapType::from_error::<Ctx>(&anyhow!(error)))
+                                        }
+                                    };
+                                    let decision = match trap_type {
+                                        Some(trap_type) => {
+                                            store.data_mut().on_invocation_failure(&trap_type).await
+                                        }
+                                        None => RecoveryDecision::None,
+                                    };
+
+                                    final_decision = decision;
+                                    true // break
+                                }
+                            }
                         }
                         .instrument(span)
-                        .await
+                        .await;
+                        if do_break {
+                            break;
+                        }
                     }
                     WorkerInvocation::ManualUpdate { target_version } => {
                         let span = span!(
@@ -548,7 +908,7 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                                 "golem:api/save-snapshot@0.2.0/save".to_string(),
                                 vec![],
                                 store,
-                                instance,
+                                &instance,
                                 CallingConvention::Component,
                                 true,
                             )
@@ -556,10 +916,9 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                             store.data_mut().end_call_snapshotting_function();
 
                             match result {
-                                None => {false}
-                                Some(Ok(result)) => {
+                                Ok(InvokeResult::Succeeded { output, .. }) =>
                                     if let Some(parent) = parent.upgrade() {
-                                        if let Some(bytes) = Self::decode_snapshot_result(result) {
+                                        if let Some(bytes) = Self::decode_snapshot_result(output) {
                                             match store
                                                 .data_mut()
                                                 .get_public_state()
@@ -577,10 +936,8 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                                                     // Make sure to update the pending updates queue
                                                     store.data_mut().update_pending_updates().await;
 
-                                                    // Reactivate the worker in the background
-                                                    worker_activator
-                                                        .reactivate_worker(&owned_worker_id)
-                                                        .await;
+                                                    // Reactivate the worker
+                                                    final_decision = RecoveryDecision::Immediate;
 
                                                     // Stop processing the queue to avoid race conditions
                                                     true
@@ -597,11 +954,34 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                                     } else {
                                         panic!("Parent invocation queue was unexpectedly dropped")
                                     }
-                                }
-                                Some(Err(error)) => {
+                                Ok(InvokeResult::Failed { error, .. }) => {
                                     Self::fail_update(
                                         target_version,
                                         format!("failed to get a snapshot for manual update: {error}"),
+                                        store,
+                                    ).await;
+                                    false
+                                }
+                                Ok(InvokeResult::Exited { .. }) => {
+                                    Self::fail_update(
+                                        target_version,
+                                        "failed to get a snapshot for manual update: it called exit".to_string(),
+                                        store,
+                                    ).await;
+                                    false
+                                }
+                                Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                                    Self::fail_update(
+                                        target_version,
+                                        format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
+                                        store,
+                                    ).await;
+                                    false
+                                }
+                                Err(error) => {
+                                    Self::fail_update(
+                                        target_version,
+                                        format!("failed to get a snapshot for manual update: {error:?}"),
                                         store,
                                     ).await;
                                     false
@@ -613,15 +993,43 @@ impl<Ctx: WorkerCtx> RunningInvocationQueue<Ctx> {
                         }
                     }
                 }
-            } else {
-                warn!("Lost invocation message because the worker was dropped: {message:?}");
-                break;
+            }
+            debug!("Invocation queue loop for finished");
+        }
+
+        {
+            store.lock().await.data_mut().set_suspended();
+        }
+
+        match final_decision {
+            RecoveryDecision::Immediate => {
+                if let Some(parent) = parent.upgrade() {
+                    debug!("Invocation queue loop triggering restart immediately");
+                    let _ = InvocationQueue::restart(parent).await; // TODO: what to do with error here?
+                }
+            }
+            RecoveryDecision::Delayed(delay) => {
+                debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
+                tokio::time::sleep(delay).await;
+                if let Some(parent) = parent.upgrade() {
+                    debug!("Invocation queue loop triggering restart after delay");
+                    let _ = InvocationQueue::restart(parent).await; // TODO: what to do with error here?
+                }
+            }
+            RecoveryDecision::None => {
+                if let Some(parent) = parent.upgrade() {
+                    debug!("Invocation queue loop notifying parent about being stopped");
+                    parent.stop().await;
+                }
             }
         }
-        debug!("Invocation queue loop for finished");
     }
 
-    async fn fail_update(target_version: ComponentVersion, error: String, store: &mut Store<Ctx>) {
+    async fn fail_update<Ctx: WorkerCtx>(
+        target_version: ComponentVersion,
+        error: String,
+        store: &mut Store<Ctx>,
+    ) {
         store
             .data_mut()
             .on_worker_update_failed(target_version, Some(error))
@@ -694,4 +1102,11 @@ impl InvocationResult {
             *self = Self::Cached { result, oplog_idx }
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum RecoveryDecision {
+    Immediate,
+    Delayed(Duration),
+    None,
 }

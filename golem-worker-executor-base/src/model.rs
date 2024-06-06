@@ -129,10 +129,6 @@ pub enum ExecutionStatus {
         await_interruption: Arc<tokio::sync::broadcast::Sender<()>>,
         last_known_status: WorkerStatusRecord,
     },
-    Interrupted {
-        interrupt_kind: InterruptKind,
-        last_known_status: WorkerStatusRecord,
-    },
 }
 
 impl ExecutionStatus {
@@ -147,9 +143,6 @@ impl ExecutionStatus {
             ExecutionStatus::Interrupting {
                 last_known_status, ..
             } => last_known_status,
-            ExecutionStatus::Interrupted {
-                last_known_status, ..
-            } => last_known_status,
         }
     }
 
@@ -158,9 +151,6 @@ impl ExecutionStatus {
             ExecutionStatus::Running { last_known_status } => *last_known_status = status,
             ExecutionStatus::Suspended { last_known_status } => *last_known_status = status,
             ExecutionStatus::Interrupting {
-                last_known_status, ..
-            } => *last_known_status = status,
-            ExecutionStatus::Interrupted {
                 last_known_status, ..
             } => *last_known_status = status,
         }

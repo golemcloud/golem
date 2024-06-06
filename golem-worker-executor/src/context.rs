@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::string::FromUtf8Error;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 
 use crate::services::AdditionalDeps;
 use anyhow::Error;
@@ -36,11 +36,10 @@ use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::invocation_queue::InvocationQueue;
+use golem_worker_executor_base::services::invocation_queue::{InvocationQueue, RecoveryDecision};
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
 use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::recovery::RecoveryManagement;
 use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
@@ -116,7 +115,7 @@ impl ExternalOperations<Context> for Context {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Context> + Send),
-    ) -> Result<bool, GolemError> {
+    ) -> Result<RecoveryDecision, GolemError> {
         DurableWorkerCtx::<Context>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -136,7 +135,7 @@ impl ExternalOperations<Context> for Context {
         DurableWorkerCtx::<Context>::on_worker_deleted(this, worker_id).await
     }
 
-    async fn on_shard_assignment_changed<T: HasAll<Context> + Send + Sync>(
+    async fn on_shard_assignment_changed<T: HasAll<Context> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), Error> {
         DurableWorkerCtx::<Context>::on_shard_assignment_changed(this).await
@@ -202,52 +201,23 @@ impl StatusManagement for Context {
     async fn update_pending_updates(&self) {
         self.durable_ctx.update_pending_updates().await
     }
-
-    async fn deactivate(&self) {
-        self.durable_ctx.deactivate().await
-    }
 }
 
 #[async_trait]
 impl InvocationHooks for Context {
-    type FailurePayload = <DurableWorkerCtx<Context> as InvocationHooks>::FailurePayload;
-
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
         calling_convention: Option<CallingConvention>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_exported_function_invoked(full_function_name, function_input, calling_convention)
             .await
     }
 
-    async fn on_invocation_failure(
-        &mut self,
-        trap_type: &TrapType,
-    ) -> Result<Self::FailurePayload, Error> {
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision {
         self.durable_ctx.on_invocation_failure(trap_type).await
-    }
-
-    async fn on_invocation_failure_deactivated(
-        &mut self,
-        payload: &Self::FailurePayload,
-        trap_type: &TrapType,
-    ) -> Result<WorkerStatus, Error> {
-        self.durable_ctx
-            .on_invocation_failure_deactivated(payload, trap_type)
-            .await
-    }
-
-    async fn on_invocation_failure_final(
-        &mut self,
-        payload: &Self::FailurePayload,
-        trap_type: &TrapType,
-    ) -> Result<(), Error> {
-        self.durable_ctx
-            .on_invocation_failure_final(payload, trap_type)
-            .await
     }
 
     async fn on_invocation_success(
@@ -256,7 +226,7 @@ impl InvocationHooks for Context {
         function_input: &Vec<Value>,
         consumed_fuel: i64,
         output: Vec<Value>,
-    ) -> Result<Option<Vec<Value>>, Error> {
+    ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
@@ -305,12 +275,11 @@ impl WorkerCtx for Context {
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
-        active_workers: Arc<ActiveWorkers<Context>>,
+        _active_workers: Arc<ActiveWorkers<Context>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
-        invocation_queue: Arc<InvocationQueue<Context>>,
+        invocation_queue: Weak<InvocationQueue<Context>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         _extra_deps: Self::ExtraDeps,
@@ -327,12 +296,10 @@ impl WorkerCtx for Context {
             key_value_service,
             blob_store_service,
             event_service,
-            active_workers,
             oplog_service,
             oplog,
             invocation_queue,
             scheduler_service,
-            recovery_management,
             rpc,
             worker_proxy,
             config,

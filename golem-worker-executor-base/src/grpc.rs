@@ -28,7 +28,6 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
     UpdateWorkerRequest, UpdateWorkerResponse,
 };
-use golem_common::cache::PendingOrFinal;
 use golem_common::model as common_model;
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
@@ -47,16 +46,17 @@ use wasmtime::Error;
 use crate::error::*;
 use crate::metrics::grpc::{record_closed_grpc_active_stream, record_new_grpc_active_stream};
 use crate::model::{InterruptKind, LastError};
-use crate::recorded_grpc_request;
+use crate::services::invocation_queue::InvocationQueue;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{
-    worker_event, All, HasActiveWorkers, HasAll, HasInvocationQueue, HasPromiseService,
+    worker_event, All, HasActiveWorkers, HasAll, HasPromiseService,
     HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
-use crate::worker::{invoke_and_await, PendingWorker, Worker};
-use crate::workerctx::{PublicWorkerIo, WorkerCtx};
+use crate::worker::invoke_and_await;
+use crate::workerctx::WorkerCtx;
+use crate::{recorded_grpc_request, worker};
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -248,7 +248,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        Worker::get_or_create(
+        let worker = worker::get_or_create(
             self,
             &owned_worker_id,
             Some(args),
@@ -256,6 +256,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Some(component_version),
         )
         .await?;
+        InvocationQueue::start_if_needed(worker.clone()).await?;
 
         Ok(())
     }
@@ -310,7 +311,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             // By making sure the worker is in memory. If it was suspended because of waiting
             // for a promise, replaying that call will now not suspend as the promise has been
             // completed, and the worker will continue running.
-            Worker::activate(&self.services, &owned_worker_id).await;
+            worker::activate(&self.services, &owned_worker_id).await;
         }
 
         let success = golem::workerexecutor::CompletePromiseSuccess { completed };
@@ -347,9 +348,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
 
         if should_interrupt {
-            let worker = Worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
+            let worker = worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
+            InvocationQueue::start_if_needed(worker.clone()).await?; // TODO: no need to start?
 
-            if let Some(mut await_interrupted) = worker.set_interrupting(InterruptKind::Interrupt) {
+            if let Some(mut await_interrupted) =
+                worker.set_interrupting(InterruptKind::Interrupt).await
+            {
                 await_interrupted.recv().await.unwrap();
             }
         }
@@ -384,17 +388,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         if metadata.is_none() {
             // Worker does not exist, we still check if it is in the list active workers due to some inconsistency
-            if let Some((_, worker_state)) = self
+            if let Some((_, worker)) = self
                 .active_workers()
                 .enum_workers()
                 .iter()
                 .find(|(id, _)| *id == worker_id)
             {
-                worker_state.set_interrupting(if request.recover_immediately {
-                    InterruptKind::Restart
-                } else {
-                    InterruptKind::Interrupt
-                });
+                worker
+                    .set_interrupting(if request.recover_immediately {
+                        InterruptKind::Restart
+                    } else {
+                        InterruptKind::Interrupt
+                    })
+                    .await;
             }
         }
 
@@ -421,13 +427,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             WorkerStatus::Running => {
                 let worker =
-                    Worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
+                    worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
+                InvocationQueue::start_if_needed(worker.clone()).await?; // TODO: no need to start?
 
-                worker.set_interrupting(if request.recover_immediately {
-                    InterruptKind::Restart
-                } else {
-                    InterruptKind::Interrupt
-                });
+                worker
+                    .set_interrupting(if request.recover_immediately {
+                        InterruptKind::Restart
+                    } else {
+                        InterruptKind::Interrupt
+                    })
+                    .await;
+
+                // Explicitly drop from the active worker cache - this will drop websocket connections etc.
+                self.active_workers().remove(&worker_id);
             }
         }
 
@@ -463,7 +475,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match &worker_status.status {
             WorkerStatus::Suspended | WorkerStatus::Interrupted => {
                 info!("Activating ${worker_status:?} worker {worker_id} due to explicit resume request");
-                Worker::activate(&self.services, &owned_worker_id).await;
+                worker::activate(&self.services, &owned_worker_id).await;
                 Ok(())
             }
             _ => Err(GolemError::invalid_request(format!(
@@ -493,7 +505,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .unwrap_or(IdempotencyKey::fresh());
 
         let values = invoke_and_await::<Ctx>(
-            worker.public_state.invocation_queue(),
+            worker,
             idempotency_key,
             calling_convention.into(),
             full_function_name,
@@ -507,28 +519,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_or_create<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<Arc<Worker<Ctx>>, GolemError> {
-        let worker_id = request.worker_id()?;
-        let account_id: AccountId = request.account_id()?;
-        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
-
-        self.validate_worker_id(&worker_id)?;
-
-        let metadata = self.worker_service().get(&owned_worker_id).await;
-        self.validate_worker_status(&owned_worker_id, &metadata)
-            .await?;
-
-        if let Some(limits) = request.account_limits() {
-            Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
-        }
-
-        Worker::get_or_create(self, &owned_worker_id, None, None, None).await
+    ) -> Result<Arc<InvocationQueue<Ctx>>, GolemError> {
+        let worker = self.get_or_create_pending(request).await?;
+        InvocationQueue::start_if_needed(worker.clone()).await?;
+        Ok(worker)
     }
 
     async fn get_or_create_pending<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<PendingOrFinal<PendingWorker<Ctx>, Arc<Worker<Ctx>>>, GolemError> {
+    ) -> Result<Arc<InvocationQueue<Ctx>>, GolemError> {
         let worker_id = request.worker_id()?;
         let account_id: AccountId = request.account_id()?;
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
@@ -543,7 +543,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
         }
 
-        Worker::get_or_create_pending(self, &owned_worker_id).await
+        worker::get_or_create(self, &owned_worker_id, None, None, None).await
     }
 
     async fn invoke_worker_internal<Req: GrpcInvokeRequest>(
@@ -561,22 +561,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let calling_convention = request.calling_convention();
 
-        let (invocation_queue, _worker_id) = match self.get_or_create_pending(request).await? {
-            PendingOrFinal::Pending(pending_worker) => (
-                pending_worker.invocation_queue.clone(),
-                pending_worker.worker_id.clone(),
-            ),
-            PendingOrFinal::Final(worker) => (
-                worker.public_state.invocation_queue(),
-                worker.metadata.worker_id.clone(),
-            ),
-        };
-
+        let worker = self.get_or_create_pending(request).await?;
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
 
-        invocation_queue
+        worker
             .enqueue(
                 idempotency_key,
                 full_function_name,
@@ -602,8 +592,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         for (worker_id, worker_details) in workers {
             if self.shard_service().check_worker(&worker_id).is_err() {
-                if let Some(mut await_interrupted) =
-                    worker_details.set_interrupting(InterruptKind::Restart)
+                if let Some(mut await_interrupted) = worker_details
+                    .set_interrupting(InterruptKind::Restart)
+                    .await
                 {
                     await_interrupted.recv().await.unwrap();
                 }
@@ -807,22 +798,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         // time to inject the pending update oplog entry so the at the time the worker
                         // really gets activated it is going to see it and perform the update.
 
-                        // Ensuring the previous instance is dropped
-                        self.active_workers().remove(&worker_id);
-
                         debug!("Activating worker for update",);
-                        let (pending_worker, resume) = Worker::get_or_create_paused_pending(
+                        let worker = worker::get_or_create(
                             self,
                             &owned_worker_id,
+                            None,
+                            None,
                             Some(worker_status.component_version),
                         )
                         .await?;
 
                         debug!("Enqueuing update");
-                        pending_worker
-                            .invocation_queue
-                            .enqueue_update(update_description.clone())
-                            .await;
+                        worker.enqueue_update(update_description.clone()).await;
 
                         if worker_status.status == WorkerStatus::Failed {
                             // If the worker was previously in a permanently failed state,
@@ -831,35 +818,29 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             worker_status.status = WorkerStatus::Retrying;
                         }
                         let mut deleted_regions = worker_status.deleted_regions.clone();
-                        let (pending_updates, extra_deleted_regions) =
-                            pending_worker.invocation_queue.pending_updates();
+                        let (pending_updates, extra_deleted_regions) = worker.pending_updates();
                         deleted_regions.set_override(extra_deleted_regions);
                         worker_status.pending_updates = pending_updates;
                         worker_status.deleted_regions = deleted_regions;
                         self.worker_service()
                             .update_status(&owned_worker_id, &worker_status)
-                            .await;
+                            .await; // TODO: do this through worker
 
                         debug!("Resuming initialization to perform the update",);
-                        resume.send(()).unwrap();
+                        InvocationQueue::start_if_needed(worker.clone()).await?;
                     }
                     WorkerStatus::Running => {
                         // If the worker is already running we need to write to its oplog the
                         // update attempt, and then interrupt it and have it immediately restarting
                         // to begin the update.
                         let worker =
-                            Worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
+                            worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
 
-                        worker
-                            .public_state
-                            .invocation_queue()
-                            .enqueue_update(update_description.clone())
-                            .await;
+                        worker.enqueue_update(update_description.clone()).await;
 
                         debug!("Enqueued update for running worker");
 
-                        worker.set_interrupting(InterruptKind::Restart);
-                        self.active_workers().remove(&worker_id);
+                        worker.set_interrupting(InterruptKind::Restart).await;
 
                         debug!("Interrupted running worker for update");
                     }
@@ -879,18 +860,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 // This is in a race condition with other worker invocations, so the whole update
                 // process need to be initiated through the worker's invocation queue.
 
-                let pending_or_final =
-                    Worker::get_or_create_pending(self, &owned_worker_id).await?;
-                let invocation_queue = match pending_or_final {
-                    PendingOrFinal::Pending(pending_worker) => {
-                        pending_worker.invocation_queue.clone()
-                    }
-                    PendingOrFinal::Final(worker) => worker.public_state.invocation_queue(),
-                };
-
-                invocation_queue
-                    .enqueue_manual_update(request.target_version)
-                    .await;
+                let worker =
+                    worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
+                worker.enqueue_manual_update(request.target_version).await;
             }
         }
 
@@ -924,12 +896,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?;
 
         if worker_status.status != WorkerStatus::Interrupted {
-            let event_service = match Worker::get_or_create_pending(self, &owned_worker_id).await? {
-                PendingOrFinal::Pending(pending) => pending.event_service.clone(),
-                PendingOrFinal::Final(worker_details) => {
-                    worker_details.public_state.event_service().clone()
-                }
-            };
+            let event_service = worker::get_or_create(self, &owned_worker_id, None, None, None)
+                .await?
+                .event_service();
 
             let mut receiver = event_service.receiver();
 

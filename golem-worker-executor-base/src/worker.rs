@@ -13,674 +13,196 @@
 // limitations under the License.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::sync::Arc;
 
-use async_mutex::Mutex;
-use golem_common::cache::PendingOrFinal;
+use golem_wasm_rpc::Value;
+use tracing::{debug, error, Instrument};
+
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
+    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     CallingConvention, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
-    Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    TimestampedWorkerInvocation, WorkerInvocation, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
-use golem_wasm_rpc::Value;
-use tokio::sync::broadcast::Receiver;
-use tracing::{debug, error, info, Instrument};
-use wasmtime::{Store, UpdateDeadline};
 
 use crate::error::GolemError;
-use crate::metrics::wasm::{record_create_worker, record_create_worker_failure};
-use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
-use crate::services::events::Events;
-use crate::services::golem_config::GolemConfig;
+use crate::model::{InterruptKind, LookupResult};
 use crate::services::invocation_queue::InvocationQueue;
-use crate::services::oplog::Oplog;
-use crate::services::recovery::is_worker_error_retriable;
-use crate::services::worker_activator::WorkerActivator;
-use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
-use crate::services::{
-    HasAll, HasComponentService, HasConfig, HasInvocationQueue, HasOplogService, HasWorkerService,
-};
+use crate::services::{HasAll, HasConfig, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 
 /// Worker is one active wasmtime instance representing a Golem worker with its corresponding
 /// worker context. The worker struct itself is responsible for creating/reactivating/interrupting
 /// the worker, but the actual worker invocation is implemented in separate functions in the
 /// 'invocation' module.
-pub struct Worker<Ctx: WorkerCtx> {
-    /// Metadata associated with the worker
-    pub metadata: WorkerMetadata,
+// pub struct Worker<Ctx: WorkerCtx> {
+//     /// Metadata associated with the worker
+//     pub metadata: WorkerMetadata,
+//
+//     /// The public part of the worker context
+//     pub public_state: Ctx::PublicState,
+//
+//     /// The current execution status of the worker
+//     pub execution_status: Arc<RwLock<ExecutionStatus>>,
+// }
 
-    /// The active wasmtime instance
-    pub instance: wasmtime::component::Instance,
+// impl<Ctx: WorkerCtx> Worker<Ctx> {
+/// Creates a new worker.
+///
+/// This involves downloading the component (WASM), creating the worker context and the wasmtime instance.
+///
+/// Arguments:
+/// - `this` - the caller object having reference to all services
+/// - `worker_id` - the worker id (consisting of a component id and a worker name)
+/// - `component_version` - the version of the component to be used (if None, the latest version is used)
+/// - `account_id` - the account id of the user who initiated the creation of the worker
+/// - `pending_worker` - the pending worker object which is already published during the worker initializes. This allows clients
+///                      to connect to the worker's event stream during it initializes.
+// async fn new<T>(
+//     this: &T,
+//     worker_id: WorkerId,
+//     mut worker_metadata: WorkerMetadata,
+//     pending_worker: &PendingWorker<Ctx>,
+// ) -> Result<Arc<Self>, GolemError>
+// where
+//     T: HasAll<Ctx>,
+// {
+//     let start = Instant::now();
+//     let result = {
+//         InvocationQueue::attach(pending_worker.invocation_queue.clone()).await?;
+//
+//         info!(
+//             "Worker {}/{} activated",
+//             worker_id.slug(),
+//             worker_metadata.last_known_status.component_version
+//         ); // TODO: move to attach?
+//
+//         todo!()
+//     };
+//
+//     match &result {
+//         Ok(_) => record_create_worker(start.elapsed()),
+//         Err(err) => record_create_worker_failure(err),
+//     }
+//
+//     result
+// }
 
-    /// The active wasmtime store holding the worker context
-    pub store: Mutex<Store<Ctx>>,
-
-    /// The public part of the worker context
-    pub public_state: Ctx::PublicState,
-
-    /// The current execution status of the worker
-    pub execution_status: Arc<RwLock<ExecutionStatus>>,
+/// Makes sure that the worker is active, but without waiting for it to be idle.
+///
+/// If the worker is already in memory this does nothing. Otherwise, the worker will be
+/// created (same as get_or_create_worker) but in a background task.
+///
+/// If the active worker cache is not full, this newly created worker will be added to it.
+/// If it was full, the worker will be dropped but only after it finishes recovering which means
+/// a previously interrupted / suspended invocation might be resumed.
+pub async fn activate<Ctx: WorkerCtx, T>(this: &T, owned_worker_id: &OwnedWorkerId)
+where
+    T: HasAll<Ctx> + Send + Sync + Clone + 'static,
+{
+    match get_or_create(this, owned_worker_id, None, None, None).await {
+        Ok(worker) => {
+            if let Err(err) = InvocationQueue::start_if_needed(worker).await {
+                error!("Failed to activate worker: {err}");
+            }
+        }
+        Err(err) => {
+            error!("Failed to activate worker: {err}");
+        }
+    }
 }
 
-impl<Ctx: WorkerCtx> Worker<Ctx> {
-    /// Creates a new worker.
-    ///
-    /// This involves downloading the component (WASM), creating the worker context and the wasmtime instance.
-    ///
-    /// Arguments:
-    /// - `this` - the caller object having reference to all services
-    /// - `worker_id` - the worker id (consisting of a component id and a worker name)
-    /// - `component_version` - the version of the component to be used (if None, the latest version is used)
-    /// - `account_id` - the account id of the user who initiated the creation of the worker
-    /// - `pending_worker` - the pending worker object which is already published during the worker initializes. This allows clients
-    ///                      to connect to the worker's event stream during it initializes.
-    async fn new<T>(
-        this: &T,
-        worker_id: WorkerId,
-        mut worker_metadata: WorkerMetadata,
-        pending_worker: &PendingWorker<Ctx>,
-    ) -> Result<Arc<Self>, GolemError>
-    where
-        T: HasAll<Ctx>,
-    {
-        let start = Instant::now();
-        let result = {
-            let component_id = worker_id.component_id.clone();
+pub async fn get_or_create<Ctx: WorkerCtx, T>(
+    this: &T,
+    owned_worker_id: &OwnedWorkerId,
+    worker_args: Option<Vec<String>>,
+    worker_env: Option<Vec<(String, String)>>,
+    component_version: Option<u64>,
+) -> Result<Arc<InvocationQueue<Ctx>>, GolemError>
+where
+    T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+{
+    let this_clone = this.clone();
+    let owned_worker_id_clone = owned_worker_id.clone();
 
-            loop {
-                let component_version = worker_metadata
-                    .last_known_status
-                    .pending_updates
-                    .front()
-                    .map_or(
-                        worker_metadata.last_known_status.component_version,
-                        |update| {
-                            let target_version = *update.description.target_version();
-                            info!(
-                                "Attempting {} update from {} to version {target_version}",
-                                match update.description {
-                                    UpdateDescription::Automatic { .. } => "automatic",
-                                    UpdateDescription::SnapshotBased { .. } => "snapshot based",
-                                },
-                                worker_metadata.last_known_status.component_version
-                            );
-                            target_version
-                        },
-                    );
-                let component = this
-                    .component_service()
-                    .get(&this.engine(), &component_id, component_version)
-                    .await?;
-
-                let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
-                    last_known_status: worker_metadata.last_known_status.clone(),
-                }));
-
-                let context = Ctx::create(
-                    OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
-                    this.promise_service(),
-                    this.events(),
-                    this.worker_service(),
-                    this.worker_enumeration_service(),
-                    this.key_value_service(),
-                    this.blob_store_service(),
-                    pending_worker.event_service.clone(),
-                    this.active_workers(),
-                    this.oplog_service(),
-                    pending_worker.oplog.clone(),
-                    pending_worker.invocation_queue.clone(),
-                    this.scheduler_service(),
-                    this.recovery_management(),
-                    this.rpc(),
-                    this.worker_proxy(),
-                    this.extra_deps(),
-                    this.config(),
-                    WorkerConfig::new(
-                        worker_metadata.worker_id.clone(),
-                        worker_metadata.last_known_status.component_version,
-                        worker_metadata.args.clone(),
-                        worker_metadata.env.clone(),
-                        worker_metadata.last_known_status.deleted_regions.clone(),
-                    ),
-                    execution_status.clone(),
-                )
-                .await?;
-
-                let public_state = context.get_public_state().clone();
-                let mut store = Store::new(&this.engine(), context);
-                store.set_epoch_deadline(this.config().limits.epoch_ticks);
-                let worker_id_clone = worker_metadata.worker_id.clone();
-                store.epoch_deadline_callback(move |mut store| {
-                    let current_level = store.get_fuel().unwrap_or(0);
-                    if store.data().is_out_of_fuel(current_level as i64) {
-                        debug!("{worker_id_clone} ran out of fuel, borrowing more");
-                        store.data_mut().borrow_fuel_sync();
-                    }
-
-                    match store.data_mut().check_interrupt() {
-                        Some(kind) => Err(kind.into()),
-                        None => Ok(UpdateDeadline::Yield(1)),
-                    }
-                });
-
-                store.set_fuel(i64::MAX as u64)?;
-                store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
-
-                store.limiter_async(|ctx| ctx.resource_limiter());
-
-                let instance_pre = this.linker().instantiate_pre(&component).map_err(|e| {
-                    GolemError::worker_creation_failed(
-                        worker_id.clone(),
-                        format!("Failed to pre-instantiate worker {worker_id}: {e}"),
-                    )
-                })?;
-
-                let instance = instance_pre
-                    .instantiate_async(&mut store)
-                    .await
-                    .map_err(|e| {
-                        GolemError::worker_creation_failed(
-                            worker_id.clone(),
-                            format!("Failed to instantiate worker {worker_id}: {e}"),
-                        )
-                    })?;
-
-                let result = Arc::new(Worker {
-                    metadata: worker_metadata.clone(),
-                    instance,
-                    store: Mutex::new(store),
-                    public_state,
-                    execution_status,
-                });
-
-                InvocationQueue::attach(result.public_state.invocation_queue(), result.clone())
-                    .await;
-
-                let need_restart = {
-                    let mut store = result.store.lock().await;
-                    Ctx::prepare_instance(&worker_metadata.worker_id, &result.instance, &mut *store)
-                        .await?
-                };
-
-                if need_restart {
-                    // Need to detach the invocation queue, because we have to be able
-                    // to attach it to the next try's instance
-                    result.public_state.invocation_queue().detach().await;
-
-                    // Need to use the latest worker status
-                    let owned_worker_id =
-                        OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id);
-                    let updated_status = calculate_last_known_status(
-                        this,
-                        &owned_worker_id,
-                        &Some(worker_metadata.clone()),
-                    )
-                    .await?;
-                    worker_metadata.last_known_status = updated_status;
-
-                    // Restart the whole loop
-                    continue;
-                }
-
-                info!(
-                    "Worker {}/{} activated",
-                    worker_id.slug(),
-                    worker_metadata.last_known_status.component_version
-                );
-
-                break Ok(result);
-            }
-        };
-
-        match &result {
-            Ok(_) => record_create_worker(start.elapsed()),
-            Err(err) => record_create_worker_failure(err),
-        }
-
-        result
-    }
-
-    /// Makes sure that the worker is active, but without waiting for it to be idle.
-    ///
-    /// If the worker is already in memory this does nothing. Otherwise, the worker will be
-    /// created (same as get_or_create_worker) but in a background task.
-    ///
-    /// If the active worker cache is not full, this newly created worker will be added to it.
-    /// If it was full, the worker will be dropped but only after it finishes recovering which means
-    /// a previously interrupted / suspended invocation might be resumed.
-    pub async fn activate<T>(this: &T, owned_worker_id: &OwnedWorkerId)
-    where
-        T: HasAll<Ctx> + Send + Sync + Clone + 'static,
-    {
-        let owned_worker_id_clone = owned_worker_id.clone();
-
-        let this_clone = this.clone();
-        tokio::task::spawn(
-            async move {
-                let result =
-                    Worker::get_or_create(&this_clone, &owned_worker_id_clone, None, None, None)
-                        .await;
-                if let Err(err) = result {
-                    error!("Failed to activate worker: {err}");
-                }
-            }
-            .in_current_span(),
-        );
-    }
-
-    pub async fn get_or_create<T>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        worker_args: Option<Vec<String>>,
-        worker_env: Option<Vec<(String, String)>>,
-        component_version: Option<u64>,
-    ) -> Result<Arc<Self>, GolemError>
-    where
-        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
-    {
-        let this_clone = this.clone();
-        let worker_id_clone_1 = owned_worker_id.worker_id();
-        let worker_id_clone_2 = owned_worker_id.worker_id();
-        let config_clone = this.config().clone();
-
-        let worker_metadata = Self::get_or_create_worker_metadata(
-            this,
-            owned_worker_id,
-            component_version,
-            worker_args,
-            worker_env,
-        )
-        .await?;
-
-        let oplog = this.oplog_service().open(owned_worker_id).await;
-        let initial_pending_invocations = worker_metadata
-            .last_known_status
-            .pending_invocations
-            .clone();
-        let initial_pending_updates = worker_metadata
-            .last_known_status
-            .pending_updates
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        let initial_invocation_results =
-            worker_metadata.last_known_status.invocation_results.clone();
-
-        let worker_details = this
-            .active_workers()
-            .get_with(
-                owned_worker_id.worker_id(),
-                || {
-                    PendingWorker::new(
-                        worker_id_clone_1,
-                        config_clone,
-                        oplog,
-                        this.worker_activator().clone(),
-                        this.events().clone(),
-                        &initial_pending_invocations,
-                        &initial_pending_updates,
-                        &initial_invocation_results,
-                    )
-                },
-                |pending_worker| {
-                    let pending_worker_clone = pending_worker.clone();
-                    Box::pin(async move {
-                        Worker::new(
-                            &this_clone,
-                            worker_id_clone_2,
-                            worker_metadata,
-                            &pending_worker_clone,
-                        )
-                        .in_current_span()
-                        .await
-                    })
-                },
-            )
-            .await?;
-        Ok(worker_details)
-    }
-
-    /// Gets an already active worker or creates a new one and returns the pending worker object
-    ///
-    /// The pending worker object holds a reference to the event service, invocation queue and oplog
-    /// of the worker that is getting created, allowing the caller to connect to the worker's event stream even before it is fully
-    /// initialized.
-    pub async fn get_or_create_pending<T>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-    ) -> Result<PendingOrFinal<PendingWorker<Ctx>, Arc<Self>>, GolemError>
-    where
-        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
-    {
-        let this_clone = this.clone();
-        let worker_id_clone_1 = owned_worker_id.worker_id();
-        let worker_id_clone_2 = owned_worker_id.worker_id();
-        let config_clone = this.config().clone();
-
-        let worker_metadata =
-            Self::get_or_create_worker_metadata(this, owned_worker_id, None, None, None).await?;
-
-        let oplog = this.oplog_service().open(owned_worker_id).await;
-        let initial_pending_invocations = worker_metadata
-            .last_known_status
-            .pending_invocations
-            .clone();
-        let initial_pending_updates = worker_metadata
-            .last_known_status
-            .pending_updates
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        let initial_invocation_results =
-            worker_metadata.last_known_status.invocation_results.clone();
-
-        this.active_workers()
-            .get_pending_with(
-                owned_worker_id.worker_id(),
-                || {
-                    PendingWorker::new(
-                        worker_id_clone_1,
-                        config_clone,
-                        oplog,
-                        this.worker_activator().clone(),
-                        this.events().clone(),
-                        &initial_pending_invocations,
-                        &initial_pending_updates,
-                        &initial_invocation_results,
-                    )
-                },
-                move |pending_worker| {
-                    let pending_worker_clone = pending_worker.clone();
-                    Box::pin(async move {
-                        Worker::new(
-                            &this_clone,
-                            worker_id_clone_2,
-                            worker_metadata,
-                            &pending_worker_clone,
-                        )
-                        .in_current_span()
-                        .await
-                    })
-                },
-            )
-            .await
-    }
-
-    /// Creates a new worker and returns the pending worker object, and pauses loading
-    /// the worker until an explicit call to a oneshot resume channel.
-    ///
-    /// If the worker is already active, the function fails.
-    ///
-    /// The pending worker object holds a reference to the event service, invocation queue and oplog
-    /// of the worker that is getting created, allowing the caller to connect to the worker's event stream even before it is fully
-    /// initialized.
-    pub async fn get_or_create_paused_pending<T>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        component_version: Option<u64>,
-    ) -> Result<(PendingWorker<Ctx>, tokio::sync::oneshot::Sender<()>), GolemError>
-    where
-        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
-    {
-        let this_clone = this.clone();
-        let worker_id_clone_1 = owned_worker_id.worker_id();
-        let worker_id_clone_2 = owned_worker_id.worker_id();
-        let owned_worker_id_clone = owned_worker_id.clone();
-        let config_clone = this.config().clone();
-
-        let mut worker_metadata = Self::get_or_create_worker_metadata(
-            this,
-            owned_worker_id,
-            component_version,
-            None,
-            None,
-        )
-        .await?;
-
-        let oplog = this.oplog_service().open(owned_worker_id).await;
-        let initial_pending_invocations = worker_metadata
-            .last_known_status
-            .pending_invocations
-            .clone();
-        let initial_pending_updates = worker_metadata
-            .last_known_status
-            .pending_updates
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        let initial_invocation_results =
-            worker_metadata.last_known_status.invocation_results.clone();
-
-        let (resume_sender, resume_receiver) = tokio::sync::oneshot::channel();
-
-        let pending_or_final = this
-            .active_workers()
-            .get_pending_with(
-                owned_worker_id.worker_id(),
-                || {
-                    PendingWorker::new(
-                        worker_id_clone_1,
-                        config_clone,
-                        oplog,
-                        this.worker_activator().clone(),
-                        this.events().clone(),
-                        &initial_pending_invocations,
-                        &initial_pending_updates,
-                        &initial_invocation_results,
-                    )
-                },
-                move |pending_worker| {
-                    let pending_worker_clone = pending_worker.clone();
-                    Box::pin(
-                        async move {
-                            resume_receiver.await.unwrap();
-
-                            // Getting an up-to-date worker metadata before continuing with the worker creation
-                            let worker_status = calculate_last_known_status(
-                                &this_clone,
-                                &owned_worker_id_clone,
-                                &Some(worker_metadata.clone()),
-                            )
-                            .await?;
-                            worker_metadata.last_known_status = worker_status;
-
-                            Worker::new(
-                                &this_clone,
-                                worker_id_clone_2,
-                                worker_metadata,
-                                &pending_worker_clone,
-                            )
-                            .await
-                        }
-                        .in_current_span(),
-                    )
-                },
-            )
-            .await?;
-
-        match pending_or_final {
-            PendingOrFinal::Pending(pending) => Ok((pending, resume_sender)),
-            PendingOrFinal::Final(_) => Err(GolemError::unknown(
-                "Worker was unexpectedly already active",
-            )),
-        }
-    }
-
-    /// Marks the worker as interrupting - this should eventually make the worker interrupted.
-    /// There are several interruption modes but not all of them are supported by all worker
-    /// executor implementations.
-    ///
-    /// - `Interrupt` means that the worker should be interrupted as soon as possible, and it should
-    ///    remain interrupted.
-    /// - `Restart` is a simulated crash, the worker gets automatically restarted after it got interrupted,
-    ///    but only if the worker context supports recovering workers.
-    /// - `Suspend` means that the worker should be moved out of memory and stay in suspended state,
-    ///    automatically resumed when the worker is needed again. This only works if the worker context
-    ///    supports recovering workers.
-    pub fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
-        let mut execution_status = self.execution_status.write().unwrap();
-        let current_execution_status = execution_status.clone();
-        match current_execution_status {
-            ExecutionStatus::Running { last_known_status } => {
-                let (sender, receiver) = tokio::sync::broadcast::channel(1);
-                *execution_status = ExecutionStatus::Interrupting {
-                    interrupt_kind,
-                    await_interruption: Arc::new(sender),
-                    last_known_status,
-                };
-                Some(receiver)
-            }
-            ExecutionStatus::Suspended { last_known_status } => {
-                *execution_status = ExecutionStatus::Interrupted {
-                    interrupt_kind,
-                    last_known_status,
-                };
-                None
-            }
-            ExecutionStatus::Interrupting {
-                await_interruption, ..
-            } => {
-                let receiver = await_interruption.subscribe();
-                Some(receiver)
-            }
-            ExecutionStatus::Interrupted { .. } => None,
-        }
-    }
-
-    pub fn get_metadata(&self) -> WorkerMetadata {
-        let mut result = self.metadata.clone();
-        result.last_known_status = self
-            .execution_status
-            .read()
-            .unwrap()
-            .last_known_status()
-            .clone();
-        result
-    }
-
-    async fn get_or_create_worker_metadata<
-        T: HasWorkerService + HasComponentService + HasConfig + HasOplogService,
-    >(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        component_version: Option<u64>,
-        worker_args: Option<Vec<String>>,
-        worker_env: Option<Vec<(String, String)>>,
-    ) -> Result<WorkerMetadata, GolemError> {
-        let component_id = owned_worker_id.component_id();
-
-        let component_version = match component_version {
-            Some(component_version) => component_version,
-            None => {
-                this.component_service()
-                    .get_latest_version(&component_id)
-                    .await?
-            }
-        };
-
-        match this.worker_service().get(owned_worker_id).await {
-            None => {
-                let initial_status =
-                    calculate_last_known_status(this, owned_worker_id, &None).await?;
-                let worker_metadata = WorkerMetadata {
-                    worker_id: owned_worker_id.worker_id(),
-                    args: worker_args.unwrap_or_default(),
-                    env: worker_env.unwrap_or_default(),
-                    account_id: owned_worker_id.account_id(),
-                    created_at: Timestamp::now_utc(),
-                    last_known_status: WorkerStatusRecord {
+    let worker_details = this
+        .active_workers()
+        .get_with(owned_worker_id.worker_id(), || {
+            Box::pin(async move {
+                Ok(Arc::new(
+                    InvocationQueue::new(
+                        &this_clone,
+                        owned_worker_id_clone,
+                        worker_args,
+                        worker_env,
                         component_version,
-                        ..initial_status
-                    },
-                };
-                this.worker_service().add(&worker_metadata).await?;
-                Ok(worker_metadata)
-            }
-            Some(previous_metadata) => Ok(WorkerMetadata {
-                last_known_status: calculate_last_known_status(
-                    this,
-                    owned_worker_id,
-                    &Some(previous_metadata.clone()),
-                )
-                .await?,
-                ..previous_metadata
-            }),
-        }
-    }
-}
-
-impl<Ctx: WorkerCtx> Drop for Worker<Ctx> {
-    fn drop(&mut self) {
-        info!("Deactivated worker {}", self.metadata.worker_id);
-    }
-}
-
-impl<Ctx: WorkerCtx> Debug for Worker<Ctx> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "WorkerDetails({})", self.metadata.worker_id)
-    }
-}
-
-/// Handle to a worker's invocation queue, oplog and event service during it is getting initialized
-pub struct PendingWorker<Ctx: WorkerCtx> {
-    pub event_service: Arc<dyn WorkerEventService + Send + Sync>,
-    pub oplog: Arc<dyn Oplog + Send + Sync>,
-    pub invocation_queue: Arc<InvocationQueue<Ctx>>,
-    pub worker_id: WorkerId,
-}
-
-impl<Ctx: WorkerCtx> Clone for PendingWorker<Ctx> {
-    fn clone(&self) -> Self {
-        PendingWorker {
-            event_service: self.event_service.clone(),
-            oplog: self.oplog.clone(),
-            invocation_queue: self.invocation_queue.clone(),
-            worker_id: self.worker_id.clone(),
-        }
-    }
-}
-
-impl<Ctx: WorkerCtx> PendingWorker<Ctx> {
-    pub fn new(
-        worker_id: WorkerId,
-        config: Arc<GolemConfig>,
-        oplog: Arc<dyn Oplog + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
-        events: Arc<Events>,
-        initial_pending_invocations: &[TimestampedWorkerInvocation],
-        initial_pending_updates: &[TimestampedUpdateDescription],
-        initial_invocation_results: &HashMap<IdempotencyKey, OplogIndex>,
-    ) -> Result<PendingWorker<Ctx>, GolemError> {
-        let invocation_queue = Arc::new(InvocationQueue::new(
-            worker_id.clone(),
-            oplog.clone(),
-            worker_activator,
-            events,
-            initial_pending_invocations,
-            initial_pending_updates,
-            initial_invocation_results,
-        ));
-
-        Ok(PendingWorker {
-            event_service: Arc::new(WorkerEventServiceDefault::new(
-                config.limits.event_broadcast_capacity,
-                config.limits.event_history_size,
-            )),
-            oplog,
-            invocation_queue,
-            worker_id,
+                    )
+                    .in_current_span()
+                    .await?,
+                ))
+            })
         })
-    }
+        .await?;
+    Ok(worker_details)
 }
 
+/// Marks the worker as interrupting - this should eventually make the worker interrupted.
+/// There are several interruption modes but not all of them are supported by all worker
+/// executor implementations.
+///
+/// - `Interrupt` means that the worker should be interrupted as soon as possible, and it should
+///    remain interrupted.
+/// - `Restart` is a simulated crash, the worker gets automatically restarted after it got interrupted,
+///    but only if the worker context supports recovering workers.
+/// - `Suspend` means that the worker should be moved out of memory and stay in suspended state,
+///    automatically resumed when the worker is needed again. This only works if the worker context
+///    supports recovering workers.
+// pub fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
+//     let mut execution_status = self.execution_status.write().unwrap();
+//     let current_execution_status = execution_status.clone();
+//     match current_execution_status {
+//         ExecutionStatus::Running { last_known_status } => {
+//             let (sender, receiver) = tokio::sync::broadcast::channel(1);
+//             *execution_status = ExecutionStatus::Interrupting {
+//                 interrupt_kind,
+//                 await_interruption: Arc::new(sender),
+//                 last_known_status,
+//             };
+//             Some(receiver)
+//         }
+//         ExecutionStatus::Suspended { last_known_status } => {
+//             *execution_status = ExecutionStatus::Interrupted {
+//                 interrupt_kind,
+//                 last_known_status,
+//             };
+//             None
+//         }
+//         ExecutionStatus::Interrupting {
+//             await_interruption, ..
+//         } => {
+//             let receiver = await_interruption.subscribe();
+//             Some(receiver)
+//         }
+//         ExecutionStatus::Interrupted { .. } => None,
+//     }
+// }
+//
+// pub fn get_metadata(&self) -> WorkerMetadata {
+//     let mut result = self.metadata.clone();
+//     result.last_known_status = self
+//         .execution_status
+//         .read()
+//         .unwrap()
+//         .last_known_status()
+//         .clone();
+//     result
+// }
+
+// TODO: move to InvocationQueue?
 pub async fn invoke<Ctx: WorkerCtx>(
     invocation_queue: Arc<InvocationQueue<Ctx>>,
     idempotency_key: IdempotencyKey,
@@ -711,6 +233,7 @@ pub async fn invoke<Ctx: WorkerCtx>(
     }
 }
 
+// TODO: move to InvocationQueue?
 pub async fn invoke_and_await<Ctx: WorkerCtx>(
     invocation_queue: Arc<InvocationQueue<Ctx>>,
     idempotency_key: IdempotencyKey,
@@ -828,10 +351,7 @@ where
             &new_entries,
         );
 
-        debug!(
-            "calculate_last_known_status using last oplog index {last_oplog_index} as reference"
-        );
-        Ok(WorkerStatusRecord {
+        let result = WorkerStatusRecord {
             oplog_idx: last_oplog_index,
             status,
             overridden_retry_config,
@@ -843,7 +363,11 @@ where
             invocation_results,
             current_idempotency_key,
             component_version,
-        })
+        };
+        debug!(
+            "calculate_last_known_status using last oplog index {last_oplog_index} as reference resulted in {result:?}"
+        );
+        Ok(result)
     }
 }
 
@@ -944,27 +468,6 @@ fn calculate_deleted_regions(
         }
     }
     builder.build()
-}
-
-pub fn calculate_worker_status(
-    retry_config: &RetryConfig,
-    trap_type: &TrapType,
-    previous_tries: u64,
-) -> WorkerStatus {
-    match trap_type {
-        TrapType::Interrupt(InterruptKind::Interrupt) => WorkerStatus::Interrupted,
-        TrapType::Interrupt(InterruptKind::Suspend) => WorkerStatus::Suspended,
-        TrapType::Interrupt(InterruptKind::Jump) => WorkerStatus::Running,
-        TrapType::Interrupt(InterruptKind::Restart) => WorkerStatus::Running,
-        TrapType::Exit => WorkerStatus::Exited,
-        TrapType::Error(error) => {
-            if is_worker_error_retriable(retry_config, error, previous_tries) {
-                WorkerStatus::Retrying
-            } else {
-                WorkerStatus::Failed
-            }
-        }
-    }
 }
 
 fn calculate_overridden_retry_policy(
@@ -1111,6 +614,9 @@ fn calculate_invocation_results(
                 current_idempotency_key = Some(idempotency_key.clone());
             }
             OplogEntry::ExportedFunctionCompleted { .. } => {
+                if let Some(idempotency_key) = &current_idempotency_key {
+                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
+                }
                 current_idempotency_key = None;
             }
             OplogEntry::Error { .. } => {
@@ -1128,4 +634,15 @@ fn calculate_invocation_results(
     }
 
     (invocation_results, current_idempotency_key)
+}
+
+pub fn is_worker_error_retriable(
+    retry_config: &RetryConfig,
+    error: &WorkerError,
+    retry_count: u64,
+) -> bool {
+    match error {
+        WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
+        WorkerError::StackOverflow => false,
+    }
 }

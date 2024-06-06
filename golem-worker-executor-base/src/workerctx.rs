@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::string::FromUtf8Error;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 
 use async_trait::async_trait;
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -34,11 +34,10 @@ use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::events::Events;
 use crate::services::golem_config::GolemConfig;
-use crate::services::invocation_queue::InvocationQueue;
+use crate::services::invocation_queue::{InvocationQueue, RecoveryDecision};
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::promise::PromiseService;
-use crate::services::recovery::RecoveryManagement;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
@@ -104,9 +103,8 @@ pub trait WorkerCtx:
         active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
-        invocation_queue: Arc<InvocationQueue<Self>>,
+        invocation_queue: Weak<InvocationQueue<Self>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         extra_deps: Self::ExtraDeps,
@@ -236,9 +234,6 @@ pub trait StatusManagement {
 
     /// Update the pending updates of the worker
     async fn update_pending_updates(&self);
-
-    /// Called when a worker is getting deactivated
-    async fn deactivate(&self);
 }
 
 /// The invocation hooks interface of a worker context has some functions called around
@@ -246,8 +241,6 @@ pub trait StatusManagement {
 /// successful or failed) of invocations.
 #[async_trait]
 pub trait InvocationHooks {
-    type FailurePayload: Send + Sync + 'static;
-
     /// Called when a worker is about to be invoked
     /// Arguments:
     /// - `full_function_name`: The full name of the function being invoked (including the exported interface name if any)
@@ -259,27 +252,10 @@ pub trait InvocationHooks {
         full_function_name: &str,
         function_input: &Vec<Value>,
         calling_convention: Option<CallingConvention>,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), GolemError>;
 
-    /// Called when a worker invocation fails, before the worker gets deactivated
-    async fn on_invocation_failure(
-        &mut self,
-        trap_type: &TrapType,
-    ) -> Result<Self::FailurePayload, anyhow::Error>;
-
-    /// Called when a worker invocation fails, after the worker has been deactivated
-    async fn on_invocation_failure_deactivated(
-        &mut self,
-        payload: &Self::FailurePayload,
-        trap_type: &TrapType,
-    ) -> Result<WorkerStatus, anyhow::Error>;
-
-    /// Called when the worker invocation's failure is final, no more retry attempts will be made
-    async fn on_invocation_failure_final(
-        &mut self,
-        payload: &Self::FailurePayload,
-        trap_type: &TrapType,
-    ) -> Result<(), anyhow::Error>;
+    /// Called when a worker invocation fails
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision;
 
     /// Called when a worker invocation succeeds
     /// Arguments:
@@ -294,7 +270,7 @@ pub trait InvocationHooks {
         function_input: &Vec<Value>,
         consumed_fuel: i64,
         output: Vec<Value>,
-    ) -> Result<Option<Vec<Value>>, anyhow::Error>;
+    ) -> Result<(), GolemError>;
 }
 
 #[async_trait]
@@ -353,7 +329,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         worker_id: &WorkerId,
         instance: &wasmtime::component::Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<bool, GolemError>;
+    ) -> Result<RecoveryDecision, GolemError>;
 
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
@@ -369,7 +345,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     ) -> Result<(), GolemError>;
 
     /// Callback called when the executor's shard assignment has been changed
-    async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync>(
+    async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), anyhow::Error>;
 }
