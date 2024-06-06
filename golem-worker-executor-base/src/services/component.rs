@@ -31,6 +31,7 @@ use golem_common::model::ComponentId;
 use golem_common::retries::with_retries;
 use http::Uri;
 use prost::Message;
+use tokio::task::spawn_blocking;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use wasmtime::component::Component;
@@ -181,14 +182,18 @@ impl ComponentService for ComponentServiceGrpc {
                             .await?;
 
                             let start = Instant::now();
-                            let component =
+                            let component_id_clone = component_id.clone();
+                            let component = spawn_blocking(move || {
                                 Component::from_binary(&engine, &bytes).map_err(|e| {
                                     GolemError::ComponentParseFailed {
-                                        component_id: component_id.clone(),
+                                        component_id: component_id_clone,
                                         component_version,
                                         reason: format!("{}", e),
                                     }
-                                })?;
+                                })
+                            })
+                            .await
+                            .map_err(|join_err| GolemError::unknown(join_err.to_string()))??;
                             let end = Instant::now();
 
                             let compilation_time = end.duration_since(start);
