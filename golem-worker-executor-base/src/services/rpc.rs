@@ -26,7 +26,7 @@ use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
 
 use crate::error::GolemError;
 use crate::services::events::Events;
-use crate::services::invocation_queue::InvocationQueue;
+use crate::worker::Worker;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
@@ -469,7 +469,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
             let worker =
                 crate::worker::get_or_create(self, owned_worker_id, None, None, None).await?;
-            InvocationQueue::start_if_needed(worker.clone()).await?;
+            Worker::start_if_needed(worker.clone()).await?;
 
             let result_values = invoke_and_await(
                 worker,
@@ -515,7 +515,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
             let worker =
                 crate::worker::get_or_create(self, owned_worker_id, None, None, None).await?;
-            InvocationQueue::start_if_needed(worker.clone()).await?;
+            Worker::start_if_needed(worker.clone()).await?;
 
             invoke(
                 worker,

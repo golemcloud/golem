@@ -46,7 +46,6 @@ use wasmtime::Error;
 use crate::error::*;
 use crate::metrics::grpc::{record_closed_grpc_active_stream, record_new_grpc_active_stream};
 use crate::model::{InterruptKind, LastError};
-use crate::services::invocation_queue::InvocationQueue;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{
@@ -55,6 +54,7 @@ use crate::services::{
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::invoke_and_await;
+use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use crate::{recorded_grpc_request, worker};
 
@@ -259,7 +259,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Some(component_version),
         )
         .await?;
-        InvocationQueue::start_if_needed(worker.clone()).await?;
+        Worker::start_if_needed(worker.clone()).await?;
 
         Ok(())
     }
@@ -534,16 +534,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_or_create<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<Arc<InvocationQueue<Ctx>>, GolemError> {
+    ) -> Result<Arc<Worker<Ctx>>, GolemError> {
         let worker = self.get_or_create_pending(request).await?;
-        InvocationQueue::start_if_needed(worker.clone()).await?;
+        Worker::start_if_needed(worker.clone()).await?;
         Ok(worker)
     }
 
     async fn get_or_create_pending<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<Arc<InvocationQueue<Ctx>>, GolemError> {
+    ) -> Result<Arc<Worker<Ctx>>, GolemError> {
         let worker_id = request.worker_id()?;
         let account_id: AccountId = request.account_id()?;
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
@@ -839,7 +839,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         worker.update_status(worker_status).await;
 
                         debug!("Resuming initialization to perform the update",);
-                        InvocationQueue::start_if_needed(worker.clone()).await?;
+                        Worker::start_if_needed(worker.clone()).await?;
                     }
                     WorkerStatus::Running | WorkerStatus::Idle => {
                         // If the worker is already running we need to write to its oplog the

@@ -36,7 +36,6 @@ use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::invocation_queue::{InvocationQueue, RecoveryDecision};
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
 use golem_worker_executor_base::services::promise::PromiseService;
@@ -46,6 +45,7 @@ use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{worker_enumeration, HasAll};
+use golem_worker_executor_base::worker::{RecoveryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
     StatusManagement, UpdateManagement, WorkerCtx,
@@ -270,7 +270,7 @@ impl WorkerCtx for Context {
         _active_workers: Arc<ActiveWorkers<Context>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
-        invocation_queue: Weak<InvocationQueue<Context>>,
+        invocation_queue: Weak<Worker<Context>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,

@@ -35,7 +35,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::{worker_enumeration, HasAll, HasInvocationQueue, HasOplog};
+use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
 use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
     ExternalOperations, InvocationHooks, InvocationManagement, IoCapturing, PublicWorkerIo,
@@ -91,8 +91,8 @@ pub mod wasm_rpc;
 
 mod durability;
 use crate::services::events::Events;
-use crate::services::invocation_queue::{InvocationQueue, RecoveryDecision};
 use crate::services::worker_proxy::WorkerProxy;
+use crate::worker::{RecoveryDecision, Worker};
 pub use durability::*;
 use golem_common::retries::get_delay;
 
@@ -129,7 +129,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
-        invocation_queue: Weak<InvocationQueue<Ctx>>,
+        invocation_queue: Weak<Worker<Ctx>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
@@ -293,26 +293,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .clone();
 
         let mut deleted_regions = self.state.deleted_regions.clone();
-        let (pending_updates, extra_deleted_regions) =
-            self.public_state.invocation_queue().pending_updates();
+        let (pending_updates, extra_deleted_regions) = self.public_state.worker().pending_updates();
         deleted_regions.set_override(extra_deleted_regions);
 
         status.deleted_regions = deleted_regions;
         status
             .overridden_retry_config
             .clone_from(&self.state.overridden_retry_policy);
-        status.pending_invocations = self.public_state.invocation_queue().pending_invocations();
-        status.invocation_results = self.public_state.invocation_queue().invocation_results();
+        status.pending_invocations = self.public_state.worker().pending_invocations();
+        status.invocation_results = self.public_state.worker().invocation_results();
         status.pending_updates = pending_updates;
         status
             .current_idempotency_key
             .clone_from(&self.state.current_idempotency_key);
         status.oplog_idx = self.state.oplog.current_oplog_index().await;
         f(&mut status);
-        self.public_state
-            .invocation_queue()
-            .update_status(status)
-            .await;
+        self.public_state.worker().update_status(status).await;
     }
 
     pub async fn store_worker_status(&self, status: WorkerStatus) {
@@ -360,7 +356,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         match self.state.get_current_idempotency_key() {
             Some(key) => Some(
                 self.public_state
-                    .invocation_queue()
+                    .worker()
                     .lookup_invocation_result(&key)
                     .await,
             ),
@@ -456,7 +452,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             .data()
             .durable_ctx()
             .public_state
-            .invocation_queue()
+            .worker()
             .pop_pending_update();
         match pending_update {
             Some(pending_update) => match result {
@@ -622,7 +618,7 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
 
     async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         self.public_state
-            .invocation_queue()
+            .worker()
             .lookup_invocation_result(key)
             .await
     }
@@ -767,7 +763,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             if let Some(oplog_idx) = oplog_idx {
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
-                        .invocation_queue()
+                        .worker()
                         .store_invocation_failure(&idempotency_key, trap_type, oplog_idx)
                         .await;
                 }
@@ -805,7 +801,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
-                        .invocation_queue()
+                        .worker()
                         .store_invocation_success(&idempotency_key, output.clone(), oplog_idx)
                         .await;
                 }
@@ -1132,7 +1128,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             match decision {
                 RecoveryDecision::Immediate => {
                     let worker = get_or_create(this, &owned_worker_id, None, None, None).await?;
-                    InvocationQueue::start_if_needed(worker).await?;
+                    Worker::start_if_needed(worker).await?;
                 }
                 RecoveryDecision::Delayed(_) => {
                     panic!("Delayed recovery on startup is not supported currently")
@@ -1639,7 +1635,7 @@ pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
     managed_stdio: ManagedStandardIo,
-    invocation_queue: Weak<InvocationQueue<Ctx>>,
+    invocation_queue: Weak<Worker<Ctx>>,
     oplog: Arc<dyn Oplog + Send + Sync>,
 }
 
@@ -1662,8 +1658,8 @@ impl<Ctx: WorkerCtx> PublicWorkerIo for PublicDurableWorkerState<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasInvocationQueue<Ctx> for PublicDurableWorkerState<Ctx> {
-    fn invocation_queue(&self) -> Arc<InvocationQueue<Ctx>> {
+impl<Ctx: WorkerCtx> HasWorker<Ctx> for PublicDurableWorkerState<Ctx> {
+    fn worker(&self) -> Arc<Worker<Ctx>> {
         // NOTE: We store the back-reference as a weak reference here to avoid a reference cycle,
         // but this should always work as the wasmtime store holding the DurableWorkerCtx is owned
         // by the InvocationQueue's run loop.

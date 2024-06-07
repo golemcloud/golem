@@ -76,7 +76,6 @@ use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::events::Events;
-use golem_worker_executor_base::services::invocation_queue::{InvocationQueue, RecoveryDecision};
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
 };
@@ -84,6 +83,7 @@ use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
+use golem_worker_executor_base::worker::{RecoveryDecision, Worker};
 use tonic::transport::Channel;
 use tracing::{error, info};
 use wasmtime::component::{Instance, Linker, ResourceAny};
@@ -596,7 +596,7 @@ impl WorkerCtx for TestWorkerCtx {
         _active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
-        invocation_queue: Weak<InvocationQueue<TestWorkerCtx>>,
+        invocation_queue: Weak<Worker<TestWorkerCtx>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,

@@ -22,12 +22,12 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::model::WorkerId;
 
 use crate::error::GolemError;
-use crate::services::invocation_queue::InvocationQueue;
+use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 
 /// Holds the metadata and wasmtime structures of the active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
-    cache: Cache<WorkerId, (), Arc<InvocationQueue<Ctx>>, GolemError>, // TODO: SimpleCache?
+    cache: Cache<WorkerId, (), Arc<Worker<Ctx>>, GolemError>, // TODO: SimpleCache?
 }
 
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
@@ -61,10 +61,10 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         &self,
         worker_id: &WorkerId,
         f: F,
-    ) -> Result<Arc<InvocationQueue<Ctx>>, GolemError>
+    ) -> Result<Arc<Worker<Ctx>>, GolemError>
     where
         F: FnOnce() -> Pin<
-                Box<dyn Future<Output = Result<Arc<InvocationQueue<Ctx>>, GolemError>> + Send>,
+                Box<dyn Future<Output = Result<Arc<Worker<Ctx>>, GolemError>> + Send>,
             > + Send,
     {
         self.cache.get_or_insert_simple(worker_id, f).await
@@ -74,7 +74,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.cache.remove(worker_id)
     }
 
-    pub fn enum_workers(&self) -> Vec<(WorkerId, Arc<InvocationQueue<Ctx>>)> {
+    pub fn enum_workers(&self) -> Vec<(WorkerId, Arc<Worker<Ctx>>)> {
         self.cache.iter().collect()
     }
 }

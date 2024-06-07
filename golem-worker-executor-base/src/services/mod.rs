@@ -29,7 +29,6 @@ pub mod compiled_component;
 pub mod component;
 pub mod events;
 pub mod golem_config;
-pub mod invocation_queue;
 pub mod key_value;
 pub mod oplog;
 pub mod promise;
@@ -115,8 +114,8 @@ pub trait HasExtraDeps<Ctx: WorkerCtx> {
     fn extra_deps(&self) -> Ctx::ExtraDeps;
 }
 
-pub trait HasInvocationQueue<Ctx: WorkerCtx> {
-    fn invocation_queue(&self) -> Arc<invocation_queue::InvocationQueue<Ctx>>;
+pub trait HasWorker<Ctx: WorkerCtx> {
+    fn worker(&self) -> Arc<crate::worker::Worker<Ctx>>;
 }
 
 pub trait HasOplog {

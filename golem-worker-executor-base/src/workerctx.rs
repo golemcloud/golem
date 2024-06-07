@@ -34,7 +34,6 @@ use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::events::Events;
 use crate::services::golem_config::GolemConfig;
-use crate::services::invocation_queue::{InvocationQueue, RecoveryDecision};
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::promise::PromiseService;
@@ -43,7 +42,8 @@ use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{worker_enumeration, HasAll, HasInvocationQueue, HasOplog};
+use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
+use crate::worker::{RecoveryDecision, Worker};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -66,7 +66,7 @@ pub trait WorkerCtx:
     /// PublicState is a subset of the worker context which is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
-    type PublicState: PublicWorkerIo + HasInvocationQueue<Self> + HasOplog + Clone + Send + Sync;
+    type PublicState: PublicWorkerIo + HasWorker<Self> + HasOplog + Clone + Send + Sync;
 
     /// Creates a new worker context
     ///
@@ -103,7 +103,7 @@ pub trait WorkerCtx:
         active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
-        invocation_queue: Weak<InvocationQueue<Self>>,
+        invocation_queue: Weak<Worker<Self>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
