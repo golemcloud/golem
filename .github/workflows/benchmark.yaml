@@ -81,7 +81,7 @@ jobs:
           echo "Successfully ran cold start large benchmark without component compilation"
           
           echo "Starting cold start medium benchmark without component compilation"
-          ./target/debug/benchmark_cold_start_medium spawned --quiet --json --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
+          ./target/debug/benchmark_cold_start_medium --quiet --json spawned --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
           cat benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
           echo "Successfully ran cold start medium benchmark without component compilation"
           
