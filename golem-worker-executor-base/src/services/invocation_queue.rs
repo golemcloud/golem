@@ -16,6 +16,7 @@ use anyhow::anyhow;
 use golem_wasm_rpc::Value;
 use std::collections::{HashMap, VecDeque};
 use std::ops::DerefMut;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
@@ -73,6 +74,7 @@ pub struct InvocationQueue<Ctx: WorkerCtx> {
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
     initial_worker_metadata: WorkerMetadata,
+    stopping: AtomicBool,
 
     running: Arc<Mutex<Option<RunningInvocationQueue>>>,
 }
@@ -153,6 +155,8 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
             last_known_status: worker_metadata.last_known_status.clone(),
         }));
 
+        let stopping = AtomicBool::new(false);
+
         Ok(InvocationQueue {
             owned_worker_id,
             oplog,
@@ -166,6 +170,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
             invocation_results,
             running,
             execution_status,
+            stopping,
             initial_worker_metadata: worker_metadata,
         })
     }
@@ -291,30 +296,56 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
     }
 
     pub async fn stop(&self) {
-        let mut running = self.running.lock().await;
-        if let Some(running) = running.take() {
-            debug!("Stopping running worker");
-            let queued_items = running
-                .queue
-                .write()
-                .unwrap()
-                .drain(..)
-                .collect::<VecDeque<_>>();
+        self.stop_internal(false).await;
+    }
 
-            debug!("stop updating queue with items {queued_items:?}");
+    async fn stop_internal(&self, called_from_invocation_loop: bool) {
+        // we don't want to re-enter stop from within the invocation loop
+        if self
+            .stopping
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            == Ok(false)
+        {
+            let mut running = self.running.lock().await;
+            if let Some(running) = running.take() {
+                debug!("Stopping running worker ({called_from_invocation_loop})");
+                let queued_items = running
+                    .queue
+                    .write()
+                    .unwrap()
+                    .drain(..)
+                    .collect::<VecDeque<_>>();
 
-            *self.queue.write().unwrap() = queued_items;
+                debug!("stop updating queue with items {queued_items:?}");
 
-            // TODO: save last known status?
-            // TODO: make sure the loop is stopped (probably it's already implemented?)
+                *self.queue.write().unwrap() = queued_items;
+
+                if !called_from_invocation_loop {
+                    // If stop was called from outside, we wait until the invocation queue stops
+                    // (it happens by `running` getting dropped)
+                    let run_loop_handle = running.stop();
+                    debug!("Awaiting invocation queue loop to stop");
+                    run_loop_handle.await.expect("Worker run loop failed");
+                    debug!("Awaited invocation queue loop stopped");
+                }
+            } else {
+                debug!("Worker was already stopped");
+            }
+            self.stopping.store(false, Ordering::Release);
         } else {
-            debug!("Worker was already stopped");
+            debug!("Skipping stop() as it is already running");
         }
     }
 
     pub async fn restart(this: Arc<InvocationQueue<Ctx>>) -> Result<(), GolemError> {
-        // TODO
-        this.stop().await;
+        Self::restart_internal(this, false).await
+    }
+
+    async fn restart_internal(
+        this: Arc<InvocationQueue<Ctx>>,
+        called_from_invocation_loop: bool,
+    ) -> Result<(), GolemError> {
+        this.stop_internal(called_from_invocation_loop).await;
         Self::start_if_needed(this).await
     }
 
@@ -699,7 +730,7 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
 struct RunningInvocationQueue {
     owned_worker_id: OwnedWorkerId,
 
-    _handle: Option<JoinHandle<()>>,
+    handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -750,12 +781,16 @@ impl RunningInvocationQueue {
 
         RunningInvocationQueue {
             owned_worker_id,
-            _handle: Some(handle),
+            handle: Some(handle),
             sender,
             queue,
             oplog,
             execution_status,
         }
+    }
+
+    pub fn stop(mut self) -> JoinHandle<()> {
+        self.handle.take().unwrap()
     }
 
     pub async fn enqueue(
@@ -820,7 +855,7 @@ impl RunningInvocationQueue {
                 Ok(decision) => decision,
                 Err(err) => {
                     warn!("Failed to start the worker: {err}");
-                    parent.stop().await;
+                    parent.stop_internal(true).await;
                     store.data_mut().set_suspended();
                     return; // early return, we can't retry this
                 }
@@ -1061,17 +1096,17 @@ impl RunningInvocationQueue {
         match final_decision {
             RecoveryDecision::Immediate => {
                 debug!("Invocation queue loop triggering restart immediately");
-                let _ = InvocationQueue::restart(parent).await; // TODO: what to do with error here?
+                let _ = InvocationQueue::restart_internal(parent, true).await; // TODO: what to do with error here?
             }
             RecoveryDecision::Delayed(delay) => {
                 debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
                 tokio::time::sleep(delay).await;
                 debug!("Invocation queue loop triggering restart after delay");
-                let _ = InvocationQueue::restart(parent).await; // TODO: what to do with error here?
+                let _ = InvocationQueue::restart_internal(parent, true).await; // TODO: what to do with error here?
             }
             RecoveryDecision::None => {
                 debug!("Invocation queue loop notifying parent about being stopped");
-                parent.stop().await;
+                parent.stop_internal(true).await;
             }
         }
     }

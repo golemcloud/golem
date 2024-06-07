@@ -431,7 +431,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let worker =
                     worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
                 worker.set_interrupting(InterruptKind::Interrupt).await;
-                worker.stop().await;
                 // Explicitly drop from the active worker cache - this will drop websocket connections etc.
                 self.active_workers().remove(&worker_id);
             }
@@ -440,7 +439,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let worker =
                     worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
                 worker.set_interrupting(InterruptKind::Interrupt).await;
-                worker.stop().await;
                 // Explicitly drop from the active worker cache - this will drop websocket connections etc.
                 self.active_workers().remove(&worker_id);
             }
@@ -455,7 +453,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     })
                     .await;
 
-                worker.stop().await;
                 // Explicitly drop from the active worker cache - this will drop websocket connections etc.
                 self.active_workers().remove(&worker_id);
             }
