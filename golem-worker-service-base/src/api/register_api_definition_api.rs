@@ -16,9 +16,16 @@ use crate::parser::ParseError;
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ApiDeployment {
-    pub api_definition_id: ApiDefinitionId,
-    pub version: ApiVersion,
+    pub api_definitions: Vec<ApiDefinitionInfo>,
     pub site: ApiSite,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ApiDefinitionInfo {
+    pub id: ApiDefinitionId,
+    pub version: ApiVersion,
 }
 
 // Mostly this data structures that represents the actual incoming request
@@ -54,9 +61,17 @@ pub struct GolemWorkerBinding {
 
 impl<N> From<crate::api_definition::ApiDeployment<N>> for ApiDeployment {
     fn from(value: crate::api_definition::ApiDeployment<N>) -> Self {
+        let api_definitions = value
+            .api_definition_keys
+            .into_iter()
+            .map(|key| ApiDefinitionInfo {
+                id: key.id,
+                version: key.version,
+            })
+            .collect();
+
         Self {
-            api_definition_id: value.api_definition_id.id,
-            version: value.api_definition_id.version,
+            api_definitions,
             site: value.site,
         }
     }

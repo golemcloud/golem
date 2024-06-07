@@ -80,6 +80,14 @@ pub struct ApiDefinitionKey<Namespace> {
     pub version: ApiVersion,
 }
 
+#[derive(
+    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
+)]
+pub struct ApiDefinitionIdWithVersion {
+    pub id: ApiDefinitionId,
+    pub version: ApiVersion,
+}
+
 impl<Namespace: Display> ApiDefinitionKey<Namespace> {
     pub fn displayed(&self) -> ApiDefinitionKey<String> {
         ApiDefinitionKey {

@@ -45,7 +45,7 @@ impl SpawnedComponentCompilationService {
         out_level: Level,
         err_level: Level,
     ) -> Self {
-        println!("Starting golem-component-compilation-service process");
+        info!("Starting golem-component-compilation-service process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled golem-component-compilation-service at {executable:?}");

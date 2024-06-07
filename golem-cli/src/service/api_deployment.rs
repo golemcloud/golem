@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::clients::api_deployment::ApiDeploymentClient;
-use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
+use crate::model::{ApiDefinitionId, ApiDefinitionIdWithVersion, GolemError, GolemResult};
 use async_trait::async_trait;
 
 #[async_trait]
@@ -22,8 +22,7 @@ pub trait ApiDeploymentService {
 
     async fn deploy(
         &self,
-        id: ApiDefinitionId,
-        version: ApiDefinitionVersion,
+        definitions: Vec<ApiDefinitionIdWithVersion>,
         host: String,
         subdomain: Option<String>,
         project: &Self::ProjectContext,
@@ -49,15 +48,14 @@ impl<ProjectContext: Send + Sync> ApiDeploymentService
 
     async fn deploy(
         &self,
-        id: ApiDefinitionId,
-        version: ApiDefinitionVersion,
+        definitions: Vec<ApiDefinitionIdWithVersion>,
         host: String,
         subdomain: Option<String>,
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError> {
         let deployment = self
             .client
-            .deploy(&id, &version, &host, subdomain, project)
+            .deploy(definitions, &host, subdomain, project)
             .await?;
 
         Ok(GolemResult::Ok(Box::new(deployment)))
