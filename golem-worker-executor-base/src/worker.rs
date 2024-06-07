@@ -35,63 +35,6 @@ use crate::services::invocation_queue::InvocationQueue;
 use crate::services::{HasAll, HasConfig, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 
-/// Worker is one active wasmtime instance representing a Golem worker with its corresponding
-/// worker context. The worker struct itself is responsible for creating/reactivating/interrupting
-/// the worker, but the actual worker invocation is implemented in separate functions in the
-/// 'invocation' module.
-// pub struct Worker<Ctx: WorkerCtx> {
-//     /// Metadata associated with the worker
-//     pub metadata: WorkerMetadata,
-//
-//     /// The public part of the worker context
-//     pub public_state: Ctx::PublicState,
-//
-//     /// The current execution status of the worker
-//     pub execution_status: Arc<RwLock<ExecutionStatus>>,
-// }
-
-// impl<Ctx: WorkerCtx> Worker<Ctx> {
-/// Creates a new worker.
-///
-/// This involves downloading the component (WASM), creating the worker context and the wasmtime instance.
-///
-/// Arguments:
-/// - `this` - the caller object having reference to all services
-/// - `worker_id` - the worker id (consisting of a component id and a worker name)
-/// - `component_version` - the version of the component to be used (if None, the latest version is used)
-/// - `account_id` - the account id of the user who initiated the creation of the worker
-/// - `pending_worker` - the pending worker object which is already published during the worker initializes. This allows clients
-///                      to connect to the worker's event stream during it initializes.
-// async fn new<T>(
-//     this: &T,
-//     worker_id: WorkerId,
-//     mut worker_metadata: WorkerMetadata,
-//     pending_worker: &PendingWorker<Ctx>,
-// ) -> Result<Arc<Self>, GolemError>
-// where
-//     T: HasAll<Ctx>,
-// {
-//     let start = Instant::now();
-//     let result = {
-//         InvocationQueue::attach(pending_worker.invocation_queue.clone()).await?;
-//
-//         info!(
-//             "Worker {}/{} activated",
-//             worker_id.slug(),
-//             worker_metadata.last_known_status.component_version
-//         ); // TODO: move to attach?
-//
-//         todo!()
-//     };
-//
-//     match &result {
-//         Ok(_) => record_create_worker(start.elapsed()),
-//         Err(err) => record_create_worker_failure(err),
-//     }
-//
-//     result
-// }
-
 /// Makes sure that the worker is active, but without waiting for it to be idle.
 ///
 /// If the worker is already in memory this does nothing. Otherwise, the worker will be
@@ -131,7 +74,7 @@ where
 
     let worker_details = this
         .active_workers()
-        .get_with(owned_worker_id.worker_id(), || {
+        .get_with(&owned_worker_id.worker_id, || {
             Box::pin(async move {
                 Ok(Arc::new(
                     InvocationQueue::new(
@@ -149,58 +92,6 @@ where
         .await?;
     Ok(worker_details)
 }
-
-/// Marks the worker as interrupting - this should eventually make the worker interrupted.
-/// There are several interruption modes but not all of them are supported by all worker
-/// executor implementations.
-///
-/// - `Interrupt` means that the worker should be interrupted as soon as possible, and it should
-///    remain interrupted.
-/// - `Restart` is a simulated crash, the worker gets automatically restarted after it got interrupted,
-///    but only if the worker context supports recovering workers.
-/// - `Suspend` means that the worker should be moved out of memory and stay in suspended state,
-///    automatically resumed when the worker is needed again. This only works if the worker context
-///    supports recovering workers.
-// pub fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
-//     let mut execution_status = self.execution_status.write().unwrap();
-//     let current_execution_status = execution_status.clone();
-//     match current_execution_status {
-//         ExecutionStatus::Running { last_known_status } => {
-//             let (sender, receiver) = tokio::sync::broadcast::channel(1);
-//             *execution_status = ExecutionStatus::Interrupting {
-//                 interrupt_kind,
-//                 await_interruption: Arc::new(sender),
-//                 last_known_status,
-//             };
-//             Some(receiver)
-//         }
-//         ExecutionStatus::Suspended { last_known_status } => {
-//             *execution_status = ExecutionStatus::Interrupted {
-//                 interrupt_kind,
-//                 last_known_status,
-//             };
-//             None
-//         }
-//         ExecutionStatus::Interrupting {
-//             await_interruption, ..
-//         } => {
-//             let receiver = await_interruption.subscribe();
-//             Some(receiver)
-//         }
-//         ExecutionStatus::Interrupted { .. } => None,
-//     }
-// }
-//
-// pub fn get_metadata(&self) -> WorkerMetadata {
-//     let mut result = self.metadata.clone();
-//     result.last_known_status = self
-//         .execution_status
-//         .read()
-//         .unwrap()
-//         .last_known_status()
-//         .clone();
-//     result
-// }
 
 // TODO: move to InvocationQueue?
 pub async fn invoke<Ctx: WorkerCtx>(

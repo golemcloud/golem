@@ -59,7 +59,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     pub async fn get_with<F>(
         &self,
-        worker_id: WorkerId,
+        worker_id: &WorkerId,
         f: F,
     ) -> Result<Arc<InvocationQueue<Ctx>>, GolemError>
     where
@@ -67,7 +67,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 Box<dyn Future<Output = Result<Arc<InvocationQueue<Ctx>>, GolemError>> + Send>,
             > + Send,
     {
-        self.cache.get_or_insert_simple(&worker_id, f).await
+        self.cache.get_or_insert_simple(worker_id, f).await
     }
 
     pub fn remove(&self, worker_id: &WorkerId) {
