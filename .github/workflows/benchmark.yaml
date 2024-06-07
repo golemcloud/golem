@@ -137,7 +137,7 @@ jobs:
           
           if git fetch origin main:main && [[ ! "$COMMENT_BODY" =~ refresh ]]; then                              
              # Check each file
-             for file in "${files[@]}"; do
+             for file in ${files[@]}; do
                 if git checkout master -- "benchmark-data/$file"; then
                   present_files+=("$file")
                   compare_command="$compare_command --files $file=$(pwd)/benchmark-data/$file,$(pwd)/benchmark-data-current/$file"
