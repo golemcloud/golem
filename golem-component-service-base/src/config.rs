@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::Deserialize;
 use golem_service_base::model::Empty;
+use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]

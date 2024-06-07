@@ -116,6 +116,9 @@ mod tests {
         let cfg = super::ComponentServiceConfig::new();
         std::env::remove_var("GOLEM__COMPILATION__TYPE");
 
-        assert!(matches!(cfg.compilation, super::ComponentCompilationConfig::Disabled(_)));
+        assert!(matches!(
+            cfg.compilation,
+            super::ComponentCompilationConfig::Disabled(_)
+        ));
     }
 }
