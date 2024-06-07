@@ -387,14 +387,6 @@ impl FuelManagement for TestWorkerCtx {
 impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     type ExtraDeps = ();
 
-    async fn set_worker_status<T: HasAll<TestWorkerCtx> + Send + Sync>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        status: WorkerStatus,
-    ) -> Result<(), GolemError> {
-        DurableWorkerCtx::<TestWorkerCtx>::set_worker_status(this, owned_worker_id, status).await
-    }
-
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,

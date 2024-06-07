@@ -635,6 +635,16 @@ impl<Ctx: WorkerCtx> InvocationQueue<Ctx> {
         }
     }
 
+    pub async fn update_status(&self, status_value: WorkerStatusRecord) {
+        self.worker_service()
+            .update_status(&self.owned_worker_id, &status_value)
+            .await;
+        self.execution_status
+            .write()
+            .unwrap()
+            .set_last_known_status(status_value);
+    }
+
     async fn get_or_create_worker_metadata<
         T: HasWorkerService + HasComponentService + HasConfig + HasOplogService,
     >(

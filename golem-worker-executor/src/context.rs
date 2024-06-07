@@ -88,14 +88,6 @@ impl FuelManagement for Context {
 impl ExternalOperations<Context> for Context {
     type ExtraDeps = AdditionalDeps;
 
-    async fn set_worker_status<T: HasAll<Context> + Send + Sync>(
-        this: &T,
-        worker_id: &OwnedWorkerId,
-        status: WorkerStatus,
-    ) -> Result<(), GolemError> {
-        DurableWorkerCtx::<Context>::set_worker_status(this, worker_id, status).await
-    }
-
     async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
         worker_id: &OwnedWorkerId,

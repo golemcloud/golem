@@ -309,13 +309,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .clone_from(&self.state.current_idempotency_key);
         status.oplog_idx = self.state.oplog.current_oplog_index().await;
         f(&mut status);
-        self.state
-            .worker_service
-            .update_status(&self.owned_worker_id, &status)
+        self.public_state
+            .invocation_queue()
+            .update_status(status)
             .await;
-
-        let mut execution_status = self.execution_status.write().unwrap();
-        execution_status.set_last_known_status(status);
     }
 
     pub async fn store_worker_status(&self, status: WorkerStatus) {
@@ -927,21 +924,6 @@ pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
 #[async_trait]
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     type ExtraDeps = Ctx::ExtraDeps;
-
-    async fn set_worker_status<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        status: WorkerStatus,
-    ) -> Result<(), GolemError> {
-        let metadata = this.worker_service().get(owned_worker_id).await;
-        let mut latest_status =
-            calculate_last_known_status(this, owned_worker_id, &metadata).await?;
-        latest_status.status = status;
-        this.worker_service()
-            .update_status(owned_worker_id, &latest_status)
-            .await;
-        Ok(())
-    }
 
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,

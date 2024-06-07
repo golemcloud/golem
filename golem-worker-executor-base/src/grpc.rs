@@ -428,16 +428,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             WorkerStatus::Suspended => {
                 debug!("Marking suspended worker as interrupted");
-                Ctx::set_worker_status(self, &owned_worker_id, WorkerStatus::Interrupted).await?;
+                let worker =
+                    worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
+                worker.set_interrupting(InterruptKind::Interrupt).await;
+                worker.stop().await;
+                // Explicitly drop from the active worker cache - this will drop websocket connections etc.
+                self.active_workers().remove(&worker_id);
             }
             WorkerStatus::Retrying => {
                 debug!("Marking worker scheduled to be retried as interrupted");
-                Ctx::set_worker_status(self, &owned_worker_id, WorkerStatus::Interrupted).await?;
+                let worker =
+                    worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
+                worker.set_interrupting(InterruptKind::Interrupt).await;
+                worker.stop().await;
+                // Explicitly drop from the active worker cache - this will drop websocket connections etc.
+                self.active_workers().remove(&worker_id);
             }
             WorkerStatus::Running => {
                 let worker =
                     worker::get_or_create(self, &owned_worker_id, None, None, None).await?;
-
                 worker
                     .set_interrupting(if request.recover_immediately {
                         InterruptKind::Restart
@@ -830,9 +839,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         deleted_regions.set_override(extra_deleted_regions);
                         worker_status.pending_updates = pending_updates;
                         worker_status.deleted_regions = deleted_regions;
-                        self.worker_service()
-                            .update_status(&owned_worker_id, &worker_status)
-                            .await; // TODO: do this through worker
+                        worker.update_status(worker_status).await;
 
                         debug!("Resuming initialization to perform the update",);
                         InvocationQueue::start_if_needed(worker.clone()).await?;

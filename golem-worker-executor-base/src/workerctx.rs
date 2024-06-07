@@ -300,13 +300,6 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// passed to the created worker context in the 'extra_deps' parameter of 'WorkerCtx::create'.
     type ExtraDeps: Clone + Send + Sync + 'static;
 
-    /// Sets the current worker status without activating the worker
-    async fn set_worker_status<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        status: WorkerStatus,
-    ) -> Result<(), GolemError>;
-
     /// Gets how many times the worker has been retried to recover from an error, and what
     /// error was stored in the last entry.
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
