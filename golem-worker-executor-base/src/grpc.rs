@@ -360,11 +360,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
 
             worker.stop().await;
-        } else {
-            debug!(
-                "Not interrupting because it's status is {:?}",
-                worker_status.status
-            );
         }
 
         Ctx::on_worker_deleted(self, &worker_id).await?;
@@ -926,7 +921,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
                 let mut receiver = event_service.receiver();
 
-                info!("Client connected to {worker_id}");
+                info!("Client connected");
                 record_new_grpc_active_stream();
 
                 // spawn and channel are required if you want handle "disconnect" functionality
@@ -1027,7 +1022,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
 
                         record_closed_grpc_active_stream();
-                        info!("Client disconnected from {worker_id}");
+                        info!("Client disconnected");
                     }
                     .in_current_span(),
                 );

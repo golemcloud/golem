@@ -109,12 +109,6 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
-impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
-    fn drop(&mut self) {
-        debug!("Dropping worker context {}", self.owned_worker_id.worker_id);
-    }
-}
-
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn create(
         owned_worker_id: OwnedWorkerId,
@@ -312,8 +306,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn store_worker_status(&self, status: WorkerStatus) {
-        debug!("store_worker_status {status:?}");
-
         self.update_worker_status(|s| s.status = status.clone())
             .await;
         if status == WorkerStatus::Idle
@@ -762,8 +754,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         output: Vec<Value>,
     ) -> Result<(), GolemError> {
         let is_live_after = self.state.is_live();
-
-        debug!("*** on_invocation_success {is_live_after}");
 
         if is_live_after {
             if self.state.snapshotting_mode.is_none() {

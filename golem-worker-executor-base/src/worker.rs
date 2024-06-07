@@ -96,15 +96,6 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> Drop for Worker<Ctx> {
-    fn drop(&mut self) {
-        debug!(
-            "Dropping InvocationQueue {}",
-            self.owned_worker_id.worker_id.to_string()
-        );
-    }
-}
-
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker, but does not start it
     pub async fn get_or_create_suspended<T>(
@@ -229,9 +220,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<(), GolemError> {
         let mut running = this.running.lock().await;
         if running.is_none() {
-            debug!("Starting worker");
-            // TODO: split/refactor
-
             let component_id = this.owned_worker_id.component_id();
             let worker_metadata = this.get_metadata().await?;
 
@@ -656,10 +644,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await;
             }
             None => {
-                debug!(
-                    "Worker {} is initializing, persisting pending invocation",
-                    self.owned_worker_id
-                );
+                debug!("Worker is initializing, persisting pending invocation");
                 let invocation = WorkerInvocation::ExportedFunction {
                     idempotency_key,
                     full_function_name,
@@ -764,24 +749,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .drain(..)
                     .collect::<VecDeque<_>>();
 
-                debug!("stop updating queue with items {queued_items:?}");
-
                 *self.queue.write().unwrap() = queued_items;
 
                 if !called_from_invocation_loop {
                     // If stop was called from outside, we wait until the invocation queue stops
                     // (it happens by `running` getting dropped)
                     let run_loop_handle = running.stop();
-                    debug!("Awaiting invocation queue loop to stop");
                     run_loop_handle.await.expect("Worker run loop failed");
-                    debug!("Awaited invocation queue loop stopped");
                 }
             } else {
                 debug!("Worker was already stopped");
             }
             self.stopping.store(false, Ordering::Release);
-        } else {
-            debug!("Skipping stop() as it is already running");
         }
     }
     async fn restart_internal(
@@ -844,23 +823,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 }
 
 struct RunningWorker {
-    owned_worker_id: OwnedWorkerId,
-
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 
     oplog: Arc<dyn Oplog + Send + Sync>,
-}
-
-impl Drop for RunningWorker {
-    fn drop(&mut self) {
-        debug!(
-            "Dropping RunningWorker {}",
-            self.owned_worker_id.worker_id.to_string()
-        );
-    }
 }
 
 impl RunningWorker {
@@ -896,7 +864,6 @@ impl RunningWorker {
         });
 
         RunningWorker {
-            owned_worker_id,
             handle: Some(handle),
             sender,
             queue,
@@ -966,7 +933,7 @@ impl RunningWorker {
             let mut store = store.lock().await;
             let prepare_result =
                 Ctx::prepare_instance(&owned_worker_id.worker_id, &instance, &mut *store).await;
-            debug!("prepare_instance resulted in {prepare_result:?}");
+
             match prepare_result {
                 Ok(decision) => decision,
                 Err(err) => {
@@ -1337,10 +1304,6 @@ where
     if last_known.oplog_idx == last_oplog_index {
         Ok(last_known)
     } else {
-        debug!(
-            "Calculating new worker status from {} to {}",
-            last_known.oplog_idx, last_oplog_index
-        );
         let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
             .oplog_service()
             .read_range(
@@ -1408,9 +1371,6 @@ where
             current_idempotency_key,
             component_version,
         };
-        debug!(
-            "calculate_last_known_status using last oplog index {last_oplog_index} as reference resulted in {result:?}"
-        );
         Ok(result)
     }
 }
