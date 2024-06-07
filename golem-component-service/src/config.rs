@@ -109,4 +109,13 @@ mod tests {
     pub fn config_is_loadable() {
         let _ = super::ComponentServiceConfig::new();
     }
+
+    #[test]
+    pub fn compilation_can_be_disabled() {
+        std::env::set_var("GOLEM__COMPILATION__TYPE", "Disabled");
+        let cfg = super::ComponentServiceConfig::new();
+        std::env::remove_var("GOLEM__COMPILATION__TYPE");
+
+        assert!(matches!(cfg.compilation, super::ComponentCompilationConfig::Disabled(_)));
+    }
 }

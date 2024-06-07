@@ -67,7 +67,7 @@ impl Services {
             ComponentCompilationConfig::Enabled(config) => {
                 Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
             }
-            ComponentCompilationConfig::Disabled => Arc::new(ComponentCompilationServiceDisabled),
+            ComponentCompilationConfig::Disabled(_) => Arc::new(ComponentCompilationServiceDisabled),
         };
 
         let component_service: Arc<dyn component::ComponentService + Sync + Send> =
