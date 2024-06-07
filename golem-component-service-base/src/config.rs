@@ -12,15 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_service_base::model::Empty;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
-#[derive(Default)]
 pub enum ComponentCompilationConfig {
     Enabled(ComponentCompilationEnabledConfig),
-    #[default]
-    Disabled,
+    Disabled(Empty),
+}
+
+impl Default for ComponentCompilationConfig {
+    fn default() -> Self {
+        Self::Disabled(Empty {})
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
