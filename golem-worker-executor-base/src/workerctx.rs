@@ -27,8 +27,7 @@ use golem_common::model::{
 
 use crate::error::GolemError;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, LookupResult, TrapType,
-    WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
@@ -187,9 +186,6 @@ pub trait InvocationManagement {
 
     /// Gets the invocation key associated with the current invocation of the worker.
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey>;
-
-    /// Gets the result associated with an invocation key of the worker
-    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult;
 }
 
 /// The IoCapturing interface of a worker context is used by the Stdio calling convention to

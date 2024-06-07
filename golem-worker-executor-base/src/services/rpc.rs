@@ -26,7 +26,6 @@ use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
 
 use crate::error::GolemError;
 use crate::services::events::Events;
-use crate::worker::Worker;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
@@ -37,7 +36,7 @@ use crate::services::{
     HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
     HasWorkerProxy, HasWorkerService,
 };
-use crate::worker::{invoke, invoke_and_await};
+use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 
 #[async_trait]
@@ -467,18 +466,16 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker =
-                crate::worker::get_or_create(self, owned_worker_id, None, None, None).await?;
-            Worker::start_if_needed(worker.clone()).await?;
+            let worker = Worker::get_or_create_running(self, owned_worker_id).await?;
 
-            let result_values = invoke_and_await(
-                worker,
-                idempotency_key,
-                golem_common::model::CallingConvention::Component,
-                function_name,
-                input_values,
-            )
-            .await?;
+            let result_values = worker
+                .invoke_and_await(
+                    idempotency_key,
+                    golem_common::model::CallingConvention::Component,
+                    function_name,
+                    input_values,
+                )
+                .await?;
             Ok(Value::Tuple(result_values).into())
         } else {
             self.remote_rpc
@@ -513,18 +510,16 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker =
-                crate::worker::get_or_create(self, owned_worker_id, None, None, None).await?;
-            Worker::start_if_needed(worker.clone()).await?;
+            let worker = Worker::get_or_create_running(self, owned_worker_id).await?;
 
-            invoke(
-                worker,
-                idempotency_key,
-                golem_common::model::CallingConvention::Component,
-                function_name,
-                input_values,
-            )
-            .await?;
+            worker
+                .invoke(
+                    idempotency_key,
+                    golem_common::model::CallingConvention::Component,
+                    function_name,
+                    input_values,
+                )
+                .await?;
             Ok(())
         } else {
             self.remote_rpc

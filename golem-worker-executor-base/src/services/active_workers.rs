@@ -63,9 +63,8 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         f: F,
     ) -> Result<Arc<Worker<Ctx>>, GolemError>
     where
-        F: FnOnce() -> Pin<
-                Box<dyn Future<Output = Result<Arc<Worker<Ctx>>, GolemError>> + Send>,
-            > + Send,
+        F: FnOnce() -> Pin<Box<dyn Future<Output = Result<Arc<Worker<Ctx>>, GolemError>> + Send>>
+            + Send,
     {
         self.cache.get_or_insert_simple(worker_id, f).await
     }

@@ -22,7 +22,7 @@ use tracing::info;
 use tracing::{error, warn};
 
 use crate::services::HasAll;
-use crate::worker;
+use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 
 /// Service for activating workers in the background
@@ -87,7 +87,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator
     async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId) {
         let metadata = self.all.worker_service().get(owned_worker_id).await;
         match metadata {
-            Some(_) => worker::activate(&self.all, owned_worker_id).await,
+            Some(_) => {
+                if let Err(err) = Worker::get_or_create_running(&self.all, owned_worker_id).await {
+                    error!("Failed to activate worker: {err}")
+                }
+            }
             None => {
                 error!("WorkerActivator::activate_worker: worker not found")
             }

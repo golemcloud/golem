@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 use crate::error::GolemError;
 use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, LookupResult,
-    PersistenceLevel, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, PersistenceLevel, TrapType,
+    WorkerConfig,
 };
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
@@ -73,7 +73,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::HasOplogService;
 use crate::wasi_host;
-use crate::worker::{calculate_last_known_status, get_or_create, is_worker_error_retriable};
+use crate::worker::{calculate_last_known_status, is_worker_error_retriable};
 
 pub mod blobstore;
 mod cli;
@@ -352,18 +352,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.get_current_idempotency_key()
     }
 
-    pub async fn get_current_invocation_result(&self) -> Option<LookupResult> {
-        match self.state.get_current_idempotency_key() {
-            Some(key) => Some(
-                self.public_state
-                    .worker()
-                    .lookup_invocation_result(&key)
-                    .await,
-            ),
-            None => None,
-        }
-    }
-
     pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
         self.state.rpc.clone()
     }
@@ -614,13 +602,6 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.get_current_idempotency_key().await
-    }
-
-    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        self.public_state
-            .worker()
-            .lookup_invocation_result(key)
-            .await
     }
 }
 
@@ -1127,8 +1108,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
             match decision {
                 RecoveryDecision::Immediate => {
-                    let worker = get_or_create(this, &owned_worker_id, None, None, None).await?;
-                    Worker::start_if_needed(worker).await?;
+                    let _ = Worker::get_or_create_running(this, &owned_worker_id).await?;
                 }
                 RecoveryDecision::Delayed(_) => {
                     panic!("Delayed recovery on startup is not supported currently")

@@ -31,8 +31,7 @@ use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, LookupResult, TrapType,
-    WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
@@ -451,10 +450,6 @@ impl InvocationManagement for TestWorkerCtx {
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.durable_ctx.get_current_idempotency_key().await
-    }
-
-    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        self.durable_ctx.lookup_invocation_result(key).await
     }
 }
 
