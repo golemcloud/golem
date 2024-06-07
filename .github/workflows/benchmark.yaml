@@ -147,7 +147,7 @@ jobs:
                 fi
              done
           else
-            for file in "${files[@]}"; do
+            for file in ${files[@]}; do
                 absent_files+=("$file")
                 get_report_command="$get_report_command --files $file=$(pwd)/benchmark-data-current/$file"
              done
