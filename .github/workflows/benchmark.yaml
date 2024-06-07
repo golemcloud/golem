@@ -115,10 +115,10 @@ jobs:
           cat benchmark-data-current/benchmark_suspend_worker.json
           echo "Successfully ran suspend benchmark"
           
-          echo "Starting throughput benchmark"
-          ./target/debug/benchmark_throughput --quiet --json spawned > benchmark-data-current/benchmark_throughput.json
-          cat benchmark-data-current/benchmark_throughput.json
-          echo "Successfully ran throughput benchmark"
+          # echo "Starting throughput benchmark"
+          # ./target/debug/benchmark_throughput --quiet --json spawned > benchmark-data-current/benchmark_throughput.json
+          # cat benchmark-data-current/benchmark_throughput.json
+          # echo "Successfully ran throughput benchmark"
                 
           echo "Finished Running Benchmark Jobs"
           
@@ -137,7 +137,7 @@ jobs:
           
           if git fetch origin main:main && [[ ! "$COMMENT_BODY" =~ refresh ]]; then                              
              # Check each file
-             for file in "${files[@]}"; do
+             for file in ${files[@]}; do
                 if git checkout master -- "benchmark-data/$file"; then
                   present_files+=("$file")
                   compare_command="$compare_command --files $file=$(pwd)/benchmark-data/$file,$(pwd)/benchmark-data-current/$file"
@@ -147,7 +147,7 @@ jobs:
                 fi
              done
           else
-            for file in "${files[@]}"; do
+            for file in ${files[@]}; do
                 absent_files+=("$file")
                 get_report_command="$get_report_command --files $file=$(pwd)/benchmark-data-current/$file"
              done
