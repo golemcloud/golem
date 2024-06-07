@@ -23,8 +23,13 @@ max_capacity = 1000
 time_to_idle = "4h"
 
 [compilation]
-type = "Disabled"
+type = "Enabled"
 
-#[compilation.config]
-#host = "localhost"
-#port = 9091
+[compilation.config]
+host = "localhost"
+port = 9091
+
+[component_service]
+host = "localhost"
+port = 9090
+access_token = "5C832D93-FF85-4A8F-9803-513950FDFDB1"
