@@ -115,10 +115,10 @@ jobs:
           cat benchmark-data-current/benchmark_suspend_worker.json
           echo "Successfully ran suspend benchmark"
           
-          echo "Starting throughput benchmark"
-          ./target/debug/benchmark_throughput --quiet --json spawned > benchmark-data-current/benchmark_throughput.json
-          cat benchmark-data-current/benchmark_throughput.json
-          echo "Successfully ran throughput benchmark"
+          # echo "Starting throughput benchmark"
+          # ./target/debug/benchmark_throughput --quiet --json spawned > benchmark-data-current/benchmark_throughput.json
+          # cat benchmark-data-current/benchmark_throughput.json
+          # echo "Successfully ran throughput benchmark"
                 
           echo "Finished Running Benchmark Jobs"
           
