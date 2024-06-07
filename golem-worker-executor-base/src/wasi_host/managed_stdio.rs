@@ -25,13 +25,9 @@ use tokio::sync::Mutex;
 
 use golem_common::model::WorkerId;
 
-use crate::services::invocation_queue::InvocationQueue;
-use crate::workerctx::WorkerCtx;
-
-pub struct ManagedStandardIo<Ctx: WorkerCtx> {
+pub struct ManagedStandardIo {
     current: Arc<Mutex<Option<State>>>,
     worker_id: WorkerId,
-    invocation_queue: Arc<InvocationQueue<Ctx>>,
 }
 
 #[derive(Debug)]
@@ -51,12 +47,11 @@ pub enum ManagedStreamStatus {
     Ended,
 }
 
-impl<Ctx: WorkerCtx> ManagedStandardIo<Ctx> {
-    pub fn new(worker_id: WorkerId, invocation_queue: Arc<InvocationQueue<Ctx>>) -> Self {
+impl ManagedStandardIo {
+    pub fn new(worker_id: WorkerId) -> Self {
         Self {
             current: Arc::new(Mutex::new(Some(State::Live))),
             worker_id,
-            invocation_queue,
         }
     }
 
@@ -246,12 +241,11 @@ fn read_from_bytes(input: &Bytes, pos: &mut usize, buf: &mut [u8]) -> (u64, Mana
     )
 }
 
-impl<Ctx: WorkerCtx> Clone for ManagedStandardIo<Ctx> {
+impl Clone for ManagedStandardIo {
     fn clone(&self) -> Self {
         Self {
             current: self.current.clone(),
             worker_id: self.worker_id.clone(),
-            invocation_queue: self.invocation_queue.clone(),
         }
     }
 }

@@ -193,7 +193,6 @@ async fn auto_update_on_idle_with_non_diverging_history() {
 
 #[tokio::test]
 #[tracing::instrument]
-#[ignore]
 async fn failing_auto_update_on_running() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
@@ -345,7 +344,6 @@ async fn manual_update_on_idle_without_save_snapshot() {
 
 #[tokio::test]
 #[tracing::instrument]
-#[ignore]
 async fn auto_update_on_running_followed_by_manual() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();

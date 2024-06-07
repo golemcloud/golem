@@ -9,7 +9,7 @@ use prometheus::Registry;
 use std::path::{Path, PathBuf};
 use std::string::FromUtf8Error;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 
 use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 
@@ -31,8 +31,7 @@ use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, LookupResult, TrapType,
-    WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
@@ -40,9 +39,6 @@ use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
 use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::recovery::{
-    RecoveryManagement, RecoveryManagementDefault,
-};
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
 use golem_worker_executor_base::services::shard_manager::ShardManagerService;
@@ -79,7 +75,6 @@ use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::services::events::Events;
-use golem_worker_executor_base::services::invocation_queue::InvocationQueue;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
 };
@@ -87,6 +82,7 @@ use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
+use golem_worker_executor_base::worker::{RecoveryDecision, Worker};
 use tonic::transport::Channel;
 use tracing::{error, info};
 use wasmtime::component::{Instance, Linker, ResourceAny};
@@ -390,14 +386,6 @@ impl FuelManagement for TestWorkerCtx {
 impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     type ExtraDeps = ();
 
-    async fn set_worker_status<T: HasAll<TestWorkerCtx> + Send + Sync>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        status: WorkerStatus,
-    ) -> Result<(), GolemError> {
-        DurableWorkerCtx::<TestWorkerCtx>::set_worker_status(this, owned_worker_id, status).await
-    }
-
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
@@ -423,7 +411,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
-    ) -> Result<bool, GolemError> {
+    ) -> Result<RecoveryDecision, GolemError> {
         DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -447,7 +435,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         DurableWorkerCtx::<TestWorkerCtx>::on_worker_deleted(this, worker_id).await
     }
 
-    async fn on_shard_assignment_changed<T: HasAll<TestWorkerCtx> + Send + Sync>(
+    async fn on_shard_assignment_changed<T: HasAll<TestWorkerCtx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), Error> {
         DurableWorkerCtx::<TestWorkerCtx>::on_shard_assignment_changed(this).await
@@ -462,10 +450,6 @@ impl InvocationManagement for TestWorkerCtx {
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.durable_ctx.get_current_idempotency_key().await
-    }
-
-    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        self.durable_ctx.lookup_invocation_result(key).await
     }
 }
 
@@ -511,52 +495,23 @@ impl StatusManagement for TestWorkerCtx {
     async fn update_pending_updates(&self) {
         self.durable_ctx.update_pending_updates().await
     }
-
-    async fn deactivate(&self) {
-        self.durable_ctx.deactivate().await
-    }
 }
 
 #[async_trait]
 impl InvocationHooks for TestWorkerCtx {
-    type FailurePayload = <DurableWorkerCtx<TestWorkerCtx> as InvocationHooks>::FailurePayload;
-
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
         calling_convention: Option<golem_common::model::CallingConvention>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_exported_function_invoked(full_function_name, function_input, calling_convention)
             .await
     }
 
-    async fn on_invocation_failure(
-        &mut self,
-        trap_type: &TrapType,
-    ) -> Result<Self::FailurePayload, Error> {
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision {
         self.durable_ctx.on_invocation_failure(trap_type).await
-    }
-
-    async fn on_invocation_failure_deactivated(
-        &mut self,
-        payload: &Self::FailurePayload,
-        trap_type: &TrapType,
-    ) -> Result<WorkerStatus, Error> {
-        self.durable_ctx
-            .on_invocation_failure_deactivated(payload, trap_type)
-            .await
-    }
-
-    async fn on_invocation_failure_final(
-        &mut self,
-        payload: &Self::FailurePayload,
-        trap_type: &TrapType,
-    ) -> Result<(), Error> {
-        self.durable_ctx
-            .on_invocation_failure_final(payload, trap_type)
-            .await
     }
 
     async fn on_invocation_success(
@@ -565,7 +520,7 @@ impl InvocationHooks for TestWorkerCtx {
         function_input: &Vec<Value>,
         consumed_fuel: i64,
         output: Vec<Value>,
-    ) -> Result<Option<Vec<Value>>, Error> {
+    ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
@@ -633,12 +588,11 @@ impl WorkerCtx for TestWorkerCtx {
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
-        active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
+        _active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
-        invocation_queue: Arc<InvocationQueue<TestWorkerCtx>>,
+        invocation_queue: Weak<Worker<TestWorkerCtx>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         _extra_deps: Self::ExtraDeps,
@@ -655,12 +609,10 @@ impl WorkerCtx for TestWorkerCtx {
             key_value_service,
             blob_store_service,
             event_service,
-            active_workers,
             oplog_service,
             oplog,
             invocation_queue,
             scheduler_service,
-            recovery_management,
             rpc,
             worker_proxy,
             config,
@@ -774,29 +726,6 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             events.clone(),
             (),
         ));
-        let recovery_management = Arc::new(RecoveryManagementDefault::new(
-            active_workers.clone(),
-            engine.clone(),
-            linker.clone(),
-            runtime.clone(),
-            component_service.clone(),
-            worker_service.clone(),
-            worker_enumeration_service.clone(),
-            running_worker_enumeration_service.clone(),
-            oplog_service.clone(),
-            promise_service.clone(),
-            scheduler_service.clone(),
-            key_value_service.clone(),
-            blob_store_service.clone(),
-            rpc.clone(),
-            worker_activator.clone(),
-            worker_proxy.clone(),
-            events.clone(),
-            golem_config.clone(),
-            (),
-        ));
-        rpc.set_recovery_management(recovery_management.clone());
-
         Ok(All::new(
             active_workers,
             engine,
@@ -813,7 +742,6 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             key_value_service,
             blob_store_service,
             oplog_service,
-            recovery_management,
             rpc,
             scheduler_service,
             worker_activator,
