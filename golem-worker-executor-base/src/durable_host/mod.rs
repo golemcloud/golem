@@ -830,6 +830,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             }
         }
 
+        self.store_worker_status(WorkerStatus::Idle).await;
+
         debug!("Function {full_function_name} finished with {output:?}");
 
         // Return indicating that it is done
