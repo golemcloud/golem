@@ -792,8 +792,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     WorkerStatus::Exited => {
                         warn!("Attempted updating worker which already exited")
                     }
-                    WorkerStatus::Idle
-                    | WorkerStatus::Interrupted
+                    WorkerStatus::Interrupted
                     | WorkerStatus::Suspended
                     | WorkerStatus::Retrying
                     | WorkerStatus::Failed => {
@@ -835,7 +834,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         debug!("Resuming initialization to perform the update",);
                         InvocationQueue::start_if_needed(worker.clone()).await?;
                     }
-                    WorkerStatus::Running => {
+                    WorkerStatus::Running | WorkerStatus::Idle => {
                         // If the worker is already running we need to write to its oplog the
                         // update attempt, and then interrupt it and have it immediately restarting
                         // to begin the update.
