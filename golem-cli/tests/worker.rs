@@ -710,6 +710,8 @@ fn worker_update(
             &component_id,
             &cfg.arg('f', "filter"),
             format!("name like {}_worker", name).as_str(),
+            &cfg.arg('p', "precise"),
+            "true",
         ])
     };
 

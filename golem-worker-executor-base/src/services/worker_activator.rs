@@ -30,11 +30,6 @@ use crate::workerctx::WorkerCtx;
 pub trait WorkerActivator {
     /// Makes sure an already existing worker is active in a background task. Returns immediately
     async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId);
-
-    /// Makes sure an already existing worker is active in a background task. If
-    /// it was already active, it deactivates it first, so it is guaranteed that its recovery
-    /// runs. Returns immediately
-    async fn reactivate_worker(&self, owned_worker_id: &OwnedWorkerId);
 }
 
 pub struct LazyWorkerActivator {
@@ -68,14 +63,6 @@ impl WorkerActivator for LazyWorkerActivator {
             None => warn!("WorkerActivator is disabled, not activating instance"),
         }
     }
-
-    async fn reactivate_worker(&self, owned_worker_id: &OwnedWorkerId) {
-        let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
-        match maybe_worker_activator {
-            Some(worker_activator) => worker_activator.reactivate_worker(owned_worker_id).await,
-            None => warn!("WorkerActivator is disabled, not reactivating instance"),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -100,38 +87,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator
     async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId) {
         let metadata = self.all.worker_service().get(owned_worker_id).await;
         match metadata {
-            Some(metadata) => {
-                Worker::activate(
-                    &self.all,
-                    owned_worker_id,
-                    metadata.args,
-                    metadata.env,
-                    Some(metadata.last_known_status.component_version),
-                )
-                .await
+            Some(_) => {
+                if let Err(err) = Worker::get_or_create_running(&self.all, owned_worker_id).await {
+                    error!("Failed to activate worker: {err}")
+                }
             }
             None => {
                 error!("WorkerActivator::activate_worker: worker not found")
-            }
-        }
-    }
-
-    async fn reactivate_worker(&self, owned_worker_id: &OwnedWorkerId) {
-        let metadata = self.all.worker_service().get(owned_worker_id).await;
-        match metadata {
-            Some(metadata) => {
-                self.all.active_workers().remove(&owned_worker_id.worker_id);
-                Worker::activate(
-                    &self.all,
-                    owned_worker_id,
-                    metadata.args,
-                    metadata.env,
-                    Some(metadata.last_known_status.component_version),
-                )
-                .await
-            }
-            None => {
-                error!("WorkerActivator::reactivate_worker: worker not found")
             }
         }
     }
@@ -159,9 +121,5 @@ impl WorkerActivatorMock {
 impl WorkerActivator for WorkerActivatorMock {
     async fn activate_worker(&self, _owned_worker_id: &OwnedWorkerId) {
         info!("WorkerActivatorMock::activate_worker");
-    }
-
-    async fn reactivate_worker(&self, _owned_worker_id: &OwnedWorkerId) {
-        info!("WorkerActivatorMock::reactivate_worker");
     }
 }

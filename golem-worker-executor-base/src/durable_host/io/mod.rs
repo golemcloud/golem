@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::wasi_host::managed_stdio::{ManagedStandardIo, ManagedStreamStatus};
-use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -45,7 +44,7 @@ struct ManagedStdInState {
 }
 
 impl ManagedStdIn {
-    pub async fn from_standard_io<Ctx: WorkerCtx>(io: ManagedStandardIo<Ctx>) -> Self {
+    pub async fn from_standard_io(io: ManagedStandardIo) -> Self {
         let (demand_tx, demand_rx) = flume::unbounded();
         let (incoming_tx, incoming_rx) = flume::unbounded();
         let (remainder_tx, remainder_rx) = flume::unbounded();
@@ -193,7 +192,7 @@ struct ManagedStdOutState {
 }
 
 impl ManagedStdOut {
-    pub fn from_standard_io<Ctx: WorkerCtx>(io: ManagedStandardIo<Ctx>) -> Self {
+    pub fn from_standard_io(io: ManagedStandardIo) -> Self {
         let consumed = Arc::new(tokio::sync::Notify::new());
         let (outgoing_tx, outgoing_rx) = flume::unbounded();
         let dirty = Arc::new(AtomicBool::new(false));

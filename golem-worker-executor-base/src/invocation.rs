@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::{parse_function_name, CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output};
 use golem_wasm_rpc::Value;
@@ -26,7 +26,6 @@ use crate::model::{InterruptKind, TrapType};
 use crate::workerctx::{FuelManagement, WorkerCtx};
 
 /// Invokes a function on a worker.
-/// Returns true if the function invocation was finished, false if it was interrupted or scheduled for retry.
 ///
 /// The context is held until the invocation finishes
 ///
@@ -37,6 +36,7 @@ use crate::workerctx::{FuelManagement, WorkerCtx};
 /// - `instance`: reference to the wasmtime instance
 /// - `calling_convention`: the calling convention to use
 /// - `was_live_before`: whether the worker was live before the invocation, or this invocation is part of a recovery
+// TODO: rename - this just adds outcome metrics recording?
 pub async fn invoke_worker<Ctx: WorkerCtx>(
     full_function_name: String,
     function_input: Vec<Value>,
@@ -44,7 +44,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     instance: &wasmtime::component::Instance,
     calling_convention: CallingConvention,
     was_live_before: bool,
-) -> Option<Result<Vec<Value>, anyhow::Error>> {
+) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
 
     let worker_id = store.data().worker_id().clone();
@@ -62,41 +62,46 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
 
     debug!("Invocation resulted in {:?}", result);
 
-    match result {
-        Err(err) => {
-            let trap_type = TrapType::from_error::<Ctx>(&err);
-            match trap_type {
-                TrapType::Interrupt(InterruptKind::Interrupt) => {
-                    record_invocation(was_live_before, "interrupted");
-                    None
-                }
-                TrapType::Interrupt(InterruptKind::Suspend) => {
-                    // this invocation was suspended and expected to be resumed by an external call or schedule
-                    record_invocation(was_live_before, "suspended");
-                    None
-                }
-                TrapType::Exit => {
-                    record_invocation(was_live_before, "exited");
-                    Some(Err(err))
-                }
-                _ => {
-                    record_invocation(was_live_before, "failed");
-                    Some(Err(err))
-                }
-            }
+    match &result {
+        Err(_) => {
+            record_invocation(was_live_before, "failed");
+            result
         }
-        Ok(None) => {
-            // this invocation did not produce any result, but we may get one in the future
-            None
+        Ok(InvokeResult::Exited { .. }) => {
+            record_invocation(was_live_before, "exited");
+            result
         }
-        Ok(Some(result)) => {
+        Ok(InvokeResult::Interrupted {
+            interrupt_kind: InterruptKind::Interrupt,
+            ..
+        }) => {
+            record_invocation(was_live_before, "interrupted");
+            result
+        }
+        Ok(InvokeResult::Interrupted {
+            interrupt_kind: InterruptKind::Suspend,
+            ..
+        }) => {
+            record_invocation(was_live_before, "suspended");
+            result
+        }
+        Ok(InvokeResult::Interrupted { .. }) => {
+            record_invocation(was_live_before, "restarted"); // TODO: do we want to record this?
+            result
+        }
+        Ok(InvokeResult::Failed { .. }) => {
+            record_invocation(was_live_before, "failed");
+            result
+        }
+        Ok(InvokeResult::Succeeded { .. }) => {
             // this invocation finished and produced a result
             record_invocation(was_live_before, "success");
-            Some(Ok(result))
+            result
         }
     }
 }
 
+// TODO: rename
 async fn invoke_or_fail<Ctx: WorkerCtx>(
     worker_id: &WorkerId,
     full_function_name: String,
@@ -105,7 +110,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
     instance: &wasmtime::component::Instance,
     calling_convention: CallingConvention,
     was_live_before: bool,
-) -> anyhow::Result<Option<Vec<Value>>> {
+) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
 
     let parsed = parse_function_name(&full_function_name);
@@ -113,10 +118,13 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
     let function = match &parsed.interface {
         Some(interface_name) => {
             let mut exports = instance.exports(&mut store);
-            let mut exported_instance = exports.instance(interface_name).ok_or(anyhow!(
-                "could not load exports for interface {}",
-                interface_name
-            ))?;
+            let mut exported_instance =
+                exports
+                    .instance(interface_name)
+                    .ok_or(GolemError::runtime(format!(
+                        "could not load exports for interface {}",
+                        interface_name
+                    )))?;
             match exported_instance.func(&parsed.function) {
                 Some(func) => Ok(Some(func)),
                 None => {
@@ -124,19 +132,16 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
                         Ok(None)
                     } else {
                         match parsed.method_as_static() {
-                            None => Err(anyhow!(
+                            None => Err(GolemError::runtime(format!(
                                 "could not load function {} for interface {}",
-                                &parsed.function,
-                                interface_name
-                            )),
+                                &parsed.function, interface_name
+                            ))),
                             Some(parsed_static) => exported_instance
                                 .func(&parsed_static.function)
-                                .ok_or(anyhow!(
+                                .ok_or(GolemError::runtime(format!(
                                     "could not load function {} or {} for interface {}",
-                                    &parsed.function,
-                                    &parsed_static.function,
-                                    interface_name
-                                ))
+                                    &parsed.function, &parsed_static.function, interface_name
+                                )))
                                 .map(Some),
                         }
                     }
@@ -145,7 +150,10 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
         }
         None => instance
             .get_func(&mut store, &parsed.function)
-            .ok_or(anyhow!("could not load function {}", &parsed.function))
+            .ok_or(GolemError::runtime(format!(
+                "could not load function {}",
+                &parsed.function
+            )))
             .map(Some),
     }?;
 
@@ -190,71 +198,24 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 
     store.data().set_suspended();
 
-    match call_result {
-        Err(err) => {
-            let trap_type = TrapType::from_error::<Ctx>(&err);
-            let failure_payload = store.data_mut().on_invocation_failure(&trap_type).await?;
-            store.data_mut().deactivate().await;
-            let result_status = store
-                .data_mut()
-                .on_invocation_failure_deactivated(&failure_payload, &trap_type)
-                .await?;
-            store
-                .data_mut()
-                .store_worker_status(result_status.clone())
-                .await;
-
-            if result_status == WorkerStatus::Retrying || result_status == WorkerStatus::Running {
-                Ok(None)
-            } else {
-                store
-                    .data_mut()
-                    .on_invocation_failure_final(&failure_payload, &trap_type)
-                    .await?;
-                Err(err)
-            }
-        }
-        Ok(InvokeResult {
-            exited,
-            consumed_fuel,
-            output,
-        }) => {
-            let result = store
-                .data_mut()
-                .on_invocation_success(&full_function_name, &function_input, consumed_fuel, output)
-                .await?;
-
-            if exited {
-                store.data_mut().deactivate().await;
-                store
-                    .data_mut()
-                    .store_worker_status(WorkerStatus::Exited)
-                    .await;
-            } else {
-                store
-                    .data_mut()
-                    .store_worker_status(WorkerStatus::Idle)
-                    .await;
-            }
-            Ok(result)
-        }
-    }
+    call_result
 }
 
+// TODO: rename
 async fn invoke<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
     function_input: &[Value],
     calling_convention: CallingConvention,
     context: &str,
-) -> Result<InvokeResult, anyhow::Error> {
+) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
     match calling_convention {
         CallingConvention::Component => {
             let param_types = function.params(&store);
 
             if function_input.len() != param_types.len() {
-                return Err(GolemError::ParamTypeMismatch.into());
+                return Err(GolemError::ParamTypeMismatch);
             }
 
             let mut params = Vec::new();
@@ -274,20 +235,19 @@ async fn invoke<Ctx: WorkerCtx>(
                 resource.resource_drop_async(&mut store).await?;
             }
 
-            let results = results?;
+            match results {
+                Ok(results) => {
+                    let mut output: Vec<Value> = Vec::new();
+                    for result in results.iter() {
+                        let result_value =
+                            encode_output(result, store.data_mut()).map_err(GolemError::from)?;
+                        output.push(result_value);
+                    }
 
-            let mut output: Vec<Value> = Vec::new();
-            for result in results.iter() {
-                let result_value =
-                    encode_output(result, store.data_mut()).map_err(GolemError::from)?;
-                output.push(result_value);
+                    Ok(InvokeResult::from_success(consumed_fuel, output))
+                }
+                Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
             }
-
-            Ok(InvokeResult {
-                exited: false,
-                consumed_fuel,
-                output,
-            })
         }
         CallingConvention::Stdio => {
             if function_input.len() != 1 {
@@ -303,25 +263,14 @@ async fn invoke<Ctx: WorkerCtx>(
             let (call_result, consumed_fuel) =
                 call_exported_function(&mut store, function, vec![], context).await?;
 
-            let exited = match call_result {
-                Err(err) => {
-                    if Ctx::is_exit(&err) == Some(0) {
-                        Ok(true)
-                    } else {
-                        Err(err)
-                    }
+            match call_result {
+                Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
+                Ok(_) => {
+                    let stdout = store.data_mut().finish_capturing_stdout().await.ok();
+                    let output: Vec<Value> = vec![Value::String(stdout.unwrap_or("".to_string()))];
+                    Ok(InvokeResult::from_success(consumed_fuel, output))
                 }
-                Ok(_) => Ok(false),
-            }?;
-
-            let stdout = store.data_mut().finish_capturing_stdout().await.ok();
-            let output: Vec<Value> = vec![Value::String(stdout.unwrap_or("".to_string()))];
-
-            Ok(InvokeResult {
-                exited,
-                consumed_fuel,
-                output,
-            })
+            }
         }
     }
 }
@@ -330,14 +279,13 @@ async fn drop_resource<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function_input: &[Value],
     context: &str,
-) -> Result<InvokeResult, anyhow::Error> {
+) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
     let self_uri = store.data().self_uri();
     if function_input.len() != 1 {
         return Err(GolemError::ValueMismatch {
             details: format!("unexpected parameter count for drop {context}"),
-        }
-        .into());
+        });
     }
     let resource = match function_input.first().unwrap() {
         Value::Handle { uri, resource_id } => {
@@ -349,27 +297,33 @@ async fn drop_resource<Ctx: WorkerCtx>(
                         "trying to drop handle for on wrong worker ({} vs {}) {}",
                         uri.value, self_uri.value, context
                     ),
-                }
-                .into())
+                })
             }
         }
-        _ => Err(anyhow!(
-            "unexpected function input for drop calling convention for {context}"
-        )),
+        _ => Err(GolemError::ValueMismatch {
+            details: format!("unexpected function input for drop calling convention for {context}"),
+        }),
     }?;
 
     if let Some(resource) = store.data_mut().get(resource) {
         debug!("Dropping resource {resource:?} in {context}");
-        resource.resource_drop_async(&mut store).await?;
+        store.data_mut().borrow_fuel().await?;
+
+        let result = resource.resource_drop_async(&mut store).await;
+
+        let current_fuel_level = store.get_fuel().unwrap_or(0);
+        let consumed_fuel = store
+            .data_mut()
+            .return_fuel(current_fuel_level as i64)
+            .await?;
+
+        match result {
+            Ok(_) => Ok(InvokeResult::from_success(consumed_fuel, vec![])),
+            Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
+        }
+    } else {
+        Ok(InvokeResult::from_success(0, vec![]))
     }
-
-    let output = Vec::new();
-
-    Ok(InvokeResult {
-        exited: false,
-        consumed_fuel: 0,
-        output,
-    })
 }
 
 async fn call_exported_function<Ctx: FuelManagement + Send>(
@@ -417,8 +371,66 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
     Ok((result.map(|_| results), consumed_fuel_for_call))
 }
 
-struct InvokeResult {
-    pub exited: bool,
-    pub consumed_fuel: i64,
-    pub output: Vec<Value>,
+#[derive(Clone, Debug)]
+pub enum InvokeResult {
+    /// The invoked function exited with exit code 0
+    Exited { consumed_fuel: i64 },
+    /// The invoked function has failed
+    Failed {
+        consumed_fuel: i64,
+        error: WorkerError,
+    },
+    /// The invoked function succeeded and produced a result
+    Succeeded {
+        consumed_fuel: i64,
+        output: Vec<Value>,
+    },
+    /// The function was running but got interrupted
+    Interrupted {
+        consumed_fuel: i64,
+        interrupt_kind: InterruptKind,
+    },
+}
+
+impl InvokeResult {
+    pub fn from_success(consumed_fuel: i64, output: Vec<Value>) -> Self {
+        InvokeResult::Succeeded {
+            consumed_fuel,
+            output,
+        }
+    }
+
+    pub fn from_error<Ctx: WorkerCtx>(consumed_fuel: i64, error: &anyhow::Error) -> Self {
+        match TrapType::from_error::<Ctx>(error) {
+            TrapType::Interrupt(kind) => InvokeResult::Interrupted {
+                consumed_fuel,
+                interrupt_kind: kind,
+            },
+            TrapType::Exit => InvokeResult::Exited { consumed_fuel },
+            TrapType::Error(error) => InvokeResult::Failed {
+                consumed_fuel,
+                error,
+            },
+        }
+    }
+
+    pub fn consumed_fuel(&self) -> i64 {
+        match self {
+            InvokeResult::Exited { consumed_fuel, .. }
+            | InvokeResult::Failed { consumed_fuel, .. }
+            | InvokeResult::Succeeded { consumed_fuel, .. }
+            | InvokeResult::Interrupted { consumed_fuel, .. } => *consumed_fuel,
+        }
+    }
+
+    pub fn as_trap_type<Ctx: WorkerCtx>(&self) -> Option<TrapType> {
+        match self {
+            InvokeResult::Failed { error, .. } => Some(TrapType::Error(error.clone())),
+            InvokeResult::Interrupted { interrupt_kind, .. } => {
+                Some(TrapType::Interrupt(interrupt_kind.clone()))
+            }
+            InvokeResult::Exited { .. } => Some(TrapType::Exit),
+            _ => None,
+        }
+    }
 }

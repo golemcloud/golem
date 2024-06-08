@@ -49,7 +49,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
 
         let mut workers: Vec<WorkerMetadata> = vec![];
         for (worker_id, worker) in active_workers {
-            let metadata = worker.get_metadata();
+            let metadata = worker.get_metadata().await?;
             if worker_id.component_id == *component_id
                 && (metadata.last_known_status.status == WorkerStatus::Running)
                 && filter.clone().map_or(true, |f| f.matches(&metadata))

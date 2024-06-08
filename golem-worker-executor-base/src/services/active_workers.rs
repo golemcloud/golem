@@ -18,16 +18,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, PendingOrFinal};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::WorkerId;
 
 use crate::error::GolemError;
-use crate::worker::{PendingWorker, Worker};
+use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 
 /// Holds the metadata and wasmtime structures of the active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
-    cache: Cache<WorkerId, PendingWorker<Ctx>, Arc<Worker<Ctx>>, GolemError>,
+    cache: Cache<WorkerId, (), Arc<Worker<Ctx>>, GolemError>, // TODO: SimpleCache?
 }
 
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
@@ -57,38 +57,16 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         }
     }
 
-    pub async fn get_with<F1, F2>(
+    pub async fn get_with<F>(
         &self,
-        worker_id: WorkerId,
-        f1: F1,
-        f2: F2,
+        worker_id: &WorkerId,
+        f: F,
     ) -> Result<Arc<Worker<Ctx>>, GolemError>
     where
-        F1: FnOnce() -> Result<PendingWorker<Ctx>, GolemError>,
-        F2: FnOnce(
-            &PendingWorker<Ctx>,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Arc<Worker<Ctx>>, GolemError>> + Send>>,
+        F: FnOnce() -> Pin<Box<dyn Future<Output = Result<Arc<Worker<Ctx>>, GolemError>> + Send>>
+            + Send,
     {
-        self.cache.get_or_insert(&worker_id, f1, f2).await
-    }
-
-    pub async fn get_pending_with<F1, F2>(
-        &self,
-        worker_id: WorkerId,
-        f1: F1,
-        f2: F2,
-    ) -> Result<PendingOrFinal<PendingWorker<Ctx>, Arc<Worker<Ctx>>>, GolemError>
-    where
-        F1: FnOnce() -> Result<PendingWorker<Ctx>, GolemError>,
-        F2: FnOnce(
-                &PendingWorker<Ctx>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Arc<Worker<Ctx>>, GolemError>> + Send>>
-            + Send
-            + 'static,
-    {
-        self.cache.get_or_insert_pending(&worker_id, f1, f2).await
+        self.cache.get_or_insert_simple(worker_id, f).await
     }
 
     pub fn remove(&self, worker_id: &WorkerId) {

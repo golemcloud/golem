@@ -20,23 +20,22 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Add;
 use std::string::FromUtf8Error;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use crate::error::GolemError;
-use crate::invocation::invoke_worker;
+use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, LookupResult,
-    PersistenceLevel, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, PersistenceLevel, TrapType,
+    WorkerConfig,
 };
-use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::{worker_enumeration, HasAll, HasInvocationQueue, HasOplog};
+use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
 use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
     ExternalOperations, InvocationHooks, InvocationManagement, IoCapturing, PublicWorkerIo,
@@ -70,12 +69,11 @@ use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::wasm_rpc::UriExtensions;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::services::oplog::{Oplog, OplogOps, OplogService};
-use crate::services::recovery::RecoveryManagement;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::HasOplogService;
 use crate::wasi_host;
-use crate::worker::{calculate_last_known_status, calculate_worker_status};
+use crate::worker::{calculate_last_known_status, is_worker_error_retriable};
 
 pub mod blobstore;
 mod cli;
@@ -93,9 +91,10 @@ pub mod wasm_rpc;
 
 mod durability;
 use crate::services::events::Events;
-use crate::services::invocation_queue::InvocationQueue;
 use crate::services::worker_proxy::WorkerProxy;
+use crate::worker::{RecoveryDecision, Worker};
 pub use durability::*;
+use golem_common::retries::get_delay;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -104,7 +103,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     wasi_http: WasiHttpCtx,
     pub owned_worker_id: OwnedWorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
-    state: PrivateDurableWorkerState<Ctx>,
+    state: PrivateDurableWorkerState,
     #[allow(unused)] // note: need to keep reference to it to keep the temp dir alive
     temp_dir: Arc<TempDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -122,12 +121,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
-        active_workers: Arc<ActiveWorkers<Ctx>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
-        invocation_queue: Arc<InvocationQueue<Ctx>>,
+        invocation_queue: Weak<Worker<Ctx>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         config: Arc<GolemConfig>,
@@ -149,7 +146,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             owned_worker_id.worker_id, worker_config.deleted_regions
         );
 
-        let stdio = ManagedStandardIo::new(owned_worker_id.worker_id(), invocation_queue.clone());
+        let stdio = ManagedStandardIo::new(owned_worker_id.worker_id());
         let stdin = ManagedStdIn::from_standard_io(stdio.clone()).await;
         let stdout = ManagedStdOut::from_standard_io(stdio.clone());
         let stderr = ManagedStdErr::from_stderr(Stderr);
@@ -191,8 +188,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         blob_store_service,
                         config.clone(),
                         owned_worker_id.clone(),
-                        active_workers.clone(),
-                        recovery_management,
                         rpc,
                         worker_proxy,
                         worker_config.deleted_regions.clone(),
@@ -233,7 +228,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let execution_status = self.execution_status.read().unwrap().clone();
         match execution_status {
             ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(interrupt_kind),
-            ExecutionStatus::Interrupted { interrupt_kind, .. } => Some(interrupt_kind),
             _ => None,
         }
     }
@@ -247,17 +241,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
             ExecutionStatus::Suspended { .. } => {}
             ExecutionStatus::Interrupting {
-                interrupt_kind,
                 await_interruption,
                 last_known_status,
+                ..
             } => {
-                *execution_status = ExecutionStatus::Interrupted {
-                    interrupt_kind,
-                    last_known_status,
-                };
+                *execution_status = ExecutionStatus::Suspended { last_known_status };
                 await_interruption.send(()).ok();
             }
-            ExecutionStatus::Interrupted { .. } => {}
         }
     }
 
@@ -270,7 +260,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 *execution_status = ExecutionStatus::Running { last_known_status };
             }
             ExecutionStatus::Interrupting { .. } => {}
-            ExecutionStatus::Interrupted { .. } => {}
         }
     }
 
@@ -298,29 +287,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .clone();
 
         let mut deleted_regions = self.state.deleted_regions.clone();
-        let (pending_updates, extra_deleted_regions) =
-            self.public_state.invocation_queue().pending_updates();
+        let (pending_updates, extra_deleted_regions) = self.public_state.worker().pending_updates();
         deleted_regions.set_override(extra_deleted_regions);
 
         status.deleted_regions = deleted_regions;
         status
             .overridden_retry_config
             .clone_from(&self.state.overridden_retry_policy);
-        status.pending_invocations = self.public_state.invocation_queue().pending_invocations();
-        status.invocation_results = self.public_state.invocation_queue.invocation_results();
+        status.pending_invocations = self.public_state.worker().pending_invocations();
+        status.invocation_results = self.public_state.worker().invocation_results();
         status.pending_updates = pending_updates;
         status
             .current_idempotency_key
             .clone_from(&self.state.current_idempotency_key);
         status.oplog_idx = self.state.oplog.current_oplog_index().await;
         f(&mut status);
-        self.state
-            .worker_service
-            .update_status(&self.owned_worker_id, &status)
-            .await;
-
-        let mut execution_status = self.execution_status.write().unwrap();
-        execution_status.set_last_known_status(status);
+        self.public_state.worker().update_status(status).await;
     }
 
     pub async fn store_worker_status(&self, status: WorkerStatus) {
@@ -354,24 +336,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.update_worker_status(|_| {}).await;
     }
 
-    pub fn get_stdio(&self) -> ManagedStandardIo<Ctx> {
+    pub fn get_stdio(&self) -> ManagedStandardIo {
         self.public_state.managed_stdio.clone()
     }
 
     pub async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.state.get_current_idempotency_key()
-    }
-
-    pub async fn get_current_invocation_result(&self) -> Option<LookupResult> {
-        match self.state.get_current_idempotency_key() {
-            Some(key) => Some(
-                self.public_state
-                    .invocation_queue
-                    .lookup_invocation_result(&key)
-                    .await,
-            ),
-            None => None,
-        }
     }
 
     pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
@@ -381,27 +351,92 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
         self.state.worker_proxy.clone()
     }
+
+    fn get_recovery_decision_on_trap(
+        retry_config: &RetryConfig,
+        previous_tries: u64,
+        trap_type: &TrapType,
+    ) -> RecoveryDecision {
+        match trap_type {
+            TrapType::Interrupt(InterruptKind::Interrupt) => RecoveryDecision::None,
+            TrapType::Interrupt(InterruptKind::Suspend) => RecoveryDecision::None,
+            TrapType::Interrupt(InterruptKind::Restart) => RecoveryDecision::Immediate,
+            TrapType::Interrupt(InterruptKind::Jump) => RecoveryDecision::Immediate,
+            TrapType::Exit => RecoveryDecision::None,
+            TrapType::Error(error) => {
+                if is_worker_error_retriable(retry_config, error, previous_tries) {
+                    match get_delay(retry_config, previous_tries) {
+                        Some(delay) => RecoveryDecision::Delayed(delay),
+                        None => RecoveryDecision::None,
+                    }
+                } else {
+                    RecoveryDecision::None
+                }
+            }
+        }
+    }
+
+    fn get_recovery_decision_on_startup(
+        retry_config: &RetryConfig,
+        last_error: &Option<LastError>,
+    ) -> RecoveryDecision {
+        match last_error {
+            Some(last_error) => {
+                if is_worker_error_retriable(
+                    retry_config,
+                    &last_error.error,
+                    last_error.retry_count,
+                ) {
+                    RecoveryDecision::Immediate
+                } else {
+                    RecoveryDecision::None
+                }
+            }
+            None => RecoveryDecision::Immediate,
+        }
+    }
+
+    fn calculate_worker_status(
+        retry_config: &RetryConfig,
+        trap_type: &TrapType,
+        previous_tries: u64,
+    ) -> WorkerStatus {
+        match trap_type {
+            TrapType::Interrupt(InterruptKind::Interrupt) => WorkerStatus::Interrupted,
+            TrapType::Interrupt(InterruptKind::Suspend) => WorkerStatus::Suspended,
+            TrapType::Interrupt(InterruptKind::Jump) => WorkerStatus::Running,
+            TrapType::Interrupt(InterruptKind::Restart) => WorkerStatus::Running,
+            TrapType::Exit => WorkerStatus::Exited,
+            TrapType::Error(error) => {
+                if is_worker_error_retriable(retry_config, error, previous_tries) {
+                    WorkerStatus::Retrying
+                } else {
+                    WorkerStatus::Failed
+                }
+            }
+        }
+    }
 }
 
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
     /// Records the result of an automatic update, if any was active, and returns whether the worker
     /// should be restarted to retry recovering without the pending update.
     pub async fn finalize_pending_update(
-        result: &Result<(), GolemError>,
+        result: &Result<RecoveryDecision, GolemError>,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> bool {
+    ) -> RecoveryDecision {
         let worker_id = store.as_context().data().worker_id().clone();
         let pending_update = store
             .as_context()
             .data()
             .durable_ctx()
             .public_state
-            .invocation_queue
+            .worker()
             .pop_pending_update();
         match pending_update {
             Some(pending_update) => match result {
-                Ok(_) => {
+                Ok(RecoveryDecision::None) => {
                     if let UpdateDescription::SnapshotBased { .. } = &pending_update.description {
                         let target_version = *pending_update.description.target_version();
 
@@ -441,12 +476,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     .end_call_snapshotting_function();
 
                                 let failed = match load_result {
-                                    Some(Err(error)) => Some(format!(
+                                    Err(error) => Some(format!(
                                         "Manual update failed to load snapshot: {error}"
                                     )),
-                                    Some(Ok(value)) => {
-                                        if value.len() == 1 {
-                                            match &value[0] {
+                                    Ok(InvokeResult::Failed { error, .. }) => Some(format!(
+                                        "Manual update failed to load snapshot: {error}"
+                                    )),
+                                    Ok(InvokeResult::Succeeded { output, .. }) => {
+                                        if output.len() == 1 {
+                                            match &output[0] {
                                                     Value::Result(Err(Some(boxed_error_value))) => {
                                                         match &**boxed_error_value {
                                                             Value::String(error) =>
@@ -470,14 +508,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                         .data_mut()
                                         .on_worker_update_failed(target_version, Some(error))
                                         .await;
-                                    true
+                                    RecoveryDecision::Immediate
                                 } else {
                                     store
                                         .as_context_mut()
                                         .data_mut()
                                         .on_worker_update_succeeded(target_version)
                                         .await;
-                                    false
+                                    RecoveryDecision::None
                                 }
                             }
                             Ok(None) => {
@@ -489,7 +527,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                         Some("Failed to find snapshot data for update".to_string()),
                                     )
                                     .await;
-                                true
+                                RecoveryDecision::Immediate
                             }
                             Err(error) => {
                                 store
@@ -497,18 +535,34 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     .data_mut()
                                     .on_worker_update_failed(target_version, Some(error))
                                     .await;
-                                true
+                                RecoveryDecision::Immediate
                             }
                         }
                     } else {
+                        // Automatic update succeeded
                         let target_version = *pending_update.description.target_version();
                         store
                             .as_context_mut()
                             .data_mut()
                             .on_worker_update_succeeded(target_version)
                             .await;
-                        false
+                        RecoveryDecision::None
                     }
+                }
+                Ok(_) => {
+                    // TODO: we loose knowledge of the error here
+                    // Failure that triggered a retry
+                    let target_version = *pending_update.description.target_version();
+
+                    store
+                        .as_context_mut()
+                        .data_mut()
+                        .on_worker_update_failed(
+                            target_version,
+                            Some("Automatic update failed".to_string()),
+                        )
+                        .await;
+                    RecoveryDecision::Immediate
                 }
                 Err(error) => {
                     let target_version = *pending_update.description.target_version();
@@ -521,12 +575,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             Some(format!("Automatic update failed: {error}")),
                         )
                         .await;
-                    true
+                    RecoveryDecision::Immediate
                 }
             },
             None => {
                 debug!("No pending updates to finalize for {}", worker_id);
-                false
+                RecoveryDecision::None
             }
         }
     }
@@ -540,13 +594,6 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.get_current_idempotency_key().await
-    }
-
-    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        self.public_state
-            .invocation_queue
-            .lookup_invocation_result(key)
-            .await
     }
 }
 
@@ -596,25 +643,16 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     async fn update_pending_updates(&self) {
         self.update_pending_invocations().await
     }
-
-    async fn deactivate(&self) {
-        debug!("deactivating worker");
-        self.state
-            .active_workers
-            .remove(&self.owned_worker_id.worker_id);
-    }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
-    type FailurePayload = Option<OplogIndex>;
-
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
         calling_convention: Option<CallingConvention>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), GolemError> {
         if self.state.snapshotting_mode.is_none() {
             let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
                 .iter()
@@ -643,11 +681,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn on_invocation_failure(
-        &mut self,
-        trap_type: &TrapType,
-    ) -> Result<Option<OplogIndex>, anyhow::Error> {
-        if self.state.is_live() {
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision {
+        let oplog_idx = if self.state.is_live() {
             let needs_commit = match trap_type {
                 TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
                 TrapType::Interrupt(InterruptKind::Interrupt) => {
@@ -662,23 +697,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 let oplog_idx = self.state.oplog.add_and_commit(entry).await;
 
                 if store {
-                    Ok(Some(oplog_idx))
+                    Some(oplog_idx)
                 } else {
-                    Ok(None)
+                    None
                 }
             } else {
-                Ok(None)
+                None
             }
         } else {
-            Ok(None)
-        }
-    }
+            None
+        };
 
-    async fn on_invocation_failure_deactivated(
-        &mut self,
-        _payload: &Option<OplogIndex>,
-        error: &TrapType,
-    ) -> Result<WorkerStatus, anyhow::Error> {
         let previous_tries = self.state.trailing_error_count().await;
         let default_retry_config = &self.state.config.retry;
         let retry_config = self
@@ -687,38 +716,34 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .as_ref()
             .unwrap_or(default_retry_config)
             .clone();
-        let decision = self
-            .state
-            .recovery_management
-            .schedule_recovery_on_trap(&self.owned_worker_id, &retry_config, previous_tries, error)
-            .await;
+        let decision =
+            Self::get_recovery_decision_on_trap(&retry_config, previous_tries, trap_type);
 
         debug!(
-            "Recovery decision because of error {:?} after {} tries: {:?}",
-            error, previous_tries, decision
+            "Recovery decision after {} tries: {:?}",
+            previous_tries, decision
         );
 
-        Ok(calculate_worker_status(
-            &retry_config,
-            error,
-            previous_tries,
-        ))
-    }
+        let updated_worker_status =
+            Self::calculate_worker_status(&retry_config, trap_type, previous_tries);
 
-    async fn on_invocation_failure_final(
-        &mut self,
-        payload: &Option<OplogIndex>,
-        trap_type: &TrapType,
-    ) -> Result<(), anyhow::Error> {
-        if let Some(oplog_idx) = payload {
-            if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
-                self.public_state
-                    .invocation_queue
-                    .store_invocation_failure(&idempotency_key, trap_type, *oplog_idx)
-                    .await;
+        self.store_worker_status(updated_worker_status.clone())
+            .await;
+
+        if updated_worker_status != WorkerStatus::Retrying
+            && updated_worker_status != WorkerStatus::Running
+        {
+            if let Some(oplog_idx) = oplog_idx {
+                if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                    self.public_state
+                        .worker()
+                        .store_invocation_failure(&idempotency_key, trap_type, oplog_idx)
+                        .await;
+                }
             }
         }
-        Ok(())
+
+        decision
     }
 
     async fn on_invocation_success(
@@ -727,7 +752,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         function_input: &Vec<Value>,
         consumed_fuel: i64,
         output: Vec<Value>,
-    ) -> Result<Option<Vec<Value>>, anyhow::Error> {
+    ) -> Result<(), GolemError> {
         let is_live_after = self.state.is_live();
 
         if is_live_after {
@@ -747,7 +772,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
-                        .invocation_queue
+                        .worker()
                         .store_invocation_success(&idempotency_key, output.clone(), oplog_idx)
                         .await;
                 }
@@ -761,18 +786,20 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             if let Some(function_output) = response {
                 let is_diverged = function_output != output;
                 if is_diverged {
-                    return Err(anyhow!(GolemError::unexpected_oplog_entry(
+                    return Err(GolemError::unexpected_oplog_entry(
                         format!("{full_function_name}({function_input:?}) => {function_output:?}"),
                         format!("{full_function_name}({function_input:?}) => {output:?}"),
-                    )));
+                    ));
                 }
             }
         }
 
+        self.store_worker_status(WorkerStatus::Idle).await;
+
         debug!("Function {full_function_name} finished with {output:?}");
 
         // Return indicating that it is done
-        Ok(Some(output))
+        Ok(())
     }
 }
 
@@ -865,21 +892,6 @@ pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     type ExtraDeps = Ctx::ExtraDeps;
 
-    async fn set_worker_status<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        status: WorkerStatus,
-    ) -> Result<(), GolemError> {
-        let metadata = this.worker_service().get(owned_worker_id).await;
-        let mut latest_status =
-            calculate_last_known_status(this, owned_worker_id, &metadata).await?;
-        latest_status.status = status;
-        this.worker_service()
-            .update_status(owned_worker_id, &latest_status)
-            .await;
-        Ok(())
-    }
-
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
@@ -899,7 +911,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<bool, GolemError> {
+    ) -> Result<RecoveryDecision, GolemError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
         let mut count = 0;
@@ -926,14 +938,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .await;
                 match oplog_entry {
                     Err(error) => break Err(error),
-                    Ok(None) => break Ok(()),
+                    Ok(None) => break Ok(RecoveryDecision::None),
                     Ok(Some((
                         function_name,
                         function_input,
                         idempotency_key,
                         calling_convention,
                     ))) => {
-                        debug!("prepare_instance invoking function {function_name}");
+                        debug!("Replaying function {function_name}");
                         let span = span!(Level::INFO, "replaying", function = function_name);
                         store
                             .as_context_mut()
@@ -941,9 +953,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .set_current_idempotency_key(idempotency_key)
                             .await;
 
+                        let full_function_name = function_name.to_string();
                         let invoke_result = invoke_worker(
-                            function_name.to_string(),
-                            function_input,
+                            full_function_name.clone(),
+                            function_input.clone(),
                             store,
                             instance,
                             calling_convention.unwrap_or(CallingConvention::Component),
@@ -952,40 +965,93 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         .instrument(span)
                         .await;
 
-                        if let Some(invoke_result) = invoke_result {
-                            if let Err(error) = invoke_result {
-                                if let Some(error) =
-                                    TrapType::from_error::<Ctx>(&error).as_golem_error()
+                        match invoke_result {
+                            Ok(InvokeResult::Succeeded {
+                                output,
+                                consumed_fuel,
+                            }) => {
+                                if let Err(err) = store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .on_invocation_success(
+                                        &full_function_name,
+                                        &function_input,
+                                        consumed_fuel,
+                                        output,
+                                    )
+                                    .await
                                 {
-                                    break Err(error);
+                                    break Err(err);
                                 }
+                                count += 1;
+                                continue;
                             }
-                        } else {
-                            break Err(GolemError::runtime(format!(
-                                "The worker could not finish replaying a function {function_name}"
-                            )));
-                        }
+                            _ => {
+                                let trap_type = match invoke_result {
+                                    Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
+                                    Err(error) => {
+                                        Some(TrapType::from_error::<Ctx>(&anyhow!(error)))
+                                    }
+                                };
+                                let decision = match trap_type {
+                                    Some(trap_type) => {
+                                        let decision = store
+                                            .as_context_mut()
+                                            .data_mut()
+                                            .on_invocation_failure(&trap_type)
+                                            .await;
 
-                        count += 1;
+                                        if decision == RecoveryDecision::None {
+                                            // Cannot retry so we need to fail
+                                            match trap_type {
+                                                TrapType::Interrupt(interrupt_kind) => {
+                                                    if interrupt_kind == InterruptKind::Interrupt {
+                                                        break Err(GolemError::runtime(
+                                                            "Interrupted via the Golem API",
+                                                        ));
+                                                    } else {
+                                                        break Err(GolemError::runtime("The worker could not finish replaying a function {function_name}"));
+                                                    }
+                                                }
+                                                TrapType::Exit => {
+                                                    break Err(GolemError::runtime(
+                                                        "Process exited",
+                                                    ))
+                                                }
+                                                TrapType::Error(error) => {
+                                                    break Err(GolemError::runtime(
+                                                        error.to_string(),
+                                                    ))
+                                                }
+                                            }
+                                        }
+
+                                        decision
+                                    }
+                                    None => RecoveryDecision::None,
+                                };
+
+                                break Ok(decision);
+                            }
+                        }
                     }
                 }
             } else {
-                break Ok(());
+                break Ok(RecoveryDecision::None);
             }
         };
         record_resume_worker(start.elapsed());
         record_number_of_replayed_functions(count);
 
-        let retry = Self::finalize_pending_update(&result, instance, store).await;
+        let final_decision = Self::finalize_pending_update(&result, instance, store).await;
 
-        if retry {
+        // The update finalization has the right to override the Err result with an explicit retry request
+        if final_decision != RecoveryDecision::None {
             debug!("Retrying prepare_instance after failed update attempt");
-            Ok(true)
+            Ok(final_decision)
         } else {
             debug!("Finished prepare_instance");
-            result
-                .map(|_| false)
-                .map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
+            result.map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
         }
     }
 
@@ -1004,7 +1070,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         Ok(())
     }
 
-    async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync>(
+    async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), anyhow::Error> {
         info!("Recovering workers");
@@ -1019,19 +1085,25 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             let actualized_metadata =
                 calculate_last_known_status(this, &owned_worker_id, &Some(worker)).await?;
             let last_error = Self::get_last_error_and_retry_count(this, &owned_worker_id).await;
-            let decision = this
-                .recovery_management()
-                .schedule_recovery_on_startup(
-                    &owned_worker_id,
-                    actualized_metadata
-                        .overridden_retry_config
-                        .as_ref()
-                        .unwrap_or(default_retry_config),
-                    &last_error,
-                )
-                .await;
+            let decision = Self::get_recovery_decision_on_startup(
+                actualized_metadata
+                    .overridden_retry_config
+                    .as_ref()
+                    .unwrap_or(default_retry_config),
+                &last_error,
+            );
             if let Some(last_error) = last_error {
                 debug!("Recovery decision after {last_error}: {decision:?}");
+            }
+
+            match decision {
+                RecoveryDecision::Immediate => {
+                    let _ = Worker::get_or_create_running(this, &owned_worker_id).await?;
+                }
+                RecoveryDecision::Delayed(_) => {
+                    panic!("Delayed recovery on startup is not supported currently")
+                }
+                RecoveryDecision::None => {}
             }
         }
 
@@ -1083,7 +1155,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
     }
 }
 
-pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
+pub struct PrivateDurableWorkerState {
     oplog_service: Arc<dyn OplogService + Send + Sync>,
     oplog: Arc<dyn Oplog + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
@@ -1095,8 +1167,6 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     current_idempotency_key: Option<IdempotencyKey>,
-    active_workers: Arc<ActiveWorkers<Ctx>>,
-    recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
     rpc: Arc<dyn Rpc + Send + Sync>,
     worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
     resources: HashMap<u64, ResourceAny>,
@@ -1114,7 +1184,7 @@ pub struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     snapshotting_mode: Option<PersistenceLevel>,
 }
 
-impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
+impl PrivateDurableWorkerState {
     pub fn new(
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
@@ -1128,8 +1198,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
-        active_workers: Arc<ActiveWorkers<Ctx>>,
-        recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         deleted_regions: DeletedRegions,
@@ -1147,8 +1215,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             config,
             owned_worker_id,
             current_idempotency_key: None,
-            active_workers,
-            recovery_management,
             rpc,
             worker_proxy,
             resources: HashMap::new(),
@@ -1502,7 +1568,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
+impl ResourceStore for PrivateDurableWorkerState {
     fn self_uri(&self) -> Uri {
         Uri::golem_uri(&self.owned_worker_id.worker_id, None)
     }
@@ -1523,13 +1589,13 @@ impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasOplogService for PrivateDurableWorkerState<Ctx> {
+impl HasOplogService for PrivateDurableWorkerState {
     fn oplog_service(&self) -> Arc<dyn OplogService + Send + Sync> {
         self.oplog_service.clone()
     }
 }
 
-impl<Ctx: WorkerCtx> HasOplog for PrivateDurableWorkerState<Ctx> {
+impl HasOplog for PrivateDurableWorkerState {
     fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
         self.oplog.clone()
     }
@@ -1538,8 +1604,8 @@ impl<Ctx: WorkerCtx> HasOplog for PrivateDurableWorkerState<Ctx> {
 pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
-    managed_stdio: ManagedStandardIo<Ctx>,
-    invocation_queue: Arc<InvocationQueue<Ctx>>,
+    managed_stdio: ManagedStandardIo,
+    invocation_queue: Weak<Worker<Ctx>>,
     oplog: Arc<dyn Oplog + Send + Sync>,
 }
 
@@ -1562,9 +1628,14 @@ impl<Ctx: WorkerCtx> PublicWorkerIo for PublicDurableWorkerState<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasInvocationQueue<Ctx> for PublicDurableWorkerState<Ctx> {
-    fn invocation_queue(&self) -> Arc<InvocationQueue<Ctx>> {
-        self.invocation_queue.clone()
+impl<Ctx: WorkerCtx> HasWorker<Ctx> for PublicDurableWorkerState<Ctx> {
+    fn worker(&self) -> Arc<Worker<Ctx>> {
+        // NOTE: We store the back-reference as a weak reference here to avoid a reference cycle,
+        // but this should always work as the wasmtime store holding the DurableWorkerCtx is owned
+        // by the InvocationQueue's run loop.
+        self.invocation_queue
+            .upgrade()
+            .expect("InvocationQueue dropped")
     }
 }
 

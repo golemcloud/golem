@@ -2,6 +2,7 @@ use clap::Parser;
 use golem_test_framework::dsl::benchmark::{BenchmarkResult, RunConfig};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::time::Duration;
 
 use cli_params::CliReportParams;
 use internal::*;
@@ -73,7 +74,7 @@ impl BenchmarkComparisonReport {
         for report in self.results.iter() {
             for run_config_report in report.comparison_results.results.iter() {
                 table.push(format!(
-                    r#"| {} | {} | {} | {} | {} | {} |"#,
+                    r#"| {} | {} | {} | {} | {:?} | {:?} |"#,
                     report.benchmark_type.0,
                     run_config_report.run_config.cluster_size,
                     run_config_report.run_config.size,
@@ -109,7 +110,7 @@ impl BenchmarkReport {
         for report in self.results.iter() {
             for run_config_report in report.report.results.iter() {
                 table.push(format!(
-                    "| {} | {} | {} | {} | {} |",
+                    "| {} | {} | {} | {} | {:?} |",
                     report.benchmark_type.0,
                     run_config_report.run_config.cluster_size,
                     run_config_report.run_config.size,
@@ -168,7 +169,7 @@ struct BenchmarkReportForAllRunConfigs {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct BenchmarkReportPerRunConfig {
     run_config: RunConfig,
-    avg_time: u64,
+    avg_time: Duration,
 }
 
 impl ComparisonForAllRunConfigs {
@@ -199,8 +200,8 @@ impl ComparisonForAllRunConfigs {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Comparison {
-    previous_avg: u64,
-    current_avg: u64,
+    previous_avg: Duration,
+    current_avg: Duration,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -220,6 +221,8 @@ mod internal {
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
+    use std::ops::Add;
+    use std::time::Duration;
 
     pub fn load_json(file_path: &str) -> Result<BenchmarkResult, String> {
         let file = File::open(file_path)
@@ -230,18 +233,24 @@ mod internal {
         Ok(data)
     }
 
-    pub fn calculate_mean_avg_time(json: &BenchmarkResult) -> HashMap<RunConfig, u64> {
-        let mut total_avg_secs = 0;
+    pub fn calculate_mean_avg_time(json: &BenchmarkResult) -> HashMap<RunConfig, Duration> {
+        let mut total_duration = Duration::ZERO;
 
         let mut run_config_to_avg_time = HashMap::new();
 
         for (run_config, benchmark_result) in &json.results {
             for duration in benchmark_result.duration_results.values() {
-                total_avg_secs += duration.avg.as_secs();
+                total_duration = total_duration.add(duration.avg);
             }
 
-            let avg = total_avg_secs / benchmark_result.duration_results.values().len() as u64;
-            run_config_to_avg_time.insert(run_config.clone(), avg);
+            let length = benchmark_result.duration_results.values().len();
+
+            if length != 0 {
+                let avg = total_duration.div_f64(length as f64);
+                run_config_to_avg_time.insert(run_config.clone(), avg);
+            } else {
+                run_config_to_avg_time.insert(run_config.clone(), Duration::ZERO);
+            }
         }
 
         run_config_to_avg_time

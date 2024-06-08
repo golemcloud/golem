@@ -60,15 +60,15 @@ impl Services {
                 }
             };
 
-        let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> = match config
-            .compilation
-            .clone()
-        {
-            ComponentCompilationConfig::Enabled(config) => {
-                Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
-            }
-            ComponentCompilationConfig::Disabled => Arc::new(ComponentCompilationServiceDisabled),
-        };
+        let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
+            match config.compilation.clone() {
+                ComponentCompilationConfig::Enabled(config) => {
+                    Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
+                }
+                ComponentCompilationConfig::Disabled(_) => {
+                    Arc::new(ComponentCompilationServiceDisabled)
+                }
+            };
 
         let component_service: Arc<dyn component::ComponentService + Sync + Send> =
             Arc::new(component::ComponentServiceDefault::new(
