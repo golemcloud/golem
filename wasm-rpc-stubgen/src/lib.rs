@@ -257,7 +257,6 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     // If stub generated world points to the destination world (meaning the destination still owns the world for which the stub is generated),
     // we re-generation of stub with inlined types and copy the inlined stub to the destination
     if internal::dest_owns_stub_world(&world_name, &destination_wit_root) {
-        dbg!("Is destination owning stub world");
         let stub_root = &args
             .stub_wit_root
             .parent()
