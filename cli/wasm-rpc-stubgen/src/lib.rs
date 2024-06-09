@@ -279,6 +279,21 @@ fn dest_owns_stub_world(stub_world_name: &str, destination_wit_root: &Unresolved
         .contains(&stub_world_name.to_string())
 }
 
+// When copying the wit files of the target to the packages wit/deps in the source, we need to ensure
+// these dependencies are not the source itself, or it's stub version
+// For cases where adding the stub dependency to its own package is valid (i.e, in case of self-loop/ direct-cycle dependency)
+// this function is/should-never-be called because, in this case destination owns the stub world (the stub to be copied) already
+// and forms a different branch of logic.
+fn is_invalid_dependency(destination_wit_root: &UnresolvedPackage, dependency_package: &UnresolvedPackage) -> bool {
+    let self_stub_name = format!(
+        "{}-stub",
+        destination_wit_root.name.name
+    );
+
+    dependency_package.name == destination_wit_root.name ||
+        (dependency_package.name.namespace == destination_wit_root.name.namespace && dependency_package.name.name == self_stub_name)
+}
+
 pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     // The destination's WIT's package details
     let destination_wit_root = UnresolvedPackage::parse_dir(&args.dest_wit_root)?;
@@ -295,6 +310,7 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     // If stub generated world points to the destination world (meaning the destination still owns the world for which the stub is generated),
     // we re-generation of stub with inlined types and copy the inlined stub to the destination
     if dest_owns_stub_world(&world_name, &destination_wit_root) {
+        dbg!("Is destination owning stub world");
         let stub_root = &args
             .stub_wit_root
             .parent()
@@ -334,11 +350,19 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
             file_name: "_stub.wit".to_string(),
         });
     } else {
+        dbg!("Destination doesn't own stub world");
         let main_wit_package_name = wit::get_package_name(&main_wit)?;
 
         for source_dir in source_deps {
-            actions.push(WitAction::CopyDepDir { source_dir })
+            let parsed = UnresolvedPackage::parse_dir(&source_dir)?;
+
+            if is_invalid_dependency(&destination_wit_root, &parsed) {
+                eprintln!("Skipping the copy of cyclic dependencies {} to the the same as {}", parsed.name, destination_wit_root.name);
+            } else {
+                actions.push(WitAction::CopyDepDir { source_dir })
+            }
         }
+
         actions.push(WitAction::CopyDepWit {
             source_wit: main_wit,
             dir_name: format!(
