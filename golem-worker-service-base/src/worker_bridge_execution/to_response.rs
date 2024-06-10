@@ -82,7 +82,7 @@ mod internal {
                     }?;
 
                     let body = typed_value
-                        .get_optional(&Path::from_key("body"))?
+                        .get_optional(&Path::from_key("body"))
                         .unwrap_or(typed_value.clone());
 
                     Ok(IntermediateHttpResponse {
@@ -121,7 +121,8 @@ mod internal {
 
                     match evaluation_result {
                         Some(type_annotated_value) => {
-                            match type_annotated_value.to_http_response_body(content_type) {
+                            match type_annotated_value.to_http_resp_with_content_type(content_type)
+                            {
                                 Ok(body_with_header) => {
                                     let mut response = body_with_header.into_response();
                                     response.set_status(*status);
@@ -304,7 +305,12 @@ mod test {
         let status = response_parts.status;
 
         let expected_body = "Healthy";
-        let expected_headers = poem::web::headers::HeaderMap::new();
+
+        // Deault content response is application/json. Refer HttpResponse
+        let expected_headers = poem::web::headers::HeaderMap::from_iter(vec![(
+            CONTENT_TYPE,
+            "application/json".parse().unwrap(),
+        )]);
         let expected_status = StatusCode::OK;
 
         assert_eq!(body, expected_body);
