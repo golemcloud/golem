@@ -179,35 +179,29 @@ spec:
               value: "{{ .Values.workerService.ports.grpc }}"
             - name: GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN
               value: "2A354594-7A63-4091-A46B-CC58D379F677"
-{{- if eq .Values.componentCompiledStore.type "pvc" }}
-            - name: GOLEM__COMPILED_COMPONENT_SERVICE__TYPE
-              value: "Local"
-            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__ROOT
-              value: "/golem/component/compiled"
-{{- end }}
-{{- if eq .Values.componentCompiledStore.type "s3" }}
             - name: GOLEM__COMPILED_COMPONENT_SERVICE__TYPE
               value: "Enabled"
-            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__REGION
-              value: {{ .Values.componentCompiledStore.s3.region }}
-            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__OBJECT_PREFIX
-              value: {{ .Values.componentCompiledStore.s3.objectPrefix }}
-            - name: GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__BUCKET
-              value: {{ .Values.componentCompiledStore.s3.bucket }}
-{{- end }}
-{{- if eq .Values.workerBlobStore.type "pvc" }}
+{{- if eq .Values.workerExecutorStore.type "pvc" }}
             - name: GOLEM__BLOB_STORAGE__TYPE
               value: "LocalFileSystem"
             - name: GOLEM__BLOB_STORAGE__CONFIG__ROOT
-              value: "/golem"
+              value: "/golem/worker"
 {{- end }}
-{{- if eq .Values.workerBlobStore.type "s3" }}
+{{- if eq .Values.workerExecutorStore.type "s3" }}
             - name: GOLEM__BLOB_STORAGE__TYPE
               value: "S3"
             - name: GOLEM__BLOB_STORAGE__CONFIG__REGION
-              value: {{ .Values.workerBlobStore.s3.region }}
+              value: {{ .Values.workerExecutorStore.s3.region }}
             - name: GOLEM__BLOB_STORAGE__CONFIG__BUCKET_PREFIX
-              value: {{ .Values.workerBlobStore.s3.bucketPrefix }}
+              value: {{ .Values.workerExecutorStore.s3.objectPrefix }}
+            - name: GOLEM__BLOB_STORAGE__CONFIG__compilation_cache_bucket
+              value: {{ .Values.workerExecutorStore.s3.compilationCacheBucket }}
+            - name: GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET
+              value: {{ .Values.workerExecutorStore.s3.customDataBucket }}
+            - name: GOLEM__BLOB_STORAGE__CONFIG__OPLOG_PAYLOAD_BUCKET
+              value: {{ .Values.workerExecutorStore.s3.oplogPayloadBucket }}
+            - name: GOLEM__BLOB_STORAGE__CONFIG__COMPRESSED_OPLOG_BUCKETS
+              value: {{ .Values.workerExecutorStore.s3.compressedOplogBuckets }}
 {{- end }}
             - name: POD_NAME
               valueFrom:
@@ -226,32 +220,17 @@ spec:
             failureThreshold: 5
             initialDelaySeconds: 45
             timeoutSeconds: 2
-{{- if or (eq .Values.componentCompiledStore.type "pvc") (eq .Values.workerBlobStore.type "pvc") }}
+{{- if eq .Values.workerExecutorStore.type "pvc" }}
           volumeMounts:
+            - name: golem-worker-executor-store-{{.Values.env}}
+              mountPath: /golem/worker
 {{- end }}
-{{- if eq .Values.componentCompiledStore.type "pvc" }}
-            - name: golem-component-compiled-store-{{.Values.env}}
-              mountPath: /golem/component/compiled
-{{- end }}
-{{- if eq .Values.workerBlobStore.type "pvc" }}
-            - name: golem-worker-blob-store-{{.Values.env}}
-              mountPath: /golem/worker/blob
-{{- end }}
-{{- if or (eq .Values.componentCompiledStore.type "pvc") (eq .Values.workerBlobStore.type "pvc") }}
+{{- if eq .Values.workerExecutorStore.type "pvc" }}
       volumes:
-{{- end }}
-{{- if eq .Values.componentCompiledStore.type "pvc" }}
-        - name: golem-component-compiled-store-{{.Values.env}}
+        - name: golem-worker-executor-store-{{.Values.env}}
           persistentVolumeClaim:
-            claimName: golem-component-compiled-store-{{.Values.env}}
+            claimName: golem-worker-executor-store-{{.Values.env}}
 {{- end }}
-{{- if eq .Values.workerBlobStore.type "pvc" }}
-        - name: golem-worker-blob-store-{{.Values.env}}
-          persistentVolumeClaim:
-            claimName: golem-worker-blob-store-{{.Values.env}}
-{{- end }}
-
-
 ---
 
 apiVersion: apps/v1
@@ -526,23 +505,29 @@ spec:
               value: "{{ .Values.componentCompilationService.ports.http }}"
             - name: GOLEM__GRPC_PORT
               value: "{{ .Values.componentCompilationService.ports.grpc }}"
-{{- if eq .Values.componentCompiledStore.type "pvc" }}
             - name: GOLEM__COMPILED_COMPONENT_SERVICE__TYPE
               value: "Enabled"
+{{- if eq .Values.workerExecutorStore.type "pvc" }}
             - name: GOLEM__BLOB_STORAGE__TYPE
               value: "LocalFileSystem"
             - name: GOLEM__BLOB_STORAGE__CONFIG__ROOT
-              value: "/golem"
+              value: "/golem/worker"
 {{- end }}
-{{- if eq .Values.componentCompiledStore.type "s3" }}
-            - name: GOLEM__COMPILED_COMPONENT_SERVICE__TYPE
-              value: "Enabled"
+{{- if eq .Values.workerExecutorStore.type "s3" }}
             - name: GOLEM__BLOB_STORAGE__TYPE
               value: "S3"
             - name: GOLEM__BLOB_STORAGE__CONFIG__REGION
-              value: {{ .Values.componentCompiledStore.s3.region }}
+              value: {{ .Values.workerExecutorStore.s3.region }}
             - name: GOLEM__BLOB_STORAGE__CONFIG__BUCKET_PREFIX
-              value: {{ .Values.componentCompiledStore.s3.objectPrefix }}
+              value: {{ .Values.workerExecutorStore.s3.objectPrefix }}
+            - name: GOLEM__BLOB_STORAGE__CONFIG__compilation_cache_bucket
+              value: {{ .Values.workerExecutorStore.s3.compilationCacheBucket }}
+            - name: GOLEM__BLOB_STORAGE__CONFIG__CUSTOM_DATA_BUCKET
+              value: {{ .Values.workerExecutorStore.s3.customDataBucket }}
+            - name: GOLEM__BLOB_STORAGE__CONFIG__OPLOG_PAYLOAD_BUCKET
+              value: {{ .Values.workerExecutorStore.s3.oplogPayloadBucket }}
+            - name: GOLEM__BLOB_STORAGE__CONFIG__COMPRESSED_OPLOG_BUCKETS
+              value: {{ .Values.workerExecutorStore.s3.compressedOplogBuckets }}
 {{- end }}
           ports:
             - name: http
@@ -557,14 +542,14 @@ spec:
             failureThreshold: 5
             initialDelaySeconds: 45
             timeoutSeconds: 2
-{{- if eq .Values.componentCompiledStore.type "pvc" }}
+{{- if eq .Values.workerExecutorStore.type "pvc" }}
           volumeMounts:
-            - name: golem-component-compiled-store-{{.Values.env}}
-              mountPath: /golem/component/compiled
+            - name: golem-worker-executor-store-{{.Values.env}}
+              mountPath: /golem/worker
 {{- end }}
-{{- if eq .Values.componentCompiledStore.type "pvc" }}
+{{- if eq .Values.workerExecutorStore.type "pvc" }}
       volumes:
-        - name: golem-component-compiled-store-{{.Values.env}}
+        - name: golem-worker-executor-store-{{.Values.env}}
           persistentVolumeClaim:
-            claimName: golem-component-compiled-store-{{.Values.env}}
+            claimName: golem-worker-executor-store-{{.Values.env}}
 {{- end }}

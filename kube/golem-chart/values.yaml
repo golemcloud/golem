@@ -2,12 +2,12 @@ shardManager:
   image: golemservices/golem-shard-manager:latest
   imagePullPolicy: Always
   ports:
-    http: 8080
+    http: 8081
     grpc: 9001
   service:
     type: ClusterIP
   worker:
-    healthCheckType: "Grpc"
+    healthCheckType: "K8s"
   redis:
     port: 6379
     host: golem-redis-master
@@ -114,18 +114,7 @@ componentStore:
     bucket: ""
     region: "us-east-1"
 
-componentCompiledStore:
-  type: pvc
-  pvc:
-    storageClassName: hostpath
-    storageSize: 5Gi
-    accessMode: ReadWriteOnce
-  s3:
-    objectPrefix: ""
-    bucket: ""
-    region: "us-east-1"
-
-workerBlobStore:
+workerExecutorStore:
   type: pvc
   pvc:
     storageClassName: hostpath
@@ -134,6 +123,11 @@ workerBlobStore:
   s3:
     bucketPrefix: ""
     region: "us-east-1"
+    compilationCacheBucket: "compilation-cache"
+    customDataBucket: "custom-data"
+    oplogPayloadBucket: "oplog-payload"
+    compressedOplogBuckets: "oplog-archive-1"
+
 
 ingress:
   type: nginx
