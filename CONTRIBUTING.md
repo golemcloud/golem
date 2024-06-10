@@ -44,7 +44,7 @@ cargo make sharding-tests
     /run-benchmark
 ```
 
-3. If there are no other benchmarks to compare the following report should generate as a PR comment itself
+3. For all new benchmark types (meaning, those for which there is no baseline to compare), it should generate a report as below, as a PR comment
 
 ## Benchmark Report
 | Benchmark Type | Cluster Size | Size | Length | Avg Time |
@@ -63,8 +63,8 @@ cargo make sharding-tests
 
 RunID: 9435476881
 
-4. The underlying data used to created the above create will be automatically pushed back to the PR branch itself
-5. If there exists a baseline to compare for the benchmark type, then a comparison report will be generated for these benchmarks, and rest of them will be reported as above
+4. The underlying data used to created the above report will be automatically pushed back to the PR branch
+5. If there exists a baseline to compare for the benchmark type, then a comparison report will be generated for those benchmarks
 6. If there is no need to compare with any baseline, regardless of a baseline exist or not, then simply run
 
 ```bash
@@ -72,7 +72,7 @@ RunID: 9435476881
 /run-benchmark-refresh
 
 ```
-7. Refresh message can be useful in the event of comparison failures due to schema mismatches (especially when a developer refactor the benchmark code itself)
+7. Refresh message can be useful in the event of comparison failures (Example: A failure due to schema mismatch especially when a developer refactor the benchmark code itself)
 
 ## Starting all services locally
 
