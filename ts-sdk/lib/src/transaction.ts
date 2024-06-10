@@ -76,7 +76,7 @@ class InfallibleTransaction {
   execute<In, Out, Err>(
     operation: Operation<In, Out, Err>,
     input: In,
-  ) : Result<Out, Err> {
+  ) : Out {
     const result = operation.execute(input);
     if (result.isOk) {
       this.compensations.push(
@@ -88,7 +88,7 @@ class InfallibleTransaction {
           }
         }
       );
-      return Result.ok(result.value);
+      return result.value;
     } else {
       this.retry();
       throw new Error("Unreachable code");
