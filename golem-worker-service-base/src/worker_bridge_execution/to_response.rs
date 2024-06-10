@@ -71,12 +71,12 @@ mod internal {
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
             match evaluation_result {
                 ExprEvaluationResult::Value(typed_value) => {
-                    let status = match typed_value.get_optional(&Path::from_key("status"))? {
+                    let status = match typed_value.get_optional(&Path::from_key("status")) {
                         Some(typed_value) => get_status_code(&typed_value),
                         None => Ok(StatusCode::OK),
                     }?;
 
-                    let headers = match typed_value.get_optional(&Path::from_key("headers"))? {
+                    let headers = match typed_value.get_optional(&Path::from_key("headers")) {
                         None => Ok(ResolvedResponseHeaders::default()),
                         Some(header) => ResolvedResponseHeaders::from_typed_value(&header),
                     }?;
@@ -195,7 +195,7 @@ mod internal {
         )))
     }
 
-    #[derive(Default, Debug)]
+    #[derive(Default, Debug, PartialEq)]
     pub(crate) struct ResolvedResponseHeaders {
         pub(crate) headers: HashMap<String, String>,
     }
@@ -272,9 +272,10 @@ mod test {
         let http_response: poem::Response =
             evaluation_result.to_response(&RequestDetails::Http(TypedHttRequestDetails::empty()));
 
-        let body = http_response.into_body().into_string().await.unwrap();
-        let headers = http_response.headers();
-        let status = http_response.status();
+        let (response_parts, body) = http_response.into_parts();
+        let body = body.into_string().await.unwrap();
+        let headers = response_parts.headers;
+        let status = response_parts.status;
 
         let expected_body = "Hello";
         let expected_headers = poem::web::headers::HeaderMap::from_iter(vec![(
@@ -285,7 +286,7 @@ mod test {
         let expected_status = StatusCode::BAD_REQUEST;
 
         assert_eq!(body, expected_body);
-        assert_eq!(headers, expected_headers);
+        assert_eq!(headers.clone(), expected_headers);
         assert_eq!(status, expected_status);
     }
 
@@ -297,16 +298,17 @@ mod test {
         let http_response: poem::Response =
             evaluation_result.to_response(&RequestDetails::Http(TypedHttRequestDetails::empty()));
 
-        let body = http_response.into_body().into_string().await.unwrap();
-        let headers = http_response.headers();
-        let status = http_response.status();
+        let (response_parts, body) = http_response.into_parts();
+        let body = body.into_string().await.unwrap();
+        let headers = response_parts.headers;
+        let status = response_parts.status;
 
         let expected_body = "Healthy";
         let expected_headers = poem::web::headers::HeaderMap::new();
         let expected_status = StatusCode::OK;
 
         assert_eq!(body, expected_body);
-        assert_eq!(headers, expected_headers);
+        assert_eq!(headers.clone(), expected_headers);
         assert_eq!(status, expected_status);
     }
 

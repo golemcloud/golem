@@ -81,11 +81,10 @@ pub trait GetterExt<T> {
 }
 
 impl<T: Getter<T>> GetterExt<T> for T {
-    fn get_optional(&self, key: &Path) -> Result<Option<T>, GetError> {
+    fn get_optional(&self, key: &Path) -> Option<T> {
         match self.get(key) {
-            Ok(value) => Ok(Some(value)),
-            Err(GetError::KeyNotFound(_)) => Ok(None),
-            Err(e) => Err(e),
+            Ok(value) => Some(value),
+            Err(_) => None,
         }
     }
 }
