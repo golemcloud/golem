@@ -3604,9 +3604,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.22"
+version = "0.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "012c0e9d0ac13ddf01a3fba860d5f1450a120cbf5481ebbd42523ebbbcebfe50"
+checksum = "c04f0b0463ad8c4490c8f29e3bfb22b956bf168d22122e0d745a6aeac99fd048"
 dependencies = [
  "arbitrary",
  "bigdecimal",
@@ -3623,9 +3623,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "0.0.22"
+version = "0.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2b34f30b90ef924d9a68fc45f6c40c9507896ba7b273152ef7ceedee60a59af"
+checksum = "fb2e6a348f3b93f19b84bb6e84934373c576d064c9100d0064323366b7728387"
 dependencies = [
  "anyhow",
  "cargo-component",
@@ -3643,6 +3643,7 @@ dependencies = [
  "prettyplease 0.2.17",
  "proc-macro2",
  "quote",
+ "regex",
  "serde",
  "syn 2.0.55",
  "tempdir",
