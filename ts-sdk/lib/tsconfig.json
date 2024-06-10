@@ -5,9 +5,8 @@
     "declaration": true,
     "outDir": "./out",
     "lib": ["es2020", "dom"],
-    "allowJs": true
   },
   "include": [
-    "src/**/*"
+    "src/**/*",
   ]
 }

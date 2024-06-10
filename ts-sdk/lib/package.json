@@ -8,7 +8,7 @@
     "src"
   ],
   "scripts":  {
-    "build": "tsc"
+    "build": "tsc && cp -r src/bindgen out/bindgen"
   },
   "devDependencies": {
     "@bytecodealliance/jco": "1.2.4",
