@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::function_name::{ParsedFunctionName, ParsedFunctionReference};
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{parse_function_name, CallingConvention, WorkerId, WorkerStatus};
+use golem_common::model::{CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output};
 use golem_wasm_rpc::Value;
 use tracing::{debug, error};
@@ -113,9 +114,10 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 ) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
 
-    let parsed = parse_function_name(&full_function_name);
+    let parsed = ParsedFunctionName::parse(&full_function_name)
+        .map_err(|err| GolemError::invalid_request(format!("Invalid function name: {}", err)))?;
 
-    let function = match &parsed.interface {
+    let function = match &parsed.site().interface_name() {
         Some(interface_name) => {
             let mut exports = instance.exports(&mut store);
             let mut exported_instance =
@@ -125,22 +127,28 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
                         "could not load exports for interface {}",
                         interface_name
                     )))?;
-            match exported_instance.func(&parsed.function) {
+            match exported_instance.func(&parsed.function().function_name()) {
                 Some(func) => Ok(Some(func)),
                 None => {
-                    if parsed.function.starts_with("[drop]") {
+                    if matches!(
+                        parsed.function(),
+                        ParsedFunctionReference::RawResourceDrop { .. }
+                    ) {
                         Ok(None)
                     } else {
                         match parsed.method_as_static() {
                             None => Err(GolemError::runtime(format!(
                                 "could not load function {} for interface {}",
-                                &parsed.function, interface_name
+                                &parsed.function().function_name(),
+                                interface_name
                             ))),
                             Some(parsed_static) => exported_instance
-                                .func(&parsed_static.function)
+                                .func(&parsed_static.function().function_name())
                                 .ok_or(GolemError::runtime(format!(
                                     "could not load function {} or {} for interface {}",
-                                    &parsed.function, &parsed_static.function, interface_name
+                                    &parsed.function().function_name(),
+                                    &parsed_static.function().function_name(),
+                                    interface_name
                                 )))
                                 .map(Some),
                         }
@@ -149,10 +157,10 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
             }
         }
         None => instance
-            .get_func(&mut store, &parsed.function)
+            .get_func(&mut store, &parsed.function().function_name())
             .ok_or(GolemError::runtime(format!(
                 "could not load function {}",
-                &parsed.function
+                &parsed.function().function_name()
             )))
             .map(Some),
     }?;

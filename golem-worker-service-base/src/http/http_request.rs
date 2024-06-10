@@ -233,9 +233,20 @@ mod tests {
         ) -> Result<ComponentMetadata, MetadataFetchError> {
             Ok(ComponentMetadata {
                 exports: vec![Export::Instance(ExportInstance {
-                    name: self.test_fqn.clone().interface.unwrap(),
+                    name: self
+                        .test_fqn
+                        .clone()
+                        .parsed_function_name
+                        .site()
+                        .interface_name()
+                        .unwrap(),
                     functions: vec![ExportFunction {
-                        name: self.test_fqn.name.clone(),
+                        name: self
+                            .test_fqn
+                            .parsed_function_name
+                            .function()
+                            .function_name()
+                            .clone(),
                         parameters: vec![],
                         results: vec![],
                     }],
@@ -249,7 +260,7 @@ mod tests {
         function_name: &str,
     ) -> Arc<dyn WorkerMetadataFetcher + Sync + Send> {
         Arc::new(TestMetadataFetcher {
-            test_fqn: FQN::from(function_name),
+            test_fqn: FQN::try_from(function_name).unwrap(),
         })
     }
 

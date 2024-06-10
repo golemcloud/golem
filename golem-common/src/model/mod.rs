@@ -40,9 +40,9 @@ use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
 
+pub mod function_name;
 pub mod oplog;
 pub mod regions;
-pub mod function_name;
 
 newtype_uuid!(
     ComponentId,
@@ -1783,8 +1783,8 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use crate::model::{
-        AccountId, ComponentId, FilterComparator, StringFilterComparator,
-        Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+        AccountId, ComponentId, FilterComparator, StringFilterComparator, Timestamp, WorkerFilter,
+        WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
 
     #[test]

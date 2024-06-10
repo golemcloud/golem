@@ -400,6 +400,12 @@ where
         let function_type = component_details
             .metadata
             .function_by_name(&function_name)
+            .map_err(|err| {
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to parse the function name: {}",
+                    err
+                ))
+            })?
             .ok_or_else(|| {
                 WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
@@ -458,6 +464,12 @@ where
         let function_type = component_details
             .metadata
             .function_by_name(&function_name)
+            .map_err(|err| {
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to parse the function name: {}",
+                    err
+                ))
+            })?
             .ok_or_else(|| {
                 WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
@@ -533,6 +545,12 @@ where
         let function_type = component_details
             .metadata
             .function_by_name(&function_name)
+            .map_err(|err| {
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to parse the function name: {}",
+                    err
+                ))
+            })?
             .ok_or_else(|| {
                 WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
@@ -574,6 +592,12 @@ where
         let function_type = component_details
             .metadata
             .function_by_name(&function_name)
+            .map_err(|err| {
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to parse the function name: {}",
+                    err
+                ))
+            })?
             .ok_or_else(|| {
                 WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;

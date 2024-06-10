@@ -3310,6 +3310,7 @@ dependencies = [
  "fred",
  "futures-core",
  "golem-api-grpc",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "humantime-serde",
  "iso8601-timestamp",
@@ -3329,6 +3330,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "wasm-wave",
 ]
 
 [[package]]

@@ -15,9 +15,9 @@
 use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
+use golem_common::model::function_name::ParsedFunctionName;
 use golem_common::model::{
-    parse_function_name, ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp,
-    WorkerFilter, WorkerStatus,
+    ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use http::Uri;
@@ -1736,40 +1736,40 @@ impl ComponentMetadata {
         functions
     }
 
-    pub fn function_by_name(&self, name: &str) -> Option<ExportFunction> {
-        let parsed = parse_function_name(name);
+    pub fn function_by_name(&self, name: &str) -> Result<Option<ExportFunction>, String> {
+        let parsed = ParsedFunctionName::parse(name)?;
 
-        match &parsed.interface {
-            None => self.functions().iter().find(|f| f.name == *name).cloned(),
-            Some(instance_name) => {
+        match &parsed.site().interface_name() {
+            None => Ok(self.functions().iter().find(|f| f.name == *name).cloned()),
+            Some(interface_name) => {
                 let exported_function = self
                     .instances()
                     .iter()
-                    .find(|instance| instance.name == *instance_name)
+                    .find(|instance| instance.name == *interface_name)
                     .and_then(|instance| {
                         instance
                             .functions
                             .iter()
-                            .find(|f| f.name == parsed.function)
+                            .find(|f| f.name == parsed.function().function_name())
                             .cloned()
                     });
                 if exported_function.is_none() {
                     match parsed.method_as_static() {
-                        Some(parsed_static) => self
+                        Some(parsed_static) => Ok(self
                             .instances()
                             .iter()
-                            .find(|instance| instance.name == *instance_name)
+                            .find(|instance| instance.name == *interface_name)
                             .and_then(|instance| {
                                 instance
                                     .functions
                                     .iter()
-                                    .find(|f| f.name == parsed_static.function)
+                                    .find(|f| f.name == parsed_static.function().function_name())
                                     .cloned()
-                            }),
-                        None => None,
+                            })),
+                        None => Ok(None),
                     }
                 } else {
-                    exported_function
+                    Ok(exported_function)
                 }
             }
         }
