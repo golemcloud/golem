@@ -15,8 +15,10 @@
 pub mod clients;
 pub mod cloud;
 pub mod command;
+pub mod config;
 pub mod examples;
 pub mod factory;
+pub mod init;
 pub mod model;
 pub mod oss;
 pub mod service;
