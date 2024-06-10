@@ -47,6 +47,18 @@ pub struct TypedHttRequestDetails {
 }
 
 impl TypedHttRequestDetails {
+    pub fn empty() -> TypedHttRequestDetails {
+        TypedHttRequestDetails {
+            typed_path_key_values: TypedPathKeyValues(TypedKeyValueCollection::default()),
+            typed_request_body: TypedRequestBody(TypeAnnotatedValue::Record {
+                value: vec![],
+                typ: vec![],
+            }),
+            typed_query_values: TypedQueryKeyValues(TypedKeyValueCollection::default()),
+            typed_header_values: TypedHeaderValues(TypedKeyValueCollection::default()),
+        }
+    }
+
     pub fn get_accept_content_type_header(&self) -> Option<String> {
         self.typed_header_values
             .0
@@ -105,7 +117,7 @@ impl TypedHttRequestDetails {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct TypedPathKeyValues(pub TypedKeyValueCollection);
 
 impl TypedPathKeyValues {
