@@ -19,6 +19,7 @@ use crate::oss::model::OssContext;
 pub mod api_definition;
 pub mod api_deployment;
 pub mod component;
+pub mod profile;
 pub mod worker;
 
 pub trait ComponentRefSplit<ProjectRef> {

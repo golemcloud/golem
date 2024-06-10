@@ -7,6 +7,7 @@ mod api_definition;
 mod api_deployment;
 pub mod cli;
 mod component;
+mod profile;
 mod text;
 mod worker;
 
@@ -19,7 +20,8 @@ fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
     tests.append(&mut worker::all(deps.clone()));
     tests.append(&mut text::all(deps.clone()));
     tests.append(&mut api_definition::all(deps.clone()));
-    tests.append(&mut api_deployment::all(deps));
+    tests.append(&mut api_deployment::all(deps.clone()));
+    tests.append(&mut profile::all(deps));
 
     libtest_mimic::run(&args, tests)
 }
