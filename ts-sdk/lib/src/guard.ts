@@ -13,17 +13,17 @@
 // limitations under the License.
 
 import {
-	type OplogIndex,
-	type PersistenceLevel,
-	type RetryPolicy,
-	getIdempotenceMode,
-	getOplogPersistenceLevel,
-	getRetryPolicy,
-	markBeginOperation,
-	markEndOperation,
-	setIdempotenceMode,
-	setOplogPersistenceLevel,
-	setRetryPolicy,
+   type OplogIndex,
+   type PersistenceLevel,
+   type RetryPolicy,
+   getIdempotenceMode,
+   getOplogPersistenceLevel,
+   getRetryPolicy,
+   markBeginOperation,
+   markEndOperation,
+   setIdempotenceMode,
+   setOplogPersistenceLevel,
+   setRetryPolicy,
 } from "./bindgen/bindgen";
 
 /**
@@ -31,10 +31,10 @@ import {
  * You must call drop on the guard once you are finished using it.
  */
 export class PersistenceLevelGuard {
-	constructor(private originalLevel: PersistenceLevel) {}
-	drop() {
-		setOplogPersistenceLevel(this.originalLevel);
-	}
+   constructor(private originalLevel: PersistenceLevel) {}
+   drop() {
+      setOplogPersistenceLevel(this.originalLevel);
+   }
 }
 
 /**
@@ -44,9 +44,9 @@ export class PersistenceLevelGuard {
  * @returns A PersistenceLevelGuard instance.
  */
 export function usePersistenceLevel(level: PersistenceLevel) {
-	const originalLevel = getOplogPersistenceLevel();
-	setOplogPersistenceLevel(level);
-	return new PersistenceLevelGuard(originalLevel);
+   const originalLevel = getOplogPersistenceLevel();
+   setOplogPersistenceLevel(level);
+   return new PersistenceLevelGuard(originalLevel);
 }
 
 /**
@@ -55,12 +55,9 @@ export function usePersistenceLevel(level: PersistenceLevel) {
  * @param f - The function to execute.
  * @returns The result of the executed function.
  */
-export function withPersistenceLevel<R>(
-	level: PersistenceLevel,
-	f: () => R,
-): R {
-	const guard = usePersistenceLevel(level);
-	return executeWithDrop([guard], f);
+export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => R): R {
+   const guard = usePersistenceLevel(level);
+   return executeWithDrop([guard], f);
 }
 
 /**
@@ -68,10 +65,10 @@ export function withPersistenceLevel<R>(
  * You must call drop on the guard once you are finished using it.
  */
 export class IdempotenceModeGuard {
-	constructor(private original: boolean) {}
-	drop() {
-		setIdempotenceMode(this.original);
-	}
+   constructor(private original: boolean) {}
+   drop() {
+      setIdempotenceMode(this.original);
+   }
 }
 
 /**
@@ -81,9 +78,9 @@ export class IdempotenceModeGuard {
  * @returns An IdempotenceModeGuard instance.
  */
 export function useIdempotenceMode(mode: boolean): IdempotenceModeGuard {
-	const original = getIdempotenceMode();
-	setIdempotenceMode(mode);
-	return new IdempotenceModeGuard(original);
+   const original = getIdempotenceMode();
+   setIdempotenceMode(mode);
+   return new IdempotenceModeGuard(original);
 }
 
 /**
@@ -93,8 +90,8 @@ export function useIdempotenceMode(mode: boolean): IdempotenceModeGuard {
  * @returns The result of the executed function.
  */
 export function withIdempotenceMode<R>(mode: boolean, f: () => R): R {
-	const guard = useIdempotenceMode(mode);
-	return executeWithDrop([guard], f);
+   const guard = useIdempotenceMode(mode);
+   return executeWithDrop([guard], f);
 }
 
 /**
@@ -102,10 +99,10 @@ export function withIdempotenceMode<R>(mode: boolean, f: () => R): R {
  * You must call drop on the guard once you are finished using it.
  */
 export class RetryPolicyGuard {
-	constructor(private original: RetryPolicy) {}
-	drop() {
-		setRetryPolicy(this.original);
-	}
+   constructor(private original: RetryPolicy) {}
+   drop() {
+      setRetryPolicy(this.original);
+   }
 }
 
 /**
@@ -115,9 +112,9 @@ export class RetryPolicyGuard {
  * @returns A RetryPolicyGuard instance.
  */
 export function useRetryPolicy(policy: RetryPolicy): RetryPolicyGuard {
-	const original = getRetryPolicy();
-	setRetryPolicy(policy);
-	return new RetryPolicyGuard(original);
+   const original = getRetryPolicy();
+   setRetryPolicy(policy);
+   return new RetryPolicyGuard(original);
 }
 
 /**
@@ -127,8 +124,8 @@ export function useRetryPolicy(policy: RetryPolicy): RetryPolicyGuard {
  * @returns The result of the executed function.
  */
 export function withRetryPolicy<R>(policy: RetryPolicy, f: () => R): R {
-	const guard = useRetryPolicy(policy);
-	return executeWithDrop([guard], f);
+   const guard = useRetryPolicy(policy);
+   return executeWithDrop([guard], f);
 }
 
 /**
@@ -136,10 +133,10 @@ export function withRetryPolicy<R>(policy: RetryPolicy, f: () => R): R {
  * You must call drop on the guard once you are finished using it.
  */
 export class AtomicOperationGuard {
-	constructor(private begin: OplogIndex) {}
-	drop() {
-		markEndOperation(this.begin);
-	}
+   constructor(private begin: OplogIndex) {}
+   drop() {
+      markEndOperation(this.begin);
+   }
 }
 
 /**
@@ -148,8 +145,8 @@ export class AtomicOperationGuard {
  * @returns An AtomicOperationGuard instance.
  */
 export function markAtomicOperation(): AtomicOperationGuard {
-	const begin = markBeginOperation();
-	return new AtomicOperationGuard(begin);
+   const begin = markBeginOperation();
+   return new AtomicOperationGuard(begin);
 }
 
 /**
@@ -158,8 +155,8 @@ export function markAtomicOperation(): AtomicOperationGuard {
  * @returns The result of the executed function.
  */
 export function atomically<T>(f: () => T): T {
-	const guard = markAtomicOperation();
-	return executeWithDrop([guard], f);
+   const guard = markAtomicOperation();
+   return executeWithDrop([guard], f);
 }
 
 /**
@@ -169,17 +166,17 @@ export function atomically<T>(f: () => T): T {
  * @returns The result of the executed function.
  */
 export function executeWithDrop<Resource extends { drop: () => void }, R>(
-	resources: [Resource],
-	fn: () => R,
+   resources: [Resource],
+   fn: () => R,
 ): R {
-	try {
-		const result = fn();
-		dropAll(true, resources);
-		return result;
-	} catch (e) {
-		dropAll(false, resources);
-		throw e;
-	}
+   try {
+      const result = fn();
+      dropAll(true, resources);
+      return result;
+   } catch (e) {
+      dropAll(false, resources);
+      throw e;
+   }
 }
 
 /**
@@ -188,28 +185,28 @@ export function executeWithDrop<Resource extends { drop: () => void }, R>(
  * @throws DropError if any errors occur during the dropping process.
  */
 export function dropAll<Resource extends { drop: () => void }>(
-	throwOnError: boolean,
-	resources: [Resource],
+   throwOnError: boolean,
+   resources: [Resource],
 ) {
-	const errors = [];
-	for (const resource of resources) {
-		try {
-			resource.drop();
-		} catch (e) {
-			errors.push(e);
-		}
-	}
-	if (throwOnError && errors.length > 0) {
-		throw new DropError(errors);
-	}
+   const errors = [];
+   for (const resource of resources) {
+      try {
+         resource.drop();
+      } catch (e) {
+         errors.push(e);
+      }
+   }
+   if (throwOnError && errors.length > 0) {
+      throw new DropError(errors);
+   }
 }
 
 /**
  * Custom error class for errors that occur during the dropping of resources.
  */
 class DropError extends Error {
-	constructor(public errors: Error[]) {
-		const message = errors.map((e) => e.message).join(", ");
-		super(`Error dropping resources: ${message}`);
-	}
+   constructor(public errors: Error[]) {
+      const message = errors.map((e) => e.message).join(", ");
+      super(`Error dropping resources: ${message}`);
+   }
 }
