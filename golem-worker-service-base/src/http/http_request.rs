@@ -119,7 +119,7 @@ mod tests {
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
     use crate::evaluator::{
-        DefaultEvaluator, EvaluationError, EvaluationResult, Evaluator, MetadataFetchError,
+        DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError,
         WorkerMetadataFetcher, FQN,
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
@@ -260,7 +260,7 @@ mod tests {
         function_params: Value,
     }
 
-    impl ToResponse<TestResponse> for EvaluationResult {
+    impl ToResponse<TestResponse> for ExprEvaluationResult {
         fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
             let function_name = self
                 .get_value()
