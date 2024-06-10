@@ -21,7 +21,6 @@ import { getIdempotenceMode, getOplogPersistenceLevel, getRetryPolicy, markBegin
 export class PersistenceLevelGuard {
   constructor(private originalLevel: PersistenceLevel) {}
   drop() {
-    console.log("Dropping PersistenceLevelGuard!")
     setOplogPersistenceLevel(this.originalLevel);
   }
 }
@@ -56,7 +55,6 @@ export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => R): R 
 export class IdempotenceModeGuard {
   constructor(private original: boolean) {}
   drop() {
-    console.log("Dropping RetryPolicyGuard!")
     setIdempotenceMode(this.original);
   }
 }
@@ -91,7 +89,6 @@ export function withIdempotenceMode<R>(mode: boolean, f: () => R): R {
 export class RetryPolicyGuard {
   constructor(private original: RetryPolicy) {}
   drop() {
-    console.log("Dropping RetryPolicyGuard!")
     setRetryPolicy(this.original);
   }
 }
@@ -126,7 +123,6 @@ export function withRetryPolicy<R>(policy: RetryPolicy, f: () => R): R {
 export class AtomicOperationGuard {
   constructor(private begin: OplogIndex) {}
   drop() {
-    console.log("Dropping AtomicOperationGuard!")
     markEndOperation(this.begin);
   }
 }
@@ -174,7 +170,6 @@ export function executeWithDrop<Resource extends {drop: () => void}, R>(
  * @throws DropError if any errors occur during the dropping process.
  */
 export function dropAll<Resource extends {drop: () => void}>(resources: [Resource]) {
-  console.log("dropAll!")
   const errors = [];
   for (const resource of resources) {
     try {
