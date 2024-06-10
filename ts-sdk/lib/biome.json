@@ -1,0 +1,22 @@
+{
+	"$schema": "https://biomejs.dev/schemas/1.8.0/schema.json",
+	"organizeImports": {
+		"enabled": true
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"style": {
+				"noUselessElse": "off"
+			},
+			"suspicious": {
+				"noExplicitAny": "off",
+				"noShadowRestrictedNames": "off"
+			}
+		}
+	},
+	"files": {
+		"include": ["src/**/*"]
+	}
+}

@@ -1,5 +1,4 @@
 name: CI
-
 on:
   pull_request:
     branches: [main]
@@ -22,6 +21,11 @@ jobs:
         run: |
           cd lib
           npm install
+      
+      - name: Run code quality check
+        run: |
+          cd lib
+          npm run check
       
       - name: Build the package
         run: |
