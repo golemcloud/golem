@@ -126,7 +126,7 @@ workerExecutorStore:
     compilationCacheBucket: "compilation-cache"
     customDataBucket: "custom-data"
     oplogPayloadBucket: "oplog-payload"
-    compressedOplogBuckets: "oplog-archive-1"
+    compressedOplogBuckets: "[oplog-archive-1]"
 
 
 ingress:

@@ -201,7 +201,7 @@ spec:
             - name: GOLEM__BLOB_STORAGE__CONFIG__OPLOG_PAYLOAD_BUCKET
               value: {{ .Values.workerExecutorStore.s3.oplogPayloadBucket }}
             - name: GOLEM__BLOB_STORAGE__CONFIG__COMPRESSED_OPLOG_BUCKETS
-              value: {{ .Values.workerExecutorStore.s3.compressedOplogBuckets }}
+              value: "{{ .Values.workerExecutorStore.s3.compressedOplogBuckets }}"
 {{- end }}
             - name: POD_NAME
               valueFrom:
@@ -527,7 +527,7 @@ spec:
             - name: GOLEM__BLOB_STORAGE__CONFIG__OPLOG_PAYLOAD_BUCKET
               value: {{ .Values.workerExecutorStore.s3.oplogPayloadBucket }}
             - name: GOLEM__BLOB_STORAGE__CONFIG__COMPRESSED_OPLOG_BUCKETS
-              value: {{ .Values.workerExecutorStore.s3.compressedOplogBuckets }}
+              value: "{{ .Values.workerExecutorStore.s3.compressedOplogBuckets }}"
 {{- end }}
           ports:
             - name: http
