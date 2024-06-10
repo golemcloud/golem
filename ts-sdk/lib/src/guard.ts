@@ -158,9 +158,12 @@ export function executeWithDrop<Resource extends {drop: () => void}, R>(
   fn: () => R
 ): R {
   try {
-    return fn();
-  } finally {
-    dropAll(resources);
+    const result = fn();
+    dropAll(true, resources);
+    return result;
+  } catch (e) {
+    dropAll(false, resources);
+    throw e;
   }
 }
 
@@ -169,7 +172,10 @@ export function executeWithDrop<Resource extends {drop: () => void}, R>(
  * @param resources - An array of resources to be dropped.
  * @throws DropError if any errors occur during the dropping process.
  */
-export function dropAll<Resource extends {drop: () => void}>(resources: [Resource]) {
+export function dropAll<Resource extends {drop: () => void}>(
+  throwOnError: boolean,
+  resources: [Resource]
+) {
   const errors = [];
   for (const resource of resources) {
     try {
@@ -178,7 +184,7 @@ export function dropAll<Resource extends {drop: () => void}>(resources: [Resourc
       errors.push(e);
     }
   }
-  if (errors.length > 0) {
+  if (throwOnError && errors.length > 0) {
     throw new DropError(errors);
   }
 }
