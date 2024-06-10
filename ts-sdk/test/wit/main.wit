@@ -1,11 +1,14 @@
-package golem:ts;
+package golem:it;
 
 interface api {
-  process: func(a: u64) -> string;
-  process-fallible: func(a: u64) -> string;
+  fail-with-custom-max-retries: func(max-retries: u32) -> ();
+  explicit-commit: func(replicas: u8) -> ();
+
+  fallible-transaction-test: func() -> bool;
+  infallible-transaction-test: func() -> u32;
 }
 
-world test {
+world golem-ts-tests {
   import golem:api/host@0.2.0;
   export api;
 }

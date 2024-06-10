@@ -1,46 +1,63 @@
-import { fallibleTransaction, infallibleTransaction, Operation, operation, OperationErrors, Result } from 'golem-ts';
-import { GolemTsApi } from './interfaces/golem-ts-api.js';
+import { GolemItApi } from './interfaces/golem-it-api.js';
+import {
+    useRetryPolicy,
+    executeWithDrop,
+    oplogCommit,
+    atomically,
+    withIdempotenceMode,
+    withPersistenceLevel,
+    operation,
+    Result,
+    Operation,
+    infallibleTransaction,
+} from 'golem-ts';
 
-export const api: typeof GolemTsApi  = {
-    process: (a: bigint) =>  {
-        const result = infallibleTransaction(tx => {
-            const resultA = tx.execute(operationOne, a);
-            const resultB = resultA.flatMap(a => tx.execute(operationTwo, a));
-            return resultB
-        });
-        if (result.isOk) {
-            return result.value;
-        } else {
-            console.log(`Error: ${result.error}`);
-            return "Error";
-        }
+export const api: typeof GolemItApi = {
+    failWithCustomMaxRetries,
+    explicitCommit,
+    fallibleTransactionTest() {
+        return false;
     },
-    processFallible: (a: bigint) =>  {
-        type Error = OperationErrors<[typeof neverFailsOperation, typeof alwaysFailsOperation]>;
-        const result = fallibleTransaction<bigint, Error>(tx => {
-            const resultA = tx.execute(neverFailsOperation, a);
-            const resultB = resultA.flatMap(num => tx.execute(alwaysFailsOperation, num));
-            return resultB;
-          });
+    infallibleTransactionTest,
+};
 
-        if (result.isOk) {
-            return result.value.toString();
-        } else {
-            const message = typeof result.error === "string" ? result.error : JSON.stringify(result.error);
-            return `Error ${message}`;
-        }
-    }
+function failWithCustomMaxRetries(maxRetries: number): void {
+    const retryPolicy = {
+        maxAttempts: maxRetries,
+        minDelay: BigInt(1000),
+        maxDelay: BigInt(1000),
+        multiplier: 1,
+    };
+    const retry = useRetryPolicy(retryPolicy);
+    executeWithDrop([retry], () => {
+        throw new Error('Fail now');
+    });
 }
 
-const operationOne: Operation<bigint, bigint, string> = operation(
-    (input: bigint) => {
+function explicitCommit(replicas: number): void {
+    const now = new Date();
+    console.log(`Starting commit with ${replicas} replicas at ${now}`);
+    oplogCommit(replicas);
+    console.log('Finished commit');
+}
+
+function infallibleTransactionTest(): number {
+    const result = infallibleTransaction(tx => {
+        const result = tx.execute(operationOne, undefined);
+        return tx.execute(operationTwo, result)
+    });
+    return result;
+}
+
+const operationOne = operation(
+    (_: void) => {
         const random = Math.floor(Math.random() * 10);
-        if (random < 5) {
-            console.log(`OperationOne | input: ${input} | random ${random} | negative input detected`)
-            return Result.err("input cannot be negative");
+        if (random < 4) {
+            console.log(`OperationOne error | random ${random}`)
+            return Result.err("random was < 4");
         } else {
             console.log(`OperationOne | incrementing input by 1`)
-            return Result.ok(input + BigInt(1));
+            return Result.ok(random);
         }
     },
     (input, result) => {
@@ -50,17 +67,15 @@ const operationOne: Operation<bigint, bigint, string> = operation(
 );
   
 const operationTwo = operation( 
-    (input: bigint) => {
-        const random = Math.floor(Math.random() * 10);
-        if (random < 8) {
-            console.log(`OperationTwo | input: ${input} | input too large`)
+    (input: number) => {
+        if (input < 7) {
+            console.log(`OperationTwo error | input ${input}`)
             return Result.err( {
-                code: "invalid_random",
-                message: "random number not = 9"
+                code: "invalid_num",
+                message: "Random number < 7"
             });
         } else {
-            console.log(`OperationTwo | input: ${input} | converting input to string`)
-            return Result.ok("Valid BigInt: " + input.toString());
+            return Result.ok(input);
         }
     },
     (input, result) => {
