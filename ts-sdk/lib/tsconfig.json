@@ -1,10 +1,11 @@
 {
   "compilerOptions": {
-    "module": "commonjs",
-    "target": "es2022",
+    "module": "ES2020",
+    "target": "ES2020",
     "declaration": true,
     "outDir": "./out",
-    "lib": ["es2022", "esnext.disposable", "dom"]
+    "lib": ["es2020", "dom"],
+    "allowJs": true
   },
   "include": [
     "src/**/*"

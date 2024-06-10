@@ -195,6 +195,6 @@ export function dropAll<Resource extends {drop: () => void}>(
 class DropError extends Error {
   constructor(public errors: Error[]) {
     const message = errors.map(e => e.message).join(", ");
-    super(`Error dropping resources: ${message}`, { cause: errors[0] });
+    super(`Error dropping resources: ${message}`);
   }
 }

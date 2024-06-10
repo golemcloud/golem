@@ -2,13 +2,15 @@
   "name": "golem-ts",
   "version": "0.1.0",
   "description": "A library that help writing Golem programs by providing higher level wrappers for Golem's runtime APIs, including functions for defining and performing operations transactionally.",
-  "main": "src/index.js",
-  "types": "src/index.d.ts",
+  "main": "out/index.js",
+  "types": "out/index.d.ts",
   "files": [
     "src"
   ],
+  "scripts":  {
+    "build": "tsc"
+  },
   "devDependencies": {
-    "@bytecodealliance/componentize-js": "0.8.3",
     "@bytecodealliance/jco": "1.2.4",
     "typescript": "^4.9.5"
   }
