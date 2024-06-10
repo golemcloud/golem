@@ -6,19 +6,20 @@ use poem::Body;
 use std::fmt::{Display, Formatter};
 
 pub trait HttpContentTypeResponseMapper {
-    fn to_http_response_body(
+    fn to_http_resp_with_content_type(
         &self,
         content_type_headers: ContentTypeHeaders,
     ) -> Result<WithContentType<Body>, ContentTypeMapError>;
 }
 
+#[derive(Debug, Clone)]
 pub enum ContentTypeHeaders {
     FromClientAccept(AcceptHeaders),
     FromUserDefinedResponseMapping(ContentType),
     Empty,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AcceptHeaders(Vec<String>);
 
 pub trait ContentTypeHeaderExt {
@@ -88,7 +89,7 @@ impl ContentTypeHeaders {
 }
 
 impl HttpContentTypeResponseMapper for TypeAnnotatedValue {
-    fn to_http_response_body(
+    fn to_http_resp_with_content_type(
         &self,
         content_type_headers: ContentTypeHeaders,
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
