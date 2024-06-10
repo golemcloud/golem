@@ -12,76 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use clap::Parser;
-use clap_verbosity_flag::Level;
+use crate::cloud::clients::CloudAuthentication;
+use crate::cloud::command::{CloudCommand, GolemCloudCommand};
+use crate::cloud::factory::CloudServiceFactory;
+use crate::config::{CloudProfile, ProfileName};
+use crate::examples;
+use crate::factory::ServiceFactory;
+use crate::model::GolemError;
+use crate::stubgen::handle_stubgen;
 use colored::Colorize;
-use golem_cli::cloud::command::{CloudCommand, GolemCloudCommand};
-use golem_cli::cloud::factory::CloudServiceFactory;
-use golem_cli::examples;
-use golem_cli::factory::ServiceFactory;
-use golem_cli::stubgen::handle_stubgen;
-use tracing::debug;
-use tracing_subscriber::FmtSubscriber;
-use url::Url;
+use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let command = GolemCloudCommand::parse();
-
-    if let Some(level) = command.verbosity.log_level() {
-        let tracing_level = match level {
-            Level::Error => tracing::Level::ERROR,
-            Level::Warn => tracing::Level::WARN,
-            Level::Info => tracing::Level::INFO,
-            Level::Debug => tracing::Level::DEBUG,
-            Level::Trace => tracing::Level::TRACE,
-        };
-
-        let subscriber = FmtSubscriber::builder()
-            .with_max_level(tracing_level)
-            .with_writer(std::io::stderr)
-            .finish();
-
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("setting default subscriber failed");
-    }
-
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async_main(command))
-}
-
-async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Error>> {
-    let url_str = std::env::var("GOLEM_CLOUD_BASE_URL")
-        .ok()
-        .or_else(|| std::env::var("GOLEM_BASE_URL").ok())
-        .unwrap_or("https://release.api.golem.cloud/".to_string());
-    let gateway_url_str = std::env::var("GOLEM_GATEWAY_BASE_URL").unwrap_or(url_str.clone());
-    let url = Url::parse(&url_str).unwrap();
-    let gateway_url = Url::parse(&gateway_url_str).unwrap();
-    let home = dirs::home_dir().unwrap();
-    let allow_insecure_str = std::env::var("GOLEM_ALLOW_INSECURE").unwrap_or("false".to_string());
-    let allow_insecure = allow_insecure_str != "false";
-    let default_conf_dir = home.join(".golem");
-
-    debug!(
-        "Golem configuration directory: {}",
-        default_conf_dir.display()
-    );
-
-    let factory = CloudServiceFactory {
-        url,
-        gateway_url,
-        allow_insecure,
-    };
-
+async fn get_auth(
+    auth_token: Option<Uuid>,
+    profile_name: &ProfileName,
+    profile: &CloudProfile,
+    config_dir: &Path,
+    factory: &CloudServiceFactory,
+) -> Result<CloudAuthentication, GolemError> {
     let auth = factory
         .auth()?
-        .authenticate(
-            cmd.auth_token,
-            cmd.config_directory.clone().unwrap_or(default_conf_dir),
-        )
+        .authenticate(auth_token, profile_name, profile, config_dir)
         .await?;
 
     let version_check = factory.version_service(&auth)?.check().await;
@@ -90,8 +42,30 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
         eprintln!("{}", err.0.yellow())
     }
 
+    Ok(auth)
+}
+
+pub async fn async_main(
+    cmd: GolemCloudCommand,
+    profile_name: ProfileName,
+    profile: CloudProfile,
+    config_dir: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let format = cmd.format.unwrap_or(profile.config.default_format);
+
+    let factory = CloudServiceFactory::from_profile(&profile);
+
     let res = match cmd.command {
         CloudCommand::Component { subcommand } => {
+            let auth = get_auth(
+                cmd.auth_token,
+                &profile_name,
+                &profile,
+                &config_dir,
+                &factory,
+            )
+            .await?;
+
             subcommand
                 .handle(
                     factory.component_service(&auth)?.as_ref(),
@@ -100,9 +74,18 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
                 .await
         }
         CloudCommand::Worker { subcommand } => {
+            let auth = get_auth(
+                cmd.auth_token,
+                &profile_name,
+                &profile,
+                &config_dir,
+                &factory,
+            )
+            .await?;
+
             subcommand
                 .handle(
-                    cmd.format,
+                    format,
                     factory.worker_service(&auth)?.as_ref(),
                     factory.project_resolver(&auth)?.as_ref(),
                 )
@@ -112,6 +95,15 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
             account_id,
             subcommand,
         } => {
+            let auth = get_auth(
+                cmd.auth_token,
+                &profile_name,
+                &profile,
+                &config_dir,
+                &factory,
+            )
+            .await?;
+
             subcommand
                 .handle(
                     account_id,
@@ -124,11 +116,29 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
             account_id,
             subcommand,
         } => {
+            let auth = get_auth(
+                cmd.auth_token,
+                &profile_name,
+                &profile,
+                &config_dir,
+                &factory,
+            )
+            .await?;
+
             subcommand
                 .handle(account_id, factory.token_service(&auth)?.as_ref())
                 .await
         }
         CloudCommand::Project { subcommand } => {
+            let auth = get_auth(
+                cmd.auth_token,
+                &profile_name,
+                &profile,
+                &config_dir,
+                &factory,
+            )
+            .await?;
+
             subcommand
                 .handle(factory.project_service(&auth)?.as_ref())
                 .await
@@ -139,6 +149,15 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
             project_policy_id,
             project_actions,
         } => {
+            let auth = get_auth(
+                cmd.auth_token,
+                &profile_name,
+                &profile,
+                &config_dir,
+                &factory,
+            )
+            .await?;
+
             factory
                 .project_grant_service(&auth)?
                 .grant(
@@ -150,6 +169,15 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
                 .await
         }
         CloudCommand::ProjectPolicy { subcommand } => {
+            let auth = get_auth(
+                cmd.auth_token,
+                &profile_name,
+                &profile,
+                &config_dir,
+                &factory,
+            )
+            .await?;
+
             subcommand
                 .handle(factory.project_policy_service(&auth)?.as_ref())
                 .await
@@ -165,6 +193,15 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
         #[cfg(feature = "stubgen")]
         CloudCommand::Stubgen { subcommand } => handle_stubgen(subcommand).await,
         CloudCommand::ApiDefinition { subcommand } => {
+            let auth = get_auth(
+                cmd.auth_token,
+                &profile_name,
+                &profile,
+                &config_dir,
+                &factory,
+            )
+            .await?;
+
             subcommand
                 .handle(
                     factory.api_definition_service(&auth)?.as_ref(),
@@ -173,6 +210,15 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
                 .await
         }
         CloudCommand::ApiDeployment { subcommand } => {
+            let auth = get_auth(
+                cmd.auth_token,
+                &profile_name,
+                &profile,
+                &config_dir,
+                &factory,
+            )
+            .await?;
+
             subcommand
                 .handle(
                     factory.api_deployment_service(&auth)?.as_ref(),
@@ -181,20 +227,40 @@ async fn async_main(cmd: GolemCloudCommand) -> Result<(), Box<dyn std::error::Er
                 .await
         }
         CloudCommand::Certificate { subcommand } => {
+            let auth = get_auth(
+                cmd.auth_token,
+                &profile_name,
+                &profile,
+                &config_dir,
+                &factory,
+            )
+            .await?;
+
             subcommand
                 .handle(factory.certificate_service(&auth)?.as_ref())
                 .await
         }
         CloudCommand::Domain { subcommand } => {
+            let auth = get_auth(
+                cmd.auth_token,
+                &profile_name,
+                &profile,
+                &config_dir,
+                &factory,
+            )
+            .await?;
+
             subcommand
                 .handle(factory.domain_service(&auth)?.as_ref())
                 .await
         }
+        CloudCommand::Profile { subcommand } => subcommand.handle(&config_dir).await,
+        CloudCommand::Init {} => crate::init::init_profile(None, &config_dir).await,
     };
 
     match res {
         Ok(res) => {
-            res.print(cmd.format);
+            res.print(format);
             Ok(())
         }
         Err(err) => Err(Box::new(err)),

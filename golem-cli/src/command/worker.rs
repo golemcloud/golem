@@ -85,7 +85,7 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
         )]
         wave: Vec<String>,
 
-        /// Enables the STDIO cal;ing convention, passing the parameters through stdin instead of a typed exported interface
+        /// Enables the STDIO calling convention, passing the parameters through stdin instead of a typed exported interface
         #[arg(short = 's', long, default_value_t = false)]
         use_stdio: bool,
     },
