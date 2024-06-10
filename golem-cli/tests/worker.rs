@@ -74,13 +74,21 @@ fn make(
 }
 
 pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let short_cli = CliLive::make(deps.clone()).unwrap().with_short_args();
-    let mut short_args = make("_short", "CLI_short", short_cli.clone(), deps.clone());
+    let mut short_args = make(
+        "_short",
+        "CLI_short",
+        CliLive::make("worker_short", deps.clone())
+            .unwrap()
+            .with_short_args(),
+        deps.clone(),
+    );
 
     let mut long_args = make(
         "_long",
         "CLI_long",
-        CliLive::make(deps.clone()).unwrap().with_long_args(),
+        CliLive::make("worker_long", deps.clone())
+            .unwrap()
+            .with_long_args(),
         deps.clone(),
     );
 
