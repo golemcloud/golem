@@ -99,7 +99,7 @@ componentCompilationService:
 logging:
   json: false
 
-#serviceAccountName: golem-sa-default
+serviceAccountName: golem-sa-default
 
 env: default
 
