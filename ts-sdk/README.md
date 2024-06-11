@@ -1,10 +1,21 @@
-# golem-ts
+# @golemcloud/golem
+`golem` is a TypeScript library that provides high-level wrappers for Golem's runtime API, including the [transaction API](https://learn.golem.cloud/docs/transaction-api). It simplifies the process of writing Golem programs by offering a set of utilities and abstractions.
 
-The `golem-ts` library contains Typescript wrappers for Golem's runtime API, including
-the [transaction API](https://learn.golem.cloud/docs/transaction-api).
+## Installation
 
-# Installation
+To install `golem`, use the following command:
 
 ```bash
-npm install golem-ts
+npm install @golemcloud/golem
 ```
+
+## Features
+
+- **Transactions**: `golem` supports both infallible and fallible transactions.
+  - Use operations with compensations to handle failure cases gracefully.
+- **Guards and Helpers**: The library provides guards and helper functions for various aspects of Golem programming.
+  - Retry Policy: Define retry policies for operations to handle transient failures.
+  - Idempotence Level: Specify the idempotence level of operations to ensure data consistency.
+  - Persistence Level: Control the persistence level of operations to balance performance and durability.
+  - Atomic Operations: Perform multiple operations atomically to maintain data integrity.
+- **Result Type**: `golem` introduces a `Result` type that enables typed errors, making error handling more robust and expressive.
