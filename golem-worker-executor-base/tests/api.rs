@@ -122,7 +122,7 @@ async fn shopping_cart_example() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/initialize-cart",
+            "golem:it/api.{initialize-cart}",
             vec![Value::String("test-user-1".to_string())],
         )
         .await;
@@ -130,7 +130,7 @@ async fn shopping_cart_example() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
@@ -143,7 +143,7 @@ async fn shopping_cart_example() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1001".to_string()),
                 Value::String("Golem Cloud Subscription 1y".to_string()),
@@ -156,7 +156,7 @@ async fn shopping_cart_example() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1002".to_string()),
                 Value::String("Mud Golem".to_string()),
@@ -169,17 +169,17 @@ async fn shopping_cart_example() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/update-item-quantity",
+            "golem:it/api.{update-item-quantity}",
             vec![Value::String("G1002".to_string()), Value::U32(20)],
         )
         .await;
 
     let contents = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-cart-contents", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
         .await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/checkout", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
         .await;
 
     drop(executor);
@@ -240,11 +240,11 @@ async fn dynamic_worker_creation() {
     };
 
     let args = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-arguments", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get-arguments}", vec![])
         .await
         .unwrap();
     let env = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-environment", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
         .await
         .unwrap();
 
@@ -331,7 +331,7 @@ async fn get_self_uri() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-self-uri",
+            "golem:it/api.{get-self-uri}",
             vec![Value::String("function-name".to_string())],
         )
         .await
@@ -389,7 +389,7 @@ async fn get_workers_from_worker() {
         let result = executor
             .invoke_and_await(
                 worker_id,
-                "golem:it/api/get-workers",
+                "golem:it/api.{get-workers}",
                 vec![
                     component_id_val,
                     Value::Option(filter_val.map(Box::new)),
@@ -466,7 +466,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent() {
         .unwrap();
 
     let contents = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-cart-contents", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
         .await
         .unwrap();
 
@@ -529,7 +529,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart() {
         .unwrap();
 
     let contents = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-cart-contents", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
         .await
         .unwrap();
 
@@ -560,7 +560,7 @@ async fn optional_parameters() {
     let echo_some = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/echo",
+            "golem:it/api.{echo}",
             vec![Value::Option(Some(Box::new(Value::String(
                 "Hello".to_string(),
             ))))],
@@ -569,14 +569,14 @@ async fn optional_parameters() {
         .unwrap();
 
     let echo_none = executor
-        .invoke_and_await(&worker_id, "golem:it/api/echo", vec![Value::Option(None)])
+        .invoke_and_await(&worker_id, "golem:it/api.{echo}", vec![Value::Option(None)])
         .await
         .unwrap();
 
     let todo_some = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/todo",
+            "golem:it/api.{todo}",
             vec![Value::Record(vec![
                 Value::String("todo".to_string()),
                 Value::Option(Some(Box::new(Value::String("description".to_string())))),
@@ -588,7 +588,7 @@ async fn optional_parameters() {
     let todo_none = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/todo",
+            "golem:it/api.{todo}",
             vec![Value::Record(vec![
                 Value::String("todo".to_string()),
                 Value::Option(Some(Box::new(Value::String("description".to_string())))),
@@ -624,7 +624,7 @@ async fn flags_parameters() {
     let create_task = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-task",
+            "golem:it/api.{create-task}",
             vec![Value::Record(vec![
                 Value::String("t1".to_string()),
                 Value::Flags(vec![true, true, false, false]),
@@ -634,7 +634,7 @@ async fn flags_parameters() {
         .unwrap();
 
     let get_tasks = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-tasks", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get-tasks}", vec![])
         .await
         .unwrap();
 
@@ -674,7 +674,7 @@ async fn variants_with_no_payloads() {
         .await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/bid", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{bid}", vec![])
         .await;
 
     drop(executor);
@@ -696,7 +696,7 @@ async fn delete_worker() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/echo",
+            "golem:it/api.{echo}",
             vec![Value::Option(Some(Box::new(Value::String(
                 "Hello".to_string(),
             ))))],
@@ -768,7 +768,7 @@ async fn get_workers() {
         let _ = executor
             .invoke_and_await(
                 &worker_id,
-                "golem:it/api/echo",
+                "golem:it/api.{echo}",
                 vec![Value::Option(Some(Box::new(Value::String(
                     "Hello".to_string(),
                 ))))],
@@ -876,7 +876,7 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
         .await;
 
     let failure = executor
-        .invoke_and_await(&worker_id, "golem:it/api/echo", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{echo}", vec![])
         .await;
     drop(executor);
     check!(failure.is_err());
@@ -896,7 +896,7 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
     let failure = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/echo",
+            "golem:it/api.{echo}",
             vec![
                 Value::Option(Some(Box::new(Value::String("Hello".to_string())))),
                 Value::String("extra parameter".to_string()),
@@ -923,7 +923,11 @@ async fn get_worker_metadata() {
     let executor_clone = executor.clone();
     let fiber = tokio::spawn(async move {
         executor_clone
-            .invoke_and_await(&worker_id_clone, "golem:it/api/sleep", vec![Value::U64(10)])
+            .invoke_and_await(
+                &worker_id_clone,
+                "golem:it/api.{sleep}",
+                vec![Value::U64(10)],
+            )
             .await
     });
 
@@ -967,7 +971,7 @@ async fn create_invoke_delete_create_invoke() {
     let r1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
@@ -986,7 +990,7 @@ async fn create_invoke_delete_create_invoke() {
     let r2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
@@ -1019,7 +1023,7 @@ async fn recovering_an_old_worker_after_updating_a_component() {
     let r1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
@@ -1046,7 +1050,7 @@ async fn recovering_an_old_worker_after_updating_a_component() {
     let r2 = executor
         .invoke_and_await(
             &worker_id2,
-            "golem:it/api/echo",
+            "golem:it/api.{echo}",
             vec![Value::Option(Some(Box::new(Value::String(
                 "Hello".to_string(),
             ))))],
@@ -1060,7 +1064,7 @@ async fn recovering_an_old_worker_after_updating_a_component() {
 
     // Call the first worker again to check if it is still working
     let r3 = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-cart-contents", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
         .await
         .unwrap();
 
@@ -1099,7 +1103,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version() {
     let r1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
@@ -1129,7 +1133,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version() {
     let r2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/echo",
+            "golem:it/api.{echo}",
             vec![Value::Option(Some(Box::new(Value::String(
                 "Hello".to_string(),
             ))))],
@@ -1740,7 +1744,7 @@ async fn shopping_cart_resource_example() {
     let cart = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/[constructor]cart",
+            "golem:it/api.{[constructor]cart}",
             vec![Value::String("test-user-1".to_string())],
         )
         .await
@@ -1750,7 +1754,7 @@ async fn shopping_cart_resource_example() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/[method]cart.add-item",
+            "golem:it/api.{[method]cart.add-item}",
             vec![
                 cart[0].clone(),
                 Value::Record(vec![
@@ -1766,7 +1770,7 @@ async fn shopping_cart_resource_example() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/[method]cart.add-item",
+            "golem:it/api.{[method]cart.add-item}",
             vec![
                 cart[0].clone(),
                 Value::Record(vec![
@@ -1782,7 +1786,7 @@ async fn shopping_cart_resource_example() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/[method]cart.add-item",
+            "golem:it/api.{[method]cart.add-item}",
             vec![
                 cart[0].clone(),
                 Value::Record(vec![
@@ -1798,7 +1802,7 @@ async fn shopping_cart_resource_example() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/[method]cart.update-item-quantity",
+            "golem:it/api.{[method]cart.update-item-quantity}",
             vec![
                 cart[0].clone(),
                 Value::String("G1002".to_string()),
@@ -1810,7 +1814,7 @@ async fn shopping_cart_resource_example() {
     let contents = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/[method]cart.get-cart-contents",
+            "golem:it/api.{[method]cart.get-cart-contents}",
             vec![cart[0].clone()],
         )
         .await;
@@ -1818,7 +1822,7 @@ async fn shopping_cart_resource_example() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/[method]cart.checkout",
+            "golem:it/api.{[method]cart.checkout}",
             vec![cart[0].clone()],
         )
         .await;
@@ -1863,7 +1867,7 @@ async fn counter_resource_test_1() {
     let counter1 = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api/[constructor]counter",
+            "rpc:counters/api.{[constructor]counter}",
             vec![Value::String("counter1".to_string())],
         )
         .await
@@ -1871,7 +1875,7 @@ async fn counter_resource_test_1() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api/[method]counter.inc-by",
+            "rpc:counters/api.{[method]counter.inc-by}",
             vec![counter1[0].clone(), Value::U64(5)],
         )
         .await;
@@ -1879,7 +1883,7 @@ async fn counter_resource_test_1() {
     let result1 = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api/[method]counter.get-value",
+            "rpc:counters/api.{[method]counter.get-value}",
             vec![counter1[0].clone()],
         )
         .await;
@@ -1887,13 +1891,13 @@ async fn counter_resource_test_1() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters/api/[drop]counter",
+            "rpc:counters/api.{[drop]counter}",
             vec![counter1[0].clone()],
         )
         .await;
 
     let result2 = executor
-        .invoke_and_await(&worker_id, "rpc:counters/api/get-all-dropped", vec![])
+        .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
     drop(executor);
@@ -1905,6 +1909,86 @@ async fn counter_resource_test_1() {
                 Value::String("counter1".to_string()),
                 Value::U64(5)
             ])])])
+    );
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn counter_resource_test_2() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_component("counters").await;
+    let worker_id = executor.start_worker(&component_id, "counters-2").await;
+    executor.log_output(&worker_id).await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").inc-by}",
+            vec![Value::U64(5)],
+        )
+        .await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").inc-by}",
+            vec![Value::U64(1)],
+        )
+        .await;
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").inc-by}",
+            vec![Value::U64(2)],
+        )
+        .await;
+
+    let result1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+    let result2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").get-value}",
+            vec![],
+        )
+        .await;
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").drop}",
+            vec![],
+        )
+        .await;
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").drop}",
+            vec![],
+        )
+        .await;
+
+    let result3 = executor
+        .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(result1 == Ok(vec![Value::U64(5)]));
+    check!(result2 == Ok(vec![Value::U64(3)]));
+    check!(
+        result3
+            == Ok(vec![Value::List(vec![
+                Value::Tuple(vec![Value::String("counter1".to_string()), Value::U64(5)]),
+                Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)])
+            ])])
     );
 }
 
@@ -2040,7 +2124,7 @@ async fn invocation_queue_is_persistent() {
     }
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-count", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get-count}", vec![])
         .await
         .unwrap();
 

@@ -185,7 +185,7 @@ impl ParsedFunctionReference {
         }
     }
 
-    pub fn resource_params(&self, types: Vec<AnalysedType>) -> Result<Option<Vec<Value>>, String> {
+    pub fn resource_params(&self, types: &[AnalysedType]) -> Result<Option<Vec<Value>>, String> {
         if let Some(raw_params) = self.raw_resource_params() {
             if raw_params.len() != types.len() {
                 Err(format!(
@@ -217,6 +217,10 @@ pub struct ParsedFunctionName {
 }
 
 impl ParsedFunctionName {
+    pub fn new(site: ParsedFunctionSite, function: ParsedFunctionReference) -> Self {
+        Self { site, function }
+    }
+
     pub fn global(name: String) -> Self {
         Self {
             site: ParsedFunctionSite::Global,

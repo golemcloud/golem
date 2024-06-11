@@ -46,8 +46,8 @@ use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{worker_enumeration, HasAll};
 use golem_worker_executor_base::worker::{RecoveryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
-    ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
+    InvocationManagement, IoCapturing, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
@@ -244,6 +244,28 @@ impl UpdateManagement for Context {
         self.durable_ctx
             .on_worker_update_succeeded(target_version)
             .await
+    }
+}
+
+impl IndexedResourceStore for Context {
+    fn get_indexed_resource(&self, resource_name: &str, resource_params: &[String]) -> Option<u64> {
+        self.durable_ctx
+            .get_indexed_resource(resource_name, resource_params)
+    }
+
+    fn store_indexed_resource(
+        &mut self,
+        resource_name: &str,
+        resource_params: &[String],
+        resource: u64,
+    ) {
+        self.durable_ctx
+            .store_indexed_resource(resource_name, resource_params, resource)
+    }
+
+    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
+        self.durable_ctx
+            .drop_indexed_resource(resource_name, resource_params)
     }
 }
 

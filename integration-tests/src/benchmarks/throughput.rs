@@ -235,7 +235,7 @@ impl Benchmark for Throughput {
                     .deps
                     .invoke_and_await(
                         &worker_id_clone,
-                        "golem:it/api/echo",
+                        "golem:it/api.{echo}",
                         vec![Value::String("hello".to_string())],
                     )
                     .await
@@ -280,7 +280,7 @@ impl Benchmark for Throughput {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:it/api/echo",
+                            "golem:it/api.{echo}",
                             vec![Value::String("hello".to_string())],
                         )
                         .await
@@ -309,7 +309,7 @@ impl Benchmark for Throughput {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:it/api/calculate",
+                            "golem:it/api.{calculate}",
                             vec![Value::U64(calculate_iter)],
                         )
                         .await
@@ -340,7 +340,7 @@ impl Benchmark for Throughput {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:it/api/process",
+                            "golem:it/api.{process}",
                             vec![Value::List(values_clone.clone())],
                         )
                         .await

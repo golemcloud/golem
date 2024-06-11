@@ -15,11 +15,11 @@
 use golem_common::model::function_name::{ParsedFunctionName, ParsedFunctionReference};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{CallingConvention, WorkerId, WorkerStatus};
-use golem_wasm_rpc::wasmtime::{decode_param, encode_output};
+use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
 use golem_wasm_rpc::Value;
 use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
-use wasmtime::AsContextMut;
+use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
@@ -102,24 +102,14 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
     }
 }
 
-// TODO: rename
-async fn invoke_or_fail<Ctx: WorkerCtx>(
-    worker_id: &WorkerId,
-    full_function_name: String,
-    function_input: Vec<Value>,
-    store: &mut impl AsContextMut<Data = Ctx>,
-    instance: &wasmtime::component::Instance,
-    calling_convention: CallingConvention,
-    was_live_before: bool,
-) -> Result<InvokeResult, GolemError> {
-    let mut store = store.as_context_mut();
-
-    let parsed = ParsedFunctionName::parse(&full_function_name)
-        .map_err(|err| GolemError::invalid_request(format!("Invalid function name: {}", err)))?;
-
-    let function = match &parsed.site().interface_name() {
+fn find_function<'a, Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'a, Ctx>,
+    instance: &'a wasmtime::component::Instance,
+    parsed_function_name: &ParsedFunctionName,
+) -> Result<Option<Func>, GolemError> {
+    match &parsed_function_name.site().interface_name() {
         Some(interface_name) => {
-            let mut exports = instance.exports(&mut store);
+            let mut exports = instance.exports(store);
             let mut exported_instance =
                 exports
                     .instance(interface_name)
@@ -127,26 +117,27 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
                         "could not load exports for interface {}",
                         interface_name
                     )))?;
-            match exported_instance.func(&parsed.function().function_name()) {
+            match exported_instance.func(&parsed_function_name.function().function_name()) {
                 Some(func) => Ok(Some(func)),
                 None => {
                     if matches!(
-                        parsed.function(),
+                        parsed_function_name.function(),
                         ParsedFunctionReference::RawResourceDrop { .. }
+                            | ParsedFunctionReference::IndexedResourceDrop { .. }
                     ) {
                         Ok(None)
                     } else {
-                        match parsed.method_as_static() {
+                        match parsed_function_name.method_as_static() {
                             None => Err(GolemError::runtime(format!(
                                 "could not load function {} for interface {}",
-                                &parsed.function().function_name(),
+                                &parsed_function_name.function().function_name(),
                                 interface_name
                             ))),
                             Some(parsed_static) => exported_instance
                                 .func(&parsed_static.function().function_name())
                                 .ok_or(GolemError::runtime(format!(
                                     "could not load function {} or {} for interface {}",
-                                    &parsed.function().function_name(),
+                                    &parsed_function_name.function().function_name(),
                                     &parsed_static.function().function_name(),
                                     interface_name
                                 )))
@@ -157,13 +148,31 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
             }
         }
         None => instance
-            .get_func(&mut store, &parsed.function().function_name())
+            .get_func(store, &parsed_function_name.function().function_name())
             .ok_or(GolemError::runtime(format!(
                 "could not load function {}",
-                &parsed.function().function_name()
+                &parsed_function_name.function().function_name()
             )))
             .map(Some),
-    }?;
+    }
+}
+
+// TODO: rename
+async fn invoke_or_fail<Ctx: WorkerCtx>(
+    worker_id: &WorkerId,
+    full_function_name: String,
+    mut function_input: Vec<Value>,
+    store: &mut impl AsContextMut<Data = Ctx>,
+    instance: &wasmtime::component::Instance,
+    calling_convention: CallingConvention,
+    was_live_before: bool,
+) -> Result<InvokeResult, GolemError> {
+    let mut store = store.as_context_mut();
+
+    let parsed = ParsedFunctionName::parse(&full_function_name)
+        .map_err(|err| GolemError::invalid_request(format!("Invalid function name: {}", err)))?;
+
+    let function = find_function(&mut store, instance, &parsed)?;
 
     if was_live_before {
         store
@@ -182,31 +191,146 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
         .store_worker_status(WorkerStatus::Running)
         .await;
 
-    let call_result = match function {
+    let context = format!("{worker_id}/{full_function_name}");
+    let mut extra_fuel = 0;
+
+    if parsed.function().is_indexed_resource() {
+        let resource_handle =
+            get_or_create_indexed_resource(&mut store, instance, &parsed, &context).await?;
+
+        match resource_handle {
+            InvokeResult::Succeeded {
+                consumed_fuel,
+                output,
+            } => {
+                function_input = [output, function_input].concat();
+                extra_fuel = consumed_fuel;
+            }
+            other => {
+                // Early return because of a failed invocation of the resource constructor
+                return Ok(other);
+            }
+        }
+    }
+
+    let mut call_result = match function {
         Some(function) => {
             invoke(
                 &mut store,
                 function,
                 &function_input,
                 calling_convention,
-                &format!("{worker_id}/{full_function_name}"),
+                &context,
             )
             .await
         }
         None => {
             // Special function: drop
-            drop_resource(
-                &mut store,
-                &function_input,
-                &format!("{worker_id}/{full_function_name}"),
-            )
-            .await
+            drop_resource(&mut store, &parsed, &function_input, &context).await
         }
     };
+    if let Ok(r) = call_result.as_mut() {
+        r.add_fuel(extra_fuel);
+    }
 
     store.data().set_suspended();
 
     call_result
+}
+
+async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'a, Ctx>,
+    instance: &'a wasmtime::component::Instance,
+    parsed_function_name: &ParsedFunctionName,
+    context: &str,
+) -> Result<InvokeResult, GolemError> {
+    let resource_name =
+        parsed_function_name
+            .function()
+            .resource_name()
+            .ok_or(GolemError::invalid_request(
+                "Cannot extract resource name from function name",
+            ))?;
+
+    let resource_constructor_name = ParsedFunctionName::new(
+        parsed_function_name.site().clone(),
+        ParsedFunctionReference::RawResourceConstructor {
+            resource: resource_name.clone(),
+        },
+    );
+    let resource_constructor = find_function(store, instance, &resource_constructor_name)?.ok_or(
+        GolemError::runtime(format!(
+            "could not find resource constructor for resource {}",
+            resource_name
+        )),
+    )?;
+
+    let constructor_param_types = resource_constructor.params(&store).iter().map(type_to_analysed_type).collect::<Result<Vec<_>, _>>()
+        .map_err(|err| GolemError::invalid_request(format!("Indexed resource invocation cannot be used with owned or borrowed resource handles in constructor parameter position! ({err})")))?;
+
+    let raw_constructor_params = parsed_function_name
+        .function()
+        .raw_resource_params()
+        .ok_or(GolemError::invalid_request(
+            "Could not extract raw resource constructor parameters from function name",
+        ))?;
+
+    match store
+        .data()
+        .get_indexed_resource(resource_name, raw_constructor_params)
+    {
+        Some(resource_id) => {
+            debug!("Using existing indexed resource with id {resource_id}");
+            Ok(InvokeResult::from_success(
+                0,
+                vec![Value::Handle {
+                    uri: store.data().self_uri(),
+                    resource_id,
+                }],
+            ))
+        }
+        None => {
+            let constructor_params = parsed_function_name
+                .function()
+                .resource_params(&constructor_param_types)
+                .map_err(|err| {
+                    GolemError::invalid_request(format!(
+                        "Failed to parse resource constructor parameters: {err}"
+                    ))
+                })?
+                .ok_or(GolemError::invalid_request(
+                    "Could not extract resource constructor parameters from function name",
+                ))?;
+
+            debug!("Creating new indexed resource with parameters {constructor_params:?}");
+
+            let constructor_result = invoke(
+                store,
+                resource_constructor,
+                &constructor_params,
+                CallingConvention::Component,
+                context,
+            )
+            .await?;
+
+            if let InvokeResult::Succeeded { output, .. } = &constructor_result {
+                if let Some(Value::Handle { resource_id, .. }) = output.first() {
+                    debug!("Storing indexed resource with id {resource_id}");
+                    store.data_mut().store_indexed_resource(
+                        resource_name,
+                        raw_constructor_params,
+                        *resource_id,
+                    );
+                } else {
+                    return Err(GolemError::invalid_request(
+                        "Resource constructor did not return a resource handle",
+                    ));
+                }
+            }
+
+            Ok(constructor_result)
+        }
+    }
 }
 
 // TODO: rename
@@ -285,6 +409,7 @@ async fn invoke<Ctx: WorkerCtx>(
 
 async fn drop_resource<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
+    parsed_function_name: &ParsedFunctionName,
     function_input: &[Value],
     context: &str,
 ) -> Result<InvokeResult, GolemError> {
@@ -312,6 +437,19 @@ async fn drop_resource<Ctx: WorkerCtx>(
             details: format!("unexpected function input for drop calling convention for {context}"),
         }),
     }?;
+
+    if let ParsedFunctionReference::IndexedResourceDrop {
+        resource,
+        resource_params,
+    } = parsed_function_name.function()
+    {
+        debug!(
+            "Dropping indexed resource {resource:?} with params {resource_params:?} in {context}"
+        );
+        store
+            .data_mut()
+            .drop_indexed_resource(resource, resource_params);
+    }
 
     if let Some(resource) = store.data_mut().get(resource) {
         debug!("Dropping resource {resource:?} in {context}");
@@ -350,8 +488,6 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
         .map(|_| Val::Bool(false))
         .collect();
 
-    // We always have to return the captured stdout in Stdio calling convention because
-    // of the special error I32Exit(0) which is treated as a success, triggered through WASI
     let result = function.call_async(&mut store, &params, &mut results).await;
     let result = if result.is_ok() {
         function.post_return_async(&mut store).await.map_err(|e| {
@@ -428,6 +564,23 @@ impl InvokeResult {
             | InvokeResult::Failed { consumed_fuel, .. }
             | InvokeResult::Succeeded { consumed_fuel, .. }
             | InvokeResult::Interrupted { consumed_fuel, .. } => *consumed_fuel,
+        }
+    }
+
+    pub fn add_fuel(&mut self, extra_fuel: i64) {
+        match self {
+            InvokeResult::Exited { consumed_fuel } => {
+                *consumed_fuel += extra_fuel;
+            }
+            InvokeResult::Failed { consumed_fuel, .. } => {
+                *consumed_fuel += extra_fuel;
+            }
+            InvokeResult::Succeeded { consumed_fuel, .. } => {
+                *consumed_fuel += extra_fuel;
+            }
+            InvokeResult::Interrupted { consumed_fuel, .. } => {
+                *consumed_fuel += extra_fuel;
+            }
         }
     }
 

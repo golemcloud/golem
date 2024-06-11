@@ -280,7 +280,7 @@ async fn file_write_read() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/write-file",
+            "golem:it/api.{write-file}",
             vec![
                 Value::String("/testfile.txt".to_string()),
                 Value::String("hello world".to_string()),
@@ -295,7 +295,7 @@ async fn file_write_read() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/read-file",
+            "golem:it/api.{read-file}",
             vec![Value::String("/testfile.txt".to_string())],
         )
         .await
@@ -352,7 +352,7 @@ async fn http_client() {
     let rx = executor.capture_output(&worker_id).await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/run", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
         .await;
 
     drop(executor);
@@ -413,7 +413,7 @@ async fn http_client_using_reqwest() {
         .await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/run", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
         .await
         .unwrap();
     let captured_body = captured_body.lock().unwrap().clone().unwrap();
@@ -444,12 +444,12 @@ async fn environment_service() {
         .await;
 
     let args_result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-arguments", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get-arguments}", vec![])
         .await
         .unwrap();
 
     let env_result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get-environment", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
         .await
         .unwrap();
 
@@ -534,7 +534,7 @@ async fn http_client_response_persisted_between_invocations() {
     let rx = executor.capture_output(&worker_id).await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/send-request", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{send-request}", vec![])
         .await
         .expect("first send-request failed");
 
@@ -545,7 +545,7 @@ async fn http_client_response_persisted_between_invocations() {
     let _rx = executor.capture_output(&worker_id).await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/process-response", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{process-response}", vec![])
         .await;
 
     http_server.abort();
@@ -570,7 +570,7 @@ async fn sleep() {
         .await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![Value::U64(10)])
+        .invoke_and_await(&worker_id, "golem:it/api.{sleep}", vec![Value::U64(10)])
         .await
         .unwrap();
 
@@ -579,7 +579,7 @@ async fn sleep() {
 
     let start = Instant::now();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![Value::U64(0)])
+        .invoke_and_await(&worker_id, "golem:it/api.{sleep}", vec![Value::U64(0)])
         .await
         .unwrap();
     let duration = start.elapsed();
@@ -602,7 +602,11 @@ async fn resuming_sleep() {
     let worker_id_clone = worker_id.clone();
     let fiber = spawn(async move {
         executor_clone
-            .invoke_and_await(&worker_id_clone, "golem:it/api/sleep", vec![Value::U64(10)])
+            .invoke_and_await(
+                &worker_id_clone,
+                "golem:it/api.{sleep}",
+                vec![Value::U64(10)],
+            )
             .await
             .unwrap();
     });
@@ -620,7 +624,7 @@ async fn resuming_sleep() {
 
     let start = Instant::now();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/sleep", vec![Value::U64(10)])
+        .invoke_and_await(&worker_id, "golem:it/api.{sleep}", vec![Value::U64(10)])
         .await
         .unwrap();
     let duration = start.elapsed();
@@ -641,15 +645,19 @@ async fn failing_worker() {
         .await;
 
     let result1 = executor
-        .invoke_and_await(&worker_id, "golem:component/api/add", vec![Value::U64(5)])
+        .invoke_and_await(&worker_id, "golem:component/api.{add}", vec![Value::U64(5)])
         .await;
 
     let result2 = executor
-        .invoke_and_await(&worker_id, "golem:component/api/add", vec![Value::U64(50)])
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{add}",
+            vec![Value::U64(50)],
+        )
         .await;
 
     let result3 = executor
-        .invoke_and_await(&worker_id, "golem:component/api/get", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
         .await;
 
     drop(executor);
@@ -677,7 +685,7 @@ async fn file_service_write_direct() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/write-file-direct",
+            "golem:it/api.{write-file-direct}",
             vec![
                 Value::String("testfile.txt".to_string()),
                 Value::String("hello world".to_string()),
@@ -692,7 +700,7 @@ async fn file_service_write_direct() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/read-file",
+            "golem:it/api.{read-file}",
             vec![Value::String("/testfile.txt".to_string())],
         )
         .await
@@ -718,7 +726,7 @@ async fn filesystem_write_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/write-file-direct",
+            "golem:it/api.{write-file-direct}",
             vec![
                 Value::String("testfile.txt".to_string()),
                 Value::String("hello world".to_string()),
@@ -729,7 +737,7 @@ async fn filesystem_write_replay_restores_file_times() {
     let times1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-file-info",
+            "golem:it/api.{get-file-info}",
             vec![Value::String("/testfile.txt".to_string())],
         )
         .await
@@ -741,7 +749,7 @@ async fn filesystem_write_replay_restores_file_times() {
     let times2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-file-info",
+            "golem:it/api.{get-file-info}",
             vec![Value::String("/testfile.txt".to_string())],
         )
         .await
@@ -762,7 +770,7 @@ async fn filesystem_create_dir_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-directory",
+            "golem:it/api.{create-directory}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -770,7 +778,7 @@ async fn filesystem_create_dir_replay_restores_file_times() {
     let times1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/".to_string())],
         )
         .await
@@ -782,7 +790,7 @@ async fn filesystem_create_dir_replay_restores_file_times() {
     let times2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/".to_string())],
         )
         .await
@@ -803,7 +811,7 @@ async fn file_hard_link() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/write-file",
+            "golem:it/api.{write-file}",
             vec![
                 Value::String("/testfile.txt".to_string()),
                 Value::String("hello world".to_string()),
@@ -815,7 +823,7 @@ async fn file_hard_link() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-link",
+            "golem:it/api.{create-link}",
             vec![
                 Value::String("/testfile.txt".to_string()),
                 Value::String("/link.txt".to_string()),
@@ -827,7 +835,7 @@ async fn file_hard_link() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/read-file",
+            "golem:it/api.{read-file}",
             vec![Value::String("/link.txt".to_string())],
         )
         .await
@@ -853,7 +861,7 @@ async fn filesystem_link_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-directory",
+            "golem:it/api.{create-directory}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -861,7 +869,7 @@ async fn filesystem_link_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-directory",
+            "golem:it/api.{create-directory}",
             vec![Value::String("/test2".to_string())],
         )
         .await
@@ -869,7 +877,7 @@ async fn filesystem_link_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/write-file",
+            "golem:it/api.{write-file}",
             vec![
                 Value::String("/test/testfile.txt".to_string()),
                 Value::String("hello world".to_string()),
@@ -880,7 +888,7 @@ async fn filesystem_link_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-link",
+            "golem:it/api.{create-link}",
             vec![
                 Value::String("/test/testfile.txt".to_string()),
                 Value::String("/test2/link.txt".to_string()),
@@ -892,7 +900,7 @@ async fn filesystem_link_replay_restores_file_times() {
     let times_file_1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
@@ -900,7 +908,7 @@ async fn filesystem_link_replay_restores_file_times() {
     let times_dir_1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2".to_string())],
         )
         .await
@@ -912,7 +920,7 @@ async fn filesystem_link_replay_restores_file_times() {
     let times_dir_2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2".to_string())],
         )
         .await
@@ -920,7 +928,7 @@ async fn filesystem_link_replay_restores_file_times() {
     let times_file_2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
@@ -942,7 +950,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-directory",
+            "golem:it/api.{create-directory}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -950,7 +958,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-directory",
+            "golem:it/api.{create-directory}",
             vec![Value::String("/test/a".to_string())],
         )
         .await
@@ -958,7 +966,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
     _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/remove-directory",
+            "golem:it/api.{remove-directory}",
             vec![Value::String("/test/a".to_string())],
         )
         .await
@@ -966,7 +974,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
     let times1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -978,7 +986,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
     let times2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -999,7 +1007,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-directory",
+            "golem:it/api.{create-directory}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -1007,7 +1015,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-directory",
+            "golem:it/api.{create-directory}",
             vec![Value::String("/test2".to_string())],
         )
         .await
@@ -1015,7 +1023,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/write-file-direct",
+            "golem:it/api.{write-file-direct}",
             vec![
                 Value::String("test/testfile.txt".to_string()),
                 Value::String("hello world".to_string()),
@@ -1026,7 +1034,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-sym-link",
+            "golem:it/api.{create-sym-link}",
             vec![
                 Value::String("../test/testfile.txt".to_string()),
                 Value::String("/test2/link.txt".to_string()),
@@ -1038,7 +1046,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
     let times_file_1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
@@ -1046,7 +1054,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
     let times_dir_1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2".to_string())],
         )
         .await
@@ -1059,7 +1067,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
     let times_dir_2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2".to_string())],
         )
         .await
@@ -1067,7 +1075,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
     let times_file_2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
@@ -1089,7 +1097,7 @@ async fn filesystem_rename_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-directory",
+            "golem:it/api.{create-directory}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -1097,7 +1105,7 @@ async fn filesystem_rename_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-directory",
+            "golem:it/api.{create-directory}",
             vec![Value::String("/test2".to_string())],
         )
         .await
@@ -1105,7 +1113,7 @@ async fn filesystem_rename_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/write-file",
+            "golem:it/api.{write-file}",
             vec![
                 Value::String("/test/testfile.txt".to_string()),
                 Value::String("hello world".to_string()),
@@ -1116,7 +1124,7 @@ async fn filesystem_rename_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/rename-file",
+            "golem:it/api.{rename-file}",
             vec![
                 Value::String("/test/testfile.txt".to_string()),
                 Value::String("/test2/link.txt".to_string()),
@@ -1128,7 +1136,7 @@ async fn filesystem_rename_replay_restores_file_times() {
     let times_srcdir_1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -1136,7 +1144,7 @@ async fn filesystem_rename_replay_restores_file_times() {
     let times_destdir_1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2".to_string())],
         )
         .await
@@ -1144,7 +1152,7 @@ async fn filesystem_rename_replay_restores_file_times() {
     let times_file_1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
@@ -1156,7 +1164,7 @@ async fn filesystem_rename_replay_restores_file_times() {
     let times_srcdir_2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -1164,7 +1172,7 @@ async fn filesystem_rename_replay_restores_file_times() {
     let times_destdir_2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2".to_string())],
         )
         .await
@@ -1172,7 +1180,7 @@ async fn filesystem_rename_replay_restores_file_times() {
     let times_file_2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test2/link.txt".to_string())],
         )
         .await
@@ -1197,7 +1205,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-directory",
+            "golem:it/api.{create-directory}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -1205,7 +1213,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/write-file",
+            "golem:it/api.{write-file}",
             vec![
                 Value::String("/test/testfile.txt".to_string()),
                 Value::String("hello world".to_string()),
@@ -1216,7 +1224,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
     _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/remove-file",
+            "golem:it/api.{remove-file}",
             vec![Value::String("/test/testfile.txt".to_string())],
         )
         .await
@@ -1224,7 +1232,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
     let times1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -1236,7 +1244,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
     let times2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-info",
+            "golem:it/api.{get-info}",
             vec![Value::String("/test".to_string())],
         )
         .await
@@ -1257,7 +1265,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/write-file",
+            "golem:it/api.{write-file}",
             vec![
                 Value::String("/testfile.txt".to_string()),
                 Value::String("hello world".to_string()),
@@ -1268,7 +1276,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
     let times1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-file-info",
+            "golem:it/api.{get-file-info}",
             vec![Value::String("/testfile.txt".to_string())],
         )
         .await
@@ -1280,7 +1288,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
     let times2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-file-info",
+            "golem:it/api.{get-file-info}",
             vec![Value::String("/testfile.txt".to_string())],
         )
         .await
@@ -1301,7 +1309,7 @@ async fn filesystem_metadata_hash() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/write-file-direct",
+            "golem:it/api.{write-file-direct}",
             vec![
                 Value::String("testfile.txt".to_string()),
                 Value::String("hello world".to_string()),
@@ -1312,7 +1320,7 @@ async fn filesystem_metadata_hash() {
     let hash1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/hash",
+            "golem:it/api.{hash}",
             vec![Value::String("testfile.txt".to_string())],
         )
         .await
@@ -1324,7 +1332,7 @@ async fn filesystem_metadata_hash() {
     let hash2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/hash",
+            "golem:it/api.{hash}",
             vec![Value::String("testfile.txt".to_string())],
         )
         .await
@@ -1345,7 +1353,7 @@ async fn ip_address_resolve() {
         .await;
 
     let result1 = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
         .await
         .unwrap();
 
@@ -1355,7 +1363,7 @@ async fn ip_address_resolve() {
     // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
 
     let result2 = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
         .await
         .unwrap();
 
