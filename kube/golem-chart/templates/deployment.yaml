@@ -192,7 +192,7 @@ spec:
               value: "S3"
             - name: GOLEM__BLOB_STORAGE__CONFIG__REGION
               value: {{ .Values.workerExecutorStore.s3.region }}
-            - name: GOLEM__BLOB_STORAGE__CONFIG__BUCKET_PREFIX
+            - name: GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX
               value: {{ .Values.workerExecutorStore.s3.objectPrefix }}
             - name: GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET
               value: {{ .Values.workerExecutorStore.s3.compilationCacheBucket }}
@@ -518,7 +518,7 @@ spec:
               value: "S3"
             - name: GOLEM__BLOB_STORAGE__CONFIG__REGION
               value: {{ .Values.workerExecutorStore.s3.region }}
-            - name: GOLEM__BLOB_STORAGE__CONFIG__BUCKET_PREFIX
+            - name: GOLEM__BLOB_STORAGE__CONFIG__OBJECT_PREFIX
               value: {{ .Values.workerExecutorStore.s3.objectPrefix }}
             - name: GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET
               value: {{ .Values.workerExecutorStore.s3.compilationCacheBucket }}
