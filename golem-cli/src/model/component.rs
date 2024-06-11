@@ -7,6 +7,7 @@ use golem_client::model::{
     TypeVariant, UserComponentId, VersionedComponentId, VersionedName,
 };
 use golem_wasm_ast::wave::DisplayNamedFunc;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -457,6 +458,8 @@ fn resolve_function<'t>(
     component: &'t Component,
     function: &str,
 ) -> Result<&'t ExportFunction, GolemError> {
+    // TODO: this need to parse `function` with `ParsedFunctionName::parse`
+
     let functions = component
         .metadata
         .exports
@@ -502,11 +505,12 @@ pub fn function_params_types<'t>(
 fn export_to_functions(export: &Export) -> Vec<(String, &ExportFunction)> {
     match export {
         Export::Instance(inst) => {
-            let prefix = format!("{}/", inst.name);
+            let prefix = format!("{}.{{", inst.name);
+            let postfix = "}";
 
             inst.functions
                 .iter()
-                .map(|f| (format!("{prefix}{}", f.name), f))
+                .map(|f| (format!("{prefix}{}{postfix}", f.name), f))
                 .collect()
         }
         Export::Function(f) => vec![(f.name.clone(), f)],

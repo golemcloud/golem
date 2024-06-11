@@ -351,7 +351,7 @@ async fn get_running_workers() {
         let _ = DEPS
             .invoke(
                 &worker_id,
-                "golem:it/api/start-polling",
+                "golem:it/api.{start-polling}",
                 vec![Value::String("first".to_string())],
             )
             .await;

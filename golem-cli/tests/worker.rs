@@ -169,7 +169,7 @@ fn worker_invoke_and_await(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/get-arguments",
+        "golem:it/api.{get-arguments}",
         &cfg.arg('j', "parameters"),
         "[]",
         &cfg.arg('k', "idempotency-key"),
@@ -241,7 +241,7 @@ fn worker_invoke_and_await_wave_params(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/set",
+        "golem:it/api.{set}",
         &cfg.arg('p', "param"),
         r#""bucket name""#,
         &cfg.arg('p', "param"),
@@ -259,7 +259,7 @@ fn worker_invoke_and_await_wave_params(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/get",
+        "golem:it/api.{get}",
         &cfg.arg('p', "param"),
         r#""bucket name""#,
         &cfg.arg('p', "param"),
@@ -306,7 +306,7 @@ fn worker_invoke_no_params(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/get-arguments",
+        "golem:it/api.{get-arguments}",
     ])?;
 
     Ok(())
@@ -339,7 +339,7 @@ fn worker_invoke_json_params(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/get-arguments",
+        "golem:it/api.{get-arguments}",
         &cfg.arg('j', "parameters"),
         "[]",
     ])?;
@@ -379,7 +379,7 @@ fn worker_invoke_wave_params(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/set",
+        "golem:it/api.{set}",
         &cfg.arg('p', "param"),
         r#""bucket name""#,
         &cfg.arg('p', "param"),

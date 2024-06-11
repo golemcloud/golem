@@ -86,7 +86,7 @@ futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
 golem-wasm-ast = "0.2.2"
-golem-wasm-rpc = { version = "0.0.24", default-features = false, features = [
+golem-wasm-rpc = { version = "0.0.25", default-features = false, features = [
     "host",
 ] }
 http = "1.0.0" # keep in sync with wasmtime

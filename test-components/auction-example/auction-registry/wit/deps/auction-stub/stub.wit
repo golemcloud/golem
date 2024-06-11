@@ -10,6 +10,7 @@ interface stub-auction {
 
   resource api {
     constructor(location: uri);
+    blocking-initialize: func(auction: auction);
     initialize: func(auction: auction);
     bid: func(bidder-id: bidder-id, price: f32) -> bid-result;
     close-auction: func() -> option<bidder-id>;

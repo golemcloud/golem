@@ -29,14 +29,14 @@ impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestApi for
             rpc: WasmRpc::new(&location),
         }
     }
-    fn initialize(
+    fn blocking_initialize(
         &self,
         auction: crate::bindings::auction::auction::api::Auction,
     ) -> () {
         let result = self
             .rpc
             .invoke_and_await(
-                "auction:auction/api/initialize",
+                "auction:auction/api.{initialize}",
                 &[
                     WitValue::builder()
                         .record()
@@ -57,7 +57,44 @@ impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestApi for
                 ],
             )
             .expect(
-                &format!("Failed to invoke remote {}", "auction:auction/api/initialize"),
+                &format!(
+                    "Failed to invoke-and-await remote {}",
+                    "auction:auction/api.{initialize}"
+                ),
+            );
+        ()
+    }
+    fn initialize(
+        &self,
+        auction: crate::bindings::auction::auction::api::Auction,
+    ) -> () {
+        let result = self
+            .rpc
+            .invoke(
+                "auction:auction/api.{initialize}",
+                &[
+                    WitValue::builder()
+                        .record()
+                        .item()
+                        .record()
+                        .item()
+                        .string(&auction.auction_id.auction_id)
+                        .finish()
+                        .item()
+                        .string(&auction.name)
+                        .item()
+                        .string(&auction.description)
+                        .item()
+                        .f32(auction.limit_price)
+                        .item()
+                        .u64(auction.expiration)
+                        .finish(),
+                ],
+            )
+            .expect(
+                &format!(
+                    "Failed to invoke remote {}", "auction:auction/api.{initialize}"
+                ),
             );
         ()
     }
@@ -69,7 +106,7 @@ impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestApi for
         let result = self
             .rpc
             .invoke_and_await(
-                "auction:auction/api/bid",
+                "auction:auction/api.{bid}",
                 &[
                     WitValue::builder()
                         .record()
@@ -79,7 +116,11 @@ impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestApi for
                     WitValue::builder().f32(price),
                 ],
             )
-            .expect(&format!("Failed to invoke remote {}", "auction:auction/api/bid"));
+            .expect(
+                &format!(
+                    "Failed to invoke-and-await remote {}", "auction:auction/api.{bid}"
+                ),
+            );
         ({
             let (case_idx, inner) = result
                 .tuple_element(0)
@@ -97,10 +138,11 @@ impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestApi for
     fn close_auction(&self) -> Option<crate::bindings::auction::auction::api::BidderId> {
         let result = self
             .rpc
-            .invoke_and_await("auction:auction/api/close-auction", &[])
+            .invoke_and_await("auction:auction/api.{close-auction}", &[])
             .expect(
                 &format!(
-                    "Failed to invoke remote {}", "auction:auction/api/close-auction"
+                    "Failed to invoke-and-await remote {}",
+                    "auction:auction/api.{close-auction}"
                 ),
             );
         (result
@@ -133,7 +175,7 @@ for RunningAuction {
         let rpc = WasmRpc::new(&location);
         let result = rpc
             .invoke_and_await(
-                "auction:auction/api/running-auction/new",
+                "auction:auction/api/running-auction.{new}",
                 &[
                     WitValue::builder()
                         .record()
@@ -155,8 +197,8 @@ for RunningAuction {
             )
             .expect(
                 &format!(
-                    "Failed to invoke remote {}",
-                    "auction:auction/api/running-auction/new"
+                    "Failed to invoke-and-await remote {}",
+                    "auction:auction/api/running-auction.{new}"
                 ),
             );
         ({
@@ -176,7 +218,7 @@ for RunningAuction {
         let result = self
             .rpc
             .invoke_and_await(
-                "auction:auction/api/running-auction/bid",
+                "auction:auction/api/running-auction.{bid}",
                 &[
                     WitValue::builder().handle(self.uri.clone(), self.id),
                     WitValue::builder()
@@ -189,8 +231,8 @@ for RunningAuction {
             )
             .expect(
                 &format!(
-                    "Failed to invoke remote {}",
-                    "auction:auction/api/running-auction/bid"
+                    "Failed to invoke-and-await remote {}",
+                    "auction:auction/api/running-auction.{bid}"
                 ),
             );
         ({
@@ -211,13 +253,13 @@ for RunningAuction {
         let result = self
             .rpc
             .invoke_and_await(
-                "auction:auction/api/running-auction/close",
+                "auction:auction/api/running-auction.{close}",
                 &[WitValue::builder().handle(self.uri.clone(), self.id)],
             )
             .expect(
                 &format!(
-                    "Failed to invoke remote {}",
-                    "auction:auction/api/running-auction/close"
+                    "Failed to invoke-and-await remote {}",
+                    "auction:auction/api/running-auction.{close}"
                 ),
             );
         (result
@@ -242,7 +284,7 @@ impl Drop for RunningAuction {
     fn drop(&mut self) {
         self.rpc
             .invoke_and_await(
-                "auction:auction/api/running-auction/drop",
+                "auction:auction/api/running-auction.{drop}",
                 &[WitValue::builder().handle(self.uri.clone(), self.id)],
             )
             .expect("Failed to invoke remote drop");
