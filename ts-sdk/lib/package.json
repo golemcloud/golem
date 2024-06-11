@@ -1,5 +1,5 @@
 {
-	"name": "@golemcloud/golem",
+	"name": "golem-ts",
 	"version": "0.1.0",
 	"description": "A library that help writing Golem programs by providing higher level wrappers for Golem's runtime APIs, including functions for defining and performing operations transactionally.",
 	"repository": {
