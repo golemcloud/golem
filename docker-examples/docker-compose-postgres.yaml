@@ -16,6 +16,7 @@ services:
       - golem-worker-service
       - golem-component-service
       - golem-shard-manager
+      - golem-component-compilation-service
 
   redis:
     image: redis:latest
@@ -73,6 +74,7 @@ services:
       - GOLEM__DB__CONFIG__DATABASE=golem_db
       - GOLEM__DB__CONFIG__MAX_CONNECTIONS=10
       - GOLEM__DB__CONFIG__HOST=postgres
+      - GOLEM__DB__CONFIG__PORT=${POSTGRES_PORT}
       - GOLEM__DB__CONFIG__USERNAME=golem_user
       - GOLEM__DB__CONFIG__PASSWORD=golem_password
       - GOLEM__GRPC_PORT=${COMPONENT_SERVICE_GRPC_PORT}
