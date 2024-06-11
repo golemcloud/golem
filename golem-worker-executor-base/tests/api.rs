@@ -439,7 +439,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent() {
         .invoke_and_await_with_key(
             &worker_id,
             &idempotency_key,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
@@ -454,7 +454,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent() {
         .invoke_and_await_with_key(
             &worker_id,
             &idempotency_key,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
@@ -499,7 +499,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart() {
         .invoke_and_await_with_key(
             &worker_id,
             &idempotency_key,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
@@ -517,7 +517,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart() {
         .invoke_and_await_with_key(
             &worker_id,
             &idempotency_key,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
@@ -1309,7 +1309,7 @@ async fn long_running_poll_loop_works_as_expected() {
     executor
         .invoke(
             &worker_id,
-            "golem:it/api/start-polling",
+            "golem:it/api.{start-polling}",
             vec![Value::String("first".to_string())],
         )
         .await
@@ -1374,7 +1374,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
     executor
         .invoke(
             &worker_id,
-            "golem:it/api/start-polling",
+            "golem:it/api.{start-polling}",
             vec![Value::String("first".to_string())],
         )
         .await
@@ -1414,7 +1414,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
         executor_clone
             .invoke(
                 &worker_id_clone,
-                "golem:it/api/start-polling",
+                "golem:it/api.{start-polling}",
                 vec![Value::String("second".to_string())],
             )
             .await
@@ -1498,7 +1498,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
     executor
         .invoke(
             &worker_id,
-            "golem:it/api/start-polling",
+            "golem:it/api.{start-polling}",
             vec![Value::String("first".to_string())],
         )
         .await
@@ -1558,7 +1558,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     executor
         .invoke(
             &worker_id,
-            "golem:it/api/start-polling",
+            "golem:it/api.{start-polling}",
             vec![Value::String("first".to_string())],
         )
         .await
@@ -1623,7 +1623,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
     executor
         .invoke(
             &worker_id,
-            "golem:it/api/start-polling",
+            "golem:it/api.{start-polling}",
             vec![Value::String("first".to_string())],
         )
         .await
@@ -1709,7 +1709,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
     executor
         .invoke(
             &worker_id,
-            "golem:it/api/start-polling",
+            "golem:it/api.{start-polling}",
             vec![Value::String("first".to_string())],
         )
         .await
@@ -2081,7 +2081,7 @@ async fn invocation_queue_is_persistent() {
     executor
         .invoke(
             &worker_id,
-            "golem:it/api/start-polling",
+            "golem:it/api.{start-polling}",
             vec![Value::String("done".to_string())],
         )
         .await
@@ -2090,15 +2090,15 @@ async fn invocation_queue_is_persistent() {
     sleep(Duration::from_secs(2)).await;
 
     executor
-        .invoke(&worker_id, "golem:it/api/increment", vec![])
+        .invoke(&worker_id, "golem:it/api.{increment}", vec![])
         .await
         .unwrap();
     executor
-        .invoke(&worker_id, "golem:it/api/increment", vec![])
+        .invoke(&worker_id, "golem:it/api.{increment}", vec![])
         .await
         .unwrap();
     executor
-        .invoke(&worker_id, "golem:it/api/increment", vec![])
+        .invoke(&worker_id, "golem:it/api.{increment}", vec![])
         .await
         .unwrap();
 
@@ -2110,7 +2110,7 @@ async fn invocation_queue_is_persistent() {
     let executor = start(&context).await.unwrap();
 
     executor
-        .invoke(&worker_id, "golem:it/api/increment", vec![])
+        .invoke(&worker_id, "golem:it/api.{increment}", vec![])
         .await
         .unwrap();
 

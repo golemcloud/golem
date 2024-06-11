@@ -163,7 +163,7 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/delete",
+            "golem:it/api.{delete}",
             vec![
                 Value::String(format!("{component_id}-{worker_name}-bucket")),
                 Value::String("key".to_string()),
@@ -215,7 +215,7 @@ async fn readwrite_exists_returns_true_if_the_value_was_set() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/exists",
+            "golem:it/api.{exists}",
             vec![
                 Value::String(format!("{component_id}-{worker_name}-bucket")),
                 Value::String("key".to_string()),
@@ -242,7 +242,7 @@ async fn readwrite_exists_returns_false_if_the_value_was_not_set() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/exists",
+            "golem:it/api.{exists}",
             vec![
                 Value::String(format!("{component_id}-{worker_name}-bucket")),
                 Value::String("key".to_string()),
@@ -359,7 +359,7 @@ async fn batch_get_many_gets_multiple_values() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/get-many",
+            "golem:it/api.{get-many}",
             vec![
                 Value::String(format!("{component_id}-{worker_name}-bucket")),
                 Value::List(vec![
