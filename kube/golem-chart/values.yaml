@@ -121,7 +121,7 @@ workerExecutorStore:
     storageSize: 5Gi
     accessMode: ReadWriteOnce
   s3:
-    bucketPrefix: ""
+    objectPrefix: ""
     region: "us-east-1"
     compilationCacheBucket: "compilation-cache"
     customDataBucket: "custom-data"
