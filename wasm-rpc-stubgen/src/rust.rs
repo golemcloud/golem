@@ -406,16 +406,13 @@ fn get_remote_function_name(
 ) -> String {
     match interface_name {
         Some(remote_interface) => format!(
-            "{}:{}/{}/{}",
+            "{}:{}/{}.{{{}}}",
             def.root_package_name.namespace,
             def.root_package_name.name,
             remote_interface,
             function_name
         ),
-        None => format!(
-            "{}:{}/{}",
-            def.root_package_name.namespace, def.root_package_name.name, function_name
-        ),
+        None => function_name.to_string(),
     }
 }
 
