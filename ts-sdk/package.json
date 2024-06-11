@@ -14,12 +14,11 @@
 	],
 	"main": "out/index.js",
 	"types": "out/index.d.ts",
-	"readme": "out/README.md",
 	"files": [
 		"out/"
 	],
 	"scripts": {
-		"build": "tsc && cp -r src/bindgen out/bindgen && cp ../README.md out/",
+		"build": "tsc && cp -r src/bindgen out/bindgen",
 		"check": "npx @biomejs/biome check",
 		"fix": "npx @biomejs/biome check --write"
 	},

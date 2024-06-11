@@ -20,17 +20,14 @@ jobs:
       
       - name: Install dependencies
         run: |
-          cd lib
           npm install
       
       - name: Run code quality check
         run: |
-          cd lib
           npm run check
       
       - name: Build the package
         run: |
-          cd lib
           npm run build
   
   publish:
@@ -50,17 +47,14 @@ jobs:
       
       - name: Install dependencies
         run: |
-          cd lib
           npm install
       
       - name: Build the package
         run: |
-          cd lib
           npm run build
       
       - name: Publish to npm
         run: |
-          cd lib
           npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
