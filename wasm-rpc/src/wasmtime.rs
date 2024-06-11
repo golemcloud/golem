@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::{Uri, Value};
+use golem_wasm_ast::analysis::AnalysedType;
 use wasmtime::component::{
     types, Enum, Flags, List, OptionVal, Record, ResourceAny, ResultVal, Tuple, Type, Val, Variant,
 };
@@ -478,4 +479,79 @@ pub struct WasmFlags {
     ty: types::Flags,
     count: u32,
     value: Box<[u32]>,
+}
+
+pub fn type_to_analysed_type(typ: &Type) -> Result<AnalysedType, String> {
+    match typ {
+        Type::Bool => Ok(AnalysedType::Bool),
+        Type::S8 => Ok(AnalysedType::S8),
+        Type::U8 => Ok(AnalysedType::U8),
+        Type::S16 => Ok(AnalysedType::S16),
+        Type::U16 => Ok(AnalysedType::U16),
+        Type::S32 => Ok(AnalysedType::S32),
+        Type::U32 => Ok(AnalysedType::U32),
+        Type::S64 => Ok(AnalysedType::S64),
+        Type::U64 => Ok(AnalysedType::U64),
+        Type::Float32 => Ok(AnalysedType::F32),
+        Type::Float64 => Ok(AnalysedType::F64),
+        Type::Char => Ok(AnalysedType::Chr),
+        Type::String => Ok(AnalysedType::Str),
+        Type::List(list) => {
+            let inner = type_to_analysed_type(&list.ty())?;
+            Ok(AnalysedType::List(Box::new(inner)))
+        }
+        Type::Record(record) => {
+            let fields = record
+                .fields()
+                .map(|field| type_to_analysed_type(&field.ty).map(|t| (field.name.to_string(), t)))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(AnalysedType::Record(fields))
+        }
+        Type::Tuple(tuple) => {
+            let types = tuple
+                .types()
+                .map(|ty| type_to_analysed_type(&ty))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(AnalysedType::Tuple(types))
+        }
+        Type::Variant(variant) => {
+            let cases = variant
+                .cases()
+                .map(|case| match case.ty {
+                    Some(ty) => {
+                        type_to_analysed_type(&ty).map(|t| (case.name.to_string(), Some(t)))
+                    }
+                    None => Ok((case.name.to_string(), None)),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(AnalysedType::Variant(cases))
+        }
+        Type::Enum(enm) => {
+            let names = enm.names().map(|name| name.to_string()).collect();
+            Ok(AnalysedType::Enum(names))
+        }
+        Type::Option(option) => {
+            let inner = type_to_analysed_type(&option.ty())?;
+            Ok(AnalysedType::Option(Box::new(inner)))
+        }
+        Type::Result(result) => {
+            let ok = match result.ok() {
+                Some(ty) => Some(Box::new(type_to_analysed_type(&ty)?)),
+                None => None,
+            };
+            let error = match result.err() {
+                Some(ty) => Some(Box::new(type_to_analysed_type(&ty)?)),
+                None => None,
+            };
+            Ok(AnalysedType::Result { ok, error })
+        }
+        Type::Flags(flags) => {
+            let names = flags.names().map(|name| name.to_string()).collect();
+            Ok(AnalysedType::Flags(names))
+        }
+        Type::Own(_) => Err("Cannot extract information about owned resource type".to_string()),
+        Type::Borrow(_) => {
+            Err("Cannot extract information about borrowed resource type".to_string())
+        }
+    }
 }
