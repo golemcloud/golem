@@ -4,7 +4,7 @@
 	"description": "A library that help writing Golem programs by providing higher level wrappers for Golem's runtime APIs, including functions for defining and performing operations transactionally.",
 	"readme": "../README.md",
 	"repository": {
-		"url": "https://github.com/golemcloud/golem-ts",
+		"url": "git+https://github.com/golemcloud/golem-ts.git",
 		"directory": "lib"
 	},
 	"license": "Apache-2.0",

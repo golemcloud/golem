@@ -8,6 +8,7 @@ on:
     types: [published]
 
 jobs:
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -36,6 +37,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'published'
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       
