@@ -2,6 +2,13 @@
 	"name": "golem-ts",
 	"version": "0.1.0",
 	"description": "A library that help writing Golem programs by providing higher level wrappers for Golem's runtime APIs, including functions for defining and performing operations transactionally.",
+	"readme": "../README.md",
+	"repository": {
+		"url": "https://github.com/golemcloud/golem-ts",
+		"directory": "lib"
+	},
+	"license": "Apache-2.0",
+	"keywords": ["golem", "typescript", "runtime"],
 	"main": "out/index.js",
 	"types": "out/index.d.ts",
 	"files": ["src"],
