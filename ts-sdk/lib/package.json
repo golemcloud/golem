@@ -11,7 +11,6 @@
 	"keywords": ["golem", "typescript", "runtime"],
 	"main": "out/index.js",
 	"types": "out/index.d.ts",
-	"files": ["src"],
 	"scripts": {
 		"build": "tsc && cp -r src/bindgen out/bindgen",
 		"check": "npx @biomejs/biome check",
