@@ -1,6 +1,6 @@
 {
 	"name": "golem-ts",
-	"version": "0.1.0",
+	"version": "0.1.2",
 	"description": "A library that help writing Golem programs by providing higher level wrappers for Golem's runtime APIs, including functions for defining and performing operations transactionally.",
 	"repository": {
 		"url": "git+https://github.com/golemcloud/golem-ts.git",
@@ -15,7 +15,9 @@
 	"main": "out/index.js",
 	"types": "out/index.d.ts",
 	"readme": "out/README.md",
-	"files": ["out/"],
+	"files": [
+		"out/"
+	],
 	"scripts": {
 		"build": "tsc && cp -r src/bindgen out/bindgen && cp ../README.md out/",
 		"check": "npx @biomejs/biome check",
