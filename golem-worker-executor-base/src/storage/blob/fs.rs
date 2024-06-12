@@ -206,6 +206,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, String> {
+        let namespace_root = self.path_of(&namespace, Path::new(""));
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -215,9 +216,8 @@ impl BlobStorage for FileSystemBlobStorage {
 
         let mut result = Vec::new();
         while let Some(entry) = entries.try_next().await.map_err(|err| err.to_string())? {
-            let path = entry.path();
-            if path.is_file() {
-                result.push(path);
+            if let Ok(path) = entry.path().strip_prefix(&namespace_root) {
+                result.push(path.to_path_buf());
             }
         }
         Ok(result)

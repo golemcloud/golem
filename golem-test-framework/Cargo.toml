@@ -29,7 +29,7 @@ k8s-openapi = { workspace = true }
 kill_tree = { version = "0.2.4", features = ["tokio"] }
 kube = { workspace = true }
 kube-derive = { workspace = true }
-once_cell = "1.19.0"
+once_cell = { workspace = true }
 postgres = { workspace = true }
 redis = { workspace = true }
 serde = { workspace = true }

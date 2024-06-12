@@ -259,6 +259,7 @@ pub struct S3BlobStorageConfig {
     pub custom_data_bucket: String,
     pub oplog_payload_bucket: String,
     pub compressed_oplog_buckets: Vec<String>,
+    pub use_minio_credentials: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -352,6 +353,7 @@ impl Default for S3BlobStorageConfig {
             object_prefix: "".to_string(),
             aws_endpoint_url: None,
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
+            use_minio_credentials: false,
         }
     }
 }
