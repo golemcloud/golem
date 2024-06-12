@@ -143,7 +143,7 @@ mod tests {
             metadata: ComponentMetadata {
                 producers: Vec::new(),
                 exports: vec![Export::Function(ExportFunction {
-                    name: "func_name".to_string(),
+                    name: "func-name".to_string(),
                     parameters: Vec::new(),
                     results: func_res,
                 })],
@@ -151,7 +151,7 @@ mod tests {
             project_id: None,
         };
 
-        InvokeResultView::try_parse_or_json(InvokeResult { result: json }, &component, "func_name")
+        InvokeResultView::try_parse_or_json(InvokeResult { result: json }, &component, "func-name")
     }
 
     #[test]

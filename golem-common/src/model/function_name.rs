@@ -14,8 +14,9 @@
 
 use combine::error::Commit;
 use combine::parser::char::{alpha_num, string};
+use combine::parser::repeat::take_until;
 use combine::stream::easy;
-use combine::{any, attempt, choice, many1, none_of, optional, parser, token, EasyParser, Parser};
+use combine::{any, attempt, choice, many1, optional, parser, token, EasyParser, Parser};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{TypeAnnotatedValue, Value};
 
@@ -283,8 +284,11 @@ impl ParsedFunctionName {
         };
 
         let version = attempt(token('@'))
-            .with(many1(none_of(vec!['{'])))
-            .and_then(|v: String| semver::Version::parse(&v))
+            .with(take_until(attempt(string(".{"))))
+            .and_then(|v: String| {
+                let stripped = v.strip_suffix('.').unwrap_or(&v);
+                semver::Version::parse(stripped)
+            })
             .message("version");
 
         let single_function =
@@ -476,6 +480,30 @@ mod tests {
                 },
                 function: ParsedFunctionReference::Function {
                     function: "fn1".to_string()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn parse_function_name_in_versioned_exported_interface() {
+        let parsed = ParsedFunctionName::parse("wasi:cli/run@0.2.0.{run}").expect("Parsing failed");
+        assert_eq!(
+            parsed.site().interface_name(),
+            Some("wasi:cli/run@0.2.0".to_string())
+        );
+        assert_eq!(parsed.function().function_name(), "run".to_string());
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "wasi".to_string(),
+                    package: "cli".to_string(),
+                    interface: "run".to_string(),
+                    version: Some(semver::Version::new(0, 2, 0))
+                },
+                function: ParsedFunctionReference::Function {
+                    function: "run".to_string()
                 }
             }
         );
