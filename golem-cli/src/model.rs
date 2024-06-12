@@ -175,10 +175,11 @@ impl std::error::Error for GolemError {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize, Default)]
 pub enum Format {
     Json,
     Yaml,
+    #[default]
     Text,
 }
 

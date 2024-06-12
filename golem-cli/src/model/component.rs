@@ -7,7 +7,6 @@ use golem_client::model::{
     TypeVariant, UserComponentId, VersionedComponentId, VersionedName,
 };
 use golem_wasm_ast::wave::DisplayNamedFunc;
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 

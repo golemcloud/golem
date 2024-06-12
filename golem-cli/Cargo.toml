@@ -7,16 +7,12 @@ homepage = "https://golem.cloud/"
 repository = "https://github.com/golemcloud/golem"
 authors = ["Simon Popugaev <simon.popugaev@ziverge.com>"]
 readme = "README.md"
-description = "Command line interface for OSS version of Golem. See also golem-cloud-cli."
+description = "Command line interface for Golem."
 autotests = false
 
 [[bin]]
 name = "golem-cli"
 path = "src/main.rs"
-
-[[bin]]
-name = "golem-cloud-cli"
-path = "src/cloud_main.rs"
 
 [[test]]
 name = "integration"
@@ -68,6 +64,7 @@ cli-table = { workspace = true }
 textwrap = "0.16.1"
 anyhow.workspace = true
 colored = "2.1.0"
+inquire = "0.7.5"
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }

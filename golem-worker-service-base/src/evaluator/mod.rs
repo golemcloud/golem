@@ -28,52 +28,52 @@ pub trait Evaluator {
         &self,
         expr: &Expr,
         evaluation_context: &EvaluationContext,
-    ) -> Result<EvaluationResult, EvaluationError>;
+    ) -> Result<ExprEvaluationResult, EvaluationError>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum EvaluationResult {
+pub enum ExprEvaluationResult {
     Value(TypeAnnotatedValue),
     Unit,
 }
 
-impl From<&RefinedWorkerResponse> for EvaluationResult {
+impl From<&RefinedWorkerResponse> for ExprEvaluationResult {
     fn from(value: &RefinedWorkerResponse) -> Self {
         match value {
-            RefinedWorkerResponse::Unit => EvaluationResult::Unit,
+            RefinedWorkerResponse::Unit => ExprEvaluationResult::Unit,
             RefinedWorkerResponse::SingleResult(typed_value) => {
-                EvaluationResult::Value(typed_value.clone())
+                ExprEvaluationResult::Value(typed_value.clone())
             }
             RefinedWorkerResponse::MultipleResults(typed_value) => {
-                EvaluationResult::Value(typed_value.clone())
+                ExprEvaluationResult::Value(typed_value.clone())
             }
         }
     }
 }
 
-impl EvaluationResult {
+impl ExprEvaluationResult {
     pub(crate) fn get_primitive(&self) -> Option<Primitive> {
         match self {
-            EvaluationResult::Value(value) => value.get_primitive(),
-            EvaluationResult::Unit => None,
+            ExprEvaluationResult::Value(value) => value.get_primitive(),
+            ExprEvaluationResult::Unit => None,
         }
     }
 
     pub fn is_unit(&self) -> bool {
-        matches!(self, EvaluationResult::Unit)
+        matches!(self, ExprEvaluationResult::Unit)
     }
 
     pub fn get_value(&self) -> Option<TypeAnnotatedValue> {
         match self {
-            EvaluationResult::Value(value) => Some(value.clone()),
-            EvaluationResult::Unit => None,
+            ExprEvaluationResult::Value(value) => Some(value.clone()),
+            ExprEvaluationResult::Unit => None,
         }
     }
 }
 
-impl From<TypeAnnotatedValue> for EvaluationResult {
+impl From<TypeAnnotatedValue> for ExprEvaluationResult {
     fn from(value: TypeAnnotatedValue) -> Self {
-        EvaluationResult::Value(value)
+        ExprEvaluationResult::Value(value)
     }
 }
 
@@ -117,7 +117,7 @@ impl Evaluator for DefaultEvaluator {
         &self,
         expr: &Expr,
         input: &EvaluationContext,
-    ) -> Result<EvaluationResult, EvaluationError> {
+    ) -> Result<ExprEvaluationResult, EvaluationError> {
         let executor = self.worker_request_executor.clone();
         // An expression evaluation needs to be careful with string values
         // and therefore returns ValueTyped
@@ -125,7 +125,7 @@ impl Evaluator for DefaultEvaluator {
             expr: &Expr,
             input: &mut EvaluationContext,
             executor: &Arc<dyn WorkerRequestExecutor + Sync + Send>,
-        ) -> Result<EvaluationResult, EvaluationError> {
+        ) -> Result<ExprEvaluationResult, EvaluationError> {
             match expr {
                 Expr::Identifier(variable) => input
                     .get_variable_value(variable.as_str())
@@ -151,7 +151,7 @@ impl Evaluator for DefaultEvaluator {
 
                     input.merge(&response_context);
 
-                    Ok(EvaluationResult::from(&result))
+                    Ok(ExprEvaluationResult::from(&result))
                 }
 
                 Expr::SelectIndex(expr, index) => {
@@ -227,7 +227,7 @@ impl Evaluator for DefaultEvaluator {
                     let evaluated_expr = Box::pin(go(expr, input, executor)).await?;
 
                     match evaluated_expr {
-                        EvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => Ok(EvaluationResult::Value(TypeAnnotatedValue::Bool(!value))),
+                        ExprEvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Bool(!value))),
                         _ => Err(EvaluationError::Message(format!(
                             "The expression is evaluated to {} but it is not a boolean value to apply not (!) operator on",
                            &evaluated_expr.get_value().map_or("unit".to_string(), |eval_result| get_json_from_typed_value(&eval_result).to_string())
@@ -241,7 +241,7 @@ impl Evaluator for DefaultEvaluator {
                     let right = Box::pin(go(right, input, executor)).await?;
 
                     match pred {
-                        EvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => {
+                        ExprEvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => {
                             if value {
                                 Ok(left)
                             } else {
@@ -260,7 +260,7 @@ impl Evaluator for DefaultEvaluator {
 
                     eval_result
                         .get_value()
-                        .map_or(Ok(EvaluationResult::Unit), |value| {
+                        .map_or(Ok(ExprEvaluationResult::Unit), |value| {
                             let typ = AnalysedType::from(&value);
 
                             let result = TypeAnnotatedValue::Record {
@@ -270,12 +270,12 @@ impl Evaluator for DefaultEvaluator {
 
                             input.merge_variables(&result);
 
-                            Ok(EvaluationResult::Unit) // Result of a let binding is Unit
+                            Ok(ExprEvaluationResult::Unit) // Result of a let binding is Unit
                         })
                 }
 
                 Expr::Multiple(multiple) => {
-                    let mut result: Vec<EvaluationResult> = vec![];
+                    let mut result: Vec<ExprEvaluationResult> = vec![];
 
                     for expr in multiple {
                         match Box::pin(go(expr, input, executor)).await {
@@ -291,7 +291,7 @@ impl Evaluator for DefaultEvaluator {
 
                     Ok(result
                         .last()
-                        .map_or(EvaluationResult::Unit, |last| last.clone()))
+                        .map_or(ExprEvaluationResult::Unit, |last| last.clone()))
                 }
 
                 Expr::Sequence(exprs) => {
@@ -370,7 +370,7 @@ impl Evaluator for DefaultEvaluator {
                         }
                     }
 
-                    Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(result)))
+                    Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Str(result)))
                 }
 
                 Expr::Literal(literal) => Ok(TypeAnnotatedValue::Str(literal.clone()).into()),
@@ -407,7 +407,7 @@ impl Evaluator for DefaultEvaluator {
                             Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a option", expression::to_string(expr).unwrap())))
                         }
                     }
-                    None => Ok(EvaluationResult::Value(TypeAnnotatedValue::Option {
+                    None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option {
                         value: None,
                         typ: AnalysedType::Str,
                     })),
@@ -470,7 +470,7 @@ impl Evaluator for DefaultEvaluator {
                     .into())
                 }
 
-                Expr::Flags(flags) => Ok(EvaluationResult::Value(TypeAnnotatedValue::Flags {
+                Expr::Flags(flags) => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Flags {
                     values: flags.clone(),
                     typ: flags.clone(),
                 })),
@@ -587,7 +587,7 @@ mod tests {
     use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::evaluator_context::EvaluationContext;
     use crate::evaluator::getter::GetError;
-    use crate::evaluator::{DefaultEvaluator, EvaluationError, EvaluationResult, Evaluator};
+    use crate::evaluator::{DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult};
     use crate::expression;
     use crate::expression::Expr;
     use crate::worker_binding::RequestDetails;
@@ -612,7 +612,7 @@ mod tests {
             expr: &Expr,
             input: &RequestDetails,
             worker_response: &RefinedWorkerResponse,
-        ) -> Result<EvaluationResult, EvaluationError>;
+        ) -> Result<ExprEvaluationResult, EvaluationError>;
     }
 
     #[async_trait]
@@ -652,7 +652,7 @@ mod tests {
             expr: &Expr,
             input: &RequestDetails,
             worker_response: &RefinedWorkerResponse,
-        ) -> Result<EvaluationResult, EvaluationError> {
+        ) -> Result<ExprEvaluationResult, EvaluationError> {
             let mut evaluation_context = EvaluationContext::from_request_data(input);
 
             let response_context = EvaluationContext::from_refined_worker_response(worker_response);
@@ -1123,13 +1123,13 @@ mod tests {
         assert_eq!(
             (result1, result2, result3),
             (
-                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(
+                Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Str(
                     "bar".to_string()
                 ))),
-                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(
+                Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Str(
                     "baz".to_string()
                 ))),
-                Ok(EvaluationResult::Value(TypeAnnotatedValue::Str(
+                Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Str(
                     "empty".to_string()
                 )))
             )
@@ -1632,7 +1632,7 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Record {
+        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Record {
             typ: vec![(
                 "a".to_string(),
                 AnalysedType::Result {
@@ -1663,7 +1663,7 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Record {
+        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Record {
             typ: vec![(
                 "a".to_string(),
                 AnalysedType::Result {
@@ -1694,7 +1694,7 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::List {
+        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::List {
             typ: AnalysedType::U64,
             values: vec![
                 TypeAnnotatedValue::U64(1),
@@ -1716,7 +1716,7 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Tuple {
+        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Tuple {
             typ: vec![
                 AnalysedType::Option(Box::new(AnalysedType::U64)),
                 AnalysedType::U64,
@@ -1745,7 +1745,7 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Flags {
+        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Flags {
             typ: vec!["A".to_string(), "B".to_string(), "C".to_string()],
             values: vec!["A".to_string(), "B".to_string(), "C".to_string()],
         }));
@@ -1763,7 +1763,7 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::List {
+        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::List {
             typ: AnalysedType::Result {
                 ok: Some(Box::new(AnalysedType::U64)),
                 error: None,
@@ -1802,7 +1802,7 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(EvaluationResult::Value(TypeAnnotatedValue::Bool(false)));
+        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Bool(false)));
 
         assert_eq!(result, expected);
     }

@@ -75,3 +75,16 @@ fn get_array(value: &TypeAnnotatedValue) -> Option<Vec<TypeAnnotatedValue>> {
         _ => None,
     }
 }
+
+pub trait GetterExt<T> {
+    fn get_optional(&self, key: &Path) -> Option<T>;
+}
+
+impl<T: Getter<T>> GetterExt<T> for T {
+    fn get_optional(&self, key: &Path) -> Option<T> {
+        match self.get(key) {
+            Ok(value) => Some(value),
+            Err(_) => None,
+        }
+    }
+}

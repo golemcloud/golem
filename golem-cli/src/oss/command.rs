@@ -15,6 +15,7 @@
 use crate::command::api_definition::ApiDefinitionSubcommand;
 use crate::command::api_deployment::ApiDeploymentSubcommand;
 use crate::command::component::ComponentSubCommand;
+use crate::command::profile::ProfileSubCommand;
 use crate::command::worker::WorkerSubcommand;
 use crate::model::{ComponentIdOrName, Format};
 use crate::oss::model::OssContext;
@@ -87,27 +88,28 @@ pub enum OssCommand {
         #[command(subcommand)]
         subcommand: ApiDeploymentSubcommand<OssContext>,
     },
+
+    /// Manage profiles
+    #[command()]
+    Profile {
+        #[command(subcommand)]
+        subcommand: ProfileSubCommand,
+    },
+
+    /// Interactively creates default profile
+    #[command()]
+    Init {},
 }
 
 #[derive(Parser, Debug)]
 #[command(author, version = option_env ! ("VERSION").unwrap_or(env ! ("CARGO_PKG_VERSION")), about, long_about, rename_all = "kebab-case")]
 /// Command line interface for OSS version of Golem.
-///
-/// For Golem Cloud client see golem-cloud-cli instead: https://github.com/golemcloud/golem-cloud-cli
 pub struct GolemOssCommand {
     #[command(flatten)]
     pub verbosity: Verbosity,
 
-    #[arg(short = 'F', long, default_value = "text")]
-    pub format: Format,
-
-    #[arg(short = 'u', long)]
-    /// Golem base url. Default: GOLEM_BASE_URL environment variable or http://localhost:9881.
-    ///
-    /// You can also specify different URLs for different services
-    /// via GOLEM_COMPONENT_BASE_URL and GOLEM_WORKER_BASE_URL
-    /// environment variables.
-    pub golem_url: Option<String>,
+    #[arg(short = 'F', long)]
+    pub format: Option<Format>,
 
     #[command(subcommand)]
     pub command: OssCommand,

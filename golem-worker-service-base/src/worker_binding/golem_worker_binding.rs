@@ -14,5 +14,6 @@ pub struct GolemWorkerBinding {
     pub response: ResponseMapping,
 }
 
+// ResponseMapping will consist of actual logic such as invoking worker functions
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub struct ResponseMapping(pub Expr);

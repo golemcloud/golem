@@ -41,6 +41,7 @@ use crate::cloud::service::policy::{ProjectPolicyService, ProjectPolicyServiceLi
 use crate::cloud::service::project::{CloudProjectResolver, ProjectService, ProjectServiceLive};
 use crate::cloud::service::project_grant::{ProjectGrantService, ProjectGrantServiceLive};
 use crate::cloud::service::token::{TokenService, TokenServiceLive};
+use crate::config::CloudProfile;
 use crate::factory::{FactoryWithAuth, ServiceFactory};
 use crate::model::GolemError;
 use crate::service::project::ProjectResolver;
@@ -50,11 +51,30 @@ use url::Url;
 #[derive(Debug, Clone)]
 pub struct CloudServiceFactory {
     pub url: Url,
-    pub gateway_url: Url,
+    pub worker_url: Url,
     pub allow_insecure: bool,
 }
 
+fn default_url() -> Url {
+    Url::parse("https://release.api.golem.cloud/").unwrap()
+}
+
 impl CloudServiceFactory {
+    pub fn from_profile(profile: &CloudProfile) -> Self {
+        let url = profile.custom_url.clone().unwrap_or_else(default_url);
+        let worker_url = profile
+            .custom_worker_url
+            .clone()
+            .unwrap_or_else(|| url.clone());
+        let allow_insecure = profile.allow_insecure;
+
+        CloudServiceFactory {
+            url,
+            worker_url,
+            allow_insecure,
+        }
+    }
+
     fn client(&self) -> Result<reqwest::Client, GolemError> {
         let mut builder = reqwest::Client::builder();
         if self.allow_insecure {
@@ -97,7 +117,7 @@ impl CloudServiceFactory {
 
     fn worker_context(&self, auth: &CloudAuthentication) -> Result<Context, GolemError> {
         Ok(Context {
-            base_url: self.gateway_url.clone(),
+            base_url: self.worker_url.clone(),
             client: self.client()?,
             security_token: Security::Bearer(auth.0.secret.value.to_string()),
         })

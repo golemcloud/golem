@@ -1,6 +1,6 @@
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
 use crate::evaluator::{
-    DefaultEvaluator, EvaluationContext, EvaluationError, EvaluationResult, MetadataFetchError,
+    DefaultEvaluator, EvaluationContext, EvaluationError, ExprEvaluationResult, MetadataFetchError,
 };
 use crate::evaluator::{Evaluator, WorkerMetadataFetcher};
 use crate::http::http_request::router;
@@ -110,7 +110,7 @@ impl ResolvedWorkerBinding {
         worker_metadata_fetcher: &Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     ) -> R
     where
-        EvaluationResult: ToResponse<R>,
+        ExprEvaluationResult: ToResponse<R>,
         EvaluationError: ToResponse<R>,
         MetadataFetchError: ToResponse<R>,
     {

@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::{create_dir_all, File, OpenOptions};
-use std::io::{BufReader, BufWriter};
-use std::path::{Path, PathBuf};
+use std::fmt::{Debug, Formatter};
+use std::path::Path;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_cloud_client::model::{OAuth2Data, Token, TokenSecret, UnsafeToken};
 use indoc::printdoc;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::cloud::clients::login::LoginClient;
 use crate::cloud::clients::CloudAuthentication;
+use crate::config::{CloudProfile, Config, Profile, ProfileName};
 use crate::model::GolemError;
 
 #[async_trait]
@@ -33,7 +33,9 @@ pub trait Auth {
     async fn authenticate(
         &self,
         manual_token: Option<Uuid>,
-        config_dir: PathBuf,
+        profile_name: &ProfileName,
+        profile: &CloudProfile,
+        config_dir: &Path,
     ) -> Result<CloudAuthentication, GolemError>;
 }
 
@@ -41,16 +43,55 @@ pub struct AuthLive {
     pub login: Box<dyn LoginClient + Send + Sync>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CloudAuthenticationConfig {
+pub struct CloudAuthenticationConfig {
     data: CloudAuthenticationConfigData,
-    secret: Uuid,
+    secret: AuthSecret,
 }
 
-#[derive(Serialize, Deserialize)]
+impl From<&CloudAuthenticationConfig> for CloudAuthentication {
+    fn from(val: &CloudAuthenticationConfig) -> Self {
+        CloudAuthentication(UnsafeToken {
+            data: Token {
+                id: val.data.id,
+                account_id: val.data.account_id.to_string(),
+                created_at: val.data.created_at,
+                expires_at: val.data.expires_at,
+            },
+            secret: TokenSecret {
+                value: val.secret.0,
+            },
+        })
+    }
+}
+
+impl From<&UnsafeToken> for CloudAuthenticationConfig {
+    fn from(value: &UnsafeToken) -> Self {
+        CloudAuthenticationConfig {
+            data: CloudAuthenticationConfigData {
+                id: value.data.id,
+                account_id: value.data.account_id.to_string(),
+                created_at: value.data.created_at,
+                expires_at: value.data.expires_at,
+            },
+            secret: AuthSecret(value.secret.value),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AuthSecret(pub Uuid);
+
+impl Debug for AuthSecret {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("AuthSecret").field(&"*******").finish()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CloudAuthenticationConfigData {
+pub struct CloudAuthenticationConfigData {
     id: Uuid,
     account_id: String,
     created_at: DateTime<Utc>,
@@ -58,87 +99,64 @@ struct CloudAuthenticationConfigData {
 }
 
 impl AuthLive {
-    fn read_from_file(&self, config_dir: &Path) -> Option<CloudAuthentication> {
-        let file = File::open(self.config_path(config_dir)).ok()?; // TODO log
+    fn save_auth_unsafe(
+        &self,
+        token: &UnsafeToken,
+        profile_name: &ProfileName,
+        config_dir: &Path,
+    ) -> Result<(), GolemError> {
+        let profile = Config::get_profile(profile_name, config_dir).ok_or(GolemError(format!(
+            "Can't find profile {profile_name} in config"
+        )))?;
 
-        let reader = BufReader::new(file);
+        match profile {
+            Profile::Golem(_) => Err(GolemError(format!(
+                "Profile {profile_name} is an OOS profile. Cloud profile expected."
+            ))),
+            Profile::GolemCloud(mut profile) => {
+                profile.auth = Some(token.into());
+                Config::set_profile(
+                    profile_name.clone(),
+                    Profile::GolemCloud(profile),
+                    config_dir,
+                )?;
 
-        let parsed: serde_json::Result<CloudAuthenticationConfig> = serde_json::from_reader(reader);
-
-        match parsed {
-            Ok(conf) => Some(CloudAuthentication(UnsafeToken {
-                data: Token {
-                    id: conf.data.id,
-                    account_id: conf.data.account_id,
-                    created_at: conf.data.created_at,
-                    expires_at: conf.data.expires_at,
-                },
-                secret: TokenSecret { value: conf.secret },
-            })),
-            Err(err) => {
-                info!("Parsing failed: {err}"); // TODO configure
-                None
+                Ok(())
             }
         }
     }
 
-    fn config_path(&self, config_dir: &Path) -> PathBuf {
-        config_dir.join("cloud_authentication.json")
-    }
-
-    fn store_file(&self, token: &UnsafeToken, config_dir: &Path) {
-        match create_dir_all(config_dir) {
+    fn save_auth(&self, token: &UnsafeToken, profile_name: &ProfileName, config_dir: &Path) {
+        match self.save_auth_unsafe(token, profile_name, config_dir) {
             Ok(_) => {}
             Err(err) => {
-                info!("Can't create config directory: {err}");
+                warn!("Failed to save auth data: {err}")
             }
-        }
-        let file_res = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(true)
-            .open(self.config_path(config_dir));
-        let file = match file_res {
-            Ok(file) => file,
-            Err(err) => {
-                info!("Can't open file: {err}");
-                return;
-            }
-        };
-        let writer = BufWriter::new(file);
-        let data = CloudAuthenticationConfig {
-            data: CloudAuthenticationConfigData {
-                id: token.data.id,
-                account_id: token.data.account_id.clone(),
-                created_at: token.data.created_at,
-                expires_at: token.data.expires_at,
-            },
-            secret: token.secret.value,
-        };
-        let res = serde_json::to_writer_pretty(writer, &data);
-
-        if let Err(err) = res {
-            info!("File sawing error: {err}");
         }
     }
 
-    async fn oauth2(&self, config_dir: &Path) -> Result<CloudAuthentication, GolemError> {
+    async fn oauth2(
+        &self,
+        profile_name: &ProfileName,
+        config_dir: &Path,
+    ) -> Result<CloudAuthentication, GolemError> {
         let data = self.login.start_oauth2().await?;
         inform_user(&data);
         let token = self.login.complete_oauth2(data.encoded_session).await?;
-        self.store_file(&token, config_dir);
+        self.save_auth(&token, profile_name, config_dir);
         Ok(CloudAuthentication(token))
     }
 
-    async fn config_authentication(
+    async fn profile_authentication(
         &self,
-        config_dir: PathBuf,
+        profile_name: &ProfileName,
+        profile: &CloudProfile,
+        config_dir: &Path,
     ) -> Result<CloudAuthentication, GolemError> {
-        if let Some(data) = self.read_from_file(&config_dir) {
-            Ok(data)
+        if let Some(data) = &profile.auth {
+            Ok(data.into())
         } else {
-            self.oauth2(&config_dir).await
+            self.oauth2(profile_name, config_dir).await
         }
     }
 }
@@ -180,7 +198,9 @@ impl Auth for AuthLive {
     async fn authenticate(
         &self,
         manual_token: Option<Uuid>,
-        config_dir: PathBuf,
+        profile_name: &ProfileName,
+        profile: &CloudProfile,
+        config_dir: &Path,
     ) -> Result<CloudAuthentication, GolemError> {
         if let Some(manual_token) = manual_token {
             let secret = TokenSecret {
@@ -190,7 +210,8 @@ impl Auth for AuthLive {
 
             Ok(CloudAuthentication(UnsafeToken { data, secret }))
         } else {
-            self.config_authentication(config_dir).await
+            self.profile_authentication(profile_name, profile, config_dir)
+                .await
         }
     }
 }

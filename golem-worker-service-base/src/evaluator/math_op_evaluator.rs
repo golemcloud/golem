@@ -1,4 +1,4 @@
-use crate::evaluator::{EvaluationError, EvaluationResult};
+use crate::evaluator::{EvaluationError, ExprEvaluationResult};
 use crate::primitive::{GetPrimitive, Primitive};
 use golem_wasm_rpc::TypeAnnotatedValue;
 
@@ -22,10 +22,10 @@ where
 }
 
 pub(crate) fn compare_eval_result<F>(
-    left: &EvaluationResult,
-    right: &EvaluationResult,
+    left: &ExprEvaluationResult,
+    right: &ExprEvaluationResult,
     compare: F,
-) -> Result<EvaluationResult, EvaluationError>
+) -> Result<ExprEvaluationResult, EvaluationError>
 where
     F: Fn(Primitive, Primitive) -> bool,
 {
@@ -35,7 +35,7 @@ where
         match (left.get_value(), right.get_value()) {
             (Some(left), Some(right)) => {
                 let result = compare_typed_value(&left, &right, compare)?;
-                Ok(EvaluationResult::Value(result))
+                Ok(ExprEvaluationResult::Value(result))
             }
             _ => Err(EvaluationError::Message(
                 "Unsupported type to compare".to_string(),

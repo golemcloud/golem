@@ -337,6 +337,7 @@ args = ["-v", "./target/golem-service.yaml", "./openapi/golem-service.yaml"]
 [tasks.publish]
 description = "Publishes packages to crates.io"
 dependencies = [
+    "build-release",
     "publish-golem-client",
     "publish-golem-api-grpc",
     "publish-golem-common",

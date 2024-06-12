@@ -1,6 +1,6 @@
 use crate::evaluator::evaluator_context::EvaluationContext;
 use crate::evaluator::{DefaultEvaluator, Evaluator};
-use crate::evaluator::{EvaluationError, EvaluationResult};
+use crate::evaluator::{EvaluationError, ExprEvaluationResult};
 use crate::expression::{ArmPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, MatchArm};
 use crate::worker_bridge_execution::WorkerRequestExecutor;
 use golem_wasm_ast::analysis::AnalysedType;
@@ -31,12 +31,12 @@ pub(crate) async fn evaluate_pattern_match(
     match_expr: &Expr,
     arms: &Vec<MatchArm>,
     input: &mut EvaluationContext,
-) -> Result<EvaluationResult, EvaluationError> {
+) -> Result<ExprEvaluationResult, EvaluationError> {
     let evaluator = DefaultEvaluator::from_worker_request_executor(worker_executor.clone());
 
     let match_evaluated = evaluator.evaluate(match_expr, input).await?;
 
-    let mut resolved: Option<EvaluationResult> = None;
+    let mut resolved: Option<ExprEvaluationResult> = None;
 
     for arm in arms {
         let constructor_pattern = &arm.0 .0;
