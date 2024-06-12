@@ -15,7 +15,7 @@ use golem_api_grpc::proto::golem::worker::{
     ResumeWorkerRequest, ResumeWorkerResponse, UnknownError, UpdateWorkerRequest,
     UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
 };
-use golem_common::model::{ComponentVersion, WorkerFilter, WorkerId};
+use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_worker_service_base::service::component::ComponentService;
 use golem_worker_service_base::service::worker::WorkerServiceError;
 use tap::TapFallible;
@@ -120,13 +120,15 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<GetWorkersMetadataRequest>,
     ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let response =
-            match self.get_workers_metadata(r, m).await {
-                Ok((cursor, workers)) => get_workers_metadata_response::Result::Success(
-                    GetWorkersMetadataSuccessResponse { cursor, workers },
-                ),
-                Err(error) => get_workers_metadata_response::Result::Error(error),
-            };
+        let response = match self.get_workers_metadata(r, m).await {
+            Ok((cursor, workers)) => {
+                get_workers_metadata_response::Result::Success(GetWorkersMetadataSuccessResponse {
+                    workers,
+                    cursor: cursor.map(|c| c.into()),
+                })
+            }
+            Err(error) => get_workers_metadata_response::Result::Error(error),
+        };
 
         Ok(Response::new(GetWorkersMetadataResponse {
             result: Some(response),
@@ -344,7 +346,7 @@ impl WorkerGrpcApi {
         &self,
         request: GetWorkersMetadataRequest,
         metadata: MetadataMap,
-    ) -> Result<(Option<u64>, Vec<WorkerMetadata>), GrpcWorkerError> {
+    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GrpcWorkerError> {
         let auth = self.auth(metadata)?;
         let component_id: golem_common::model::ComponentId = request
             .component_id
@@ -365,7 +367,7 @@ impl WorkerGrpcApi {
             .find_metadata(
                 &component_id,
                 filter,
-                request.cursor,
+                request.cursor.map(|c| c.into()).unwrap_or_default(),
                 request.count,
                 request.precise,
                 &auth,

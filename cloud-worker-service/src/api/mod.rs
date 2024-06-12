@@ -45,7 +45,6 @@ pub fn make_open_api_service(
                 services.domain_route.clone(),
             ),
             ApiDeploymentApi::new(
-                services.definition_service,
                 services.deployment_service,
                 services.auth_service.clone(),
                 services.domain_route,
@@ -76,6 +75,7 @@ pub fn management_routes(services: ApiServices) -> Route {
 pub fn custom_http_request_route(services: ApiServices) -> Route {
     let api_handler = CustomHttpRequestApi::new(
         services.worker_request_to_http_service,
+        services.worker_metadata_fetcher,
         services.http_request_api_definition_lookup_service,
     );
 

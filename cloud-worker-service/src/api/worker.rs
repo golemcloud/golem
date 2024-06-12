@@ -4,12 +4,15 @@ use crate::api::common::ApiTags;
 use crate::service::auth::{AuthServiceError, CloudAuthCtx};
 use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
 use cloud_common::auth::GolemSecurityScheme;
-use golem_common::model::{CallingConvention, ComponentId, IdempotencyKey, WorkerFilter};
+use golem_common::model::{
+    CallingConvention, ComponentId, IdempotencyKey, ScanCursor, WorkerFilter,
+};
 use golem_service_base::model::*;
 use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::str::FromStr;
 use tap::TapFallible;
 use tonic::Status;
 
@@ -454,7 +457,7 @@ impl WorkerApi {
         /// Filter for worker metadata in form of `property op value`. Can be used multiple times (AND condition is applied between them)
         filter: Query<Option<Vec<String>>>,
         /// Count of listed values, default: 50
-        cursor: Query<Option<u64>>,
+        cursor: Query<Option<String>>,
         /// Position where to start listing, if not provided, starts from the beginning. It is used to get the next page of results. To get next page, use the cursor returned in the response
         count: Query<Option<u64>>,
         /// Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
@@ -471,12 +474,20 @@ impl WorkerApi {
             _ => None,
         };
 
+        let cursor = match cursor.0 {
+            Some(cursor) => Some(
+                ScanCursor::from_str(&cursor)
+                    .map_err(|e| WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] })))?,
+            ),
+            None => None,
+        };
+
         let (cursor, workers) = self
             .worker_service
             .find_metadata(
                 &component_id.0,
                 filter,
-                cursor.0.unwrap_or(0),
+                cursor.unwrap_or_default(),
                 count.0.unwrap_or(50),
                 precise.0.unwrap_or(false),
                 &auth,
@@ -528,7 +539,7 @@ impl WorkerApi {
             .find_metadata(
                 &component_id.0,
                 params.filter.clone(),
-                params.cursor.unwrap_or(0),
+                params.cursor.clone().unwrap_or_default(),
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),
                 &auth,

@@ -600,13 +600,16 @@ impl RegisterDomainRouteError {
 // Register user specified api-site in Route Infrastructure
 #[async_trait]
 pub trait RegisterDomainRoute {
-    async fn register(&self, domain: &str, subdomain: &str)
-        -> Result<(), RegisterDomainRouteError>;
+    async fn register(
+        &self,
+        domain: &str,
+        subdomain: Option<&str>,
+    ) -> Result<(), RegisterDomainRouteError>;
 
     async fn unregister(
         &self,
         domain: &str,
-        subdomain: &str,
+        subdomain: Option<&str>,
     ) -> Result<(), RegisterDomainRouteError>;
 }
 
@@ -685,16 +688,21 @@ impl RegisterDomainRoute for AwsDomainRoute {
     async fn register(
         &self,
         domain: &str,
-        subdomain: &str,
+        sub_domain_opt: Option<&str>,
     ) -> Result<(), RegisterDomainRouteError> {
-        let api_site = format!("{}.{}", subdomain, domain);
+        let api_site = match sub_domain_opt {
+            Some(subdomain) => format!("{}.{}", subdomain, domain),
+            None => domain.to_string(),
+        };
 
         info!("Register - API site: {}", api_site);
 
-        if subdomain.contains('.') {
-            return Err(RegisterDomainRouteError::NotAvailable(
-                "API site subdomain cannot be multi-level".to_string(),
-            ));
+        if let Some(sub_domain) = sub_domain_opt {
+            if sub_domain.contains('.') {
+                return Err(RegisterDomainRouteError::NotAvailable(
+                    "API site subdomain cannot be multi-level".to_string(),
+                ));
+            }
         }
 
         if !self.domain_records_config.is_domain_available(domain) {
@@ -755,9 +763,12 @@ impl RegisterDomainRoute for AwsDomainRoute {
     async fn unregister(
         &self,
         domain: &str,
-        subdomain: &str,
+        subdomain: Option<&str>,
     ) -> Result<(), RegisterDomainRouteError> {
-        let api_site = format!("{}.{}", subdomain, domain);
+        let api_site = match subdomain {
+            Some(subdomain) => format!("{}.{}", subdomain, domain),
+            None => domain.to_string(),
+        };
 
         info!("Unregister - API site: {}", api_site);
 
@@ -775,7 +786,7 @@ impl RegisterDomainRoute for AwsDomainRoute {
             changes: vec![Change {
                 action: "DELETE".to_string(),
                 resource_record_set: ResourceRecordSet {
-                    name: api_site.to_string(),
+                    name: api_site,
                     type_: "A".to_string(),
                     alias_target: Some(AliasTarget {
                         dns_name: self.load_balancer.dns_name.clone(),
@@ -827,16 +838,21 @@ impl RegisterDomainRoute for NoOpRegisterDomainRoute {
     async fn register(
         &self,
         domain: &str,
-        sub_domain: &str,
+        sub_domain: Option<&str>,
     ) -> Result<(), RegisterDomainRouteError> {
-        let api_site = format!("{}.{}", sub_domain, domain);
+        let api_site = match sub_domain {
+            Some(subdomain) => format!("{}.{}", subdomain, domain),
+            None => domain.to_string(),
+        };
 
         info!("Register API site: {}", api_site);
 
-        if sub_domain.contains('.') {
-            return Err(RegisterDomainRouteError::NotAvailable(
-                "API site subdomain cannot be multi-level".to_string(),
-            ));
+        if let Some(sub_domain) = sub_domain {
+            if sub_domain.contains('.') {
+                return Err(RegisterDomainRouteError::NotAvailable(
+                    "API site subdomain cannot be multi-level".to_string(),
+                ));
+            }
         }
 
         if !self.domain_records_config.is_domain_available(domain) {
@@ -859,10 +875,9 @@ impl RegisterDomainRoute for NoOpRegisterDomainRoute {
 
     async fn unregister(
         &self,
-        domain: &str,
-        subdomain: &str,
+        _domain: &str,
+        _subdomain: Option<&str>,
     ) -> Result<(), RegisterDomainRouteError> {
-        info!("Unregister API site: {}.{}", subdomain, domain);
         Ok(())
     }
 }
@@ -945,16 +960,16 @@ mod tests {
             NoOpRegisterDomainRoute::new("dev", "dev-api.golem.cloud", &domain_records_config);
 
         let reg_result = domain_route
-            .register("dev-api.golem.cloud", "some-test-domain")
+            .register("dev-api.golem.cloud", Some("some-test-domain"))
             .await;
         let unreg_result = domain_route
-            .unregister("dev-api.golem.cloud", "some-test-domain")
+            .unregister("dev-api.golem.cloud", Some("some-test-domain"))
             .await;
         let reg_subdomain_error_result = domain_route
-            .register("dev-api.golem.cloud", "some-test-domain.xxx")
+            .register("dev-api.golem.cloud", Some("some-test-domain.xxx"))
             .await;
         let reg_domain_error_result = domain_route
-            .register("api.golem.cloud", "some-test-domain")
+            .register("api.golem.cloud", Some("some-test-domain"))
             .await;
 
         assert!(reg_result.is_ok());
@@ -981,16 +996,16 @@ mod tests {
             .unwrap();
 
         let reg_result = domain_route
-            .register("dev-api.golem.cloud", "some-test-domain")
+            .register("dev-api.golem.cloud", Some("some-test-domain"))
             .await;
         let unreg_result = domain_route
-            .unregister("dev-api.golem.cloud", "some-test-domain")
+            .unregister("dev-api.golem.cloud", Some("some-test-domain"))
             .await;
         let reg_subdomain_error_result = domain_route
-            .register("dev-api.golem.cloud", "some-test-domain.xxx")
+            .register("dev-api.golem.cloud", Some("some-test-domain.xxx"))
             .await;
         let reg_domain_error_result = domain_route
-            .register("api.golem.cloud", "some-test-domain")
+            .register("api.golem.cloud", Some("some-test-domain"))
             .await;
 
         assert!(reg_result.is_ok());

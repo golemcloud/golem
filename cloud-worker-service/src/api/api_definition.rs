@@ -265,7 +265,7 @@ impl ApiDefinitionApi {
 
                 for deployment in deployments {
                     self.domain_route
-                        .unregister(&deployment.site.host, &deployment.site.subdomain)
+                        .unregister(&deployment.site.host, deployment.site.subdomain.as_deref())
                         .await
                         .map_err(ApiEndpointError::from)?;
 

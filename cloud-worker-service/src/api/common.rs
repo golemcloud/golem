@@ -120,6 +120,10 @@ impl From<golem_worker_service_base::service::api_deployment::ApiDeploymentError
             golem_worker_service_base::service::api_deployment::ApiDeploymentError::DeploymentConflict(site) => {
                 ApiEndpointError::AlreadyExists(Json(format!("Deployment conflict for site: {}", site)))
             }
+
+            golem_worker_service_base::service::api_deployment::ApiDeploymentError::ConflictingDefinitions(definitions) => {
+                ApiEndpointError::AlreadyExists(Json(format!("Conflicting API definitions for site: {}", definitions.join(", "))))
+            }
         }
     }
 }

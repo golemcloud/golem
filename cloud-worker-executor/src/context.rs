@@ -2,10 +2,9 @@ use crate::services::resource_limits::ResourceLimits;
 use crate::services::{AdditionalDeps, HasResourceLimits};
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -15,30 +14,28 @@ use golem_worker_executor_base::durable_host::{
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::metrics::wasm::record_allocated_memory;
 use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, LookupResult, TrapType,
-    WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::invocation_queue::InvocationQueue;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
 use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::recovery::RecoveryManagement;
 use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{worker_enumeration, HasAll};
+use golem_worker_executor_base::worker::{RecoveryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
     StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::string::FromUtf8Error;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 use tracing::debug;
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
@@ -140,10 +137,6 @@ impl InvocationManagement for Context {
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.durable_ctx.get_current_idempotency_key().await
     }
-
-    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        self.durable_ctx.lookup_invocation_result(key).await
-    }
 }
 
 #[async_trait]
@@ -188,52 +181,23 @@ impl StatusManagement for Context {
     async fn update_pending_updates(&self) {
         self.durable_ctx.update_pending_updates().await
     }
-
-    async fn deactivate(&self) {
-        self.durable_ctx.deactivate().await
-    }
 }
 
 #[async_trait]
 impl InvocationHooks for Context {
-    type FailurePayload = <DurableWorkerCtx<Context> as InvocationHooks>::FailurePayload;
-
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
         calling_convention: Option<CallingConvention>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_exported_function_invoked(full_function_name, function_input, calling_convention)
             .await
     }
 
-    async fn on_invocation_failure(
-        &mut self,
-        error: &TrapType,
-    ) -> Result<Option<OplogIndex>, Error> {
+    async fn on_invocation_failure(&mut self, error: &TrapType) -> RecoveryDecision {
         self.durable_ctx.on_invocation_failure(error).await
-    }
-
-    async fn on_invocation_failure_deactivated(
-        &mut self,
-        payload: &Self::FailurePayload,
-        error: &TrapType,
-    ) -> Result<WorkerStatus, Error> {
-        self.durable_ctx
-            .on_invocation_failure_deactivated(payload, error)
-            .await
-    }
-
-    async fn on_invocation_failure_final(
-        &mut self,
-        payload: &Self::FailurePayload,
-        trap_type: &TrapType,
-    ) -> Result<(), Error> {
-        self.durable_ctx
-            .on_invocation_failure_final(payload, trap_type)
-            .await
     }
 
     async fn on_invocation_success(
@@ -242,7 +206,7 @@ impl InvocationHooks for Context {
         function_input: &Vec<Value>,
         consumed_fuel: i64,
         output: Vec<Value>,
-    ) -> Result<Option<Vec<Value>>, Error> {
+    ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
@@ -290,24 +254,16 @@ impl ResourceLimiterAsync for Context {
 impl ExternalOperations<Context> for Context {
     type ExtraDeps = AdditionalDeps;
 
-    async fn set_worker_status<T: HasAll<Context> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
-        status: WorkerStatus,
-    ) -> Result<(), GolemError> {
-        DurableWorkerCtx::<Context>::set_worker_status(this, worker_id, status).await
-    }
-
     async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        worker_id: &OwnedWorkerId,
     ) -> Option<LastError> {
         DurableWorkerCtx::<Context>::get_last_error_and_retry_count(this, worker_id).await
     }
 
     async fn compute_latest_worker_status<T: HasAll<Context> + Send + Sync>(
         this: &T,
-        worker_id: &WorkerId,
+        worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
     ) -> Result<WorkerStatusRecord, GolemError> {
         DurableWorkerCtx::<Context>::compute_latest_worker_status(this, worker_id, metadata).await
@@ -317,7 +273,7 @@ impl ExternalOperations<Context> for Context {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Self> + Send),
-    ) -> Result<bool, GolemError> {
+    ) -> Result<RecoveryDecision, GolemError> {
         DurableWorkerCtx::<Context>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -339,7 +295,7 @@ impl ExternalOperations<Context> for Context {
         DurableWorkerCtx::<Context>::on_worker_deleted(this, worker_id).await
     }
 
-    async fn on_shard_assignment_changed<T: HasAll<Context> + Send + Sync>(
+    async fn on_shard_assignment_changed<T: HasAll<Context> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), Error> {
         DurableWorkerCtx::<Context>::on_shard_assignment_changed(this).await
@@ -396,8 +352,7 @@ impl WorkerCtx for Context {
     type PublicState = PublicDurableWorkerState<Context>;
 
     async fn create(
-        worker_id: WorkerId,
-        account_id: AccountId,
+        owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
@@ -407,12 +362,11 @@ impl WorkerCtx for Context {
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
-        active_workers: Arc<ActiveWorkers<Self>>,
+        _active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
-        invocation_queue: Arc<InvocationQueue<Context>>,
+        invocation_queue: Weak<Worker<Self>>,
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        recovery_management: Arc<dyn RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         extra_deps: Self::ExtraDeps,
@@ -421,8 +375,7 @@ impl WorkerCtx for Context {
         execution_status: Arc<RwLock<ExecutionStatus>>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
-            worker_id,
-            account_id.clone(),
+            owned_worker_id.clone(),
             promise_service,
             events,
             worker_service,
@@ -430,12 +383,10 @@ impl WorkerCtx for Context {
             key_value_service,
             blob_store_service,
             event_service,
-            active_workers,
             oplog_service,
             oplog,
             invocation_queue,
             scheduler_service,
-            recovery_management,
             rpc,
             worker_proxy,
             config.clone(),
@@ -446,7 +397,7 @@ impl WorkerCtx for Context {
         Ok(Self::new(
             golem_ctx,
             config,
-            account_id,
+            owned_worker_id.account_id,
             extra_deps.resource_limits(),
         ))
     }

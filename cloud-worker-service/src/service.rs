@@ -22,8 +22,10 @@ use crate::service::auth::{
 use crate::service::limit::{LimitService, LimitServiceDefault, NoOpLimitService};
 use crate::service::project::{NoOpProjectService, ProjectService, ProjectServiceDefault};
 use crate::service::worker::{WorkerService, WorkerServiceDefault, WorkerServiceNoOp};
+use crate::worker_component_metadata_fetcher::DefaultWorkerComponentMetadataFetcher;
 use crate::worker_request_to_http_response::CloudWorkerRequestToHttpResponse;
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
+use golem_worker_service_base::evaluator::WorkerMetadataFetcher;
 use golem_worker_service_base::http::InputHttpRequest;
 use golem_worker_service_base::repo::api_definition_repo::{
     ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
@@ -35,7 +37,7 @@ use golem_worker_service_base::service::api_definition::{
     ApiDefinitionService as BaseApiDefinitionService,
     ApiDefinitionServiceDefault as BaseApiDefinitionServiceDefault,
 };
-use golem_worker_service_base::service::api_definition_lookup::ApiDefinitionLookup;
+use golem_worker_service_base::service::api_definition_lookup::ApiDefinitionsLookup;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
@@ -45,7 +47,6 @@ use golem_worker_service_base::service::http::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
-use poem::Response;
 use std::sync::Arc;
 use tracing::{error, info};
 
@@ -70,10 +71,10 @@ pub struct ApiServices {
     pub component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send>,
     pub worker_service: Arc<dyn WorkerService + Sync + Send>,
     // Custom request specific services
-    pub worker_request_to_http_service:
-        Arc<dyn WorkerRequestExecutor<poem::Response> + Sync + Send>,
+    pub worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send>,
+    pub worker_request_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     pub http_request_api_definition_lookup_service:
-        Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
+        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
 }
 
 pub async fn get_api_services(
@@ -270,14 +271,20 @@ pub async fn get_api_services(
         ),
     ));
 
-    let worker_request_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
+    let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> =
+        Arc::new(DefaultWorkerComponentMetadataFetcher::new(
+            worker_service.clone(),
+            config.base_config.component_service.access_token,
+        ));
+
+    let worker_request_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> =
         Arc::new(CloudWorkerRequestToHttpResponse::new(
             worker_service.clone(),
             config.base_config.component_service.access_token,
         ));
 
     let http_request_api_definition_lookup_service: Arc<
-        dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
+        dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
     > = Arc::new(CloudHttpRequestDefinitionLookup::new(
         deployment_service.clone(),
         definition_repo.clone(),
@@ -294,6 +301,7 @@ pub async fn get_api_services(
         certificate_service,
         component_service,
         worker_service,
+        worker_metadata_fetcher,
         worker_request_to_http_service,
         http_request_api_definition_lookup_service,
     })
@@ -383,14 +391,20 @@ pub fn get_api_services_local(config: &WorkerServiceCloudConfig) -> ApiServices 
 
     let worker_service: Arc<dyn WorkerService + Sync + Send> = Arc::new(WorkerServiceNoOp {});
 
-    let worker_request_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
+    let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> =
+        Arc::new(DefaultWorkerComponentMetadataFetcher::new(
+            worker_service.clone(),
+            config.base_config.component_service.access_token,
+        ));
+
+    let worker_request_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> =
         Arc::new(CloudWorkerRequestToHttpResponse::new(
             worker_service.clone(),
             config.base_config.component_service.access_token,
         ));
 
     let http_request_api_definition_lookup_service: Arc<
-        dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
+        dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
     > = Arc::new(CloudHttpRequestDefinitionLookup::new(
         deployment_service.clone(),
         definition_repo.clone(),
@@ -407,6 +421,7 @@ pub fn get_api_services_local(config: &WorkerServiceCloudConfig) -> ApiServices 
         certificate_service,
         component_service,
         worker_service,
+        worker_metadata_fetcher,
         worker_request_to_http_service,
         http_request_api_definition_lookup_service,
     }

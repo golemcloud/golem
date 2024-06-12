@@ -9,6 +9,7 @@ pub mod repo;
 pub mod service;
 
 pub mod http_request_definition_lookup;
+mod worker_component_metadata_fetcher;
 pub mod worker_request_to_http_response;
 
 pub trait UriBackConversion {

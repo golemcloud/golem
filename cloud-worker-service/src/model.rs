@@ -6,7 +6,7 @@ use crate::service::auth::CloudNamespace;
 use bincode::{Decode, Encode};
 use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
 use derive_more::{Display, FromStr};
-use golem_common::model::{AccountId, ComponentId};
+use golem_common::model::{AccountId, ComponentId, ScanCursor};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
 use golem_service_base::model::{UpdateRecord, WorkerId};
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
@@ -183,17 +183,24 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 pub struct WorkersMetadataResponse {
     pub workers: Vec<WorkerMetadata>,
-    pub cursor: Option<u64>,
+    pub cursor: Option<ScanCursor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ApiDeployment {
-    pub api_definition_id: ApiDefinitionId,
-    pub version: ApiVersion,
+    pub api_definitions: Vec<ApiDefinitionInfo>,
     pub project_id: ProjectId,
     pub site: ApiSite,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ApiDefinitionInfo {
+    pub id: ApiDefinitionId,
+    pub version: ApiVersion,
 }
 
 impl From<golem_worker_service_base::api_definition::ApiDeployment<CloudNamespace>>
@@ -203,10 +210,16 @@ impl From<golem_worker_service_base::api_definition::ApiDeployment<CloudNamespac
         api_deployment: golem_worker_service_base::api_definition::ApiDeployment<CloudNamespace>,
     ) -> Self {
         Self {
-            api_definition_id: api_deployment.api_definition_id.id,
-            version: api_deployment.api_definition_id.version,
-            project_id: api_deployment.api_definition_id.namespace.project_id,
-            site: api_deployment.site,
+            api_definitions: api_deployment
+                .api_definition_keys
+                .iter()
+                .map(|k| ApiDefinitionInfo {
+                    id: k.id.clone(),
+                    version: k.version.clone(),
+                })
+                .collect(),
+            project_id: api_deployment.namespace.project_id.clone(),
+            site: api_deployment.site.clone(),
         }
     }
 }

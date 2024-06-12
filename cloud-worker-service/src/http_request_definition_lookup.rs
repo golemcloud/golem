@@ -6,13 +6,14 @@ use golem_worker_service_base::http::InputHttpRequest;
 use golem_worker_service_base::repo::api_definition_repo::ApiDefinitionRepo;
 use golem_worker_service_base::service::api_definition::ApiDefinitionKey;
 use golem_worker_service_base::service::api_definition_lookup::{
-    ApiDefinitionLookup, ApiDefinitionLookupError,
+    ApiDefinitionLookupError, ApiDefinitionsLookup,
 };
 use golem_worker_service_base::service::api_deployment::{
     ApiDeploymentError, ApiDeploymentService,
 };
 use http::header::HOST;
 use std::sync::Arc;
+use tracing::error;
 
 pub struct CloudHttpRequestDefinitionLookup {
     deployment_service: Arc<dyn ApiDeploymentService<CloudNamespace> + Sync + Send>,
@@ -34,11 +35,13 @@ impl CloudHttpRequestDefinitionLookup {
 }
 
 #[async_trait]
-impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> for CloudHttpRequestDefinitionLookup {
+impl ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition>
+    for CloudHttpRequestDefinitionLookup
+{
     async fn get(
         &self,
         input_http_request: InputHttpRequest,
-    ) -> Result<HttpApiDefinition, ApiDefinitionLookupError> {
+    ) -> Result<Vec<HttpApiDefinition>, ApiDefinitionLookupError> {
         let host = match input_http_request
             .headers
             .get(HOST)
@@ -62,23 +65,34 @@ impl ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> for CloudHttpReque
             })?;
 
         match api_deployment {
-            Some(api_deployment) => self
-                .definition_repo
-                .get(&ApiDefinitionKey {
-                    namespace: CloudNamespace {
-                        project_id: api_deployment.api_definition_id.namespace.project_id,
-                        account_id: api_deployment.api_definition_id.namespace.account_id,
-                    },
-                    id: api_deployment.api_definition_id.id,
-                    version: api_deployment.api_definition_id.version,
-                })
-                .await
-                .map_err(|e| {
-                    ApiDefinitionLookupError(format!("Error getting API Definition: {}", e))
-                })?
-                .ok_or(ApiDefinitionLookupError(
-                    "API Definition not found".to_string(),
-                )),
+            Some(api_deployment) => {
+                let mut http_api_defs = vec![];
+
+                for api_defs in api_deployment.api_definition_keys {
+                    let api_key = ApiDefinitionKey {
+                        namespace: api_deployment.namespace.clone(),
+                        id: api_defs.id.clone(),
+                        version: api_defs.version.clone(),
+                    };
+
+                    let value = self.definition_repo.get(&api_key).await.map_err(|err| {
+                        error!("Error getting api definition from the repo: {}", err);
+                        ApiDefinitionLookupError(format!(
+                            "Error getting api definition from the repo: {}",
+                            err
+                        ))
+                    })?;
+
+                    let api_definition = value.ok_or(ApiDefinitionLookupError(format!(
+                        "Api definition with id: {} and version: {} not found",
+                        &api_key.id, &api_key.version
+                    )))?;
+
+                    http_api_defs.push(api_definition);
+                }
+
+                Ok(http_api_defs)
+            }
             None => Err(ApiDefinitionLookupError(
                 "API Deployment not found".to_string(),
             )),
@@ -106,6 +120,9 @@ pub fn print_api_deployment_error(error: ApiDeploymentError<CloudNamespace>) -> 
         }
         ApiDeploymentError::DeploymentConflict(conflict) => {
             format!("DeploymentConflict: {:?}", conflict)
+        }
+        ApiDeploymentError::ConflictingDefinitions(error) => {
+            format!("ConflictingDefinitions: {:?}", error.join(", "))
         }
     }
 }
