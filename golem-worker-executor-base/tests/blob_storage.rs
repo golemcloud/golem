@@ -366,7 +366,7 @@ pub(crate) async fn s3() -> impl GetBlobStorage {
         region: "us-east-1".to_string(),
         object_prefix: "".to_string(),
         aws_endpoint_url: Some(format!("http://127.0.0.1:{host_port}")),
-        minio: true,
+        use_minio_credentials: true,
         ..std::default::Default::default()
     };
     create_buckets(host_port, &config).await;
@@ -386,7 +386,7 @@ pub(crate) async fn s3_prefixed() -> impl GetBlobStorage {
         region: "us-east-1".to_string(),
         object_prefix: "test-prefix".to_string(),
         aws_endpoint_url: Some(format!("http://127.0.0.1:{host_port}")),
-        minio: true,
+        use_minio_credentials: true,
         ..std::default::Default::default()
     };
     create_buckets(host_port, &config).await;

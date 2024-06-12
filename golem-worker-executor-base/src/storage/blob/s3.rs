@@ -49,7 +49,7 @@ impl S3BlobStorage {
             config_builder = config_builder.endpoint_url(endpoint_url);
         }
 
-        if config.minio {
+        if config.use_minio_credentials {
             let creds = Credentials::new("minioadmin", "minioadmin", None, None, "test");
             config_builder = config_builder.credentials_provider(creds);
         }
