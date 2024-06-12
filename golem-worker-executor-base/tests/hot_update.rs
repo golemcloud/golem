@@ -295,7 +295,7 @@ async fn manual_update_on_idle() {
         .await;
 
     let after_update = executor
-        .invoke_and_await(&worker_id, "golem:component/api/get", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
         .await
         .unwrap();
 
@@ -406,7 +406,7 @@ async fn auto_update_on_running_followed_by_manual() {
     info!("result1: {:?}", result1);
 
     let result2 = executor
-        .invoke_and_await(&worker_id, "golem:component/api/get", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
         .await
         .unwrap();
     info!("result2: {:?}", result2);
