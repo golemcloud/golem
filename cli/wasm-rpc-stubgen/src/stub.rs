@@ -136,6 +136,25 @@ impl InterfaceStub {
     pub fn is_resource(&self) -> bool {
         self.constructor_params.is_some()
     }
+
+    pub fn interface_name(&self) -> Option<String> {
+        if self.global {
+            None
+        } else {
+            match &self.owner_interface {
+                Some(iface) => Some(iface.clone()),
+                None => Some(self.name.clone()),
+            }
+        }
+    }
+
+    pub fn resource_name(&self) -> Option<String> {
+        if self.is_resource() {
+            Some(self.name.clone())
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
