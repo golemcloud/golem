@@ -99,7 +99,7 @@ async fn auction_example_2() {
         auction_component_id.to_string(),
     );
     let registry_worker_id = executor
-        .start_worker_with(&registry_component_id, "auction-registry-1", vec![], env)
+        .start_worker_with(&registry_component_id, "auction-registry-2", vec![], env)
         .await;
 
     let _ = executor.log_output(&registry_worker_id).await;
