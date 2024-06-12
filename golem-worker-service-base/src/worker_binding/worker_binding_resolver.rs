@@ -138,13 +138,20 @@ impl ResolvedWorkerBinding {
                     functions,
                 );
 
-                let result = evaluator
-                    .evaluate(&self.response_mapping.clone().0, &runtime)
-                    .await;
+                match runtime {
+                    Ok(context) => {
+                        let result = evaluator
+                            .evaluate(&self.response_mapping.clone().0, &context)
+                            .await;
 
-                match result {
-                    Ok(worker_response) => worker_response.to_response(&self.request_details),
-                    Err(err) => err.to_response(&self.request_details),
+                        match result {
+                            Ok(worker_response) => {
+                                worker_response.to_response(&self.request_details)
+                            }
+                            Err(err) => err.to_response(&self.request_details),
+                        }
+                    }
+                    Err(err) => MetadataFetchError(err).to_response(&self.request_details),
                 }
             }
             Err(err) => err.to_response(&self.request_details),

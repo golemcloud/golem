@@ -14,7 +14,7 @@ use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::RefinedWorkerResponse;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct EvaluationContext {
     pub variables: Option<TypeAnnotatedValue>,
     pub functions: Vec<Function>,
@@ -39,11 +39,19 @@ impl TryFrom<&str> for FQN {
 
 impl Display for FQN {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.parsed_function_name.fmt(f)
+        let result = self.parsed_function_name.clone();
+        let site = result.site();
+        let site_str = site.interface_name();
+        let func_ref = result.function();
+        let function_name = func_ref.function_name();
+        let name = site_str.map_or(function_name.clone(), |s| {
+            format!("{}.{{{}}}", s.clone(), function_name)
+        });
+        write!(f, "{}", name)
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Function {
     pub fqn: FQN,
     pub arguments: Vec<FunctionParameter>,
@@ -124,7 +132,7 @@ impl EvaluationContext {
         worker_detail: &WorkerDetail,
         request: &RequestDetails,
         component_metadata: ComponentMetadata,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let mut request_data = internal::request_type_annotated_value(request);
         let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
         let merged = request_data.merge(&worker_data);
@@ -148,10 +156,12 @@ impl EvaluationContext {
             .flat_map(|i| {
                 i.functions.iter().map(move |f| Function {
                     fqn: FQN {
-                        parsed_function_name: ParsedFunctionName::on_interface(
+                        parsed_function_name: ParsedFunctionName::parse(format!(
+                            "{}.{{{}}}",
                             i.name.clone(),
-                            f.name.clone(),
-                        ),
+                            f.name.clone()
+                        ))
+                        .unwrap(),
                     },
                     arguments: f.parameters.clone(),
                     return_type: f.results.clone(),
@@ -159,13 +169,13 @@ impl EvaluationContext {
             })
             .collect::<Vec<Function>>();
 
-        EvaluationContext {
+        Ok(EvaluationContext {
             variables: Some(merged.clone()),
             functions: function_of_interfaces
                 .into_iter()
                 .chain(functions)
                 .collect(),
-        }
+        })
     }
 
     pub fn from_worker_detail(worker_detail: &WorkerDetail) -> Self {

@@ -102,7 +102,6 @@ mod internal {
     }
 
     pub(crate) fn get_routes(paths: Paths) -> Result<Vec<Route>, String> {
-        dbg!("here???");
         let mut routes: Vec<Route> = vec![];
 
         for (path, path_item) in paths.iter() {
