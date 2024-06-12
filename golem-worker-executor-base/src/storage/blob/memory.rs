@@ -176,14 +176,24 @@ impl BlobStorage for InMemoryBlobStorage {
         let dir = path.to_string_lossy().to_string();
         if let Some(namespace_data) = self.data.get(&namespace) {
             if let Some(directory) = namespace_data.get(&dir) {
-                Ok(directory
+                let mut result: Vec<PathBuf> = directory
                     .iter()
                     .map(|entry| {
                         let mut path = path.to_path_buf();
                         path.push(entry.key());
                         path
                     })
-                    .collect())
+                    .collect();
+                drop(directory);
+
+                namespace_data
+                    .iter()
+                    .filter(|entry| entry.key() != &dir && entry.key().starts_with(&dir))
+                    .for_each(|entry| {
+                        result.push(Path::new(entry.key()).to_path_buf());
+                    });
+
+                Ok(result)
             } else {
                 Ok(vec![])
             }

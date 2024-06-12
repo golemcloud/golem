@@ -15,7 +15,7 @@
 use crate::services::golem_config::S3BlobStorageConfig;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
-use aws_sdk_s3::config::{BehaviorVersion, Region};
+use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::copy_object::CopyObjectError;
 use aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey;
@@ -38,18 +38,23 @@ impl S3BlobStorage {
     pub async fn new(config: S3BlobStorageConfig) -> Self {
         let region = config.region.clone();
 
-        let sdk_config_base =
+        let mut config_builder =
             aws_config::defaults(BehaviorVersion::v2023_11_09()).region(Region::new(region));
 
-        let sdk_config = if let Some(endpoint_url) = &config.aws_endpoint_url {
+        if let Some(endpoint_url) = &config.aws_endpoint_url {
             info!(
                 "The AWS endpoint urls for blob storage is {}",
                 &endpoint_url
             );
-            sdk_config_base.endpoint_url(endpoint_url).load().await
-        } else {
-            sdk_config_base.load().await
-        };
+            config_builder = config_builder.endpoint_url(endpoint_url);
+        }
+
+        if config.minio {
+            let creds = Credentials::new("minioadmin", "minioadmin", None, None, "test");
+            config_builder = config_builder.credentials_provider(creds);
+        }
+
+        let sdk_config = config_builder.load().await;
 
         Self {
             client: aws_sdk_s3::Client::new(&sdk_config),
@@ -572,13 +577,35 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<Vec<PathBuf>, String> {
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let namespace_root = self.prefix_of(&namespace);
+        let key = namespace_root.join(path);
 
         Ok(self
             .list_objects(target_label, op_label, bucket, &key.to_string_lossy())
             .await?
             .iter()
             .flat_map(|obj| obj.key.as_ref().map(|k| Path::new(k).to_path_buf()))
+            .filter_map(|path| {
+                let is_dir_marker =
+                    path.file_name().and_then(|s| s.to_str()) == Some("__dir_marker");
+                let is_nested = path.parent() != Some(&key);
+                if is_nested {
+                    if is_dir_marker {
+                        path.parent().map(|p| p.to_path_buf())
+                    } else {
+                        None
+                    }
+                } else if is_dir_marker {
+                    None
+                } else {
+                    Some(path)
+                }
+            })
+            .filter_map(|path| {
+                path.strip_prefix(&namespace_root)
+                    .ok()
+                    .map(|p| p.to_path_buf())
+            })
             .collect::<Vec<_>>())
     }
 
