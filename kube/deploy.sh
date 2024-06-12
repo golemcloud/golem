@@ -50,6 +50,8 @@ sleep 30
 echo ""
 echo "Installing golem to namespace $NAMESPACE"
 
+kubectl create serviceaccount -n $NAMESPACE golem-sa-default
+
 helm upgrade --install golem-default golem-chart -n $NAMESPACE
 
 echo ""
