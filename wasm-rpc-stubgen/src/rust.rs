@@ -85,14 +85,8 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             fn_impls.push(generate_function_stub_source(
                 def,
                 function,
-                if interface.global {
-                    None
-                } else {
-                    match &interface.owner_interface {
-                        Some(owner) => Some(format!("{owner}/{}", &interface.name)),
-                        None => Some(interface.name.clone()),
-                    }
-                },
+                interface.interface_name(),
+                interface.resource_name(),
                 if interface.is_resource() {
                     FunctionMode::Method
                 } else {
@@ -105,14 +99,8 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             fn_impls.push(generate_function_stub_source(
                 def,
                 function,
-                if interface.global {
-                    None
-                } else {
-                    match &interface.owner_interface {
-                        Some(owner) => Some(format!("{owner}/{}", &interface.name)),
-                        None => Some(interface.name.clone()),
-                    }
-                },
+                interface.interface_name(),
+                interface.resource_name(),
                 FunctionMode::Static,
             )?);
         }
@@ -132,11 +120,8 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             generate_function_stub_source(
                 def,
                 &constructor_stub,
-                Some(format!(
-                    "{}/{}",
-                    interface.owner_interface.clone().unwrap_or_default(),
-                    &interface.name
-                )),
+                interface.interface_name(),
+                interface.resource_name(),
                 FunctionMode::Constructor,
             )?
         } else {
@@ -158,16 +143,13 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             }
         });
 
+        let remote_function_name = get_remote_function_name(
+            def,
+            "drop",
+            interface.interface_name().as_ref(),
+            interface.resource_name().as_ref(),
+        );
         if interface.is_resource() {
-            let remote_function_name = get_remote_function_name(
-                def,
-                "drop",
-                Some(&format!(
-                    "{}/{}",
-                    interface.owner_interface.clone().unwrap_or_default(),
-                    &interface.name
-                )),
-            );
             interface_impls.push(quote! {
                 impl Drop for #interface_name {
                     fn drop(&mut self) {
@@ -220,6 +202,7 @@ fn generate_function_stub_source(
     def: &StubDefinition,
     function: &FunctionStub,
     interface_name: Option<String>,
+    resource_name: Option<String>,
     mode: FunctionMode,
 ) -> anyhow::Result<TokenStream> {
     let function_name = Ident::new(&to_rust_ident(&function.name), Span::call_site());
@@ -323,8 +306,12 @@ fn generate_function_stub_source(
         }
     }
 
-    let remote_function_name =
-        get_remote_function_name(def, &function.name, interface_name.as_ref());
+    let remote_function_name = get_remote_function_name(
+        def,
+        &function.name,
+        interface_name.as_ref(),
+        resource_name.as_ref(),
+    );
 
     let rpc = match mode {
         FunctionMode::Static => {
@@ -403,16 +390,30 @@ fn get_remote_function_name(
     def: &StubDefinition,
     function_name: &str,
     interface_name: Option<&String>,
+    resource_name: Option<&String>,
 ) -> String {
-    match interface_name {
-        Some(remote_interface) => format!(
+    match (interface_name, resource_name) {
+        (Some(remote_interface), None) => format!(
             "{}:{}/{}.{{{}}}",
             def.root_package_name.namespace,
             def.root_package_name.name,
             remote_interface,
             function_name
         ),
-        None => function_name.to_string(),
+        (Some(remote_interface), Some(resource)) => {
+            format!(
+                "{}:{}/{}.{{{}.{}}}",
+                def.root_package_name.namespace,
+                def.root_package_name.name,
+                remote_interface,
+                resource,
+                function_name
+            )
+        }
+        (None, Some(resource)) => {
+            format!("{}.{}", resource, function_name)
+        }
+        (None, None) => function_name.to_string(),
     }
 }
 
