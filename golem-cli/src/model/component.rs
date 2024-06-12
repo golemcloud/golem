@@ -511,7 +511,6 @@ pub fn function_params_types<'t>(
     function: &str,
 ) -> Result<Vec<&'t Type>, GolemError> {
     let (func, parsed) = resolve_function(component, function)?;
-    println!("parsed: {parsed:?}");
 
     if parsed.function().is_indexed_resource() {
         Ok(func.parameters.iter().skip(1).map(|r| &r.typ).collect())
