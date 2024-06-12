@@ -202,7 +202,7 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
                     .or_else(|_| {
                         previous_expression
                             .get_concatenated_str()
-                            .map(|opt| opt.map(|str| Expr::Literal(str)))
+                            .map(|opt| opt.map(Expr::Literal))
                     })?
                     .ok_or::<ParseError>(
                         "Selection of field is applied to a non existing left expression".into(),

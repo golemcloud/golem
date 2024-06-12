@@ -379,11 +379,9 @@ impl ParsedFunctionName {
                     ParsedFunctionName { site, function }
                 }),
         )
-        .or(identifier().map(|id| {
-            ParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: ParsedFunctionReference::Function { function: id },
-            }
+        .or(identifier().map(|id| ParsedFunctionName {
+            site: ParsedFunctionSite::Global,
+            function: ParsedFunctionReference::Function { function: id },
         }));
 
         let result: Result<(ParsedFunctionName, &str), easy::ParseError<&str>> =
