@@ -464,7 +464,7 @@ mod tests {
         let parsed = ParsedFunctionName::parse("ns:name/interface.{fn1}").expect("Parsing failed");
         assert_eq!(
             parsed.site().interface_name(),
-            Some("ns:name/interace".to_string())
+            Some("ns:name/interface".to_string())
         );
         assert_eq!(parsed.function().function_name(), "fn1".to_string());
         assert_eq!(
