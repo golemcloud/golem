@@ -42,6 +42,10 @@ pub fn get_select_field(tokenizer: &mut Tokenizer, selection_on: Expr) -> Result
     let possible_field = match next_token {
         Some(Token::MultiChar(MultiCharTokens::StringLiteral(field))) => field,
         Some(Token::MultiChar(MultiCharTokens::Identifier(field))) => field,
+        Some(Token::LCurly) => {
+            let possible_str = tokenizer.capture_string_until_and_skip_end(&Token::RCurly);
+            possible_str.map_or("{}".to_string(), |str| format!("{{{}}}", str))
+        }
         Some(token) => {
             return Err(ParseError::Message(format!(
                 "Expecting a valid field selection after dot instead of {}",

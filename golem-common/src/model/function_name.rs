@@ -379,9 +379,11 @@ impl ParsedFunctionName {
                     ParsedFunctionName { site, function }
                 }),
         )
-        .or(identifier().map(|id| ParsedFunctionName {
-            site: ParsedFunctionSite::Global,
-            function: ParsedFunctionReference::Function { function: id },
+        .or(identifier().map(|id| {
+            ParsedFunctionName {
+                site: ParsedFunctionSite::Global,
+                function: ParsedFunctionReference::Function { function: id },
+            }
         }));
 
         let result: Result<(ParsedFunctionName, &str), easy::ParseError<&str>> =
@@ -440,7 +442,7 @@ mod tests {
         let parsed = ParsedFunctionName::parse("ns:name/interface.{fn1}").expect("Parsing failed");
         assert_eq!(
             parsed.site().interface_name(),
-            Some("ns:name/interface".to_string())
+            Some("ns:name/interace".to_string())
         );
         assert_eq!(parsed.function().function_name(), "fn1".to_string());
     }
