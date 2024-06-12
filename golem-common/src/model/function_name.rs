@@ -54,7 +54,7 @@ impl ParsedFunctionSite {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ParsedFunctionReference {
     Function {
         function: String,
@@ -210,7 +210,7 @@ impl ParsedFunctionReference {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ParsedFunctionName {
     site: ParsedFunctionSite,
     function: ParsedFunctionReference,
@@ -415,13 +415,24 @@ impl ParsedFunctionName {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::function_name::ParsedFunctionName;
+    use crate::model::function_name::{
+        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite,
+    };
 
     #[test]
     fn parse_function_name_global() {
         let parsed = ParsedFunctionName::parse("run-example").expect("Parsing failed");
         assert_eq!(parsed.site().interface_name(), None);
         assert_eq!(parsed.function().function_name(), "run-example");
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::Global,
+                function: ParsedFunctionReference::Function {
+                    function: "run-example".to_string()
+                }
+            }
+        );
     }
 
     #[test]
@@ -433,6 +444,17 @@ mod tests {
             Some("interface".to_string())
         );
         assert_eq!(parsed.function().function_name(), "fn1".to_string());
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::Interface {
+                    name: "interface".to_string()
+                },
+                function: ParsedFunctionReference::Function {
+                    function: "fn1".to_string()
+                }
+            }
+        );
     }
 
     #[test]
@@ -443,6 +465,20 @@ mod tests {
             Some("ns:name/interface".to_string())
         );
         assert_eq!(parsed.function().function_name(), "fn1".to_string());
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::Function {
+                    function: "fn1".to_string()
+                }
+            }
+        );
     }
 
     #[test]
@@ -457,6 +493,20 @@ mod tests {
             parsed.function().function_name(),
             "[constructor]resource1".to_string()
         );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::RawResourceConstructor {
+                    resource: "resource1".to_string()
+                }
+            }
+        );
     }
 
     #[test]
@@ -470,6 +520,20 @@ mod tests {
         assert_eq!(
             parsed.function().function_name(),
             "[constructor]resource1".to_string()
+        );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::RawResourceConstructor {
+                    resource: "resource1".to_string()
+                }
+            }
         );
     }
 
@@ -487,6 +551,21 @@ mod tests {
         );
         assert!(parsed.function().is_indexed_resource());
         assert_eq!(parsed.function().raw_resource_params(), Some(&vec![]));
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::IndexedResourceConstructor {
+                    resource: "resource1".to_string(),
+                    resource_params: vec![]
+                }
+            }
+        );
     }
 
     #[test]
@@ -510,6 +589,25 @@ mod tests {
                 "1".to_string(),
                 "true".to_string(),
             ])
+        );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None,
+                },
+                function: ParsedFunctionReference::IndexedResourceConstructor {
+                    resource: "resource1".to_string(),
+                    resource_params: vec![
+                        "\"hello\"".to_string(),
+                        "1".to_string(),
+                        "true".to_string(),
+                    ],
+                },
+            },
         );
     }
 
@@ -535,6 +633,24 @@ mod tests {
                 "{ field-a: some(1) }".to_string(),
             ])
         );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None,
+                },
+                function: ParsedFunctionReference::IndexedResourceConstructor {
+                    resource: "resource1".to_string(),
+                    resource_params: vec![
+                        "\"hello\"".to_string(),
+                        "{ field-a: some(1) }".to_string(),
+                    ],
+                },
+            },
+        );
     }
 
     #[test]
@@ -548,6 +664,21 @@ mod tests {
         assert_eq!(
             parsed.function().function_name(),
             "[method]resource1.do-something".to_string()
+        );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::RawResourceMethod {
+                    resource: "resource1".to_string(),
+                    method: "do-something".to_string()
+                }
+            }
         );
     }
 
@@ -563,6 +694,21 @@ mod tests {
         assert_eq!(
             parsed.function().function_name(),
             "[method]resource1.do-something".to_string()
+        );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::RawResourceMethod {
+                    resource: "resource1".to_string(),
+                    method: "do-something".to_string()
+                }
+            }
         );
     }
 
@@ -582,6 +728,21 @@ mod tests {
             parsed.function().function_name(),
             "[static]resource1.do-something-static".to_string()
         );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::RawResourceStaticMethod {
+                    resource: "resource1".to_string(),
+                    method: "do-something-static".to_string()
+                }
+            }
+        );
     }
 
     #[test]
@@ -597,6 +758,21 @@ mod tests {
             parsed.function().function_name(),
             "[static]resource1.do-something-static".to_string()
         );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::RawResourceStaticMethod {
+                    resource: "resource1".to_string(),
+                    method: "do-something-static".to_string()
+                }
+            }
+        );
     }
 
     #[test]
@@ -610,6 +786,20 @@ mod tests {
         assert_eq!(
             parsed.function().function_name(),
             "[drop]resource1".to_string()
+        );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::RawResourceDrop {
+                    resource: "resource1".to_string()
+                }
+            }
         );
     }
 
@@ -627,6 +817,21 @@ mod tests {
         );
         assert!(parsed.function().is_indexed_resource());
         assert_eq!(parsed.function().raw_resource_params(), Some(&vec![]));
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::IndexedResourceDrop {
+                    resource: "resource1".to_string(),
+                    resource_params: vec![]
+                }
+            }
+        )
     }
 
     #[test]
@@ -650,6 +855,25 @@ mod tests {
                 "1".to_string(),
                 "true".to_string(),
             ])
+        );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::IndexedResourceDrop {
+                    resource: "resource1".to_string(),
+                    resource_params: vec![
+                        "\"hello\"".to_string(),
+                        "1".to_string(),
+                        "true".to_string(),
+                    ]
+                }
+            }
         );
     }
 
@@ -675,6 +899,24 @@ mod tests {
                 "{ field-a: some(1) }".to_string(),
             ])
         );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None,
+                },
+                function: ParsedFunctionReference::IndexedResourceDrop {
+                    resource: "resource1".to_string(),
+                    resource_params: vec![
+                        "\"hello\"".to_string(),
+                        "{ field-a: some(1) }".to_string(),
+                    ],
+                },
+            },
+        );
     }
 
     #[test]
@@ -688,6 +930,20 @@ mod tests {
         assert_eq!(
             parsed.function().function_name(),
             "[drop]resource1".to_string()
+        );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None
+                },
+                function: ParsedFunctionReference::RawResourceDrop {
+                    resource: "resource1".to_string()
+                }
+            }
         );
     }
 }
