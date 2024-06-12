@@ -462,7 +462,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     .data_mut()
                                     .begin_call_snapshotting_function();
                                 let load_result = invoke_worker(
-                                    "golem:api/load-snapshot@0.2.0/load".to_string(),
+                                    "golem:api/load-snapshot@0.2.0.{load}".to_string(),
                                     vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
                                     store,
                                     instance,

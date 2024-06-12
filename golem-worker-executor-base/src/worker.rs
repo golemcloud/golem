@@ -1071,7 +1071,7 @@ impl RunningWorker {
                                     };
                                     store.data_mut().begin_call_snapshotting_function();
                                     let result = invoke_worker(
-                                        "golem:api/save-snapshot@0.2.0/save".to_string(),
+                                        "golem:api/save-snapshot@0.2.0.{save}".to_string(),
                                         vec![],
                                         store,
                                         &instance,
