@@ -100,6 +100,7 @@ kube = { version = "0.88.1", features = ["runtime", "derive"] }
 kube-derive = "0.88.1"
 lazy_static = "1.4.0"
 nom = "7.1.3"
+once_cell = "1.19.0"
 openapiv3 = "2.0.0"
 opentelemetry = "0.21.0"
 opentelemetry-prometheus = "0.14.1"
@@ -137,7 +138,7 @@ strum_macros = "0.26.1"
 tap = "1.0.1"
 tempfile = "3.9.0"
 testcontainers = { version = "0.15.0", features = ["async-trait", "tokio"] }
-testcontainers-modules = { version = "0.3.2", features = ["postgres", "redis"] }
+testcontainers-modules = { version = "0.3.2", features = ["postgres", "redis", "minio"] }
 thiserror = "1.0.56"
 tokio = { version = "1.0", features = [
     "macros",
