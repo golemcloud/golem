@@ -644,21 +644,18 @@ impl From<golem_cloud_client::model::ApiDeployment> for ApiDeployment {
             site: golem_cloud_client::model::ApiSite { host, subdomain },
         } = value;
 
-
-        let api_definitions = api_definitions.into_iter().map(|d| {
-            ApiDefinitionInfo {
+        let api_definitions = api_definitions
+            .into_iter()
+            .map(|d| ApiDefinitionInfo {
                 id: d.id,
                 version: d.version,
-            }
-        }).collect();
+            })
+            .collect();
 
         ApiDeployment {
             api_definitions,
             project_id: Some(project_id),
-            site: ApiSite {
-                host,
-                subdomain,
-            },
+            site: ApiSite { host, subdomain },
         }
     }
 }

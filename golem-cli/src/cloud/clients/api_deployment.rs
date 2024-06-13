@@ -47,19 +47,20 @@ impl<C: golem_cloud_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymen
                 .map_or("".to_string(), |s| format!("subdomain {}", s))
         );
 
-        let api_definitions = api_definitions.into_iter().map(|d| {
-            golem_cloud_client::model::ApiDefinitionInfo {
+        let api_definitions = api_definitions
+            .into_iter()
+            .map(|d| golem_cloud_client::model::ApiDefinitionInfo {
                 id: d.id.0,
                 version: d.version.0,
-            }
-        }).collect_vec();
+            })
+            .collect_vec();
 
         let deployment = golem_cloud_client::model::ApiDeployment {
             api_definitions,
             project_id: project.0,
             site: ApiSite {
                 host: host.to_string(),
-                subdomain
+                subdomain,
             },
         };
 
