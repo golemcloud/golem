@@ -387,7 +387,7 @@ fn text_worker_invoke_and_await(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/get-arguments",
+        "golem:it/api.{get-arguments}",
     ])?;
 
     let lines = res.lines().collect::<Vec<_>>();
