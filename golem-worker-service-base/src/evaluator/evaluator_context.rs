@@ -1,3 +1,11 @@
+use std::fmt::{Debug, Display, Formatter};
+
+use async_trait::async_trait;
+use golem_wasm_rpc::TypeAnnotatedValue;
+
+use golem_common::model::function_name::ParsedFunctionName;
+use golem_service_base::model::{ComponentMetadata, FunctionParameter, FunctionResult, WorkerId};
+
 use crate::evaluator::evaluator_context::internal::create_record;
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
@@ -5,14 +13,8 @@ use crate::evaluator::Getter;
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::RefinedWorkerResponse;
-use async_trait::async_trait;
 
-use golem_common::model::parse_function_name;
-use golem_service_base::model::{ComponentMetadata, FunctionParameter, FunctionResult, WorkerId};
-use golem_wasm_rpc::TypeAnnotatedValue;
-use std::fmt::{Display, Formatter};
-
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct EvaluationContext {
     pub variables: Option<TypeAnnotatedValue>,
     pub functions: Vec<Function>,
@@ -20,34 +22,36 @@ pub struct EvaluationContext {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct FQN {
-    pub interface: Option<String>,
-    pub name: String,
+    pub parsed_function_name: ParsedFunctionName,
 }
 
-impl<A: AsRef<str>> From<A> for FQN {
-    fn from(value: A) -> Self {
-        let parsed_function_name = parse_function_name(value.as_ref());
-        let parsed_function_name = parsed_function_name
-            .method_as_static()
-            .unwrap_or(parsed_function_name);
+impl TryFrom<&str> for FQN {
+    type Error = String;
 
-        FQN {
-            interface: parsed_function_name.interface,
-            name: parsed_function_name.function,
-        }
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let parsed_function_name = ParsedFunctionName::parse(value)?;
+
+        Ok(FQN {
+            parsed_function_name,
+        })
     }
 }
 
 impl Display for FQN {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match &self.interface {
-            Some(interface) => write!(f, "{}/{}", interface, self.name),
-            None => write!(f, "{}", self.name),
-        }
+        let result = self.parsed_function_name.clone();
+        let site = result.site();
+        let site_str = site.interface_name();
+        let func_ref = result.function();
+        let function_name = func_ref.function_name();
+        let name = site_str.map_or(function_name.clone(), |s| {
+            format!("{}.{{{}}}", s.clone(), function_name)
+        });
+        write!(f, "{}", name)
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Function {
     pub fqn: FQN,
     pub arguments: Vec<FunctionParameter>,
@@ -93,9 +97,9 @@ impl EvaluationContext {
         }
     }
 
-    pub fn find_function(&self, function: &str) -> Option<Function> {
-        let fqn = FQN::from(function);
-        self.functions.iter().find(|f| f.fqn == fqn).cloned()
+    pub fn find_function(&self, function: &str) -> Result<Option<Function>, String> {
+        let fqn = FQN::try_from(function)?;
+        Ok(self.functions.iter().find(|f| f.fqn == fqn).cloned())
     }
 
     pub fn merge(&mut self, that: &EvaluationContext) -> EvaluationContext {
@@ -128,7 +132,7 @@ impl EvaluationContext {
         worker_detail: &WorkerDetail,
         request: &RequestDetails,
         component_metadata: ComponentMetadata,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let mut request_data = internal::request_type_annotated_value(request);
         let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
         let merged = request_data.merge(&worker_data);
@@ -139,8 +143,7 @@ impl EvaluationContext {
             .iter()
             .map(|f| Function {
                 fqn: FQN {
-                    interface: None,
-                    name: f.name.clone(),
+                    parsed_function_name: ParsedFunctionName::global(f.name.clone()),
                 },
                 arguments: f.parameters.clone(),
                 return_type: f.results.clone(),
@@ -153,8 +156,12 @@ impl EvaluationContext {
             .flat_map(|i| {
                 i.functions.iter().map(move |f| Function {
                     fqn: FQN {
-                        interface: Some(i.name.clone()),
-                        name: f.name.clone(),
+                        parsed_function_name: ParsedFunctionName::parse(format!(
+                            "{}.{{{}}}",
+                            i.name.clone(),
+                            f.name.clone()
+                        ))
+                        .unwrap(),
                     },
                     arguments: f.parameters.clone(),
                     return_type: f.results.clone(),
@@ -162,13 +169,13 @@ impl EvaluationContext {
             })
             .collect::<Vec<Function>>();
 
-        EvaluationContext {
+        Ok(EvaluationContext {
             variables: Some(merged.clone()),
             functions: function_of_interfaces
                 .into_iter()
                 .chain(functions)
                 .collect(),
-        }
+        })
     }
 
     pub fn from_worker_detail(worker_detail: &WorkerDetail) -> Self {

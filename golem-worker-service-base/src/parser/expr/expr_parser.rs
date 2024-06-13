@@ -198,7 +198,12 @@ pub(crate) fn parse_code(input: impl AsRef<str>) -> Result<Expr, ParseError> {
             Token::Dot => {
                 let expr = previous_expression
                     .clone()
-                    .final_expr()?
+                    .final_expr()
+                    .or_else(|_| {
+                        previous_expression
+                            .get_concatenated_str()
+                            .map(|opt| opt.map(Expr::Literal))
+                    })?
                     .ok_or::<ParseError>(
                         "Selection of field is applied to a non existing left expression".into(),
                     )?;
@@ -333,6 +338,12 @@ mod internal {
                     let str = match i {
                         Expr::Identifier(str) => Ok(str.to_string()),
                         Expr::Literal(str) => Ok(str.to_string()),
+                        // TODO; https://www.notion.so/golemcloud/Rib-Supporting-New-Function-Syntax-ed92a3f1b92e4dd2a768402127f9aa7f
+                        // This needs to be done better and is documented above
+                        // The reasoning here is, we consider a previous expression to be a string only if they are actually string,
+                        // but by the time we decided its an invocation of a function/variant call the possible name of the function or variant
+                        // was parsed a selection-field, and revert it back to Str
+                        Expr::SelectField(expr, field) => Ok(format!("{}.{}", expr, field)),
                         expr => Err(ParseError::Message(format!(
                             "Invalid expression: {}",
                             expression::to_string(expr).unwrap()

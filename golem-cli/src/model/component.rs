@@ -6,6 +6,7 @@ use golem_client::model::{
     Type, TypeEnum, TypeFlags, TypeHandle, TypeList, TypeOption, TypeRecord, TypeResult, TypeTuple,
     TypeVariant, UserComponentId, VersionedComponentId, VersionedName,
 };
+use golem_common::model::function_name::{ParsedFunctionName, ParsedFunctionSite};
 use golem_wasm_ast::wave::DisplayNamedFunc;
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -456,15 +457,30 @@ fn custom_show_exported_function(prefix: &str, f: &ExportFunction) -> String {
 fn resolve_function<'t>(
     component: &'t Component,
     function: &str,
-) -> Result<&'t ExportFunction, GolemError> {
-    let functions = component
-        .metadata
-        .exports
-        .iter()
-        .flat_map(export_to_functions)
-        .filter(|(name, _)| name == function)
-        .map(|(_, f)| f)
-        .collect::<Vec<_>>();
+) -> Result<(&'t ExportFunction, ParsedFunctionName), GolemError> {
+    let parsed = ParsedFunctionName::parse(function).map_err(GolemError)?;
+    let mut functions = Vec::new();
+
+    for export in &component.metadata.exports {
+        match export {
+            Export::Instance(interface) => {
+                if matches!(parsed.site().interface_name(), Some(name) if name == interface.name) {
+                    for function in &interface.functions {
+                        if parsed.function().function_name() == function.name {
+                            functions.push(function);
+                        }
+                    }
+                }
+            }
+            Export::Function(ref f @ ExportFunction { name, .. }) => {
+                if parsed.site() == &ParsedFunctionSite::Global
+                    && &parsed.function().function_name() == name
+                {
+                    functions.push(f);
+                }
+            }
+        }
+    }
 
     if functions.len() > 1 {
         info!("Multiple function with the same name '{function}' declared");
@@ -473,7 +489,7 @@ fn resolve_function<'t>(
             "Multiple function results with the same name declared".to_string(),
         ))
     } else if let Some(func) = functions.first() {
-        Ok(func)
+        Ok((func, parsed))
     } else {
         info!("No function '{function}' declared for component");
 
@@ -485,7 +501,7 @@ pub fn function_result_types<'t>(
     component: &'t Component,
     function: &str,
 ) -> Result<Vec<&'t Type>, GolemError> {
-    let func = resolve_function(component, function)?;
+    let (func, _) = resolve_function(component, function)?;
 
     Ok(func.results.iter().map(|r| &r.typ).collect())
 }
@@ -494,22 +510,12 @@ pub fn function_params_types<'t>(
     component: &'t Component,
     function: &str,
 ) -> Result<Vec<&'t Type>, GolemError> {
-    let func = resolve_function(component, function)?;
+    let (func, parsed) = resolve_function(component, function)?;
 
-    Ok(func.parameters.iter().map(|r| &r.typ).collect())
-}
-
-fn export_to_functions(export: &Export) -> Vec<(String, &ExportFunction)> {
-    match export {
-        Export::Instance(inst) => {
-            let prefix = format!("{}/", inst.name);
-
-            inst.functions
-                .iter()
-                .map(|f| (format!("{prefix}{}", f.name), f))
-                .collect()
-        }
-        Export::Function(f) => vec![(f.name.clone(), f)],
+    if parsed.function().is_indexed_resource() {
+        Ok(func.parameters.iter().skip(1).map(|r| &r.typ).collect())
+    } else {
+        Ok(func.parameters.iter().map(|r| &r.typ).collect())
     }
 }
 

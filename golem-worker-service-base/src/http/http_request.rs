@@ -233,9 +233,20 @@ mod tests {
         ) -> Result<ComponentMetadata, MetadataFetchError> {
             Ok(ComponentMetadata {
                 exports: vec![Export::Instance(ExportInstance {
-                    name: self.test_fqn.clone().interface.unwrap(),
+                    name: self
+                        .test_fqn
+                        .clone()
+                        .parsed_function_name
+                        .site()
+                        .interface_name()
+                        .unwrap(),
                     functions: vec![ExportFunction {
-                        name: self.test_fqn.name.clone(),
+                        name: self
+                            .test_fqn
+                            .parsed_function_name
+                            .function()
+                            .function_name()
+                            .clone(),
                         parameters: vec![],
                         results: vec![],
                     }],
@@ -249,7 +260,7 @@ mod tests {
         function_name: &str,
     ) -> Arc<dyn WorkerMetadataFetcher + Sync + Send> {
         Arc::new(TestMetadataFetcher {
-            test_fqn: FQN::from(function_name),
+            test_fqn: FQN::try_from(function_name).unwrap(),
         })
     }
 
@@ -311,7 +322,7 @@ mod tests {
         api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api/get-cart-contents");
+        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api.{get-cart-contents}");
 
         let resolved_route = api_request
             .resolve(vec![api_specification.clone()])
@@ -327,7 +338,7 @@ mod tests {
     async fn test_end_to_end_evaluation_simple() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
-        let expression = r#"let response = golem:it/api/get-cart-contents("a", "b"); response"#;
+        let expression = r#"let response = golem:it/api.{get-cart-contents}("a", "b"); response"#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
@@ -340,7 +351,7 @@ mod tests {
         let result = (test_response.function_name, test_response.function_params);
 
         let expected = (
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![
                 Value::String("a".to_string()),
                 Value::String("b".to_string()),
@@ -356,7 +367,7 @@ mod tests {
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
         let expression = r#"
-          let response = golem:it/api/get-cart-contents({x : "y"});
+          let response = golem:it/api.{get-cart-contents}({x : "y"});
           response
         "#;
 
@@ -380,7 +391,7 @@ mod tests {
 
         let expected = (
             "shopping-cart-1".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![Value::Object(expected_map)]),
         );
 
@@ -393,7 +404,7 @@ mod tests {
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
         let expression = r#"
-          let response = golem:it/api/get-cart-contents({x : request.path.user-id});
+          let response = golem:it/api.{get-cart-contents}({x : request.path.user-id});
           response
         "#;
 
@@ -417,7 +428,7 @@ mod tests {
 
         let expected = (
             "shopping-cart-1".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![Value::Object(expected_map)]),
         );
 
@@ -434,7 +445,7 @@ mod tests {
             serde_json::Value::Null,
         );
 
-        let expression = r#"let response = golem:it/api/get-cart-contents(request.path.user-id, request.path.token-id); response"#;
+        let expression = r#"let response = golem:it/api.{get-cart-contents}(request.path.user-id, request.path.token-id); response"#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
@@ -452,7 +463,7 @@ mod tests {
 
         let expected = (
             "shopping-cart-1".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![
                 Value::Number(serde_json::Number::from(1)),
                 Value::Number(serde_json::Number::from(2)),
@@ -480,7 +491,7 @@ mod tests {
         );
 
         let expression = r#"
-          let response = golem:it/api/get-cart-contents(request.path.user-id, request.path.token-id, "age-${request.body.age}");
+          let response = golem:it/api.{get-cart-contents}(request.path.user-id, request.path.token-id, "age-${request.body.age}");
           response
         "#;
 
@@ -500,7 +511,7 @@ mod tests {
 
         let expected = (
             "shopping-cart-1".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![
                 Value::Number(serde_json::Number::from(1)),
                 Value::Number(serde_json::Number::from(2)),
@@ -535,7 +546,7 @@ mod tests {
         );
 
         let expression = r#"
-          let response = golem:it/api/get-cart-contents({ user-id : request.path.user-id }, request.path.token-id, "age-${request.body.age}", {user-name : request.headers.username});
+          let response = golem:it/api.{get-cart-contents}({ user-id : request.path.user-id }, request.path.token-id, "age-${request.body.age}", {user-name : request.headers.username});
           response
         "#;
 
@@ -566,7 +577,7 @@ mod tests {
 
         let expected = (
             "shopping-cart-1".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![
                 Value::Object(user_id_map),
                 Value::Number(serde_json::Number::from(2)),
@@ -582,7 +593,7 @@ mod tests {
     async fn test_worker_request_cond_expr_resolution() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/2", None, &empty_headers, Value::Null);
-        let expression = r#"let response = golem:it/api/get-cart-contents("a", "b"); response"#;
+        let expression = r#"let response = golem:it/api.{get-cart-contents}("a", "b"); response"#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
@@ -600,7 +611,7 @@ mod tests {
 
         let expected = (
             "shopping-cart-1".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![
                 Value::String("a".to_string()),
                 Value::String("b".to_string()),
@@ -621,7 +632,8 @@ mod tests {
             Value::String("address".to_string()),
         );
 
-        let expression = r#"let response = golem:it/api/get-cart-contents(request.body); response"#;
+        let expression =
+            r#"let response = golem:it/api.{get-cart-contents}(request.body); response"#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
@@ -639,7 +651,7 @@ mod tests {
 
         let expected = (
             "shopping-cart-1".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![Value::String("address".to_string())]),
         );
 
@@ -657,7 +669,7 @@ mod tests {
             Value::String("address".to_string()),
         );
 
-        let expression = r#"let response = golem:it/api/get-cart-contents(1 == 1); response"#;
+        let expression = r#"let response = golem:it/api.{get-cart-contents}(1 == 1); response"#;
 
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", expression);
@@ -672,7 +684,7 @@ mod tests {
 
         let expected = (
             "shopping-cart".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![Value::Bool(true)]),
         );
 
@@ -690,7 +702,7 @@ mod tests {
             Value::String("address".to_string()),
         );
 
-        let expression = r#"let response = golem:it/api/get-cart-contents(2 > 1); response"#;
+        let expression = r#"let response = golem:it/api.{get-cart-contents}(2 > 1); response"#;
 
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", expression);
@@ -705,7 +717,7 @@ mod tests {
 
         let expected = (
             "shopping-cart".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![Value::Bool(true)]),
         );
 
@@ -724,7 +736,7 @@ mod tests {
         );
 
         let expression = r#"
-          let response = golem:it/api/get-cart-contents(if (2 < 1) then 0 else 1);
+          let response = golem:it/api.{get-cart-contents}(if (2 < 1) then 0 else 1);
           response
         "#;
 
@@ -741,7 +753,7 @@ mod tests {
 
         let expected = (
             "shopping-cart".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![Value::Number(serde_json::Number::from(1))]),
         );
 
@@ -763,7 +775,7 @@ mod tests {
         );
 
         let expression = r#"
-          let response = golem:it/api/get-cart-contents(if (request.body.number < 11) then 0 else 1);
+          let response = golem:it/api.{get-cart-contents}(if (request.body.number < 11) then 0 else 1);
           response
         "#;
 
@@ -780,7 +792,7 @@ mod tests {
 
         let expected = (
             "shopping-cart".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![Value::Number(serde_json::Number::from(0))]),
         );
 
@@ -804,7 +816,7 @@ mod tests {
         let expression = r#"
           let condition1 = if (request.body.number < 11) then request.path.user-id else 1;
           let condition2 = if (request.body.number < 5) then request.path.user-id else 1;
-          let response = golem:it/api/get-cart-contents(condition1, condition2);
+          let response = golem:it/api.{get-cart-contents}(condition1, condition2);
           response
         "#;
 
@@ -821,7 +833,7 @@ mod tests {
 
         let expected = (
             "shopping-cart".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![
                 Value::Number(serde_json::Number::from(2)),
                 Value::Number(serde_json::Number::from(1)),
@@ -857,7 +869,7 @@ mod tests {
         let expression = r#"
           let param1 = request.body.foo_key;
           let param2 = request.body.bar_key[0];
-          let response = golem:it/api/get-cart-contents(param1, param2);
+          let response = golem:it/api.{get-cart-contents}(param1, param2);
           response
         "#;
 
@@ -877,7 +889,7 @@ mod tests {
 
         let expected = (
             "shopping-cart-1".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![
                 Value::String("foo_value".to_string()),
                 Value::String("bar_value".to_string()),
@@ -912,7 +924,7 @@ mod tests {
 
         let expression = r#"
           let param = request.body;
-          let response = golem:it/api/get-cart-contents(param);
+          let response = golem:it/api.{get-cart-contents}(param);
           response
         "#;
 
@@ -932,7 +944,7 @@ mod tests {
 
         let expected = (
             "shopping-cart-1".to_string(),
-            "golem:it/api/get-cart-contents".to_string(),
+            "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![Value::Object(request_body)]),
         );
 

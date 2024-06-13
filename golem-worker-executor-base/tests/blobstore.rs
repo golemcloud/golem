@@ -30,7 +30,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-container",
+            "golem:it/api.{create-container}",
             vec![Value::String(format!(
                 "{component_id}-{worker_name}-container"
             ))],
@@ -41,7 +41,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/container-exists",
+            "golem:it/api.{container-exists}",
             vec![Value::String(format!(
                 "{component_id}-{worker_name}-container"
             ))],
@@ -67,7 +67,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/container-exists",
+            "golem:it/api.{container-exists}",
             vec![Value::String(format!(
                 "{component_id}-{worker_name}-container"
             ))],

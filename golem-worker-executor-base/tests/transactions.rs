@@ -141,7 +141,7 @@ async fn jump() {
     let (rx, abort_capture) = executor.capture_output_forever(&worker_id).await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/jump", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{jump}", vec![])
         .await
         .unwrap();
 
@@ -192,7 +192,7 @@ async fn explicit_oplog_commit() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/explicit-commit",
+            "golem:it/api.{explicit-commit}",
             vec![Value::U8(0)],
         )
         .await;
@@ -218,7 +218,7 @@ async fn set_retry_policy() {
     let result1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/fail-with-custom-max-retries",
+            "golem:it/api.{fail-with-custom-max-retries}",
             vec![Value::U64(2)],
         )
         .await;
@@ -227,7 +227,7 @@ async fn set_retry_policy() {
     let result2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/fail-with-custom-max-retries",
+            "golem:it/api.{fail-with-custom-max-retries}",
             vec![Value::U64(1)],
         )
         .await;
@@ -261,7 +261,7 @@ async fn atomic_region() {
         .await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/atomic-region", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{atomic-region}", vec![])
         .await
         .unwrap();
 
@@ -295,7 +295,7 @@ async fn idempotence_on() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/idempotence-flag",
+            "golem:it/api.{idempotence-flag}",
             vec![Value::Bool(true)],
         )
         .await
@@ -331,7 +331,7 @@ async fn idempotence_off() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/idempotence-flag",
+            "golem:it/api.{idempotence-flag}",
             vec![Value::Bool(false)],
         )
         .await;
@@ -366,7 +366,7 @@ async fn persist_nothing() {
         .await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/persist-nothing", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{persist-nothing}", vec![])
         .await;
 
     drop(executor);
@@ -400,7 +400,7 @@ async fn golem_rust_explicit_oplog_commit() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/explicit-commit",
+            "golem:it/api.{explicit-commit}",
             vec![Value::U8(0)],
         )
         .await;
@@ -426,7 +426,7 @@ async fn golem_rust_set_retry_policy() {
     let result1 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/fail-with-custom-max-retries",
+            "golem:it/api.{fail-with-custom-max-retries}",
             vec![Value::U64(2)],
         )
         .await;
@@ -435,7 +435,7 @@ async fn golem_rust_set_retry_policy() {
     let result2 = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/fail-with-custom-max-retries",
+            "golem:it/api.{fail-with-custom-max-retries}",
             vec![Value::U64(1)],
         )
         .await;
@@ -469,7 +469,7 @@ async fn golem_rust_atomic_region() {
         .await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/atomic-region", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{atomic-region}", vec![])
         .await
         .unwrap();
 
@@ -508,7 +508,7 @@ async fn golem_rust_idempotence_on() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/idempotence-flag",
+            "golem:it/api.{idempotence-flag}",
             vec![Value::Bool(true)],
         )
         .await
@@ -549,7 +549,7 @@ async fn golem_rust_idempotence_off() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/idempotence-flag",
+            "golem:it/api.{idempotence-flag}",
             vec![Value::Bool(false)],
         )
         .await;
@@ -589,7 +589,7 @@ async fn golem_rust_persist_nothing() {
         .await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/persist-nothing", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{persist-nothing}", vec![])
         .await;
 
     drop(executor);
@@ -635,7 +635,11 @@ async fn golem_rust_fallible_transaction() {
     executor.log_output(&worker_id).await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/fallible-transaction-test", vec![])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{fallible-transaction-test}",
+            vec![],
+        )
         .await;
 
     let events = http_server.get_events();
@@ -691,7 +695,7 @@ async fn golem_rust_infallible_transaction() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/infallible-transaction-test",
+            "golem:it/api.{infallible-transaction-test}",
             vec![],
         )
         .await;

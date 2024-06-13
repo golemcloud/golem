@@ -29,25 +29,43 @@ impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestApi for A
             rpc: WasmRpc::new(&location),
         }
     }
-    fn inc_global_by(&self, value: u64) -> () {
+    fn blocking_inc_global_by(&self, value: u64) -> () {
         let result = self
             .rpc
             .invoke_and_await(
-                "rpc:counters/api/inc-global-by",
+                "rpc:counters/api.{inc-global-by}",
                 &[WitValue::builder().u64(value)],
             )
             .expect(
-                &format!("Failed to invoke remote {}", "rpc:counters/api/inc-global-by"),
+                &format!(
+                    "Failed to invoke-and-await remote {}",
+                    "rpc:counters/api.{inc-global-by}"
+                ),
+            );
+        ()
+    }
+    fn inc_global_by(&self, value: u64) -> () {
+        let result = self
+            .rpc
+            .invoke(
+                "rpc:counters/api.{inc-global-by}",
+                &[WitValue::builder().u64(value)],
+            )
+            .expect(
+                &format!(
+                    "Failed to invoke remote {}", "rpc:counters/api.{inc-global-by}"
+                ),
             );
         ()
     }
     fn get_global_value(&self) -> u64 {
         let result = self
             .rpc
-            .invoke_and_await("rpc:counters/api/get-global-value", &[])
+            .invoke_and_await("rpc:counters/api.{get-global-value}", &[])
             .expect(
                 &format!(
-                    "Failed to invoke remote {}", "rpc:counters/api/get-global-value"
+                    "Failed to invoke-and-await remote {}",
+                    "rpc:counters/api.{get-global-value}"
                 ),
             );
         (result.tuple_element(0).expect("tuple not found").u64().expect("u64 not found"))
@@ -55,10 +73,11 @@ impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestApi for A
     fn get_all_dropped(&self) -> Vec<(String, u64)> {
         let result = self
             .rpc
-            .invoke_and_await("rpc:counters/api/get-all-dropped", &[])
+            .invoke_and_await("rpc:counters/api.{get-all-dropped}", &[])
             .expect(
                 &format!(
-                    "Failed to invoke remote {}", "rpc:counters/api/get-all-dropped"
+                    "Failed to invoke-and-await remote {}",
+                    "rpc:counters/api.{get-all-dropped}"
                 ),
             );
         (result
@@ -92,11 +111,14 @@ for Counter {
         let rpc = WasmRpc::new(&location);
         let result = rpc
             .invoke_and_await(
-                "rpc:counters/api/counter/new",
+                "rpc:counters/api.{counter.new}",
                 &[WitValue::builder().string(&name)],
             )
             .expect(
-                &format!("Failed to invoke remote {}", "rpc:counters/api/counter/new"),
+                &format!(
+                    "Failed to invoke-and-await remote {}",
+                    "rpc:counters/api.{counter.new}"
+                ),
             );
         ({
             let (uri, id) = result
@@ -107,18 +129,38 @@ for Counter {
             Self { rpc, id, uri }
         })
     }
-    fn inc_by(&self, value: u64) -> () {
+    fn blocking_inc_by(&self, value: u64) -> () {
         let result = self
             .rpc
             .invoke_and_await(
-                "rpc:counters/api/counter/inc-by",
+                "rpc:counters/api.{counter.inc-by}",
                 &[
                     WitValue::builder().handle(self.uri.clone(), self.id),
                     WitValue::builder().u64(value),
                 ],
             )
             .expect(
-                &format!("Failed to invoke remote {}", "rpc:counters/api/counter/inc-by"),
+                &format!(
+                    "Failed to invoke-and-await remote {}",
+                    "rpc:counters/api.{counter.inc-by}"
+                ),
+            );
+        ()
+    }
+    fn inc_by(&self, value: u64) -> () {
+        let result = self
+            .rpc
+            .invoke(
+                "rpc:counters/api.{counter.inc-by}",
+                &[
+                    WitValue::builder().handle(self.uri.clone(), self.id),
+                    WitValue::builder().u64(value),
+                ],
+            )
+            .expect(
+                &format!(
+                    "Failed to invoke remote {}", "rpc:counters/api.{counter.inc-by}"
+                ),
             );
         ()
     }
@@ -126,12 +168,13 @@ for Counter {
         let result = self
             .rpc
             .invoke_and_await(
-                "rpc:counters/api/counter/get-value",
+                "rpc:counters/api.{counter.get-value}",
                 &[WitValue::builder().handle(self.uri.clone(), self.id)],
             )
             .expect(
                 &format!(
-                    "Failed to invoke remote {}", "rpc:counters/api/counter/get-value"
+                    "Failed to invoke-and-await remote {}",
+                    "rpc:counters/api.{counter.get-value}"
                 ),
             );
         (result.tuple_element(0).expect("tuple not found").u64().expect("u64 not found"))
@@ -141,7 +184,7 @@ impl Drop for Counter {
     fn drop(&mut self) {
         self.rpc
             .invoke_and_await(
-                "rpc:counters/api/counter/drop",
+                "rpc:counters/api.{counter.drop}",
                 &[WitValue::builder().handle(self.uri.clone(), self.id)],
             )
             .expect("Failed to invoke remote drop");

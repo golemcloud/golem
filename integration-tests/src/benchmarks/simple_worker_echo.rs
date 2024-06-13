@@ -82,7 +82,7 @@ impl Benchmark for SimpleWorkerEcho {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:it/api/echo",
+                            "golem:it/api.{echo}",
                             vec![Value::Option(Some(Box::new(Value::String(
                                 "hello".to_string(),
                             ))))],
@@ -119,7 +119,7 @@ impl Benchmark for SimpleWorkerEcho {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:it/api/echo",
+                            "golem:it/api.{echo}",
                             vec![Value::Option(Some(Box::new(Value::String(
                                 "hello".to_string(),
                             ))))],

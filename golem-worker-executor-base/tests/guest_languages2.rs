@@ -33,14 +33,14 @@ async fn javascript_example_3() {
     let result_set = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/set-timeout",
+            "golem:it/api.{set-timeout}",
             vec![Value::U64(timeout_time)],
         )
         .await
         .unwrap();
 
     let result_get = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
         .await
         .unwrap();
 
@@ -67,7 +67,7 @@ async fn javascript_example_4() {
     let worker_id = executor.start_worker(&component_id, "js-4").await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/create-promise", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{create-promise}", vec![])
         .await
         .unwrap();
 
@@ -86,17 +86,17 @@ async fn python_example_1() {
     let worker_id = executor.start_worker(&component_id, "python-1").await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(3)])
+        .invoke_and_await(&worker_id, "golem:it/api.{add}", vec![Value::U64(3)])
         .await
         .unwrap();
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(8)])
+        .invoke_and_await(&worker_id, "golem:it/api.{add}", vec![Value::U64(8)])
         .await
         .unwrap();
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
         .await
         .unwrap();
 
@@ -117,7 +117,7 @@ async fn swift_example_1() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0/run", vec![])
+        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0.{run}", vec![])
         .await
         .unwrap();
 

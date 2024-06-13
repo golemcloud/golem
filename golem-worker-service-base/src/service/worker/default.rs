@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::AnalysedFunctionResult;
+use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_wasm_rpc::TypeAnnotatedValue;
@@ -21,12 +21,14 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
 };
 
+use golem_common::model::function_name::ParsedFunctionName;
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
-    FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
+    ExportFunction, FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId,
+    WorkerMetadata,
 };
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
@@ -207,6 +209,30 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
             worker_executor_clients,
             component_service,
             routing_table_service,
+        }
+    }
+
+    fn get_expected_function_parameters(
+        function_name: &str,
+        function_type: &ExportFunction,
+    ) -> Vec<AnalysedFunctionParameter> {
+        let is_indexed = ParsedFunctionName::parse(function_name)
+            .ok()
+            .map(|parsed| parsed.function().is_indexed_resource())
+            .unwrap_or(false);
+        if is_indexed {
+            function_type
+                .parameters
+                .iter()
+                .skip(1)
+                .map(|x| x.clone().into())
+                .collect()
+        } else {
+            function_type
+                .parameters
+                .iter()
+                .map(|x| x.clone().into())
+                .collect()
         }
     }
 }
@@ -400,17 +426,19 @@ where
         let function_type = component_details
             .metadata
             .function_by_name(&function_name)
+            .map_err(|err| {
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to parse the function name: {}",
+                    err
+                ))
+            })?
             .ok_or_else(|| {
                 WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
 
         let params_val = params
             .validate_function_parameters(
-                function_type
-                    .parameters
-                    .into_iter()
-                    .map(|parameter| parameter.into())
-                    .collect(),
+                Self::get_expected_function_parameters(&function_name, &function_type),
                 *calling_convention,
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
@@ -458,16 +486,18 @@ where
         let function_type = component_details
             .metadata
             .function_by_name(&function_name)
+            .map_err(|err| {
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to parse the function name: {}",
+                    err
+                ))
+            })?
             .ok_or_else(|| {
                 WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
         let params_val = params
             .validate_function_parameters(
-                function_type
-                    .parameters
-                    .into_iter()
-                    .map(|parameter| parameter.into())
-                    .collect(),
+                Self::get_expected_function_parameters(&function_name, &function_type),
                 *calling_convention,
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
@@ -533,16 +563,18 @@ where
         let function_type = component_details
             .metadata
             .function_by_name(&function_name)
+            .map_err(|err| {
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to parse the function name: {}",
+                    err
+                ))
+            })?
             .ok_or_else(|| {
                 WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
         let params_val = params
             .validate_function_parameters(
-                function_type
-                    .parameters
-                    .into_iter()
-                    .map(|parameter| parameter.into())
-                    .collect(),
+                Self::get_expected_function_parameters(&function_name, &function_type),
                 CallingConvention::Component,
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
@@ -574,16 +606,18 @@ where
         let function_type = component_details
             .metadata
             .function_by_name(&function_name)
+            .map_err(|err| {
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to parse the function name: {}",
+                    err
+                ))
+            })?
             .ok_or_else(|| {
                 WorkerServiceError::TypeChecker("Failed to find the function".to_string())
             })?;
         let params_val = params
             .validate_function_parameters(
-                function_type
-                    .parameters
-                    .into_iter()
-                    .map(|parameter| parameter.into())
-                    .collect(),
+                Self::get_expected_function_parameters(&function_name, &function_type),
                 CallingConvention::Component,
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;

@@ -70,6 +70,11 @@ fn make(
         ),
         Trial::test_in_context(format!("worker_list{suffix}"), ctx.clone(), worker_list),
         Trial::test_in_context(format!("worker_update{suffix}"), ctx.clone(), worker_update),
+        Trial::test_in_context(
+            format!("worker_invoke_indexed_resource{suffix}"),
+            ctx.clone(),
+            worker_invoke_indexed_resource,
+        ),
     ]
 }
 
@@ -177,7 +182,7 @@ fn worker_invoke_and_await(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/get-arguments",
+        "golem:it/api.{get-arguments}",
         &cfg.arg('j', "parameters"),
         "[]",
         &cfg.arg('k', "idempotency-key"),
@@ -198,7 +203,7 @@ fn worker_invoke_and_await(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/get-environment",
+        "golem:it/api.{get-environment}",
         &cfg.arg('k', "idempotency-key"),
         &env_key.0,
     ])?;
@@ -249,7 +254,7 @@ fn worker_invoke_and_await_wave_params(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/set",
+        "golem:it/api.{set}",
         &cfg.arg('p', "param"),
         r#""bucket name""#,
         &cfg.arg('p', "param"),
@@ -267,7 +272,7 @@ fn worker_invoke_and_await_wave_params(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/get",
+        "golem:it/api.{get}",
         &cfg.arg('p', "param"),
         r#""bucket name""#,
         &cfg.arg('p', "param"),
@@ -314,7 +319,7 @@ fn worker_invoke_no_params(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/get-arguments",
+        "golem:it/api.{get-arguments}",
     ])?;
 
     Ok(())
@@ -347,7 +352,7 @@ fn worker_invoke_json_params(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/get-arguments",
+        "golem:it/api.{get-arguments}",
         &cfg.arg('j', "parameters"),
         "[]",
     ])?;
@@ -387,7 +392,7 @@ fn worker_invoke_wave_params(
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/set",
+        "golem:it/api.{set}",
         &cfg.arg('p', "param"),
         r#""bucket name""#,
         &cfg.arg('p', "param"),
@@ -763,5 +768,74 @@ fn worker_update(
 
     assert_eq!(original_updates, 0);
     assert_eq!(target_version, 1);
+    Ok(())
+}
+
+fn worker_invoke_indexed_resource(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let component_id = make_component_from_file(
+        deps,
+        &format!("{name}_worker_invoke_indexed_resource"),
+        &cli,
+        "counters.wasm",
+    )?
+    .component_id;
+    let worker_name = format!("{name}_worker_invoke_no_params");
+    let cfg = &cli.config;
+
+    cli.run_unit(&[
+        "worker",
+        "invoke",
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        r#"rpc:counters/api.{counter("counter1").inc-by}"#,
+        &cfg.arg('p', "param"),
+        "1",
+    ])?;
+    cli.run_unit(&[
+        "worker",
+        "invoke",
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        r#"rpc:counters/api.{counter("counter1").inc-by}"#,
+        &cfg.arg('p', "param"),
+        "2",
+    ])?;
+    cli.run_unit(&[
+        "worker",
+        "invoke",
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        r#"rpc:counters/api.{counter("counter2").inc-by}"#,
+        &cfg.arg('p', "param"),
+        "5",
+    ])?;
+    let result = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        r#"rpc:counters/api.{counter("counter1").get-value}"#,
+    ])?;
+
+    assert_eq!(result, json!([3]));
+
     Ok(())
 }

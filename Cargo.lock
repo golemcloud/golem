@@ -1613,9 +1613,9 @@ dependencies = [
 
 [[package]]
 name = "combine"
-version = "4.6.6"
+version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35ed6e9d84f0b51a7f52daf1c7d71dd136fd7a3f41a8462b8cdb8c78d920fad4"
+checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
 dependencies = [
  "bytes 1.6.0",
  "memchr",
@@ -3249,6 +3249,7 @@ dependencies = [
  "futures-util",
  "golem-client",
  "golem-cloud-client",
+ "golem-common",
  "golem-examples",
  "golem-test-framework",
  "golem-wasm-ast",
@@ -3339,11 +3340,13 @@ dependencies = [
  "async-trait",
  "bincode 2.0.0-rc.3",
  "bytes 1.6.0",
+ "combine",
  "dashmap",
  "derive_more",
  "fred",
  "futures-core",
  "golem-api-grpc",
+ "golem-wasm-ast",
  "golem-wasm-rpc",
  "humantime-serde",
  "iso8601-timestamp",
@@ -3355,6 +3358,7 @@ dependencies = [
  "prost-types 0.12.3",
  "rand 0.8.5",
  "range-set-blaze",
+ "semver",
  "serde",
  "serde_json",
  "tokio",
@@ -3362,6 +3366,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "wasm-wave",
 ]
 
 [[package]]
@@ -3604,9 +3609,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.23"
+version = "0.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c04f0b0463ad8c4490c8f29e3bfb22b956bf168d22122e0d745a6aeac99fd048"
+checksum = "0651b9abd5bef6c22b5b46dfd096fb2b94f494b56775a69a258f18d11e6ceae6"
 dependencies = [
  "arbitrary",
  "bigdecimal",
@@ -3623,9 +3628,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "0.0.23"
+version = "0.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb2e6a348f3b93f19b84bb6e84934373c576d064c9100d0064323366b7728387"
+checksum = "106b8ad7022e5b49dc0a05bc4690a483e6bae50cd6585fc8d37e3f13e99d96e2"
 dependencies = [
  "anyhow",
  "cargo-component",
@@ -7192,9 +7197,9 @@ dependencies = [
 
 [[package]]
 name = "semver"
-version = "1.0.22"
+version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92d43fe69e652f3df9bdc2b85b2854a0825b86e4fb76bc44d945137d053639ca"
+checksum = "61697e0a1c7e512e84a621326239844a24d8207b4669b41bc18b32ea5cbf988b"
 dependencies = [
  "serde",
 ]

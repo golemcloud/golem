@@ -38,8 +38,8 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
 use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
-    ExternalOperations, InvocationHooks, InvocationManagement, IoCapturing, PublicWorkerIo,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, IndexedResourceStore, InvocationHooks, InvocationManagement, IoCapturing,
+    PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -462,7 +462,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     .data_mut()
                                     .begin_call_snapshotting_function();
                                 let load_result = invoke_worker(
-                                    "golem:api/load-snapshot@0.2.0/load".to_string(),
+                                    "golem:api/load-snapshot@0.2.0.{load}".to_string(),
                                     vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
                                     store,
                                     instance,
@@ -883,6 +883,37 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
+    fn get_indexed_resource(&self, resource_name: &str, resource_params: &[String]) -> Option<u64> {
+        let key = IndexedResourceKey {
+            resource_name: resource_name.to_string(),
+            resource_params: resource_params.to_vec(),
+        };
+        self.state.indexed_resources.get(&key).copied()
+    }
+
+    fn store_indexed_resource(
+        &mut self,
+        resource_name: &str,
+        resource_params: &[String],
+        resource: u64,
+    ) {
+        let key = IndexedResourceKey {
+            resource_name: resource_name.to_string(),
+            resource_params: resource_params.to_vec(),
+        };
+        self.state.indexed_resources.insert(key, resource);
+    }
+
+    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
+        let key = IndexedResourceKey {
+            resource_name: resource_name.to_string(),
+            resource_params: resource_params.to_vec(),
+        };
+        self.state.indexed_resources.remove(&key);
+    }
+}
+
 pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
     fn durable_ctx(&self) -> &DurableWorkerCtx<Ctx>;
     fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Ctx>;
@@ -1182,6 +1213,8 @@ pub struct PrivateDurableWorkerState {
     /// The oplog index of the last replayed entry
     last_replayed_index: OplogIndex,
     snapshotting_mode: Option<PersistenceLevel>,
+
+    indexed_resources: HashMap<IndexedResourceKey, u64>,
 }
 
 impl PrivateDurableWorkerState {
@@ -1228,6 +1261,7 @@ impl PrivateDurableWorkerState {
             last_replayed_index: OplogIndex::NONE,
             replay_target: last_oplog_index,
             snapshotting_mode: None,
+            indexed_resources: HashMap::new(),
         };
         result.move_replay_idx(OplogIndex::INITIAL); // By this we handle initial deleted regions applied by manual updates correctly
         result
@@ -1740,4 +1774,10 @@ macro_rules! get_oplog_entry {
             }
         }
     };
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct IndexedResourceKey {
+    pub resource_name: String,
+    pub resource_params: Vec<String>,
 }

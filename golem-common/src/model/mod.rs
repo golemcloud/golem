@@ -40,6 +40,7 @@ use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
 
+pub mod function_name;
 pub mod oplog;
 pub mod regions;
 
@@ -1004,67 +1005,6 @@ impl Display for AccountId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ParsedFunctionName {
-    pub interface: Option<String>,
-    pub function: String,
-}
-
-impl ParsedFunctionName {
-    pub fn new(interface: Option<String>, function: String) -> Self {
-        Self {
-            interface,
-            function,
-        }
-    }
-
-    pub fn method_as_static(&self) -> Option<ParsedFunctionName> {
-        if self.function.starts_with("[method]") {
-            Some(ParsedFunctionName {
-                interface: self.interface.clone(),
-                function: self.function.replace("[method]", "[static]"),
-            })
-        } else {
-            None
-        }
-    }
-}
-
-pub fn parse_function_name(name: &str) -> ParsedFunctionName {
-    let parts = name.match_indices('/').collect::<Vec<_>>();
-    match parts.len() {
-        1 => ParsedFunctionName::new(
-            Some(name[0..parts[0].0].to_string()),
-            name[(parts[0].0 + 1)..name.len()].to_string(),
-        ),
-        2 => ParsedFunctionName::new(
-            Some(name[0..parts[1].0].to_string()),
-            name[(parts[1].0 + 1)..name.len()].to_string(),
-        ),
-        3 => {
-            let instance = &name[0..parts[1].0];
-            let resource_name = &name[(parts[1].0 + 1)..parts[2].0];
-            let function_name = &name[(parts[2].0 + 1)..name.len()];
-
-            match function_name {
-                "new" => ParsedFunctionName::new(
-                    Some(instance.to_string()),
-                    format!("[constructor]{}", resource_name),
-                ),
-                "drop" => ParsedFunctionName::new(
-                    Some(instance.to_string()),
-                    format!("[drop]{}", resource_name),
-                ),
-                _ => ParsedFunctionName::new(
-                    Some(instance.to_string()),
-                    format!("[method]{}.{}", resource_name, function_name),
-                ),
-            }
-        }
-        _ => ParsedFunctionName::new(None, name.to_string()),
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]
 pub struct WorkerNameFilter {
     pub comparator: StringFilterComparator,
@@ -1843,8 +1783,8 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use crate::model::{
-        parse_function_name, AccountId, ComponentId, FilterComparator, StringFilterComparator,
-        Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+        AccountId, ComponentId, FilterComparator, StringFilterComparator, Timestamp, WorkerFilter,
+        WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
 
     #[test]
@@ -1856,99 +1796,6 @@ mod tests {
         let ts2: Timestamp = prost_ts.into();
 
         assert_eq!(ts2, ts);
-    }
-
-    #[test]
-    fn parse_function_name_global() {
-        let parsed = parse_function_name("run-example");
-        assert_eq!(parsed.interface, None);
-        assert_eq!(parsed.function, "run-example");
-    }
-
-    #[test]
-    fn parse_function_name_in_exported_interface_no_package() {
-        let parsed = parse_function_name("interface/fn1");
-        assert_eq!(parsed.interface, Some("interface".to_string()));
-        assert_eq!(parsed.function, "fn1".to_string());
-    }
-
-    #[test]
-    fn parse_function_name_in_exported_interface() {
-        let parsed = parse_function_name("ns:name/interface/fn1");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(parsed.function, "fn1".to_string());
-    }
-
-    #[test]
-    fn parse_function_name_constructor_syntax_sugar() {
-        let parsed = parse_function_name("ns:name/interface/resource1/new");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(parsed.function, "[constructor]resource1".to_string());
-    }
-
-    #[test]
-    fn parse_function_name_constructor() {
-        let parsed = parse_function_name("ns:name/interface/[constructor]resource1");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(parsed.function, "[constructor]resource1".to_string());
-    }
-
-    #[test]
-    fn parse_function_name_method_syntax_sugar() {
-        let parsed = parse_function_name("ns:name/interface/resource1/do-something");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(
-            parsed.function,
-            "[method]resource1.do-something".to_string()
-        );
-    }
-
-    #[test]
-    fn parse_function_name_method() {
-        let parsed = parse_function_name("ns:name/interface/[method]resource1.do-something");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(
-            parsed.function,
-            "[method]resource1.do-something".to_string()
-        );
-    }
-
-    #[test]
-    fn parse_function_name_static_method_syntax_sugar() {
-        // Note: the syntax sugared version cannot distinguish between method and static - so we need to check the actual existence of
-        // the function and fallback.
-        let parsed = parse_function_name("ns:name/interface/resource1/do-something-static")
-            .method_as_static()
-            .unwrap();
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(
-            parsed.function,
-            "[static]resource1.do-something-static".to_string()
-        );
-    }
-
-    #[test]
-    fn parse_function_name_static() {
-        let parsed = parse_function_name("ns:name/interface/[static]resource1.do-something-static");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(
-            parsed.function,
-            "[static]resource1.do-something-static".to_string()
-        );
-    }
-
-    #[test]
-    fn parse_function_name_drop_syntax_sugar() {
-        let parsed = parse_function_name("ns:name/interface/resource1/drop");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(parsed.function, "[drop]resource1".to_string());
-    }
-
-    #[test]
-    fn parse_function_name_drop() {
-        let parsed = parse_function_name("ns:name/interface/[drop]resource1");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(parsed.function, "[drop]resource1".to_string());
     }
 
     #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]

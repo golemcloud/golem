@@ -56,6 +56,7 @@ pub trait WorkerCtx:
     + InvocationHooks
     + ExternalOperations<Self>
     + ResourceStore
+    + IndexedResourceStore
     + UpdateManagement
     + Send
     + Sync
@@ -286,6 +287,25 @@ pub trait UpdateManagement {
 
     /// Called when an update attempt succeeded
     async fn on_worker_update_succeeded(&self, target_version: ComponentVersion);
+}
+
+/// Stores resources created within the worker indexed by their constructor parameters
+///
+/// This is a secondary mapping on top of `ResourceStore`, which handles the mapping between
+/// resource identifiers to actual wasmtime `ResourceAny` instances.
+///
+/// Note that the parameters are passed as unparsed WAVE strings instead of their parsed `Value`
+/// representation - the string representation is easier to hash and allows us to reduce the number
+/// of times we need to parse the parameters.
+pub trait IndexedResourceStore {
+    fn get_indexed_resource(&self, resource_name: &str, resource_params: &[String]) -> Option<u64>;
+    fn store_indexed_resource(
+        &mut self,
+        resource_name: &str,
+        resource_params: &[String],
+        resource: u64,
+    );
+    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]);
 }
 
 /// Operations not requiring an active worker context, but still depending on the

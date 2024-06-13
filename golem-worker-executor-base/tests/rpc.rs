@@ -46,7 +46,7 @@ async fn auction_example_1() {
     let create_auction_result = executor
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api/create-auction",
+            "auction:registry/api.{create-auction}",
             vec![
                 Value::String("test-auction".to_string()),
                 Value::String("this is a test".to_string()),
@@ -59,7 +59,7 @@ async fn auction_example_1() {
     let get_auctions_result = executor
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api/get-auctions",
+            "auction:registry/api.{get-auctions}",
             vec![],
         )
         .await;
@@ -99,7 +99,7 @@ async fn auction_example_2() {
         auction_component_id.to_string(),
     );
     let registry_worker_id = executor
-        .start_worker_with(&registry_component_id, "auction-registry-1", vec![], env)
+        .start_worker_with(&registry_component_id, "auction-registry-2", vec![], env)
         .await;
 
     let _ = executor.log_output(&registry_worker_id).await;
@@ -111,7 +111,7 @@ async fn auction_example_2() {
     let create_auction_result = executor
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api/create-auction-res",
+            "auction:registry/api.{create-auction-res}",
             vec![
                 Value::String("test-auction".to_string()),
                 Value::String("this is a test".to_string()),
@@ -124,7 +124,7 @@ async fn auction_example_2() {
     let get_auctions_result = executor
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api/get-auctions",
+            "auction:registry/api.{get-auctions}",
             vec![],
         )
         .await;

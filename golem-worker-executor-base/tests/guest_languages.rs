@@ -56,15 +56,15 @@ async fn zig_example_3() {
     let worker_id = executor.start_worker(&component_id, "zig-3").await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(10)])
+        .invoke_and_await(&worker_id, "golem:it/api.{add}", vec![Value::U64(10)])
         .await
         .unwrap();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(11)])
+        .invoke_and_await(&worker_id, "golem:it/api.{add}", vec![Value::U64(11)])
         .await
         .unwrap();
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
         .await
         .unwrap();
 
@@ -197,7 +197,7 @@ async fn grain_example_1() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let _result = executor
-        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0/run", vec![])
+        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0.{run}", vec![])
         .await
         .unwrap();
 
@@ -421,17 +421,17 @@ async fn javascript_example_2() {
     let worker_id = executor.start_worker(&component_id, "js-2").await;
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(5)])
+        .invoke_and_await(&worker_id, "golem:it/api.{add}", vec![Value::U64(5)])
         .await
         .unwrap();
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:it/api/add", vec![Value::U64(6)])
+        .invoke_and_await(&worker_id, "golem:it/api.{add}", vec![Value::U64(6)])
         .await
         .unwrap();
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api/get", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
         .await
         .unwrap();
 
@@ -456,7 +456,7 @@ async fn csharp_example_1() {
     let mut rx = executor.capture_output(&worker_id).await;
 
     let _result = executor
-        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0/run", vec![])
+        .invoke_and_await(&worker_id, "wasi:cli/run@0.2.0.{run}", vec![])
         .await
         .unwrap();
 

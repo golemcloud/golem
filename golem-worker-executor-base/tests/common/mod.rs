@@ -48,8 +48,8 @@ use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::{All, HasAll};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
-    ExternalOperations, FuelManagement, InvocationHooks, InvocationManagement, IoCapturing,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
+    InvocationManagement, IoCapturing, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor_base::Bootstrap;
 
@@ -379,6 +379,28 @@ impl FuelManagement for TestWorkerCtx {
 
     async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, GolemError> {
         Ok(0)
+    }
+}
+
+impl IndexedResourceStore for TestWorkerCtx {
+    fn get_indexed_resource(&self, resource_name: &str, resource_params: &[String]) -> Option<u64> {
+        self.durable_ctx
+            .get_indexed_resource(resource_name, resource_params)
+    }
+
+    fn store_indexed_resource(
+        &mut self,
+        resource_name: &str,
+        resource_params: &[String],
+        resource: u64,
+    ) {
+        self.durable_ctx
+            .store_indexed_resource(resource_name, resource_params, resource)
+    }
+
+    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
+        self.durable_ctx
+            .drop_indexed_resource(resource_name, resource_params)
     }
 }
 

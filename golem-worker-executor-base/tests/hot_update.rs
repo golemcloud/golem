@@ -43,7 +43,7 @@ async fn auto_update_on_running() {
         executor_clone
             .invoke_and_await(
                 &worker_id_clone,
-                "golem:component/api/f1",
+                "golem:component/api.{f1}",
                 vec![Value::U64(1000)],
             )
             .await
@@ -93,7 +93,7 @@ async fn auto_update_on_idle() {
         .await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f2", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
         .await
         .unwrap();
 
@@ -127,7 +127,7 @@ async fn failing_auto_update_on_idle() {
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f1", vec![Value::U64(0)])
+        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
         .await
         .unwrap();
 
@@ -136,7 +136,7 @@ async fn failing_auto_update_on_idle() {
         .await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f2", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
         .await
         .unwrap();
 
@@ -175,11 +175,11 @@ async fn auto_update_on_idle_with_non_diverging_history() {
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f3", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
         .await
         .unwrap();
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f3", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
         .await
         .unwrap();
 
@@ -188,7 +188,7 @@ async fn auto_update_on_idle_with_non_diverging_history() {
         .await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f4", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{f4}", vec![])
         .await
         .unwrap();
 
@@ -223,7 +223,7 @@ async fn failing_auto_update_on_running() {
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f2", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
         .await
         .unwrap();
 
@@ -233,7 +233,7 @@ async fn failing_auto_update_on_running() {
         executor_clone
             .invoke_and_await(
                 &worker_id_clone,
-                "golem:component/api/f1",
+                "golem:component/api.{f1}",
                 vec![Value::U64(1000)],
             )
             .await
@@ -281,12 +281,12 @@ async fn manual_update_on_idle() {
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f1", vec![Value::U64(0)])
+        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
         .await
         .unwrap();
 
     let before_update = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f2", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
         .await
         .unwrap();
 
@@ -295,7 +295,7 @@ async fn manual_update_on_idle() {
         .await;
 
     let after_update = executor
-        .invoke_and_await(&worker_id, "golem:component/api/get", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
         .await
         .unwrap();
 
@@ -330,7 +330,7 @@ async fn manual_update_on_idle_without_save_snapshot() {
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f1", vec![Value::U64(0)])
+        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
         .await
         .unwrap();
 
@@ -339,7 +339,7 @@ async fn manual_update_on_idle_without_save_snapshot() {
         .await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f3", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
         .await
         .unwrap();
 
@@ -384,7 +384,7 @@ async fn auto_update_on_running_followed_by_manual() {
         executor_clone
             .invoke_and_await(
                 &worker_id_clone,
-                "golem:component/api/f1",
+                "golem:component/api.{f1}",
                 vec![Value::U64(1000)],
             )
             .await
@@ -406,7 +406,7 @@ async fn auto_update_on_running_followed_by_manual() {
     info!("result1: {:?}", result1);
 
     let result2 = executor
-        .invoke_and_await(&worker_id, "golem:component/api/get", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
         .await
         .unwrap();
     info!("result2: {:?}", result2);
@@ -443,7 +443,7 @@ async fn manual_update_on_idle_with_failing_load() {
     info!("Updated component to version {target_version}");
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f1", vec![Value::U64(0)])
+        .invoke_and_await(&worker_id, "golem:component/api.{f1}", vec![Value::U64(0)])
         .await
         .unwrap();
 
@@ -452,7 +452,7 @@ async fn manual_update_on_idle_with_failing_load() {
         .await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api/f3", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
         .await
         .unwrap();
 

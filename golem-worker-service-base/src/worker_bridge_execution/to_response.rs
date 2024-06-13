@@ -40,6 +40,14 @@ impl ToResponse<poem::Response> for MetadataFetchError {
     }
 }
 
+impl ToResponse<poem::Response> for String {
+    fn to_response(&self, _request_details: &RequestDetails) -> poem::Response {
+        poem::Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::from_string(self.to_string()))
+    }
+}
+
 mod internal {
     use crate::evaluator::{EvaluationError, ExprEvaluationResult};
     use crate::primitive::{GetPrimitive, Primitive};

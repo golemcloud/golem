@@ -119,7 +119,7 @@ pub async fn warmup_echo(
                 .deps
                 .invoke_and_await(
                     &worker_id_clone,
-                    "golem:it/api/echo",
+                    "golem:it/api.{echo}",
                     vec![Value::String("hello".to_string())],
                 )
                 .await
@@ -152,7 +152,7 @@ pub async fn run_echo(
                     .deps
                     .invoke_and_await(
                         &worker_id_clone,
-                        "golem:it/api/echo",
+                        "golem:it/api.{echo}",
                         vec![Value::String("hello".to_string())],
                     )
                     .await

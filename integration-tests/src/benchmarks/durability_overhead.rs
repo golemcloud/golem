@@ -103,7 +103,7 @@ impl Benchmark for DurabilityOverhead {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:it/api/initialize-cart",
+                            "golem:it/api.{initialize-cart}",
                             vec![Value::String(worker_id_clone.worker_name.clone())],
                         )
                         .await
@@ -126,7 +126,7 @@ impl Benchmark for DurabilityOverhead {
             let fiber = tokio::task::spawn(async move {
                 context_clone
                     .deps
-                    .invoke_and_await(&worker_id_clone, "golem:it/api/not-durable", vec![])
+                    .invoke_and_await(&worker_id_clone, "golem:it/api.{not-durable}", vec![])
                     .await
                     .expect("not-durable invoke_and_await failed");
             });
@@ -167,7 +167,7 @@ impl Benchmark for DurabilityOverhead {
                             .deps
                             .invoke_and_await(
                                 &worker_id_clone,
-                                "golem:it/api/add-item",
+                                "golem:it/api.{add-item}",
                                 vec![Value::Record(vec![
                                     Value::String(i.to_string()),
                                     Value::String(format!("{} Golem T-Shirt M", i)),

@@ -42,7 +42,7 @@ async fn shopping_cart_example() {
     let _ = DEPS
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/initialize-cart",
+            "golem:it/api.{initialize-cart}",
             vec![Value::String("test-user-1".to_string())],
         )
         .await;
@@ -50,7 +50,7 @@ async fn shopping_cart_example() {
     let _ = DEPS
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1000".to_string()),
                 Value::String("Golem T-Shirt M".to_string()),
@@ -63,7 +63,7 @@ async fn shopping_cart_example() {
     let _ = DEPS
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1001".to_string()),
                 Value::String("Golem Cloud Subscription 1y".to_string()),
@@ -76,7 +76,7 @@ async fn shopping_cart_example() {
     let _ = DEPS
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/add-item",
+            "golem:it/api.{add-item}",
             vec![Value::Record(vec![
                 Value::String("G1002".to_string()),
                 Value::String("Mud Golem".to_string()),
@@ -89,17 +89,17 @@ async fn shopping_cart_example() {
     let _ = DEPS
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/update-item-quantity",
+            "golem:it/api.{update-item-quantity}",
             vec![Value::String("G1002".to_string()), Value::U32(20)],
         )
         .await;
 
     let contents = DEPS
-        .invoke_and_await(&worker_id, "golem:it/api/get-cart-contents", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
         .await;
 
     let _ = DEPS
-        .invoke_and_await(&worker_id, "golem:it/api/checkout", vec![])
+        .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
         .await;
 
     check!(
@@ -155,7 +155,7 @@ async fn auction_example_1() {
         let create_auction_result = DEPS
             .invoke_and_await(
                 &registry_worker_id,
-                "auction:registry/api/create-auction",
+                "auction:registry/api.{create-auction}",
                 vec![
                     Value::String("test-auction".to_string()),
                     Value::String("this is a test".to_string()),
@@ -171,7 +171,7 @@ async fn auction_example_1() {
     let get_auctions_result = DEPS
         .invoke_and_await(
             &registry_worker_id,
-            "auction:registry/api/get-auctions",
+            "auction:registry/api.{get-auctions}",
             vec![],
         )
         .await;
@@ -213,7 +213,7 @@ async fn get_workers() {
         let _ = DEPS
             .invoke_and_await(
                 worker_id,
-                "golem:it/api/initialize-cart",
+                "golem:it/api.{initialize-cart}",
                 vec![Value::String("test-user-1".to_string())],
             )
             .await;
@@ -351,7 +351,7 @@ async fn get_running_workers() {
         let _ = DEPS
             .invoke(
                 &worker_id,
-                "golem:it/api/start-polling",
+                "golem:it/api.{start-polling}",
                 vec![Value::String("first".to_string())],
             )
             .await;
@@ -431,7 +431,7 @@ async fn auto_update_on_idle() {
     DEPS.auto_update_worker(&worker_id, target_version).await;
 
     let result = DEPS
-        .invoke_and_await(&worker_id, "golem:component/api/f2", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
         .await
         .unwrap();
 
@@ -466,7 +466,7 @@ async fn auto_update_on_idle_via_host_function() {
     };
     DEPS.invoke_and_await(
         &runtime_svc_worker,
-        "golem:it/api/update-worker",
+        "golem:it/api.{update-worker}",
         vec![
             Value::Record(vec![
                 Value::Record(vec![Value::Record(vec![
@@ -483,7 +483,7 @@ async fn auto_update_on_idle_via_host_function() {
     .unwrap();
 
     let result = DEPS
-        .invoke_and_await(&worker_id, "golem:component/api/f2", vec![])
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
         .await
         .unwrap();
 
