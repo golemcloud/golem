@@ -48,18 +48,10 @@ pub struct ServerConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct WorkerServiceGrpcConfig {
-    pub host: String,
-    pub port: u16,
-    pub access_token: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
 pub struct ComponentServiceConfig {
     pub host: String,
     pub port: u16,
     pub access_token: Uuid,
-    pub retries: RetryConfig,
 }
 
 impl ComponentServiceConfig {
