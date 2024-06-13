@@ -7,6 +7,7 @@ import public "golem/worker/calling_convention.proto";
 import public "golem/worker/complete_parameters.proto";
 import public "golem/worker/cursor.proto";
 import public "golem/worker/idempotency_key.proto";
+import public "golem/worker/invocation_context.proto";
 import public "golem/worker/invoke_parameters.proto";
 import public "golem/worker/invoke_result.proto";
 import public "golem/worker/invoke_result_json.proto";
@@ -105,6 +106,7 @@ message InvokeAndAwaitRequest {
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
   golem.worker.CallingConvention callingConvention = 5;
+  optional golem.worker.InvocationContext context = 6;
 }
 
 message InvokeAndAwaitResponse {
@@ -119,6 +121,7 @@ message InvokeRequest {
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
+  optional golem.worker.InvocationContext context = 6;
 }
 
 message InvokeResponse {

@@ -34,7 +34,7 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     CallingConvention, ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId,
-    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerInvocation,
+    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 
@@ -104,6 +104,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         component_version: Option<u64>,
+        parent: Option<WorkerId>,
     ) -> Result<Arc<Self>, GolemError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -122,6 +123,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             worker_args,
                             worker_env,
                             component_version,
+                            parent,
                         )
                         .in_current_span()
                         .await?,
@@ -136,11 +138,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_or_create_running<T>(
         deps: &T,
         owned_worker_id: &OwnedWorkerId,
+        worker_args: Option<Vec<String>>,
+        worker_env: Option<Vec<(String, String)>>,
+        component_version: Option<u64>,
+        parent: Option<WorkerId>,
     ) -> Result<Arc<Self>, GolemError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_or_create_suspended(deps, owned_worker_id, None, None, None).await?;
+        let worker = Self::get_or_create_suspended(
+            deps,
+            owned_worker_id,
+            worker_args,
+            worker_env,
+            component_version,
+            parent,
+        )
+        .await?;
         Self::start_if_needed(worker.clone()).await?;
         Ok(worker)
     }
@@ -151,6 +165,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         component_version: Option<u64>,
+        parent: Option<WorkerId>,
     ) -> Result<Self, GolemError> {
         let worker_metadata = Self::get_or_create_worker_metadata(
             deps,
@@ -158,6 +173,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_version,
             worker_args,
             worker_env,
+            parent,
         )
         .await?;
         let oplog = deps.oplog_service().open(&owned_worker_id).await;
@@ -779,6 +795,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_version: Option<u64>,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        parent: Option<WorkerId>,
     ) -> Result<WorkerMetadata, GolemError> {
         let component_id = owned_worker_id.component_id();
 
@@ -801,6 +818,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     env: worker_env.unwrap_or_default(),
                     account_id: owned_worker_id.account_id(),
                     created_at: Timestamp::now_utc(),
+                    parent,
                     last_known_status: WorkerStatusRecord {
                         component_version,
                         ..initial_status

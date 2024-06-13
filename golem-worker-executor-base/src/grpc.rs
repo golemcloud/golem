@@ -256,6 +256,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Some(args),
             Some(env),
             Some(component_version),
+            None,
         )
         .await?;
         Worker::start_if_needed(worker.clone()).await?;
@@ -313,7 +314,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             // By making sure the worker is in memory. If it was suspended because of waiting
             // for a promise, replaying that call will now not suspend as the promise has been
             // completed, and the worker will continue running.
-            Worker::get_or_create_running(&self.services, &owned_worker_id).await?;
+            Worker::get_or_create_running(&self.services, &owned_worker_id, None, None, None, None)
+                .await?;
         }
 
         let success = golem::workerexecutor::CompletePromiseSuccess { completed };
@@ -351,7 +353,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         if should_interrupt {
             let worker =
-                Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None).await?;
+                Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None, None)
+                    .await?;
 
             if let Some(mut await_interrupted) =
                 worker.set_interrupting(InterruptKind::Interrupt).await
@@ -424,7 +427,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             WorkerStatus::Suspended => {
                 debug!("Marking suspended worker as interrupted");
                 let worker =
-                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None)
+                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None, None)
                         .await?;
                 worker.set_interrupting(InterruptKind::Interrupt).await;
                 // Explicitly drop from the active worker cache - this will drop websocket connections etc.
@@ -433,7 +436,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             WorkerStatus::Retrying => {
                 debug!("Marking worker scheduled to be retried as interrupted");
                 let worker =
-                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None)
+                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None, None)
                         .await?;
                 worker.set_interrupting(InterruptKind::Interrupt).await;
                 // Explicitly drop from the active worker cache - this will drop websocket connections etc.
@@ -441,7 +444,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             WorkerStatus::Running => {
                 let worker =
-                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None)
+                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None, None)
                         .await?;
                 worker
                     .set_interrupting(if request.recover_immediately {
@@ -488,7 +491,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match &worker_status.status {
             WorkerStatus::Suspended | WorkerStatus::Interrupted => {
                 info!("Activating ${worker_status:?} worker {worker_id} due to explicit resume request");
-                let _ = Worker::get_or_create_running(&self.services, &owned_worker_id).await?;
+                let _ = Worker::get_or_create_running(
+                    &self.services,
+                    &owned_worker_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
                 Ok(())
             }
             _ => Err(GolemError::invalid_request(format!(
@@ -556,7 +567,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
         }
 
-        Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None).await
+        Worker::get_or_create_suspended(
+            self,
+            &owned_worker_id,
+            request.args(),
+            request.env(),
+            None,
+            request.parent(),
+        )
+        .await
     }
 
     async fn invoke_worker_internal<Req: GrpcInvokeRequest>(
@@ -817,6 +836,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             Some(worker_status.component_version),
+                            None,
                         )
                         .await?;
 
@@ -849,6 +869,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             None,
+                            None,
                         )
                         .await?;
 
@@ -877,7 +898,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 // process need to be initiated through the worker's invocation queue.
 
                 let worker =
-                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None)
+                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None, None)
                         .await?;
                 worker.enqueue_manual_update(request.target_version).await;
             }
@@ -915,7 +936,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
             if worker_status.status != WorkerStatus::Interrupted {
                 let event_service =
-                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None)
+                    Worker::get_or_create_suspended(self, &owned_worker_id, None, None, None, None)
                         .await?
                         .event_service();
 
@@ -1699,6 +1720,9 @@ trait GrpcInvokeRequest {
     fn worker_id(&self) -> Result<WorkerId, GolemError>;
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError>;
     fn name(&self) -> String;
+    fn args(&self) -> Option<Vec<String>>;
+    fn env(&self) -> Option<Vec<(String, String)>>;
+    fn parent(&self) -> Option<WorkerId>;
 }
 
 impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
@@ -1736,6 +1760,24 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
 
     fn name(&self) -> String {
         self.name.clone()
+    }
+
+    fn args(&self) -> Option<Vec<String>> {
+        self.context.as_ref().map(|ctx| ctx.args.clone())
+    }
+
+    fn env(&self) -> Option<Vec<(String, String)>> {
+        self.context
+            .as_ref()
+            .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
+    }
+
+    fn parent(&self) -> Option<WorkerId> {
+        self.context.as_ref().and_then(|ctx| {
+            ctx.parent
+                .as_ref()
+                .and_then(|worker_id| worker_id.clone().try_into().ok())
+        })
     }
 }
 
@@ -1777,6 +1819,24 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
 
     fn name(&self) -> String {
         self.name.clone()
+    }
+
+    fn args(&self) -> Option<Vec<String>> {
+        self.context.as_ref().map(|ctx| ctx.args.clone())
+    }
+
+    fn env(&self) -> Option<Vec<(String, String)>> {
+        self.context
+            .as_ref()
+            .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
+    }
+
+    fn parent(&self) -> Option<WorkerId> {
+        self.context.as_ref().and_then(|ctx| {
+            ctx.parent
+                .as_ref()
+                .and_then(|worker_id| worker_id.clone().try_into().ok())
+        })
     }
 }
 

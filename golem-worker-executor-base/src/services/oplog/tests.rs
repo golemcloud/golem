@@ -45,6 +45,7 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             args,
             env,
             account_id,
+            parent,
         } => OplogEntry::Create {
             timestamp: rounded_ts(timestamp),
             worker_id,
@@ -52,6 +53,7 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             args,
             env,
             account_id,
+            parent,
         },
         OplogEntry::ImportedFunctionInvoked {
             timestamp,

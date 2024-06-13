@@ -221,6 +221,7 @@ impl WorkerService for ForwardingWorkerService {
                     available_fuel: i64::MAX,
                     max_memory_per_worker: i64::MAX,
                 }),
+                context: request.context,
             })
             .await
             .expect("Failed to call golem-worker-executor")
@@ -267,6 +268,7 @@ impl WorkerService for ForwardingWorkerService {
                     available_fuel: i64::MAX,
                     max_memory_per_worker: i64::MAX,
                 }),
+                context: request.context,
             })
             .await
             .expect("Failed to call golem-worker-executor")

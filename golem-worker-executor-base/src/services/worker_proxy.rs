@@ -19,13 +19,14 @@ use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
     invoke_and_await_response, invoke_response, update_worker_response, worker_error,
-    CallingConvention, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeParameters,
-    InvokeRequest, InvokeResponse, UpdateMode, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError,
+    CallingConvention, InvocationContext, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
+    InvokeParameters, InvokeRequest, InvokeResponse, UpdateMode, UpdateWorkerRequest,
+    UpdateWorkerResponse, WorkerError,
 };
-use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId};
+use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_wasm_rpc::{Value, WitValue};
 use http::Uri;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use tracing::debug;
@@ -39,6 +40,9 @@ pub trait WorkerProxy {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        caller_worker_id: WorkerId,
+        caller_args: Vec<String>,
+        caller_env: HashMap<String, String>,
     ) -> Result<WitValue, WorkerProxyError>;
 
     async fn invoke(
@@ -47,6 +51,9 @@ pub trait WorkerProxy {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        caller_worker_id: WorkerId,
+        caller_args: Vec<String>,
+        caller_env: HashMap<String, String>,
     ) -> Result<(), WorkerProxyError>;
 
     async fn update(
@@ -153,6 +160,9 @@ impl WorkerProxy for RemoteWorkerProxy {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        caller_worker_id: WorkerId,
+        caller_args: Vec<String>,
+        caller_env: HashMap<String, String>,
     ) -> Result<WitValue, WorkerProxyError> {
         debug!(
             "Invoking remote worker function {function_name} with parameters {function_params:?}"
@@ -179,6 +189,11 @@ impl WorkerProxy for RemoteWorkerProxy {
                     function: function_name,
                     invoke_parameters,
                     calling_convention: CallingConvention::Component as i32,
+                    context: Some(InvocationContext {
+                        parent: Some(caller_worker_id.into()),
+                        args: caller_args,
+                        env: caller_env,
+                    }),
                 },
                 &self.access_token,
             ))
@@ -212,6 +227,9 @@ impl WorkerProxy for RemoteWorkerProxy {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        caller_worker_id: WorkerId,
+        caller_args: Vec<String>,
+        caller_env: HashMap<String, String>,
     ) -> Result<(), WorkerProxyError> {
         debug!("Invoking remote worker function {function_name} with parameters {function_params:?} without awaiting for the result");
 
@@ -235,6 +253,11 @@ impl WorkerProxy for RemoteWorkerProxy {
                     idempotency_key: idempotency_key.map(|k| k.into()),
                     function: function_name,
                     invoke_parameters,
+                    context: Some(InvocationContext {
+                        parent: Some(caller_worker_id.into()),
+                        args: caller_args,
+                        env: caller_env,
+                    }),
                 },
                 &self.access_token,
             ))
@@ -308,6 +331,9 @@ impl WorkerProxy for WorkerProxyMock {
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
+        _caller_worker_id: WorkerId,
+        _caller_args: Vec<String>,
+        _caller_env: HashMap<String, String>,
     ) -> Result<WitValue, WorkerProxyError> {
         unimplemented!()
     }
@@ -318,6 +344,9 @@ impl WorkerProxy for WorkerProxyMock {
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
+        _caller_worker_id: WorkerId,
+        _caller_args: Vec<String>,
+        _caller_env: HashMap<String, String>,
     ) -> Result<(), WorkerProxyError> {
         unimplemented!()
     }

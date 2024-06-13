@@ -28,6 +28,7 @@ use std::str::FromStr;
 use tracing::{debug, error};
 use uuid::Uuid;
 use wasmtime::component::Resource;
+use wasmtime_wasi::preview2::bindings::cli::environment::Host;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
@@ -84,6 +85,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await?;
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
+        let args = self.get_arguments().await?;
+        let env = self.get_environment().await?;
         let result = Durability::<Ctx, WitValue, SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
@@ -96,6 +99,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             Some(idempotency_key),
                             function_name,
                             function_params,
+                            ctx.worker_id(),
+                            &args,
+                            &env,
                         )
                         .await
                 })
@@ -145,6 +151,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await?;
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
+        let args = self.get_arguments().await?;
+        let env = self.get_environment().await?;
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
@@ -157,6 +165,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             Some(idempotency_key),
                             function_name,
                             function_params,
+                            ctx.worker_id(),
+                            &args,
+                            &env,
                         )
                         .await
                 })

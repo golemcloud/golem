@@ -122,6 +122,7 @@ pub enum OplogEntry {
         args: Vec<String>,
         env: Vec<(String, String)>,
         account_id: AccountId,
+        parent: Option<WorkerId>,
     },
     /// The worker invoked a host function
     ImportedFunctionInvoked {
@@ -221,6 +222,7 @@ impl OplogEntry {
         args: Vec<String>,
         env: Vec<(String, String)>,
         account_id: AccountId,
+        parent: Option<WorkerId>,
     ) -> OplogEntry {
         OplogEntry::Create {
             timestamp: Timestamp::now_utc(),
@@ -229,6 +231,7 @@ impl OplogEntry {
             args,
             env,
             account_id,
+            parent,
         }
     }
 
