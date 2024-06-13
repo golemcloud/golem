@@ -23,7 +23,7 @@ harness = false
 golem-client = { path = "../golem-client", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 
-golem-cloud-client = "0.0.62"
+golem-cloud-client = "0.0.63"
 
 async-trait = { workspace = true }
 chrono = { workspace = true }
