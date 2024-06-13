@@ -2,21 +2,6 @@ use nom::character::complete;
 use nom::sequence::delimited;
 use nom::IResult;
 
-use super::*;
-
-pub struct PlaceHolderPatternParser;
-
-pub struct PlaceHolder(pub String);
-
-impl GolemParser<PlaceHolder> for PlaceHolderPatternParser {
-    fn parse(&self, str: &str) -> Result<PlaceHolder, ParseError> {
-        match parse_place_holder(str) {
-            Ok((_, parsed)) => Ok(PlaceHolder(parsed.to_string())),
-            Err(err) => Result::Err(ParseError::Message(err.to_string())),
-        }
-    }
-}
-
 pub fn parse_place_holder(input: &str) -> IResult<&str, &str> {
     delimited(
         complete::char('{'),

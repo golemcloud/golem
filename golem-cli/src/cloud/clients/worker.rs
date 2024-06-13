@@ -321,7 +321,10 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
                 &component_id.0,
                 &WorkersMetadataRequest {
                     filter: filter.map(to_cloud_worker_filter),
-                    cursor: cursor.map(|c| c.cursor), // TODO: unify cloud and OSS
+                    cursor: cursor.map(|c| golem_cloud_client::model::ScanCursor {
+                        cursor: c.cursor,
+                        layer: c.layer,
+                    }),
                     count,
                     precise,
                 },
@@ -348,16 +351,11 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
         );
 
         let filter: Option<&[String]> = filter.as_deref();
+        let cursor = cursor.map(|cursor| format!("{}/{}", cursor.layer, cursor.cursor));
 
         Ok(self
             .client
-            .get_workers_metadata(
-                &component_id.0,
-                filter,
-                cursor.map(|c| c.cursor),
-                count,
-                precise,
-            ) // TODO: unify cloud and OSS
+            .get_workers_metadata(&component_id.0, filter, cursor.as_deref(), count, precise) // TODO: unify cloud and OSS
             .await?
             .into())
     }

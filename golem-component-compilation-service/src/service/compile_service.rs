@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::config::{CompileWorkerConfig, ComponentServiceConfig, UploadWorkerConfig};
+use crate::config::{CompileWorkerConfig, ComponentServiceConfig};
 use crate::model::*;
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
@@ -38,7 +38,6 @@ pub struct ComponentCompilationServiceImpl {
 
 impl ComponentCompilationServiceImpl {
     pub fn new(
-        upload_worker: UploadWorkerConfig,
         compile_worker: CompileWorkerConfig,
         component_service: ComponentServiceConfig,
 
@@ -59,7 +58,7 @@ impl ComponentCompilationServiceImpl {
             compile_rx,
         );
 
-        UploadWorker::start(upload_worker, compiled_component_service.clone(), upload_rx);
+        UploadWorker::start(compiled_component_service.clone(), upload_rx);
 
         Self { queue: compile_tx }
     }
