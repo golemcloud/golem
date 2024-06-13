@@ -17,7 +17,7 @@ use std::sync::Arc;
 use golem_worker_executor_base::services::compiled_component::CompiledComponentService;
 use tokio::sync::mpsc;
 
-use crate::{model::*};
+use crate::model::*;
 
 // Worker that uploads compiled components to the cloud.
 #[derive(Clone)]
