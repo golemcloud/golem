@@ -321,7 +321,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
                 &component_id.0,
                 &WorkersMetadataRequest {
                     filter: filter.map(to_cloud_worker_filter),
-                    cursor: cursor.map(|c| c.cursor), // TODO: unify cloud and OSS
+                    cursor,
                     count,
                     precise,
                 },
@@ -354,7 +354,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             .get_workers_metadata(
                 &component_id.0,
                 filter,
-                cursor.map(|c| c.cursor),
+                cursor.as_deref(),
                 count,
                 precise,
             ) // TODO: unify cloud and OSS
