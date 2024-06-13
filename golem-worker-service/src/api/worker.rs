@@ -115,6 +115,7 @@ impl WorkerApi {
                 function.0,
                 params.0.params,
                 &calling_convention,
+                None,
                 empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
@@ -144,6 +145,7 @@ impl WorkerApi {
                 idempotency_key.0,
                 function.0,
                 params.0.params,
+                None,
                 empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )

@@ -378,6 +378,7 @@ impl WorkerGrpcApi {
                 request.idempotency_key,
                 request.function,
                 params.params,
+                request.context,
                 empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
@@ -409,6 +410,7 @@ impl WorkerGrpcApi {
                 request.function,
                 params.params,
                 &calling_convention,
+                request.context,
                 empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -49,6 +50,9 @@ pub trait Rpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<WitValue, RpcError>;
 
     async fn invoke(
@@ -57,6 +61,9 @@ pub trait Rpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<(), RpcError>;
 }
 
@@ -178,6 +185,9 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<WitValue, RpcError> {
         Ok(self
             .worker_proxy
@@ -186,6 +196,9 @@ impl Rpc for RemoteInvocationRpc {
                 idempotency_key,
                 function_name,
                 function_params,
+                self_worker_id.clone(),
+                self_args.to_vec(),
+                HashMap::from_iter(self_env.to_vec()),
             )
             .await?)
     }
@@ -196,6 +209,9 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<(), RpcError> {
         Ok(self
             .worker_proxy
@@ -204,6 +220,9 @@ impl Rpc for RemoteInvocationRpc {
                 idempotency_key,
                 function_name,
                 function_params,
+                self_worker_id.clone(),
+                self_args.to_vec(),
+                HashMap::from_iter(self_env.to_vec()),
             )
             .await?)
     }
@@ -451,6 +470,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<WitValue, RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
@@ -466,7 +488,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker = Worker::get_or_create_running(self, owned_worker_id).await?;
+            let worker = Worker::get_or_create_running(
+                self,
+                owned_worker_id,
+                Some(self_args.to_vec()),
+                Some(self_env.to_vec()),
+                None,
+                Some(self_worker_id.clone()),
+            )
+            .await?;
 
             let result_values = worker
                 .invoke_and_await(
@@ -484,6 +514,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     Some(idempotency_key),
                     function_name,
                     function_params,
+                    self_worker_id,
+                    self_args,
+                    self_env,
                 )
                 .await
         }
@@ -495,6 +528,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<(), RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
@@ -510,7 +546,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker = Worker::get_or_create_running(self, owned_worker_id).await?;
+            let worker = Worker::get_or_create_running(
+                self,
+                owned_worker_id,
+                Some(self_args.to_vec()),
+                Some(self_env.to_vec()),
+                None,
+                Some(self_worker_id.clone()),
+            )
+            .await?;
 
             worker
                 .invoke(
@@ -528,6 +572,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     Some(idempotency_key),
                     function_name,
                     function_params,
+                    self_worker_id,
+                    self_args,
+                    self_env,
                 )
                 .await
         }
@@ -566,6 +613,9 @@ impl Rpc for RpcMock {
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
+        _self_worker_id: &WorkerId,
+        _self_args: &[String],
+        _self_env: &[(String, String)],
     ) -> Result<WitValue, RpcError> {
         unimplemented!()
     }
@@ -576,6 +626,9 @@ impl Rpc for RpcMock {
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
+        _self_worker_id: &WorkerId,
+        _self_args: &[String],
+        _self_env: &[(String, String)],
     ) -> Result<(), RpcError> {
         unimplemented!()
     }

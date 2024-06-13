@@ -13,7 +13,9 @@ use tokio::time::sleep;
 use tonic::transport::Channel;
 use tracing::{debug, info};
 
-use golem_api_grpc::proto::golem::worker::IdempotencyKey as ProtoIdempotencyKey;
+use golem_api_grpc::proto::golem::worker::{
+    IdempotencyKey as ProtoIdempotencyKey, InvocationContext,
+};
 use golem_api_grpc::proto::golem::worker::{InvokeResult as ProtoInvokeResult, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
@@ -76,6 +78,7 @@ pub trait WorkerService<AuthCtx> {
         function_name: String,
         params: Value,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value>;
@@ -87,6 +90,7 @@ pub trait WorkerService<AuthCtx> {
         function_name: String,
         params: Value,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<TypedResult>;
@@ -98,6 +102,7 @@ pub trait WorkerService<AuthCtx> {
         function_name: String,
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult>;
@@ -108,6 +113,7 @@ pub trait WorkerService<AuthCtx> {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Value,
+        invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
@@ -118,6 +124,7 @@ pub trait WorkerService<AuthCtx> {
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
+        invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
@@ -391,6 +398,7 @@ where
         function_name: String,
         params: Value,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value> {
@@ -401,6 +409,7 @@ where
                 function_name,
                 params,
                 calling_convention,
+                invocation_context,
                 metadata,
                 auth_ctx,
             )
@@ -416,6 +425,7 @@ where
         function_name: String,
         params: Value,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<TypedResult> {
@@ -449,6 +459,7 @@ where
                 function_name,
                 params_val,
                 calling_convention,
+                invocation_context,
                 metadata,
                 auth_ctx,
             )
@@ -477,6 +488,7 @@ where
         function_name: String,
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult> {
@@ -504,8 +516,8 @@ where
 
         let invoke_response = self.retry_on_invalid_shard_id(
             worker_id,
-            &(worker_id.clone(), function_name, params_val, idempotency_key.clone(), *calling_convention, metadata),
-            |worker_executor_client, (worker_id, function_name, params_val, idempotency_key, calling_convention, metadata)| {
+            &(worker_id.clone(), function_name, params_val, idempotency_key.clone(), *calling_convention, metadata, invocation_context),
+            |worker_executor_client, (worker_id, function_name, params_val, idempotency_key, calling_convention, metadata, invocation_context)| {
                 Box::pin(async move {
                     let response = worker_executor_client.invoke_and_await_worker(
                         InvokeAndAwaitWorkerRequest {
@@ -516,6 +528,7 @@ where
                             calling_convention: (*calling_convention).into(),
                             account_id: metadata.account_id.clone().map(|id| id.into()),
                             account_limits: metadata.limits.clone().map(|id| id.into()),
+                            context: invocation_context.clone()
                         }
                     ).await.map_err(|err| {
                         GolemError::RuntimeError(GolemErrorRuntimeError {
@@ -554,6 +567,7 @@ where
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Value,
+        invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
@@ -583,6 +597,7 @@ where
             idempotency_key.map(|k| k.into()),
             function_name.clone(),
             params_val,
+            invocation_context,
             metadata,
             auth_ctx,
         )
@@ -597,6 +612,7 @@ where
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
+        invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
@@ -629,10 +645,11 @@ where
                 function_name,
                 params_val,
                 metadata,
-                idempotency_key
+                idempotency_key,
+                invocation_context
             ),
             |worker_executor_client,
-             (worker_id, function_name, params_val, metadata, idempotency_key)| {
+             (worker_id, function_name, params_val, metadata, idempotency_key, invocation_context)| {
                 Box::pin(async move {
                     let response = worker_executor_client
                         .invoke_worker(workerexecutor::InvokeWorkerRequest {
@@ -642,6 +659,7 @@ where
                             input: params_val.clone(),
                             account_id: metadata.account_id.clone().map(|id| id.into()),
                             account_limits: metadata.limits.clone().map(|id| id.into()),
+                            context: invocation_context.clone()
                         })
                         .await
                         .map_err(|err| {
@@ -1452,6 +1470,7 @@ where
         _function_name: String,
         _params: Value,
         _calling_convention: &CallingConvention,
+        _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value> {
@@ -1465,6 +1484,7 @@ where
         _function_name: String,
         _params: Value,
         _calling_convention: &CallingConvention,
+        _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<TypedResult> {
@@ -1484,6 +1504,7 @@ where
         _function_name: String,
         _params: Vec<ProtoVal>,
         _calling_convention: &CallingConvention,
+        _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult> {
@@ -1496,6 +1517,7 @@ where
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _params: Value,
+        _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
@@ -1508,6 +1530,7 @@ where
         _idempotency_key: Option<ProtoIdempotencyKey>,
         _function_name: String,
         _params: Vec<ProtoVal>,
+        _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {

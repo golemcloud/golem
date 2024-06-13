@@ -701,6 +701,7 @@ pub struct WorkerMetadata {
     pub env: Vec<(String, String)>,
     pub account_id: AccountId,
     pub created_at: Timestamp,
+    pub parent: Option<WorkerId>,
     pub last_known_status: WorkerStatusRecord,
 }
 
@@ -712,6 +713,7 @@ impl WorkerMetadata {
             env: vec![],
             account_id,
             created_at: Timestamp::now_utc(),
+            parent: None,
             last_known_status: WorkerStatusRecord::default(),
         }
     }
@@ -1962,6 +1964,7 @@ mod tests {
                 value: "account-1".to_string(),
             },
             created_at: Timestamp::now_utc(),
+            parent: None,
             last_known_status: WorkerStatusRecord {
                 component_version: 1,
                 ..WorkerStatusRecord::default()

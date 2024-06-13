@@ -6,4 +6,5 @@ world caller {
   export test1: func() -> list<tuple<string, u64>>;
   export test2: func() -> u64;
   export test3: func() -> u64;
+  export test4: func() -> tuple<list<string>, list<tuple<string, string>>>;
 }

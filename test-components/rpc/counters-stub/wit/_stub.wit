@@ -16,6 +16,8 @@ interface stub-counters {
     blocking-inc-by: func(value: u64);
     inc-by: func(value: u64);
     get-value: func() -> u64;
+    get-args: func() -> list<string>;
+    get-env: func() -> list<tuple<string, string>>;
   }
 
 }

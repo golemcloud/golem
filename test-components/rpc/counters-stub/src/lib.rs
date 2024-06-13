@@ -179,6 +179,60 @@ for Counter {
             );
         (result.tuple_element(0).expect("tuple not found").u64().expect("u64 not found"))
     }
+    fn get_args(&self) -> Vec<String> {
+        let result = self
+            .rpc
+            .invoke_and_await(
+                "rpc:counters/api.{counter.get-args}",
+                &[WitValue::builder().handle(self.uri.clone(), self.id)],
+            )
+            .expect(
+                &format!(
+                    "Failed to invoke-and-await remote {}",
+                    "rpc:counters/api.{counter.get-args}"
+                ),
+            );
+        (result
+            .tuple_element(0)
+            .expect("tuple not found")
+            .list_elements(|item| item.string().expect("string not found").to_string())
+            .expect("list not found"))
+    }
+    fn get_env(&self) -> Vec<(String, String)> {
+        let result = self
+            .rpc
+            .invoke_and_await(
+                "rpc:counters/api.{counter.get-env}",
+                &[WitValue::builder().handle(self.uri.clone(), self.id)],
+            )
+            .expect(
+                &format!(
+                    "Failed to invoke-and-await remote {}",
+                    "rpc:counters/api.{counter.get-env}"
+                ),
+            );
+        (result
+            .tuple_element(0)
+            .expect("tuple not found")
+            .list_elements(|item| {
+                let tuple = item;
+                (
+                    tuple
+                        .tuple_element(0usize)
+                        .expect("tuple element not found")
+                        .string()
+                        .expect("string not found")
+                        .to_string(),
+                    tuple
+                        .tuple_element(1usize)
+                        .expect("tuple element not found")
+                        .string()
+                        .expect("string not found")
+                        .to_string(),
+                )
+            })
+            .expect("list not found"))
+    }
 }
 impl Drop for Counter {
     fn drop(&mut self) {

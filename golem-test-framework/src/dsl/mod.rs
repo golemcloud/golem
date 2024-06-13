@@ -332,6 +332,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 invoke_parameters: Some(InvokeParameters {
                     params: params.into_iter().map(|v| v.into()).collect(),
                 }),
+                context: None,
             })
             .await;
 
@@ -361,6 +362,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 invoke_parameters: Some(InvokeParameters {
                     params: params.into_iter().map(|v| v.into()).collect(),
                 }),
+                context: None,
             })
             .await;
 
@@ -480,6 +482,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                     params: params.into_iter().map(|v| v.into()).collect(),
                 }),
                 calling_convention: cc.into(),
+                context: None,
             })
             .await;
 
@@ -967,6 +970,7 @@ pub fn to_worker_metadata(
             current_idempotency_key: None,
             component_version: metadata.component_version,
         },
+        parent: None,
     }
 }
 

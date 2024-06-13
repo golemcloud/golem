@@ -114,6 +114,7 @@ impl WorkerService for DefaultWorkerService {
             worker_metadata.args.clone(),
             worker_metadata.env.clone(),
             worker_metadata.account_id.clone(),
+            worker_metadata.parent.clone(),
         );
         self.oplog_service
             .create(&owned_worker_id, initial_oplog_entry)
@@ -173,6 +174,7 @@ impl WorkerService for DefaultWorkerService {
                     env,
                     account_id,
                     timestamp,
+                    parent,
                 },
             )) => {
                 let mut details = WorkerMetadata {
@@ -181,6 +183,7 @@ impl WorkerService for DefaultWorkerService {
                     env,
                     account_id,
                     created_at: timestamp,
+                    parent,
                     last_known_status: WorkerStatusRecord {
                         component_version,
                         ..WorkerStatusRecord::default()

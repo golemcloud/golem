@@ -22,7 +22,8 @@ fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
 impl Guest for Component {
     fn test1() -> Vec<(String, u64)> {
         println!("Creating, using and dropping counters");
-        let component_id = env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
+        let component_id =
+            env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
         let counters_uri = Uri {
             value: format!("worker://{component_id}/counters_test1"),
         };
@@ -64,6 +65,16 @@ impl Guest for Component {
         let api = Api::new(&counters_uri);
         api.inc_global_by(1);
         api.get_global_value()
+    }
+
+    fn test4() -> (Vec<String>, Vec<(String, String)>) {
+        let component_id =
+            env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
+        let counters_uri = Uri {
+            value: format!("worker://{component_id}/counters_test4"),
+        };
+        let counter = Counter::new(&counters_uri, "counter-test4");
+        (counter.get_args(), counter.get_env())
     }
 }
 

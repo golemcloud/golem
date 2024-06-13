@@ -1129,7 +1129,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
             match decision {
                 RecoveryDecision::Immediate => {
-                    let _ = Worker::get_or_create_running(this, &owned_worker_id).await?;
+                    let _ = Worker::get_or_create_running(
+                        this,
+                        &owned_worker_id,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await?;
                 }
                 RecoveryDecision::Delayed(_) => {
                     panic!("Delayed recovery on startup is not supported currently")

@@ -87,6 +87,7 @@ mod internal {
                 worker_request_params.function_name.to_string(),
                 Value::Array(invoke_parameters_values),
                 &CallingConvention::Component,
+                None,
                 empty_worker_metadata(),
                 &EmptyAuthCtx {},
             )
