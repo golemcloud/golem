@@ -101,7 +101,6 @@ async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn s
     );
 
     let compilation_service = ComponentCompilationServiceImpl::new(
-        config.upload_worker,
         config.compile_worker,
         config.component_service,
         engine,

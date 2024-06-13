@@ -17,7 +17,7 @@ use std::sync::Arc;
 use golem_worker_executor_base::services::compiled_component::CompiledComponentService;
 use tokio::sync::mpsc;
 
-use crate::{config::UploadWorkerConfig, model::*};
+use crate::{model::*};
 
 // Worker that uploads compiled components to the cloud.
 #[derive(Clone)]
@@ -27,7 +27,6 @@ pub struct UploadWorker {
 
 impl UploadWorker {
     pub fn start(
-        _: UploadWorkerConfig,
         compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
         mut recv: mpsc::Receiver<CompiledComponent>,
     ) {

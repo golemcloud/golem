@@ -33,7 +33,6 @@ pub struct ServerConfig {
     pub blob_storage: BlobStorageConfig,
 
     // Workers.
-    pub upload_worker: UploadWorkerConfig,
     pub compile_worker: CompileWorkerConfig,
 
     // General.
@@ -63,11 +62,6 @@ impl ComponentServiceConfig {
             .build()
             .expect("Failed to build ComponentService URI")
     }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct UploadWorkerConfig {
-    pub num_workers: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
