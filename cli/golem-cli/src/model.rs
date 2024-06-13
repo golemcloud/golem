@@ -607,9 +607,9 @@ impl From<golem_cloud_client::model::WorkersMetadataResponse> for WorkersMetadat
     fn from(value: golem_cloud_client::model::WorkersMetadataResponse) -> Self {
         WorkersMetadataResponse {
             cursor: value.cursor.map(|c| golem_client::model::ScanCursor {
-                cursor: c,
-                layer: 0,
-            }), // TODO: unify cloud and OSS
+                cursor: c.cursor,
+                layer: c.layer,
+            }),
             workers: value.workers.into_iter().map(|m| m.into()).collect(),
         }
     }
@@ -639,24 +639,23 @@ impl From<golem_client::model::ApiDeployment> for ApiDeployment {
 impl From<golem_cloud_client::model::ApiDeployment> for ApiDeployment {
     fn from(value: golem_cloud_client::model::ApiDeployment) -> Self {
         let golem_cloud_client::model::ApiDeployment {
-            api_definition_id,
-            version,
+            api_definitions,
             project_id,
             site: golem_cloud_client::model::ApiSite { host, subdomain },
         } = value;
 
-        let api_definitions = vec![ApiDefinitionInfo {
-            id: api_definition_id,
-            version,
-        }];
+        let api_definitions = api_definitions
+            .into_iter()
+            .map(|d| ApiDefinitionInfo {
+                id: d.id,
+                version: d.version,
+            })
+            .collect();
 
         ApiDeployment {
             api_definitions,
             project_id: Some(project_id),
-            site: ApiSite {
-                host,
-                subdomain: Some(subdomain),
-            },
+            site: ApiSite { host, subdomain },
         }
     }
 }

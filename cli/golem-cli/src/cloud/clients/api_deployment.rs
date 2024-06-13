@@ -47,26 +47,24 @@ impl<C: golem_cloud_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymen
                 .map_or("".to_string(), |s| format!("subdomain {}", s))
         );
 
-        if api_definitions.len() > 1 {
-            Err(GolemError(
-                "Multiple API definitions in a deployment is not supported in Golem Cloud yet"
-                    .to_string(),
-            ))
-        } else {
-            let api_definition_id = api_definitions[0].id.0.clone();
-            let version = api_definitions[0].version.0.clone();
-            let deployment = golem_cloud_client::model::ApiDeployment {
-                api_definition_id,
-                version,
-                project_id: project.0,
-                site: ApiSite {
-                    host: host.to_string(),
-                    subdomain: subdomain.expect("Subdomain is mandatory"), // TODO: unify OSS and cloud
-                },
-            };
+        let api_definitions = api_definitions
+            .into_iter()
+            .map(|d| golem_cloud_client::model::ApiDefinitionInfo {
+                id: d.id.0,
+                version: d.version.0,
+            })
+            .collect_vec();
 
-            Ok(self.client.deploy(&deployment).await?.into())
-        }
+        let deployment = golem_cloud_client::model::ApiDeployment {
+            api_definitions,
+            project_id: project.0,
+            site: ApiSite {
+                host: host.to_string(),
+                subdomain,
+            },
+        };
+
+        Ok(self.client.deploy(&deployment).await?.into())
     }
 
     async fn list(
