@@ -21,7 +21,7 @@ import type { Result } from "./result";
  * @param init
  */
 export function fetchSync(input: string | URL | Request, init?: RequestInit): Response {
-   return asyncToSync(fetch(input, init));
+	return asyncToSync(fetch(input, init));
 }
 
 /**
@@ -29,6 +29,9 @@ export function fetchSync(input: string | URL | Request, init?: RequestInit): Re
  * @param input
  * @param init
  */
-export function fetchSyncAsResult(input: string | URL | Request, init?: RequestInit): Result<Response, any> {
-   return asyncToSyncAsResult(fetch(input, init));
+export function fetchSyncAsResult(
+	input: string | URL | Request,
+	init?: RequestInit,
+): Result<Response, any> {
+	return asyncToSyncAsResult(fetch(input, init));
 }

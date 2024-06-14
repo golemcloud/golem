@@ -30,22 +30,22 @@ export function getIdempotenceMode(): boolean;
 export function setIdempotenceMode(idempotent: boolean): void;
 export function generateIdempotencyKey(): Uuid;
 export function updateWorker(
-   workerId: WorkerId,
-   targetVersion: ComponentVersion,
-   mode: UpdateMode,
+	workerId: WorkerId,
+	targetVersion: ComponentVersion,
+	mode: UpdateMode,
 ): void;
 
 export class GetWorkers {
-   constructor(componentId: ComponentId, filter: WorkerAnyFilter | undefined, precise: boolean);
-   getNext(): WorkerMetadata[] | undefined;
+	constructor(componentId: ComponentId, filter: WorkerAnyFilter | undefined, precise: boolean);
+	getNext(): WorkerMetadata[] | undefined;
 }
 
 export interface Uuid {
-   highBits: bigint;
-   lowBits: bigint;
+	highBits: bigint;
+	lowBits: bigint;
 }
 export interface ComponentId {
-   uuid: Uuid;
+	uuid: Uuid;
 }
 /**
  * # Variants
@@ -60,8 +60,8 @@ export interface ComponentId {
  */
 export type StringFilterComparator = "equal" | "not-equal" | "like" | "not-like";
 export interface WorkerNameFilter {
-   comparator: StringFilterComparator;
-   value: string;
+	comparator: StringFilterComparator;
+	value: string;
 }
 /**
  * # Variants
@@ -79,12 +79,12 @@ export interface WorkerNameFilter {
  * ## `"less"`
  */
 export type FilterComparator =
-   | "equal"
-   | "not-equal"
-   | "greater-equal"
-   | "greater"
-   | "less-equal"
-   | "less";
+	| "equal"
+	| "not-equal"
+	| "greater-equal"
+	| "greater"
+	| "less-equal"
+	| "less";
 /**
  * # Variants
  *
@@ -103,101 +103,101 @@ export type FilterComparator =
  * ## `"exited"`
  */
 export type WorkerStatus =
-   | "running"
-   | "idle"
-   | "suspended"
-   | "interrupted"
-   | "retrying"
-   | "failed"
-   | "exited";
+	| "running"
+	| "idle"
+	| "suspended"
+	| "interrupted"
+	| "retrying"
+	| "failed"
+	| "exited";
 export interface WorkerStatusFilter {
-   comparator: FilterComparator;
-   value: WorkerStatus;
+	comparator: FilterComparator;
+	value: WorkerStatus;
 }
 export interface WorkerVersionFilter {
-   comparator: FilterComparator;
-   value: bigint;
+	comparator: FilterComparator;
+	value: bigint;
 }
 export interface WorkerCreatedAtFilter {
-   comparator: FilterComparator;
-   value: bigint;
+	comparator: FilterComparator;
+	value: bigint;
 }
 export interface WorkerEnvFilter {
-   name: string;
-   comparator: StringFilterComparator;
-   value: string;
+	name: string;
+	comparator: StringFilterComparator;
+	value: string;
 }
 export type WorkerPropertyFilter =
-   | WorkerPropertyFilterName
-   | WorkerPropertyFilterStatus
-   | WorkerPropertyFilterVersion
-   | WorkerPropertyFilterCreatedAt
-   | WorkerPropertyFilterEnv;
+	| WorkerPropertyFilterName
+	| WorkerPropertyFilterStatus
+	| WorkerPropertyFilterVersion
+	| WorkerPropertyFilterCreatedAt
+	| WorkerPropertyFilterEnv;
 export interface WorkerPropertyFilterName {
-   tag: "name";
-   val: WorkerNameFilter;
+	tag: "name";
+	val: WorkerNameFilter;
 }
 export interface WorkerPropertyFilterStatus {
-   tag: "status";
-   val: WorkerStatusFilter;
+	tag: "status";
+	val: WorkerStatusFilter;
 }
 export interface WorkerPropertyFilterVersion {
-   tag: "version";
-   val: WorkerVersionFilter;
+	tag: "version";
+	val: WorkerVersionFilter;
 }
 export interface WorkerPropertyFilterCreatedAt {
-   tag: "created-at";
-   val: WorkerCreatedAtFilter;
+	tag: "created-at";
+	val: WorkerCreatedAtFilter;
 }
 export interface WorkerPropertyFilterEnv {
-   tag: "env";
-   val: WorkerEnvFilter;
+	tag: "env";
+	val: WorkerEnvFilter;
 }
 export interface WorkerAllFilter {
-   filters: WorkerPropertyFilter[];
+	filters: WorkerPropertyFilter[];
 }
 export interface WorkerAnyFilter {
-   filters: WorkerAllFilter[];
+	filters: WorkerAllFilter[];
 }
 export interface WorkerId {
-   componentId: ComponentId;
-   workerName: string;
+	componentId: ComponentId;
+	workerName: string;
 }
 export interface WorkerMetadata {
-   workerId: WorkerId;
-   args: string[];
-   env: [string, string][];
-   status: WorkerStatus;
-   componentVersion: bigint;
-   retryCount: bigint;
+	workerId: WorkerId;
+	args: string[];
+	env: [string, string][];
+	status: WorkerStatus;
+	componentVersion: bigint;
+	retryCount: bigint;
 }
 export type OplogIndex = bigint;
 export interface PromiseId {
-   workerId: WorkerId;
-   oplogIdx: OplogIndex;
+	workerId: WorkerId;
+	oplogIdx: OplogIndex;
 }
 export interface Uri {
-   value: string;
+	value: string;
 }
 export type Duration = bigint;
 export interface RetryPolicy {
-   maxAttempts: number;
-   minDelay: Duration;
-   maxDelay: Duration;
-   multiplier: number;
+	maxAttempts: number;
+	minDelay: Duration;
+	maxDelay: Duration;
+	multiplier: number;
 }
 export type PersistenceLevel =
-   | PersistenceLevelPersistNothing
-   | PersistenceLevelPersistRemoteSideEffects
-   | PersistenceLevelSmart;
+	| PersistenceLevelPersistNothing
+	| PersistenceLevelPersistRemoteSideEffects
+	| PersistenceLevelSmart;
 export interface PersistenceLevelPersistNothing {
-   tag: "persist-nothing";
+	tag: "persist-nothing";
 }
 export interface PersistenceLevelPersistRemoteSideEffects {
-   tag: "persist-remote-side-effects";
+	tag: "persist-remote-side-effects";
 }
 export interface PersistenceLevelSmart {
-   tag: "smart";
+	tag: "smart";
 }
 export type ComponentVersion = bigint;
 /**
