@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::{
-    IdempotencyKey as ProtoIdempotencyKey, InvokeResult as ProtoInvokeResult, UpdateMode,
+    IdempotencyKey as ProtoIdempotencyKey, InvocationContext, InvokeResult as ProtoInvokeResult,
+    UpdateMode,
 };
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, ProjectId,
@@ -87,6 +88,7 @@ pub trait WorkerService {
         function_name: String,
         params: Value,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<Value, WorkerError>;
 
@@ -97,6 +99,7 @@ pub trait WorkerService {
         function_name: String,
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<ProtoInvokeResult, WorkerError>;
 
@@ -107,6 +110,7 @@ pub trait WorkerService {
         function_name: String,
         params: Value,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<TypedResult, WorkerError>;
 
@@ -116,6 +120,7 @@ pub trait WorkerService {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Value,
+        invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError>;
 
@@ -125,6 +130,7 @@ pub trait WorkerService {
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
+        invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError>;
 
@@ -306,6 +312,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Value,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<Value, WorkerError> {
         let namespace = self
@@ -320,6 +327,7 @@ impl WorkerService for WorkerServiceDefault {
                 function_name,
                 params,
                 calling_convention,
+                invocation_context,
                 namespace.as_worker_request_metadata(),
                 auth,
             )
@@ -335,6 +343,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<ProtoVal>,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<ProtoInvokeResult, WorkerError> {
         let namespace = self
@@ -349,6 +358,7 @@ impl WorkerService for WorkerServiceDefault {
                 function_name,
                 params,
                 calling_convention,
+                invocation_context,
                 namespace.as_worker_request_metadata(),
                 auth,
             )
@@ -364,6 +374,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Value,
         calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<TypedResult, WorkerError> {
         let namespace = self
@@ -378,6 +389,7 @@ impl WorkerService for WorkerServiceDefault {
                 function_name,
                 params,
                 calling_convention,
+                invocation_context,
                 namespace.as_worker_request_metadata(),
                 auth,
             )
@@ -392,6 +404,7 @@ impl WorkerService for WorkerServiceDefault {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Value,
+        invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         let namespace = self
@@ -404,6 +417,7 @@ impl WorkerService for WorkerServiceDefault {
                 idempotency_key,
                 function_name,
                 params,
+                invocation_context,
                 namespace.as_worker_request_metadata(),
                 auth,
             )
@@ -418,6 +432,7 @@ impl WorkerService for WorkerServiceDefault {
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
+        invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         let namespace = self
@@ -430,6 +445,7 @@ impl WorkerService for WorkerServiceDefault {
                 idempotency_key,
                 function_name,
                 params,
+                invocation_context,
                 namespace.as_worker_request_metadata(),
                 auth,
             )
@@ -694,6 +710,7 @@ impl WorkerService for WorkerServiceNoOp {
         _function_name: String,
         _params: Value,
         _calling_convention: &CallingConvention,
+        _invocation_context: Option<InvocationContext>,
         _auth: &CloudAuthCtx,
     ) -> Result<Value, WorkerError> {
         Ok(Value::Null)
@@ -706,6 +723,7 @@ impl WorkerService for WorkerServiceNoOp {
         _function_name: String,
         _params: Vec<ProtoVal>,
         _calling_convention: &CallingConvention,
+        _invocation_context: Option<InvocationContext>,
         _auth: &CloudAuthCtx,
     ) -> Result<ProtoInvokeResult, WorkerError> {
         Ok(ProtoInvokeResult { result: vec![] })
@@ -718,6 +736,7 @@ impl WorkerService for WorkerServiceNoOp {
         _function_name: String,
         _params: Value,
         _calling_convention: &CallingConvention,
+        _invocation_context: Option<InvocationContext>,
         _auth: &CloudAuthCtx,
     ) -> Result<TypedResult, WorkerError> {
         Ok(TypedResult {
@@ -736,6 +755,7 @@ impl WorkerService for WorkerServiceNoOp {
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _params: Value,
+        _invocation_context: Option<InvocationContext>,
         _auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         Ok(())
@@ -747,6 +767,7 @@ impl WorkerService for WorkerServiceNoOp {
         _idempotency_key: Option<ProtoIdempotencyKey>,
         _function_name: String,
         _params: Vec<ProtoVal>,
+        _invocation_context: Option<InvocationContext>,
         _auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         Ok(())

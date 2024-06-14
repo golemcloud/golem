@@ -289,6 +289,7 @@ impl WorkerApi {
                 function.0,
                 params.0.params,
                 &calling_convention,
+                None,
                 &auth,
             )
             .await?;
@@ -324,6 +325,7 @@ impl WorkerApi {
                 idempotency_key.0,
                 function.0,
                 params.0.params,
+                None,
                 &auth,
             )
             .await?;

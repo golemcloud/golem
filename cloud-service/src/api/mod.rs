@@ -10,7 +10,6 @@ use crate::service::Services;
 
 mod account;
 mod account_summary;
-mod auth;
 mod grant;
 mod healthcheck;
 mod limits;

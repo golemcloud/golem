@@ -412,6 +412,7 @@ impl WorkerGrpcApi {
                 request.idempotency_key,
                 request.function,
                 params.params,
+                request.context,
                 &auth,
             )
             .await?;
@@ -444,6 +445,7 @@ impl WorkerGrpcApi {
                 request.function,
                 params.params,
                 &calling_convention,
+                request.context,
                 &auth,
             )
             .await?;
