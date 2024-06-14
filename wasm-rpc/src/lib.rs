@@ -54,7 +54,9 @@ pub use extractor::{WitNodePointer, WitValueExtractor};
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc::types::{FutureInvokeResult, NodeIndex, RpcError, Uri, WasmRpc, WitNode, WitValue};
+pub use bindings::golem::rpc::types::{
+    FutureInvokeResult, NodeIndex, RpcError, Uri, WasmRpc, WitNode, WitValue,
+};
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 pub use bindings::wasi::io::poll::Pollable;
