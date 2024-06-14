@@ -48,6 +48,7 @@ mod type_annotated_value;
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
 
+use std::any::Any;
 use crate::builder::WitValueBuilder;
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 pub use extractor::{WitNodePointer, WitValueExtractor};
@@ -65,6 +66,9 @@ pub use bindings::wasi::io::poll::Pollable;
 use ::wasmtime::component::bindgen;
 
 #[cfg(feature = "host")]
+pub use wasmtime_wasi::preview2::Pollable;
+
+#[cfg(feature = "host")]
 bindgen!({
     path: "wit",
     interfaces: "
@@ -73,7 +77,9 @@ bindgen!({
     tracing: false,
     async: true,
     with: {
-        "golem:rpc/types/wasm-rpc": WasmRpcEntry
+        "golem:rpc/types/wasm-rpc": WasmRpcEntry,
+        "golem:rpc/types/future-invoke-result": FutureInvokeResultEntry,
+        "wasi:io/poll/pollable": Pollable,
     }
 });
 
@@ -83,6 +89,27 @@ pub use golem::rpc::types::{Host, HostWasmRpc, NodeIndex, RpcError, Uri, WitNode
 #[cfg(feature = "host")]
 pub struct WasmRpcEntry {
     pub payload: Box<dyn std::any::Any + Send + Sync>,
+}
+
+#[cfg(feature = "host")]
+#[async_trait::async_trait]
+pub trait SubscribeAny: std::any::Any {
+    async fn ready(&mut self);
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+#[cfg(feature = "host")]
+pub struct FutureInvokeResultEntry {
+    pub payload: Box<dyn SubscribeAny + Send + Sync>,
+}
+
+#[cfg(feature = "host")]
+#[async_trait::async_trait]
+impl wasmtime_wasi::preview2::Subscribe for FutureInvokeResultEntry {
+    async fn ready(&mut self) {
+        self.payload.ready().await
+    }
 }
 
 #[cfg(feature = "typeinfo")]

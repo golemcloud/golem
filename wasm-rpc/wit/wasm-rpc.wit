@@ -56,7 +56,7 @@ interface types {
 
   resource future-invoke-result {
     subscribe: func() -> pollable;
-    get: func() -> result<wit-value, rpc-error>;
+    get: func() -> option<result<wit-value, rpc-error>>;
   }
 }
 
