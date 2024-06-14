@@ -27,33 +27,33 @@ export declare const runEventLoopUntilInterest: () => void;
  * @param promise
  */
 export function asyncToSync<T>(promise: Promise<T>): T {
-   let success = false;
-   let done = false;
-   let result: T;
-   let error: any;
+    let success = false;
+    let done = false;
+    let result: T;
+    let error: any;
 
-   promise
-      .then((r) => {
-         result = r;
-         success = true;
-         done = true;
-      })
-      .catch((e) => {
-         error = e;
-         done = true;
-      });
+    promise
+        .then((r) => {
+            result = r;
+            success = true;
+            done = true;
+        })
+        .catch((e) => {
+            error = e;
+            done = true;
+        });
 
-   runEventLoopUntilInterest();
+    runEventLoopUntilInterest();
 
-   if (!done) {
-      throw new Error("asyncToSync: illegal state: not done");
-   }
+    if (!done) {
+        throw new Error("asyncToSync: illegal state: not done");
+    }
 
-   if (!success) {
-      throw error;
-   }
+    if (!success) {
+        throw error;
+    }
 
-   return result;
+    return result;
 }
 
 /**
@@ -61,5 +61,5 @@ export function asyncToSync<T>(promise: Promise<T>): T {
  * @param promise
  */
 export function asyncToSyncAsResult<T>(promise: Promise<T>): Result<T, any> {
-   return Result.tryCatch(() => asyncToSync(promise));
+    return Result.tryCatch(() => asyncToSync(promise));
 }
