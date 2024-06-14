@@ -22,3 +22,4 @@ pub mod worker_executor_clients;
 
 pub mod stream;
 pub mod type_inference;
+pub mod db;

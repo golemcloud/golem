@@ -11,6 +11,7 @@ use golem_common::config::RedisConfig;
 
 use golem_common::redis::{RedisError, RedisPool};
 use tracing::{debug, info};
+use uuid::Uuid;
 
 use crate::repo::api_namespace::ApiNamespace;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
@@ -408,6 +409,16 @@ mod redis_keys {
         )
     }
 }
+
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct ApiDeploymentRecord {
+    pub namespace: String,
+    pub host: String,
+    pub subdomain: Option<String>,
+    pub definition_id: Uuid,
+    pub definition_version: String
+}
+
 
 #[cfg(test)]
 mod tests {

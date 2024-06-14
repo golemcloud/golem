@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::de::DeserializeOwned;
 use tracing::{debug, info};
+use uuid::Uuid;
 
 use golem_common::config::RedisConfig;
 use golem_common::redis::{RedisError, RedisPool};
@@ -481,6 +482,27 @@ mod redis_keys {
         golem_common::serialization::deserialize(&value)
             .map_err(|e| ApiRegistrationRepoError::Internal(anyhow::Error::msg(e)))
     }
+}
+
+/**
+CREATE TABLE api_definitions
+(
+    namespace            text      NOT NULL default '',
+    id                   uuid      NOT NULL,
+    version              bigint    NOT NULL,
+    draft                boolean   NOT NULL default true,
+    routes               jsonb     NOT NULL,
+    created_at           timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+    PRIMARY KEY (namespace, id, version)
+);
+*/
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct ApiDefinitionRecord {
+    pub namespace: String,
+    pub id: Uuid,
+    pub version: String,
+    pub draft: bool,
+    pub routes: String
 }
 
 #[cfg(test)]

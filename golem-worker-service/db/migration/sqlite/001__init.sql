@@ -1,20 +1,22 @@
 CREATE TABLE api_definitions
 (
-    id                   uuid    NOT NULL,
-    version              bigint  NOT NULL,
-    draft                boolean NOT NULL default true,
-    routes               jsonb   NOT NULL,
-    created_at           timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    deployment_host      text    NOT NULL,
-    deployment_subdomain text,
-    PRIMARY KEY (id, version)
+    namespace  text    NOT NULL default '',
+    id         uuid    NOT NULL,
+    version    text    NOT NULL,
+    draft      boolean NOT NULL default true,
+    routes     jsonb   NOT NULL,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (namespace, id, version)
 );
 
 
 CREATE TABLE api_deployments
 (
-    host       text NOT NULL,
-    subdomain  text,
-    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    PRIMARY KEY (id, version)
+    namespace          text NOT NULL default '',
+    host               text NOT NULL,
+    subdomain          text,
+    definition_id      uuid NOT NULL,
+    definition_version text NOT NULL,
+    created_at         timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (namespace, host, subdomain, definition_id, definition_version)
 );

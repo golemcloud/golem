@@ -25,6 +25,14 @@ poem-openapi = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { version = "0.7", features = [
+    "runtime-tokio",
+    "sqlite",
+    "postgres",
+    "uuid",
+    "migrate",
+    "chrono",
+] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
