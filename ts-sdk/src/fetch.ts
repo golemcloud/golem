@@ -20,7 +20,7 @@ import type { Result } from "./result";
  * @param input
  * @param init
  */
-function fetchSync(input: RequestInfo | URL, init?: RequestInit): Response {
+export function fetchSync(input: string | URL | Request, init?: RequestInit): Response {
    return asyncToSync(fetch(input, init));
 }
 
@@ -29,6 +29,6 @@ function fetchSync(input: RequestInfo | URL, init?: RequestInit): Response {
  * @param input
  * @param init
  */
-function fetchSyncAsResult(input: RequestInfo | URL, init?: RequestInit): Result<Response, any> {
+export function fetchSyncAsResult(input: string | URL | Request, init?: RequestInit): Result<Response, any> {
    return asyncToSyncAsResult(fetch(input, init));
 }
