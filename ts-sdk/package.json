@@ -1,6 +1,6 @@
 {
 	"name": "golem-ts",
-	"version": "0.1.3",
+	"version": "0.1.4",
 	"description": "A library that help writing Golem programs by providing higher level wrappers for Golem's runtime APIs, including functions for defining and performing operations transactionally.",
 	"repository": {
 		"url": "git+https://github.com/golemcloud/golem-ts.git",
