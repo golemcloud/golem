@@ -12,9 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export * from "./bindgen/bindgen";
-export * from "./eventloop";
-export * from "./fetch";
-export * from "./guard";
-export * from "./result";
-export * from "./transaction";
+import { asyncToSync, asyncToSyncAsResult } from "./eventloop";
+import type { Result } from "./result";
+
+/**
+ * Synchronous wrapper of fetch
+ * @param input
+ * @param init
+ */
+function fetchSync(input: RequestInfo | URL, init?: RequestInit): Response {
+   return asyncToSync(fetch(input, init));
+}
+
+/**
+ * Result returning variant of fetchSync
+ * @param input
+ * @param init
+ */
+function fetchSyncAsResult(input: RequestInfo | URL, init?: RequestInit): Result<Response, any> {
+   return asyncToSyncAsResult(fetch(input, init));
+}
