@@ -6,7 +6,7 @@
 To install `golem`, use the following command:
 
 ```bash
-npm install golemcloud/golem
+npm install @golemcloud/golem-ts
 ```
 
 ## Features
