@@ -52,3 +52,6 @@ package = "golem:rpc"
 
 [package.metadata.component.target]
 path = "wit"
+
+[package.metadata.component.target.dependencies]
+"wasi:io" = { path = "wit/deps/io" }

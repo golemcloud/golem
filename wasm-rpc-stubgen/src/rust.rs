@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::stub::{FunctionResultStub, FunctionStub, StubDefinition};
+use crate::stub::{FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition};
 use anyhow::anyhow;
 use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
@@ -71,7 +71,34 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
              #(#struct_fns)*
            }
         });
+
+        for function in &interface.functions {
+            if !function.results.is_empty() {
+                let result_wrapper = result_wrapper_ident(function);
+                struct_defs.push(quote! {
+                    pub struct #result_wrapper {
+                        pub future_invoke_result: FutureInvokeResult
+                    }
+                })
+            }
+        }
+        for function in &interface.static_functions {
+            if !function.results.is_empty() {
+                let result_wrapper = result_wrapper_ident(function);
+                struct_defs.push(quote! {
+                    pub struct #result_wrapper {
+                        pub future_invoke_result: FutureInvokeResult
+                    }
+                })
+            }
+        }
     }
+
+    let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+    let stub_interface_name = Ident::new(
+        &to_rust_ident(&stub_interface_name).to_snake_case(),
+        Span::call_site(),
+    );
 
     let mut interface_impls = Vec::new();
     for interface in &def.interfaces {
@@ -82,17 +109,45 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
 
         let mut fn_impls = Vec::new();
         for function in &interface.functions {
+            let mode = if interface.is_resource() {
+                FunctionMode::Method
+            } else {
+                FunctionMode::Global
+            };
             fn_impls.push(generate_function_stub_source(
                 def,
                 function,
                 interface.interface_name(),
                 interface.resource_name(),
-                if interface.is_resource() {
-                    FunctionMode::Method
-                } else {
-                    FunctionMode::Global
-                },
+                mode,
             )?);
+
+            if !function.results.is_empty() {
+                let result_wrapper = result_wrapper_ident(function);
+                let result_wrapper_interface = result_wrapper_interface_ident(function);
+
+                let subscribe = quote! {
+                    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+                        let pollable = self.future_invoke_result.subscribe();
+                        let pollable = unsafe {
+                            bindings::wasi::io::poll::Pollable::from_handle(
+                                pollable.into_handle()
+                            )
+                        };
+                        pollable
+                    }
+                };
+
+                let get = generate_result_wrapper_get_source(def, interface, function, mode)?;
+
+                let result_wrapper_impl = quote! {
+                    impl crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#result_wrapper_interface for #result_wrapper {
+                        #subscribe
+                        #get
+                    }
+                };
+                interface_impls.push(result_wrapper_impl);
+            }
         }
 
         for function in &interface.static_functions {
@@ -103,13 +158,39 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                 interface.resource_name(),
                 FunctionMode::Static,
             )?);
-        }
 
-        let stub_interface_name = format!("stub-{}", def.source_world_name()?);
-        let stub_interface_name = Ident::new(
-            &to_rust_ident(&stub_interface_name).to_snake_case(),
-            Span::call_site(),
-        );
+            if !function.results.is_empty() {
+                let result_wrapper = result_wrapper_ident(function);
+                let result_wrapper_interface = result_wrapper_interface_ident(function);
+
+                let subscribe = quote! {
+                    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+                        let pollable = self.future_invoke_result.subscribe();
+                        let pollable = unsafe {
+                            bindings::wasi::io::poll::Pollable::from_handle(
+                                pollable.into_handle()
+                            )
+                        };
+                        pollable
+                    }
+                };
+
+                let get = generate_result_wrapper_get_source(
+                    def,
+                    interface,
+                    function,
+                    FunctionMode::Static,
+                )?;
+
+                let result_wrapper_impl = quote! {
+                    impl crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#result_wrapper_interface for #result_wrapper {
+                        #subscribe
+                        #get
+                    }
+                };
+                interface_impls.push(result_wrapper_impl);
+            }
+        }
 
         let constructor = if interface.is_resource() {
             let constructor_stub = FunctionStub {
@@ -198,6 +279,44 @@ enum FunctionMode {
     Constructor,
 }
 
+fn result_wrapper_ident(function: &FunctionStub) -> Ident {
+    Ident::new(
+        &to_rust_ident(&format!("future-{}-result", function.name)).to_upper_camel_case(),
+        Span::call_site(),
+    )
+}
+
+fn result_wrapper_interface_ident(function: &FunctionStub) -> Ident {
+    Ident::new(
+        &to_rust_ident(&format!("guest-future-{}-result", function.name)).to_upper_camel_case(),
+        Span::call_site(),
+    )
+}
+
+fn generate_result_wrapper_get_source(
+    def: &StubDefinition,
+    interface: &InterfaceStub,
+    function: &FunctionStub,
+    mode: FunctionMode,
+) -> anyhow::Result<TokenStream> {
+    let result_type = get_result_type_source(def, function)?;
+    let output_values = get_output_values_source(def, function, mode)?;
+
+    let remote_function_name = get_remote_function_name(
+        def,
+        &function.name,
+        interface.interface_name().as_ref(),
+        interface.resource_name().as_ref(),
+    );
+
+    Ok(quote! {
+        fn get(&self) -> #result_type {
+            let result = self.future_invoke_result.get().expect(&format!("Failed to invoke remote {}", #remote_function_name));;
+            (#(#output_values),*)
+        }
+    })
+}
+
 fn generate_function_stub_source(
     def: &StubDefinition,
     function: &FunctionStub,
@@ -208,7 +327,6 @@ fn generate_function_stub_source(
     let function_name = Ident::new(&to_rust_ident(&function.name), Span::call_site());
     let mut params = Vec::new();
     let mut input_values = Vec::new();
-    let mut output_values = Vec::new();
 
     if mode != FunctionMode::Static && mode != FunctionMode::Constructor {
         params.push(quote! {&self});
@@ -241,70 +359,8 @@ fn generate_function_stub_source(
         )?);
     }
 
-    let result_type = match &function.results {
-        FunctionResultStub::Single(typ) => {
-            let typ = type_to_rust_ident(typ, &def.resolve)?;
-            quote! {
-                #typ
-            }
-        }
-        FunctionResultStub::Multi(params) => {
-            let mut results = Vec::new();
-            for param in params {
-                let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
-                let param_typ = type_to_rust_ident(&param.typ, &def.resolve)?;
-                results.push(quote! {
-                    #param_name: #param_typ
-                });
-            }
-            if results.is_empty() {
-                quote! {
-                    ()
-                }
-            } else {
-                quote! {
-                    (#(#results),*)
-                }
-            }
-        }
-        FunctionResultStub::SelfType => quote! { Self },
-    };
-
-    match &function.results {
-        FunctionResultStub::Single(typ) => {
-            output_values.push(extract_from_wit_value(
-                typ,
-                &def.resolve,
-                quote! { result.tuple_element(0).expect("tuple not found") },
-            )?);
-        }
-        FunctionResultStub::Multi(params) => {
-            for (n, param) in params.iter().enumerate() {
-                output_values.push(extract_from_wit_value(
-                    &param.typ,
-                    &def.resolve,
-                    quote! { result.tuple_element(#n).expect("tuple not found") },
-                )?);
-            }
-        }
-        FunctionResultStub::SelfType if mode == FunctionMode::Constructor => {
-            output_values.push(quote! {
-                {
-                    let (uri, id) = result.tuple_element(0).expect("tuple not found").handle().expect("handle not found");
-                    Self {
-                        rpc,
-                        id,
-                        uri
-                    }
-                }
-            });
-        }
-        FunctionResultStub::SelfType => {
-            return Err(anyhow!(
-                "SelfType result is only supported for constructors"
-            ));
-        }
-    }
+    let result_type = get_result_type_source(def, function)?;
+    let output_values = get_output_values_source(def, function, mode)?;
 
     let remote_function_name = get_remote_function_name(
         def,
@@ -341,14 +397,12 @@ fn generate_function_stub_source(
     };
 
     let blocking = {
-        let function_name = if function.results.is_empty() {
-            Ident::new(
-                &to_rust_ident(&format!("blocking-{}", function.name)),
-                Span::call_site(),
-            )
+        let blocking_function_name = if mode == FunctionMode::Constructor {
+            function.name.clone()
         } else {
-            function_name.clone()
+            format!("blocking-{}", function.name)
         };
+        let function_name = Ident::new(&to_rust_ident(&blocking_function_name), Span::call_site());
         quote! {
             fn #function_name(#(#params),*) -> #result_type {
                 #init
@@ -363,17 +417,33 @@ fn generate_function_stub_source(
         }
     };
 
-    let non_blocking = if function.results.is_empty() {
-        quote! {
-            fn #function_name(#(#params),*) -> #result_type {
-                #init
-                let result = #rpc.invoke(
-                    #remote_function_name,
-                    &[
-                        #(#input_values),*
-                    ],
-                ).expect(&format!("Failed to invoke remote {}", #remote_function_name));
-                (#(#output_values),*)
+    let non_blocking = if mode != FunctionMode::Constructor {
+        if function.results.is_empty() {
+            quote! {
+                fn #function_name(#(#params),*) -> #result_type {
+                    #init
+                    let result = #rpc.invoke(
+                        #remote_function_name,
+                        &[
+                            #(#input_values),*
+                        ],
+                    ).expect(&format!("Failed to invoke remote {}", #remote_function_name));
+                    (#(#output_values),*)
+                }
+            }
+        } else {
+            let result_wrapper = result_wrapper_ident(function);
+            quote! {
+                fn #function_name(#(#params),*) -> wit_bindgen::rt::Resource<#result_wrapper> {
+                    #init
+                    let result = #rpc.async_invoke_and_await(
+                        #remote_function_name,
+                        &[
+                            #(#input_values),*
+                        ],
+                    );
+                    wit_bindgen::rt::Resource::new(#result_wrapper { future_invoke_result: result})
+                }
             }
         }
     } else {
@@ -384,6 +454,85 @@ fn generate_function_stub_source(
         #blocking
         #non_blocking
     })
+}
+
+fn get_output_values_source(
+    def: &StubDefinition,
+    function: &FunctionStub,
+    mode: FunctionMode,
+) -> anyhow::Result<Vec<TokenStream>> {
+    let mut output_values = Vec::new();
+    match &function.results {
+        FunctionResultStub::Single(typ) => {
+            output_values.push(extract_from_wit_value(
+                typ,
+                &def.resolve,
+                quote! { result.tuple_element(0).expect("tuple not found") },
+            )?);
+        }
+        FunctionResultStub::Multi(params) => {
+            for (n, param) in params.iter().enumerate() {
+                output_values.push(extract_from_wit_value(
+                    &param.typ,
+                    &def.resolve,
+                    quote! { result.tuple_element(#n).expect("tuple not found") },
+                )?);
+            }
+        }
+        FunctionResultStub::SelfType if mode == FunctionMode::Constructor => {
+            output_values.push(quote! {
+                {
+                    let (uri, id) = result.tuple_element(0).expect("tuple not found").handle().expect("handle not found");
+                    Self {
+                        rpc,
+                        id,
+                        uri
+                    }
+                }
+            });
+        }
+        FunctionResultStub::SelfType => {
+            return Err(anyhow!(
+                "SelfType result is only supported for constructors"
+            ));
+        }
+    }
+    Ok(output_values)
+}
+
+fn get_result_type_source(
+    def: &StubDefinition,
+    function: &FunctionStub,
+) -> anyhow::Result<TokenStream> {
+    let result_type = match &function.results {
+        FunctionResultStub::Single(typ) => {
+            let typ = type_to_rust_ident(typ, &def.resolve)?;
+            quote! {
+                #typ
+            }
+        }
+        FunctionResultStub::Multi(params) => {
+            let mut results = Vec::new();
+            for param in params {
+                let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
+                let param_typ = type_to_rust_ident(&param.typ, &def.resolve)?;
+                results.push(quote! {
+                    #param_name: #param_typ
+                });
+            }
+            if results.is_empty() {
+                quote! {
+                    ()
+                }
+            } else {
+                quote! {
+                    (#(#results),*)
+                }
+            }
+        }
+        FunctionResultStub::SelfType => quote! { Self },
+    };
+    Ok(result_type)
 }
 
 fn get_remote_function_name(
