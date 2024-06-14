@@ -79,7 +79,6 @@ pub struct GenerateArgs {
     /// the latest version of `wasm-rpc` will be used.
     #[clap(long)]
     pub wasm_rpc_path_override: Option<String>,
-    
 }
 
 /// Build an RPC stub for a WASM component
