@@ -48,7 +48,7 @@ impl BenchmarkComparisonReport {
         let mut comparison_results: Vec<ComparisonReportPerBenchmarkType> = vec![];
         for (benchmark_type, files) in input {
             let previous_bench_mark_results = load_json(files.previous_file.0.as_str())?;
-            let current_bench_mark_results = load_json(&files.current_file.0.as_str())?;
+            let current_bench_mark_results = load_json(files.current_file.0.as_str())?;
 
             let report = ComparisonReportPerBenchmarkType {
                 benchmark_type: benchmark_type.clone(),
@@ -67,7 +67,6 @@ impl BenchmarkComparisonReport {
     }
 
     pub fn to_markdown_table(&self) -> String {
-
         let mut outer_table = vec![];
 
         for report in self.results.iter() {
@@ -88,7 +87,10 @@ impl BenchmarkComparisonReport {
             }
 
             let table_str = table.join("\\n");
-            outer_table.push(wrap_with_subtitle("Benchmark Comparison Report", &table_str))
+            outer_table.push(wrap_with_subtitle(
+                "Benchmark Comparison Report",
+                &table_str,
+            ))
         }
 
         let str = outer_table.join("\\n \\n");
@@ -107,16 +109,13 @@ struct BenchmarkReport {
     results: Vec<BenchmarkReportPerBenchmarkType>,
 }
 
-
-
-
 impl BenchmarkReport {
     pub fn to_markdown_table(&self) -> String {
         let mut outer_table = vec![];
 
         for report in self.results.iter() {
             let mut table = vec![];
-            table.push("| Report Key | Cluster Size | Size | Length | Avg Time |".to_string());
+            table.push("| Result Key | Cluster Size | Size | Length | Avg Time |".to_string());
             table.push("|---------------|--------------|------|--------|----------|".to_string());
 
             for run_config_report in report.report.results.iter() {
@@ -132,12 +131,14 @@ impl BenchmarkReport {
 
             let table_str = table.join("\\n");
 
-            outer_table.push(wrap_with_subtitle(report.benchmark_type.0.as_str(), &table_str))
+            outer_table.push(wrap_with_subtitle(
+                report.benchmark_type.0.as_str(),
+                &table_str,
+            ))
         }
 
         let str = outer_table.join("\\n \\n");
         wrap_with_title("Benchmark Report", &str)
-
     }
 
     pub fn from(input: Vec<(BenchmarkType, BenchmarkFile)>) -> Result<BenchmarkReport, String> {
@@ -234,12 +235,11 @@ struct BenchmarkFile(String);
 
 mod internal {
     use super::*;
+    use golem_test_framework::dsl::benchmark::ResultKey;
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
-    use std::ops::Add;
     use std::time::Duration;
-    use golem_test_framework::dsl::benchmark::ResultKey;
 
     pub fn load_json(file_path: &str) -> Result<BenchmarkResult, String> {
         let file = File::open(file_path)
@@ -250,21 +250,20 @@ mod internal {
         Ok(data)
     }
 
-    #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+    #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
     pub struct ReportKey {
         pub run_config: RunConfig,
         pub result_key: ResultKey,
     }
 
     pub fn calculate_mean_avg_time(json: &BenchmarkResult) -> HashMap<ReportKey, Duration> {
-
         let mut result_map = HashMap::new();
         let result = &json.results;
-        for (run_confing, benchmark) in result {
-            for (resulkt_key, duration) in benchmark.duration_results {
+        for (run_config, benchmark) in result {
+            for (result_key, duration) in &benchmark.duration_results {
                 let key = ReportKey {
-                    run_config: run_confing.clone(),
-                    result_key: resulkt_key.clone(),
+                    run_config: run_config.clone(),
+                    result_key: result_key.clone(),
                 };
 
                 result_map.insert(key, duration.avg);
