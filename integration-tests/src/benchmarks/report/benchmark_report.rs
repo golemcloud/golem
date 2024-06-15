@@ -32,7 +32,7 @@ struct ComparisonForAllRunConfigs {
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ComparisonPerRunConfig {
-    run_config: RunConfig,
+    report_key: ReportKey,
     comparison: Comparison,
 }
 
@@ -48,7 +48,7 @@ impl BenchmarkComparisonReport {
         let mut comparison_results: Vec<ComparisonReportPerBenchmarkType> = vec![];
         for (benchmark_type, files) in input {
             let previous_bench_mark_results = load_json(files.previous_file.0.as_str())?;
-            let current_bench_mark_results = load_json(files.current_file.0.as_str())?;
+            let current_bench_mark_results = load_json(&files.current_file.0.as_str())?;
 
             let report = ComparisonReportPerBenchmarkType {
                 benchmark_type: benchmark_type.clone(),
@@ -67,26 +67,32 @@ impl BenchmarkComparisonReport {
     }
 
     pub fn to_markdown_table(&self) -> String {
-        let mut table = vec![];
-        table.push("| Benchmark Type | Cluster Size | Size | Length | Previous Avg Time | Current Avg Time |".to_string());
-        table.push("|---------------|--------------|------|--------|-------------------|------------------|".to_string());
+
+        let mut outer_table = vec![];
 
         for report in self.results.iter() {
+            let mut table = vec![];
+            table.push("| ResultKey | Cluster Size | Size | Length | Previous Avg Time | Current Avg Time |".to_string());
+            table.push("|---------------|--------------|------|--------|-------------------|------------------|".to_string());
+
             for run_config_report in report.comparison_results.results.iter() {
                 table.push(format!(
                     r#"| {} | {} | {} | {} | {:?} | {:?} |"#,
-                    report.benchmark_type.0,
-                    run_config_report.run_config.cluster_size,
-                    run_config_report.run_config.size,
-                    run_config_report.run_config.length,
+                    run_config_report.report_key.result_key,
+                    run_config_report.report_key.run_config.cluster_size,
+                    run_config_report.report_key.run_config.size,
+                    run_config_report.report_key.run_config.length,
                     run_config_report.comparison.previous_avg,
                     run_config_report.comparison.current_avg
                 ));
             }
+
+            let table_str = table.join("\\n");
+            outer_table.push(wrap_with_subtitle("Benchmark Comparison Report", &table_str))
         }
 
-        let table_str = table.join("\\n");
-        wrap_with_title("Benchmark Comparison Report", &table_str)
+        let str = outer_table.join("\\n \\n");
+        wrap_with_title("Benchmark Comparison Report", &str)
     }
 }
 
@@ -101,27 +107,37 @@ struct BenchmarkReport {
     results: Vec<BenchmarkReportPerBenchmarkType>,
 }
 
+
+
+
 impl BenchmarkReport {
     pub fn to_markdown_table(&self) -> String {
-        let mut table = vec![];
-        table.push("| Benchmark Type | Cluster Size | Size | Length | Avg Time |".to_string());
-        table.push("|---------------|--------------|------|--------|----------|".to_string());
+        let mut outer_table = vec![];
 
         for report in self.results.iter() {
+            let mut table = vec![];
+            table.push("| Report Key | Cluster Size | Size | Length | Avg Time |".to_string());
+            table.push("|---------------|--------------|------|--------|----------|".to_string());
+
             for run_config_report in report.report.results.iter() {
                 table.push(format!(
-                    "| {} | {} | {} | {} | {:?} |",
-                    report.benchmark_type.0,
-                    run_config_report.run_config.cluster_size,
-                    run_config_report.run_config.size,
-                    run_config_report.run_config.length,
+                    r#"| {} | {} | {} | {} | {:?} |"#,
+                    run_config_report.report_key.result_key,
+                    run_config_report.report_key.run_config.cluster_size,
+                    run_config_report.report_key.run_config.size,
+                    run_config_report.report_key.run_config.length,
                     run_config_report.avg_time
                 ));
             }
+
+            let table_str = table.join("\\n");
+
+            outer_table.push(wrap_with_subtitle(report.benchmark_type.0.as_str(), &table_str))
         }
 
-        let table_str = table.join("\\n");
-        wrap_with_title("Benchmark Report", &table_str)
+        let str = outer_table.join("\\n \\n");
+        wrap_with_title("Benchmark Report", &str)
+
     }
 
     pub fn from(input: Vec<(BenchmarkType, BenchmarkFile)>) -> Result<BenchmarkReport, String> {
@@ -134,7 +150,7 @@ impl BenchmarkReport {
             let mut report_results = Vec::new();
             for (run_config, avg_time) in run_config_to_avg_time {
                 report_results.push(BenchmarkReportPerRunConfig {
-                    run_config,
+                    report_key: run_config,
                     avg_time,
                 });
             }
@@ -168,7 +184,7 @@ struct BenchmarkReportForAllRunConfigs {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct BenchmarkReportPerRunConfig {
-    run_config: RunConfig,
+    report_key: ReportKey,
     avg_time: Duration,
 }
 
@@ -179,15 +195,15 @@ impl ComparisonForAllRunConfigs {
 
         let mut comparison_results = Vec::new();
 
-        for (run_config, previous_avg_time) in previous_avg {
-            let current_avg_time = current_avg.get(&run_config).unwrap();
+        for (report_key, previous_avg_time) in previous_avg {
+            let current_avg_time = current_avg.get(&report_key).unwrap();
             let comparison = Comparison {
                 previous_avg: previous_avg_time,
                 current_avg: *current_avg_time,
             };
 
             comparison_results.push(ComparisonPerRunConfig {
-                run_config: run_config.clone(),
+                report_key: report_key.clone(),
                 comparison,
             });
         }
@@ -223,6 +239,7 @@ mod internal {
     use std::io::BufReader;
     use std::ops::Add;
     use std::time::Duration;
+    use golem_test_framework::dsl::benchmark::ResultKey;
 
     pub fn load_json(file_path: &str) -> Result<BenchmarkResult, String> {
         let file = File::open(file_path)
@@ -233,31 +250,36 @@ mod internal {
         Ok(data)
     }
 
-    pub fn calculate_mean_avg_time(json: &BenchmarkResult) -> HashMap<RunConfig, Duration> {
-        let mut total_duration = Duration::ZERO;
+    #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+    pub struct ReportKey {
+        pub run_config: RunConfig,
+        pub result_key: ResultKey,
+    }
 
-        let mut run_config_to_avg_time = HashMap::new();
+    pub fn calculate_mean_avg_time(json: &BenchmarkResult) -> HashMap<ReportKey, Duration> {
 
-        for (run_config, benchmark_result) in &json.results {
-            for duration in benchmark_result.duration_results.values() {
-                total_duration = total_duration.add(duration.avg);
-            }
+        let mut result_map = HashMap::new();
+        let result = &json.results;
+        for (run_confing, benchmark) in result {
+            for (resulkt_key, duration) in benchmark.duration_results {
+                let key = ReportKey {
+                    run_config: run_confing.clone(),
+                    result_key: resulkt_key.clone(),
+                };
 
-            let length = benchmark_result.duration_results.values().len();
-
-            if length != 0 {
-                let avg = total_duration.div_f64(length as f64);
-                run_config_to_avg_time.insert(run_config.clone(), avg);
-            } else {
-                run_config_to_avg_time.insert(run_config.clone(), Duration::ZERO);
+                result_map.insert(key, duration.avg);
             }
         }
 
-        run_config_to_avg_time
+        result_map
     }
 
-    pub fn wrap_with_title(title: &str, table: &String) -> String {
-        format!(r#"\n## {}\n{}\n"#, title, table)
+    pub fn wrap_with_subtitle(subtitle: &str, sub_markdown: &String) -> String {
+        format!(r#"\n## {}\n{}\n"#, subtitle, sub_markdown)
+    }
+
+    pub fn wrap_with_title(main_title: &str, sub_markdown: &String) -> String {
+        format!(r#"\n# {}\n{}\n"#, main_title, sub_markdown)
     }
 }
 
