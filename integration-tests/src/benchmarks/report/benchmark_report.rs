@@ -82,7 +82,7 @@ impl BenchmarkComparisonReport {
                     run_config_report.report_key.run_config.size,
                     run_config_report.report_key.run_config.length,
                     run_config_report.comparison.previous_avg,
-                    run_config_report.comparison.current_avg
+                    run_config_report.comparison.current_avg.map_or("Unavailable".to_string(), |x| format!("{:?}", x))
                 ));
             }
 
@@ -197,7 +197,7 @@ impl ComparisonForAllRunConfigs {
         let mut comparison_results = Vec::new();
 
         for (report_key, previous_avg_time) in previous_avg {
-            let current_avg_time = current_avg.get(&report_key).unwrap();
+            let current_avg_time = current_avg.get(&report_key);
             let comparison = Comparison {
                 previous_avg: previous_avg_time,
                 current_avg: *current_avg_time,
@@ -218,7 +218,7 @@ impl ComparisonForAllRunConfigs {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Comparison {
     previous_avg: Duration,
-    current_avg: Duration,
+    current_avg: Option<Duration>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -236,10 +236,13 @@ struct BenchmarkFile(String);
 mod internal {
     use super::*;
     use golem_test_framework::dsl::benchmark::ResultKey;
+    use poem::web::headers::ContentEncoding;
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
     use std::time::Duration;
+
+    let s = calculate_mean_avg_time();
 
     pub fn load_json(file_path: &str) -> Result<BenchmarkResult, String> {
         let file = File::open(file_path)
@@ -270,15 +273,15 @@ mod internal {
             }
         }
 
-        result_map
+       result_map
     }
 
-    pub fn wrap_with_subtitle(subtitle: &str, sub_markdown: &String) -> String {
-        format!(r#"\n## {}\n{}\n"#, subtitle, sub_markdown)
+    pub fn wrap_with_subtitle(subtitle: &str, content: &String) -> String {
+        format!(r#"\n## {}\n{}\n"#, subtitle, content)
     }
 
-    pub fn wrap_with_title(main_title: &str, sub_markdown: &String) -> String {
-        format!(r#"\n# {}\n{}\n"#, main_title, sub_markdown)
+    pub fn wrap_with_title(main_title: &str, content: &String) -> String {
+        format!(r#"\n# {}\n{}\n"#, main_title, content)
     }
 }
 
