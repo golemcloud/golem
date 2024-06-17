@@ -104,7 +104,6 @@ impl CliLive {
                 "profile",
                 "add",
                 "--set-active",
-                "golem",
                 "--component-url",
                 &component_base_url,
                 "--worker-url",
