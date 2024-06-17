@@ -23,16 +23,14 @@ use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
 use integration_tests::benchmarks::data::Data;
-use integration_tests::benchmarks::{
-    cleanup_iteration, get_worker_ids, run_benchmark, setup_benchmark, setup_with, start,
-    BenchmarkContext, IterationContext,
-};
+use integration_tests::benchmarks::{ get_worker_ids, run_benchmark, setup_benchmark, start, BenchmarkContext};
 
 struct Rpc {
     config: RunConfig,
     params: CliParams,
 }
 
+#[derive(Debug, Clone)]
 struct ParentChildWorkerId {
     parent: WorkerId,
     child: WorkerId
@@ -51,6 +49,7 @@ impl ParentChildWorkerId {
     }
 }
 
+#[derive(Clone)]
 struct RpcBenchmarkIteratorContext {
     worker_ids: Vec<ParentChildWorkerId>
 }
@@ -119,9 +118,9 @@ impl Benchmark for Rpc {
     ) {
         if !self.params.mode.component_compilation_disabled() {
             // warmup with other workers
-            if let Some(WorkerId { component_id, .. }) = context.worker_ids.clone().first() {
+            if let Some(ParentChildWorkerId { parent, .. }) = context.worker_ids.clone().first() {
                 start(
-                    get_worker_ids(context.worker_ids.len(), component_id, "warmup-worker"),
+                    get_worker_ids(context.worker_ids.len(), &parent.component_id, "warmup-worker"),
                     benchmark_context.deps.clone(),
                 )
                 .await
@@ -166,7 +165,7 @@ impl Benchmark for Rpc {
         let mut fibers = Vec::new();
 
         // For parent worker-id, we will have a child worker once the parent's function is invoked
-        for worker_id in context.worker_ids.iter() {
+        for worker_id in context.worker_ids.iter().cloned() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.parent.clone();
             let recorder_clone = recorder.clone();
@@ -206,7 +205,7 @@ impl Benchmark for Rpc {
         }
 
         let mut fibers = Vec::new();
-        for worker_id in context.worker_ids.iter() {
+        for worker_id in context.clone().worker_ids.iter().cloned() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.parent.clone();
             let recorder_clone = recorder.clone();
@@ -246,7 +245,7 @@ impl Benchmark for Rpc {
         }
 
         let mut fibers = Vec::new();
-        for worker_id in context.worker_ids.iter() {
+        for worker_id in context.worker_ids.iter().cloned() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.parent.clone();
             let recorder_clone = recorder.clone();
@@ -267,7 +266,7 @@ impl Benchmark for Rpc {
                         .await
                         .expect("invoke_and_await failed");
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    
+
                     if worker_id.same_worker_executor(&rt_clone) {
                         dbg!("Same worker invocation for process");
 
