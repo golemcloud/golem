@@ -62,7 +62,7 @@ impl Benchmark for Rpc {
     ) -> Self::IterationContext {
         let worker_ids = setup_with(
             1, //self.config.size,
-            "rust_rpc_service",
+            "rust_component_service",
             "worker",
             true,
             benchmark_context.deps.clone(),
