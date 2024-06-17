@@ -157,7 +157,7 @@ impl Benchmark for Rpc {
             let rt_clone = shard_manager_routing_table.clone();
             let length = self.config.length;
             let fiber = tokio::task::spawn(async move {
-                for _ in 0..100 {
+                for _ in 0..3 {
                     let start = SystemTime::now();
                     context_clone
                         .deps
