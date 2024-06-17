@@ -2,12 +2,13 @@ mod auction;
 mod auction_registry_logic;
 mod model;
 
+#[allow(unused)]
 mod bindings;
 
 use bindings::*;
 use exports::auction::registry::api::{
-    Guest, Auction as WitAuction, AuctionId as WitAuctionId, BidderId as WitBidderId,
-    Deadline as WitDeadline,
+    Auction as WitAuction, AuctionId as WitAuctionId, BidderId as WitBidderId,
+    Deadline as WitDeadline, Guest,
 };
 use once_cell::sync::Lazy;
 
@@ -49,7 +50,7 @@ impl Guest for Component {
                 limit_price,
                 expiration.into(),
             )
-                .into()
+            .into()
         })
     }
 
@@ -62,7 +63,12 @@ impl Guest for Component {
         })
     }
 
-    fn create_auction_res(name: String, description: String, limit_price: f32, expiration: WitDeadline) -> WitAuctionId {
+    fn create_auction_res(
+        name: String,
+        description: String,
+        limit_price: f32,
+        expiration: WitDeadline,
+    ) -> WitAuctionId {
         with_state(|state| {
             auction_registry_logic::create_auction_res(
                 state,
@@ -71,7 +77,7 @@ impl Guest for Component {
                 limit_price,
                 expiration.into(),
             )
-                .into()
+            .into()
         })
     }
 }
