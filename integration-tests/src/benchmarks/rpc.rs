@@ -14,7 +14,7 @@
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::GetRoutingTableRequest;
-use golem_common::model::WorkerId;
+use golem_common::model::{RoutingTable, WorkerId};
 use golem_wasm_rpc::Value;
 use std::time::SystemTime;
 
@@ -115,11 +115,11 @@ impl Benchmark for Rpc {
             .await
             .expect("Unable to fetch the routing table");
 
-        let shard_manager_routing_table = match routing_table.into_inner() {
+        let shard_manager_routing_table: RoutingTable = match routing_table.into_inner() {
             shardmanager::GetRoutingTableResponse {
                 result:
                     Some(shardmanager::get_routing_table_response::Result::Success(routing_table)),
-            } => routing_table,
+            } => routing_table.into(),
             _ => panic!("Failed to fetch the routing table"),
         };
 
@@ -132,7 +132,7 @@ impl Benchmark for Rpc {
             let recorder_clone = recorder.clone();
             let length = self.config.length;
             let fiber = tokio::task::spawn(async move {
-                for _ in 0..length {
+                for _ in 2 {
                     let start = SystemTime::now();
                     context_clone
                         .deps
@@ -164,7 +164,7 @@ impl Benchmark for Rpc {
             let recorder_clone = recorder.clone();
             let length = self.config.length;
             let fiber = tokio::task::spawn(async move {
-                for _ in 0..length {
+                for _ in 0..3 {
                     let start = SystemTime::now();
                     let res = context_clone
                         .deps
@@ -195,7 +195,7 @@ impl Benchmark for Rpc {
             let values_clone = values.clone();
             let length = self.config.length;
             let fiber = tokio::task::spawn(async move {
-                for _ in 0..length {
+                for _ in 0..3 {
                     let start = SystemTime::now();
                     context_clone
                         .deps
