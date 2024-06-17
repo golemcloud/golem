@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::stub::{
-    FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStubImport, InterfaceStubTypeDef,
-    StubDefinition,
+    FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubImport,
+    InterfaceStubTypeDef, StubDefinition,
 };
 use anyhow::{anyhow, bail, Context};
 use indexmap::IndexMap;
@@ -96,12 +96,12 @@ pub fn get_stub_wit(
     for interface in &def.interfaces {
         for function in &interface.functions {
             if !function.results.is_empty() {
-                write_async_return_type(&mut out, function, def)?;
+                write_async_return_type(&mut out, function, interface, def)?;
             }
         }
         for function in &interface.static_functions {
             if !function.results.is_empty() {
-                write_async_return_type(&mut out, function, def)?;
+                write_async_return_type(&mut out, function, interface, def)?;
             }
         }
     }
@@ -123,10 +123,10 @@ pub fn get_stub_wit(
             }
         }
         for function in &interface.functions {
-            write_function_definition(&mut out, function, false, def)?;
+            write_function_definition(&mut out, function, false, interface, def)?;
         }
         for function in &interface.static_functions {
-            write_function_definition(&mut out, function, true, def)?;
+            write_function_definition(&mut out, function, true, interface, def)?;
         }
         writeln!(out, "  }}")?;
         writeln!(out)?;
@@ -150,6 +150,7 @@ fn write_function_definition(
     out: &mut String,
     function: &FunctionStub,
     is_static: bool,
+    owner: &InterfaceStub,
     def: &StubDefinition,
 ) -> anyhow::Result<()> {
     let func = if is_static { "static_func" } else { "func" };
@@ -161,11 +162,11 @@ fn write_function_definition(
         write!(out, " -> ")?;
         write_function_result_type(out, function, def)?;
         writeln!(out, ";")?;
-        // Write the non blocking function
+        // Write the non-blocking function
         write!(out, "    {}: {func}(", function.name)?;
         write_param_list(out, def, &function.params)?;
         write!(out, ")")?;
-        write!(out, " -> future-{}-result", function.name)?;
+        write!(out, " -> {}", function.async_result_type(owner))?;
     } else {
         // Write the blocking function
         write!(out, "    blocking-{}: {func}(", function.name)?;
@@ -173,7 +174,7 @@ fn write_function_definition(
         write!(out, ")")?;
         writeln!(out, ";")?;
 
-        // Write the non blocking function
+        // Write the non-blocking function
         write!(out, "    {}: {func}(", function.name)?;
         write_param_list(out, def, &function.params)?;
         write!(out, ")")?;
@@ -185,9 +186,10 @@ fn write_function_definition(
 fn write_async_return_type(
     out: &mut String,
     function: &FunctionStub,
+    owner: &InterfaceStub,
     def: &StubDefinition,
 ) -> anyhow::Result<()> {
-    writeln!(out, "  resource future-{}-result {{", function.name)?;
+    writeln!(out, "  resource {} {{", function.async_result_type(owner))?;
     writeln!(out, "    subscribe: func() -> pollable;")?;
     write!(out, "    get: func() -> ")?;
     write_function_result_type(out, function, def)?;
