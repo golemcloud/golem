@@ -203,7 +203,7 @@ impl ComparisonForAllRunConfigs {
             let current_avg_time = current_avg.get(&report_key);
             let comparison = Comparison {
                 previous_avg: previous_avg_time,
-                current_avg: *current_avg_time,
+                current_avg: current_avg_time.cloned(),
             };
 
             comparison_results.push(ComparisonPerRunConfig {
@@ -239,7 +239,6 @@ struct BenchmarkFile(String);
 mod internal {
     use super::*;
     use golem_test_framework::dsl::benchmark::ResultKey;
-    use poem::web::headers::ContentEncoding;
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
