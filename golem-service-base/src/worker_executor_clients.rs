@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::Pod;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use std::time::Duration;
 use tonic::transport::Channel;
+use golem_common::model::Pod;
 
 #[async_trait]
 pub trait WorkerExecutorClients {

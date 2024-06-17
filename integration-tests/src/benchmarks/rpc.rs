@@ -111,7 +111,6 @@ impl Benchmark for Rpc {
         let routing_table =
             shard_manager_client.get_routing_table(GetRoutingTableRequest{}).await.expect("Unable to fetch the routing table");
 
-
         let shard_manager_routing_table =
             match routing_table.into_inner() {
                 shardmanager::GetRoutingTableResponse {

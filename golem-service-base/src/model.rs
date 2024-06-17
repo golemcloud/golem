@@ -12,19 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_api_grpc::proto::golem::shardmanager::{
-    Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
-};
 use golem_common::model::function_name::ParsedFunctionName;
 use golem_common::model::{
     ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
-use http::Uri;
 use poem_openapi::{Enum, NewType, Object, Union};
-use rand::seq::IteratorRandom;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashSet;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -1832,6 +1826,12 @@ impl TryFrom<String> for Id {
     fn try_from(value: String) -> Result<Self, Self::Error> {
         let _ = valid_id(value.as_str())?;
         Ok(Self(value))
+    }
+}
+
+impl Display for Id {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.clone())
     }
 }
 
