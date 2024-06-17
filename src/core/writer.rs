@@ -119,6 +119,7 @@ impl From<&TableType> for wasm_encoder::TableType {
     fn from(value: &TableType) -> Self {
         wasm_encoder::TableType {
             element_type: (&value.elements).into(),
+            table64: false, // 64 bit tables are not supported yet
             minimum: value.limits.min,
             maximum: value.limits.max,
         }
@@ -140,10 +141,11 @@ fn add_to_table_section(section: &mut wasm_encoder::TableSection, value: &Table)
 impl From<&MemType> for wasm_encoder::MemoryType {
     fn from(value: &MemType) -> Self {
         wasm_encoder::MemoryType {
-            minimum: value.limits.min as u64,
-            maximum: value.limits.max.map(|v| v as u64),
+            minimum: value.limits.min,
+            maximum: value.limits.max,
             memory64: false,
             shared: false,
+            page_size_log2: None, // custom-page-sizes proposal is not supported yet
         }
     }
 }
@@ -189,6 +191,7 @@ impl From<&GlobalType> for wasm_encoder::GlobalType {
         wasm_encoder::GlobalType {
             val_type: (&value.val_type).into(),
             mutable: value.mutability == Mut::Var,
+            shared: false, // shared-everything threads proposal is not supported yet
         }
     }
 }
@@ -1411,10 +1414,10 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) -> Result<(
             target.emit(wasm_encoder::Instruction::I64Store8(mem_arg.into()))
         }
         Instr::Store8(NumType::F32, _mem_arg) => {
-            return Err("invalid instruction: F32Store8".to_string())
+            return Err("invalid instruction: F32Store8".to_string());
         }
         Instr::Store8(NumType::F64, _mem_arg) => {
-            return Err("invalid instruction: F64Store8".to_string())
+            return Err("invalid instruction: F64Store8".to_string());
         }
         Instr::Store16(NumType::I32, mem_arg) => {
             target.emit(wasm_encoder::Instruction::I32Store16(mem_arg.into()))
@@ -1423,10 +1426,10 @@ fn encode_instr<F: InstructionTarget>(instr: &Instr, target: &mut F) -> Result<(
             target.emit(wasm_encoder::Instruction::I64Store16(mem_arg.into()))
         }
         Instr::Store16(NumType::F32, _mem_arg) => {
-            return Err("invalid instruction: F32Store16".to_string())
+            return Err("invalid instruction: F32Store16".to_string());
         }
         Instr::Store16(NumType::F64, _mem_arg) => {
-            return Err("invalid instruction: F64Store16".to_string())
+            return Err("invalid instruction: F64Store16".to_string());
         }
         Instr::Store32(mem_arg) => {
             target.emit(wasm_encoder::Instruction::I64Store32(mem_arg.into()))
