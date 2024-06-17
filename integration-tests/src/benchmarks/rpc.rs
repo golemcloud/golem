@@ -14,6 +14,8 @@
 use std::time::SystemTime;
 use async_trait::async_trait;
 use golem_wasm_rpc::Value;
+use golem_api_grpc::proto::golem::shardmanager;
+use golem_api_grpc::proto::golem::shardmanager::GetRoutingTableRequest;
 use golem_common::model::WorkerId;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
@@ -58,7 +60,7 @@ impl Benchmark for Rpc {
 
         let worker_ids = setup_with(
             1, //self.config.size,
-            "rust_component_service",
+            "rust_rpc_service",
             "worker",
             true,
             benchmark_context.deps.clone(),
@@ -102,8 +104,28 @@ impl Benchmark for Rpc {
             .map(|d| d.into())
             .collect::<Vec<Value>>();
 
+        let shard_manager = benchmark_context.deps.shard_manager();
+
+        let mut shard_manager_client = shard_manager.client().await;
+
+        let routing_table =
+            shard_manager_client.get_routing_table(GetRoutingTableRequest{}).await.expect("Unable to fetch the routing table");
+
+
+        let shard_manager_routing_table =
+            match routing_table.into_inner() {
+                shardmanager::GetRoutingTableResponse {
+                    result:
+                    Some(shardmanager::get_routing_table_response::Result::Success(routing_table)),
+                } => routing_table,
+                _ => panic!("Failed to fetch the routing table")
+        };
+
         let mut fibers = Vec::new();
+
+        // For parent worker-id, we will have a child worker once the parent's function is invoked
         for worker_id in context.worker_ids.iter() {
+
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
@@ -120,6 +142,9 @@ impl Benchmark for Rpc {
                         )
                         .await
                         .expect("invoke_and_await failed");
+
+                    dbg!(shard_manager_routing_table.number_of_shards);
+
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
                     recorder_clone.duration(&"worker-echo-invocation".to_string(), elapsed);
                 }
