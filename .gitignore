@@ -22,3 +22,4 @@ golem-client/*
 !golem-client/build.rs
 logs
 data
+.DS_Store
