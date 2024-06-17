@@ -15,6 +15,7 @@
 use crate::config::{
     CloudProfile, Config, NamedProfile, OssProfile, Profile, ProfileConfig, ProfileName,
 };
+use crate::init::{CliKind, ProfileAuth};
 use crate::model::text::TextFormat;
 use crate::model::{Format, GolemError, GolemResult};
 use clap::Subcommand;
@@ -26,63 +27,19 @@ use url::Url;
 
 #[derive(Subcommand, Debug)]
 #[command()]
-pub enum ProfileAddSubCommand {
+pub enum UniversalProfileAddSubCommand {
     /// Creates a new cloud profile
     #[command()]
     GolemCloud {
-        /// Name of the newly created profile
-        #[arg(value_name = "profile-name")]
-        name: ProfileName,
-
-        /// URL of Golem Component service
-        #[arg(long, hide = true)]
-        dev_component_url: Option<Url>,
-
-        /// URL of Golem Worker service. If not provided - use component-url.
-        #[arg(long, hide = true)]
-        dev_worker_url: Option<Url>,
-
-        /// Accept invalid certificates.
-        ///
-        /// Disables certificate validation.
-        /// Warning! Any certificate will be trusted for use.
-        /// This includes expired certificates.
-        /// This introduces significant vulnerabilities, and should only be used as a last resort.
-        #[arg(long, default_value_t = false, hide = true)]
-        dev_allow_insecure: bool,
-
-        /// Default output format
-        #[arg(short = 'f', long, default_value_t = Format::Text)]
-        default_format: Format,
+        #[command(flatten)]
+        profile_add: CloudProfileAdd,
     },
 
     /// Creates a new standalone profile
     #[command()]
     Golem {
-        /// Name of the newly created profile
-        #[arg(value_name = "profile-name")]
-        name: ProfileName,
-
-        /// URL of Golem Component service
-        #[arg(short, long)]
-        component_url: Url,
-
-        /// URL of Golem Worker service. If not provided - use component-url.
-        #[arg(short, long)]
-        worker_url: Option<Url>,
-
-        /// Accept invalid certificates.
-        ///
-        /// Disables certificate validation.
-        /// Warning! Any certificate will be trusted for use.
-        /// This includes expired certificates.
-        /// This introduces significant vulnerabilities, and should only be used as a last resort.
-        #[arg(short, long, default_value_t = false)]
-        allow_insecure: bool,
-
-        /// Default output format
-        #[arg(short = 'f', long, default_value_t = Format::Text)]
-        default_format: Format,
+        #[command(flatten)]
+        profile_add: OssProfileAdd,
     },
 }
 
@@ -102,9 +59,87 @@ pub enum ProfileConfigSubCommand {
     },
 }
 
+#[derive(clap::Args, Debug)]
+pub struct UniversalProfileAdd {
+    #[command(subcommand)]
+    subcommand: UniversalProfileAddSubCommand,
+}
+
+impl From<OssProfileAdd> for UniversalProfileAdd {
+    fn from(value: OssProfileAdd) -> Self {
+        UniversalProfileAdd {
+            subcommand: UniversalProfileAddSubCommand::Golem { profile_add: value },
+        }
+    }
+}
+
+impl From<CloudProfileAdd> for UniversalProfileAdd {
+    fn from(value: CloudProfileAdd) -> Self {
+        UniversalProfileAdd {
+            subcommand: UniversalProfileAddSubCommand::GolemCloud { profile_add: value },
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct OssProfileAdd {
+    /// Name of the newly created profile
+    #[arg(value_name = "profile-name")]
+    name: ProfileName,
+
+    /// URL of Golem Component service
+    #[arg(short, long)]
+    component_url: Url,
+
+    /// URL of Golem Worker service. If not provided - use component-url.
+    #[arg(short, long)]
+    worker_url: Option<Url>,
+
+    /// Accept invalid certificates.
+    ///
+    /// Disables certificate validation.
+    /// Warning! Any certificate will be trusted for use.
+    /// This includes expired certificates.
+    /// This introduces significant vulnerabilities, and should only be used as a last resort.
+    #[arg(short, long, default_value_t = false)]
+    allow_insecure: bool,
+
+    /// Default output format
+    #[arg(short = 'f', long, default_value_t = Format::Text)]
+    default_format: Format,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct CloudProfileAdd {
+    /// Name of the newly created profile
+    #[arg(value_name = "profile-name")]
+    name: ProfileName,
+
+    /// URL of Golem Component service
+    #[arg(long, hide = true)]
+    dev_component_url: Option<Url>,
+
+    /// URL of Golem Worker service. If not provided - use component-url.
+    #[arg(long, hide = true)]
+    dev_worker_url: Option<Url>,
+
+    /// Accept invalid certificates.
+    ///
+    /// Disables certificate validation.
+    /// Warning! Any certificate will be trusted for use.
+    /// This includes expired certificates.
+    /// This introduces significant vulnerabilities, and should only be used as a last resort.
+    #[arg(long, default_value_t = false, hide = true)]
+    dev_allow_insecure: bool,
+
+    /// Default output format
+    #[arg(short = 'f', long, default_value_t = Format::Text)]
+    default_format: Format,
+}
+
 #[derive(Subcommand, Debug)]
 #[command()]
-pub enum ProfileSubCommand {
+pub enum ProfileSubCommand<ProfileAdd: clap::Args> {
     /// Creates a new idle profile
     #[command()]
     Add {
@@ -112,8 +147,8 @@ pub enum ProfileSubCommand {
         #[arg(short, long, default_value_t = false)]
         set_active: bool,
 
-        #[command(subcommand)]
-        subcommand: ProfileAddSubCommand,
+        #[command(flatten)]
+        profile_add: ProfileAdd,
     },
 
     /// Interactively creates a new profile
@@ -167,6 +202,7 @@ pub enum ProfileSubCommand {
 impl ProfileConfigSubCommand {
     fn handle(
         self,
+        cli_kind: CliKind,
         profile_name: Option<ProfileName>,
         config_dir: &Path,
     ) -> Result<GolemResult, GolemError> {
@@ -174,7 +210,7 @@ impl ProfileConfigSubCommand {
             ProfileConfigSubCommand::Show {} => {
                 let profile = match profile_name {
                     None => {
-                        Config::get_active_profile(config_dir)
+                        Config::get_active_profile(cli_kind, config_dir)
                             .ok_or(GolemError(
                                 "No active profile. Please run `golem-cli init`".to_string(),
                             ))?
@@ -188,7 +224,7 @@ impl ProfileConfigSubCommand {
             }
             ProfileConfigSubCommand::Format { default_format } => {
                 let NamedProfile { name, mut profile } = match profile_name {
-                    None => Config::get_active_profile(config_dir).ok_or(GolemError(
+                    None => Config::get_active_profile(cli_kind, config_dir).ok_or(GolemError(
                         "No active profile. Please run `golem-cli init`".to_string(),
                     ))?,
                     Some(profile_name) => {
@@ -211,15 +247,23 @@ impl ProfileConfigSubCommand {
     }
 }
 
-impl ProfileAddSubCommand {
-    fn handle(self, set_active: bool, config_dir: &Path) -> Result<GolemResult, GolemError> {
+impl UniversalProfileAddSubCommand {
+    fn handle(
+        self,
+        cli_kind: CliKind,
+        set_active: bool,
+        config_dir: &Path,
+    ) -> Result<GolemResult, GolemError> {
         match self {
-            ProfileAddSubCommand::Golem {
-                name,
-                component_url,
-                worker_url,
-                allow_insecure,
-                default_format,
+            UniversalProfileAddSubCommand::Golem {
+                profile_add:
+                    OssProfileAdd {
+                        name,
+                        component_url,
+                        worker_url,
+                        allow_insecure,
+                        default_format,
+                    },
             } => {
                 let profile = Profile::Golem(OssProfile {
                     url: component_url,
@@ -231,17 +275,20 @@ impl ProfileAddSubCommand {
                 Config::set_profile(name.clone(), profile, config_dir)?;
 
                 if set_active {
-                    Config::set_active_profile_name(name, config_dir)?;
+                    Config::set_active_profile_name(name, cli_kind, config_dir)?;
                 }
 
                 Ok(GolemResult::Str("Profile created".to_string()))
             }
-            ProfileAddSubCommand::GolemCloud {
-                name,
-                dev_component_url,
-                dev_worker_url,
-                dev_allow_insecure,
-                default_format,
+            UniversalProfileAddSubCommand::GolemCloud {
+                profile_add:
+                    CloudProfileAdd {
+                        name,
+                        dev_component_url,
+                        dev_worker_url,
+                        dev_allow_insecure,
+                        default_format,
+                    },
             } => {
                 let profile = Profile::GolemCloud(CloudProfile {
                     custom_url: dev_component_url,
@@ -254,7 +301,7 @@ impl ProfileAddSubCommand {
                 Config::set_profile(name.clone(), profile, config_dir)?;
 
                 if set_active {
-                    Config::set_active_profile_name(name, config_dir)?;
+                    Config::set_active_profile_name(name, cli_kind, config_dir)?;
                 }
 
                 Ok(GolemResult::Str("Profile created".to_string()))
@@ -263,22 +310,43 @@ impl ProfileAddSubCommand {
     }
 }
 
-impl ProfileSubCommand {
-    pub async fn handle(self, config_dir: &Path) -> Result<GolemResult, GolemError> {
+impl<ProfileAdd: Into<UniversalProfileAdd> + clap::Args> ProfileSubCommand<ProfileAdd> {
+    pub async fn handle(
+        self,
+        cli_kind: CliKind,
+        config_dir: &Path,
+        profile_auth: &(dyn ProfileAuth + Send + Sync),
+    ) -> Result<GolemResult, GolemError> {
         match self {
             ProfileSubCommand::Add {
                 set_active,
-                subcommand,
-            } => subcommand.handle(set_active, config_dir),
+                profile_add,
+            } => {
+                let add: UniversalProfileAdd = profile_add.into();
+                add.subcommand.handle(cli_kind, set_active, config_dir)
+            }
             ProfileSubCommand::Init { name } => {
-                crate::init::init_profile(Some(name), config_dir).await
+                let res = crate::init::init_profile(cli_kind, name, config_dir).await?;
+
+                if res.auth_required {
+                    profile_auth.auth(&res.profile_name, config_dir).await?
+                }
+
+                Ok(GolemResult::Str("Profile created.".to_string()))
             }
             ProfileSubCommand::List {} => {
                 let Config {
                     profiles,
                     active_profile,
+                    active_cloud_profile,
                 } = Config::read_from_file(config_dir);
-                let active_profile = active_profile.unwrap_or_default();
+                let active_profile =
+                    match cli_kind {
+                        CliKind::Universal => active_profile
+                            .unwrap_or_else(|| ProfileName::default(CliKind::Universal)),
+                        CliKind::Cloud => active_cloud_profile
+                            .unwrap_or_else(|| ProfileName::default(CliKind::Cloud)),
+                    };
 
                 let res = profiles
                     .into_iter()
@@ -290,13 +358,13 @@ impl ProfileSubCommand {
                 Ok(GolemResult::Ok(Box::new(res)))
             }
             ProfileSubCommand::Switch { name } => {
-                Config::set_active_profile_name(name, config_dir)?;
+                Config::set_active_profile_name(name, cli_kind, config_dir)?;
 
                 Ok(GolemResult::Str("Active profile updated".to_string()))
             }
             ProfileSubCommand::Get { name } => {
                 let profile = match name {
-                    None => Config::get_active_profile(config_dir)
+                    None => Config::get_active_profile(cli_kind, config_dir)
                         .ok_or(GolemError("Can't find active profile".to_string()))?,
                     Some(name) => {
                         let profile = Config::get_profile(&name, config_dir)
@@ -306,11 +374,12 @@ impl ProfileSubCommand {
                     }
                 };
 
-                let active = Config::get_active_profile(config_dir).map(|p| p.name);
+                let active = Config::get_active_profile(cli_kind, config_dir)
+                    .map(|p| p.name)
+                    .unwrap_or_else(|| ProfileName::default(cli_kind));
 
                 Ok(GolemResult::Ok(Box::new(ProfileView::from_profile(
-                    &active.unwrap_or_default(),
-                    profile,
+                    &active, profile,
                 ))))
             }
             ProfileSubCommand::Delete { name } => {
@@ -321,7 +390,7 @@ impl ProfileSubCommand {
             ProfileSubCommand::Config {
                 profile,
                 subcommand,
-            } => subcommand.handle(profile, config_dir),
+            } => subcommand.handle(cli_kind, profile, config_dir),
         }
     }
 }

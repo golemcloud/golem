@@ -83,7 +83,6 @@ fn profile_add_get_list_switch_delete(
         "profile",
         "add",
         &cfg.arg('s', "set-active"),
-        "golem",
         &cfg.arg('c', "component-url"),
         "http://localhost:9876",
         &cfg.arg('w', "worker-url"),
@@ -114,7 +113,6 @@ fn profile_add_get_list_switch_delete(
     cli.run_unit(&[
         "profile",
         "add",
-        "golem",
         &cfg.arg('c', "component-url"),
         "http://localhost:9874",
         "p_no_worker_url",
@@ -135,28 +133,34 @@ fn profile_add_get_list_switch_delete(
 
     assert_eq!(p_no_worker_url, expected);
 
-    cli.run_unit(&["profile", "add", "golem-cloud", "p_cloud"])?;
+    cli.run_unit(&[
+        "profile",
+        "add",
+        &cfg.arg('c', "component-url"),
+        "http://localhost:9873",
+        "p_2",
+    ])?;
 
-    let p_cloud: ProfileView = cli.run(&["profile", "get", "p_cloud"])?;
+    let p_2: ProfileView = cli.run(&["profile", "get", "p_2"])?;
 
     let expected = ProfileView {
         is_active: false,
-        name: ProfileName("p_cloud".to_string()),
-        typ: ProfileType::GolemCloud,
-        url: None,
+        name: ProfileName("p_2".to_string()),
+        typ: ProfileType::Golem,
+        url: Some(Url::parse("http://localhost:9873").unwrap()),
         worker_url: None,
         allow_insecure: false,
-        authenticated: Some(false),
+        authenticated: None,
         config: ProfileConfig::default(),
     };
 
-    assert_eq!(p_cloud, expected);
+    assert_eq!(p_2, expected);
 
     let list: Vec<ProfileView> = cli.run(&["profile", "list"])?;
 
     assert!(list.iter().any(|p| &p.name.0 == "p_with_worker_url"));
     assert!(list.iter().any(|p| &p.name.0 == "p_no_worker_url"));
-    assert!(list.iter().any(|p| &p.name.0 == "p_cloud"));
+    assert!(list.iter().any(|p| &p.name.0 == "p_2"));
 
     cli.run_unit(&["profile", "delete", "p_no_worker_url"])?;
 
@@ -166,13 +170,13 @@ fn profile_add_get_list_switch_delete(
     let active: ProfileView = cli.run(&["profile", "get"])?;
     assert_eq!(active.name.0, "p_with_worker_url");
 
-    cli.run_unit(&["profile", "switch", "p_cloud"])?;
+    cli.run_unit(&["profile", "switch", "p_2"])?;
 
     let active: ProfileView = cli.run(&["profile", "get"])?;
-    assert_eq!(active.name.0, "p_cloud");
+    assert_eq!(active.name.0, "p_2");
 
     assert!(
-        cli.run_unit(&["profile", "delete", "p_cloud"]).is_err(),
+        cli.run_unit(&["profile", "delete", "p_2"]).is_err(),
         "Can't delete active"
     );
 
@@ -192,7 +196,13 @@ fn profile_config(
 
     let cfg = &cli.config;
 
-    cli.run_unit(&["profile", "add", "golem-cloud", "p_config"])?;
+    cli.run_unit(&[
+        "profile",
+        "add",
+        &cfg.arg('c', "component-url"),
+        "http://localhost:9872",
+        "p_config",
+    ])?;
 
     let config: ProfileConfig = cli.run(&[
         "profile",

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::model::{CloudComponentIdOrName, ProjectRef};
 use crate::model::ComponentIdOrName;
 use crate::oss::model::OssContext;
 
@@ -29,14 +28,5 @@ pub trait ComponentRefSplit<ProjectRef> {
 impl ComponentRefSplit<OssContext> for ComponentIdOrName {
     fn split(self) -> (ComponentIdOrName, Option<OssContext>) {
         (self, None)
-    }
-}
-
-impl ComponentRefSplit<ProjectRef> for CloudComponentIdOrName {
-    fn split(self) -> (ComponentIdOrName, Option<ProjectRef>) {
-        match self {
-            CloudComponentIdOrName::Id(id) => (ComponentIdOrName::Id(id), None),
-            CloudComponentIdOrName::Name(name, p) => (ComponentIdOrName::Name(name), Some(p)),
-        }
     }
 }

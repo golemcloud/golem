@@ -3248,7 +3248,6 @@ dependencies = [
  "env_logger 0.11.3",
  "futures-util",
  "golem-client",
- "golem-cloud-client",
  "golem-common",
  "golem-examples",
  "golem-test-framework",
@@ -3298,26 +3297,6 @@ dependencies = [
 [[package]]
 name = "golem-client"
 version = "0.0.0"
-dependencies = [
- "async-trait",
- "bytes 1.6.0",
- "chrono",
- "futures-core",
- "golem-openapi-client-generator",
- "http 1.1.0",
- "relative-path",
- "reqwest",
- "serde",
- "serde_json",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "golem-cloud-client"
-version = "0.0.63"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "435ac1d308280158170f458e23e348b73e2a0f097c13c404030e8106e5f54aa9"
 dependencies = [
  "async-trait",
  "bytes 1.6.0",

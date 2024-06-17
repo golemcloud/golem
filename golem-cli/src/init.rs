@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::factory::CloudServiceFactory;
-use crate::command::profile::ProfileSubCommand;
+use crate::command::profile::{ProfileSubCommand, UniversalProfileAdd};
 use crate::config::{CloudProfile, Config, OssProfile, Profile, ProfileConfig, ProfileName};
 use crate::examples;
 use crate::model::{Format, GolemError, GolemResult};
 use crate::stubgen::handle_stubgen;
+use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
 use indoc::formatdoc;
 use inquire::{Confirm, CustomType, Select};
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -33,7 +34,7 @@ use url::{ParseError, Url};
 
 #[derive(Subcommand, Debug)]
 #[command()]
-pub enum InitCommand {
+pub enum InitCommand<ProfileAdd: clap::Args> {
     /// Create a new default profile and switch to it
     #[command()]
     Init {},
@@ -42,7 +43,7 @@ pub enum InitCommand {
     #[command()]
     Profile {
         #[command(subcommand)]
-        subcommand: ProfileSubCommand,
+        subcommand: ProfileSubCommand<ProfileAdd>,
     },
 
     /// Create a new Golem component from built-in examples
@@ -84,7 +85,7 @@ pub enum InitCommand {
 #[derive(Parser, Debug)]
 #[command(author, version = option_env ! ("VERSION").unwrap_or(env ! ("CARGO_PKG_VERSION")), about = "Your Golem is not configured. Please run `golem-cli init`", long_about = None, rename_all = "kebab-case")]
 /// Your Golem is not configured. Please run `golem-cli init`
-pub struct GolemInitCommand {
+pub struct GolemInitCommand<ProfileAdd: clap::Args> {
     #[command(flatten)]
     pub verbosity: Verbosity,
 
@@ -92,16 +93,56 @@ pub struct GolemInitCommand {
     pub format: Format,
 
     #[command(subcommand)]
-    pub command: InitCommand,
+    pub command: InitCommand<ProfileAdd>,
 }
 
-pub async fn async_main(
-    cmd: GolemInitCommand,
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CliKind {
+    Universal,
+    Cloud,
+}
+
+#[async_trait]
+pub trait ProfileAuth {
+    async fn auth(&self, profile_name: &ProfileName, config_dir: &Path) -> Result<(), GolemError>;
+}
+
+pub struct DummyProfileAuth {}
+
+#[async_trait]
+impl ProfileAuth for DummyProfileAuth {
+    async fn auth(
+        &self,
+        _profile_name: &ProfileName,
+        _config_dir: &Path,
+    ) -> Result<(), GolemError> {
+        Ok(())
+    }
+}
+
+pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
+    cmd: GolemInitCommand<ProfileAdd>,
+    cli_kind: CliKind,
     config_dir: PathBuf,
+    profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let res = match cmd.command {
-        InitCommand::Init {} => init_profile(None, &config_dir).await,
-        InitCommand::Profile { subcommand } => subcommand.handle(&config_dir).await,
+        InitCommand::Init {} => {
+            let profile_name = ProfileName::default(cli_kind);
+
+            let res = init_profile(cli_kind, profile_name, &config_dir).await?;
+
+            if res.auth_required {
+                profile_auth.auth(&res.profile_name, &config_dir).await?
+            }
+
+            Ok(GolemResult::Str("Profile created".to_string()))
+        }
+        InitCommand::Profile { subcommand } => {
+            subcommand
+                .handle(cli_kind, &config_dir, profile_auth.as_ref())
+                .await
+        }
         InitCommand::New {
             example,
             package_name,
@@ -124,23 +165,14 @@ pub async fn async_main(
 }
 
 fn validate_profile_override(
-    profile_name: &Option<ProfileName>,
+    profile_name: &ProfileName,
     config_dir: &Path,
 ) -> Result<(), GolemError> {
-    let profile_name = profile_name
-        .clone()
-        .filter(|n| n != &ProfileName::default());
-
-    if Config::get_profile(&profile_name.clone().unwrap_or_default(), config_dir).is_some() {
-        let profile_ref = if let Some(name) = profile_name {
-            format!("Profile '{}'", name.to_string().bold())
-        } else {
-            "Default profile".to_string()
-        };
-
+    if Config::get_profile(profile_name, config_dir).is_some() {
         let question = formatdoc!(
-            "{profile_ref} already exists.
-            Do you want to override it?"
+            "Profile '{}' already exists.
+            Do you want to override it?",
+            profile_name.to_string().bold()
         );
 
         let ans = Confirm::new(&question)
@@ -253,16 +285,15 @@ fn make_cloud_profile() -> Result<Profile, GolemError> {
 }
 
 fn set_active_profile(
-    profile_name: &Option<ProfileName>,
+    cli_kind: CliKind,
+    profile_name: &ProfileName,
     config_dir: &Path,
 ) -> Result<(), GolemError> {
-    let profile_name = profile_name.clone().unwrap_or_default();
-
-    let active_profile = Config::get_active_profile(config_dir).map(|p| p.name);
+    let active_profile = Config::get_active_profile(cli_kind, config_dir).map(|p| p.name);
 
     match active_profile {
-        None => Config::set_active_profile_name(profile_name, config_dir),
-        Some(active_profile) if active_profile == profile_name => Ok(()),
+        None => Config::set_active_profile_name(profile_name.clone(), cli_kind, config_dir),
+        Some(active_profile) if &active_profile == profile_name => Ok(()),
         Some(active_profile) => {
             let question = formatdoc!(
                 "
@@ -277,7 +308,7 @@ fn set_active_profile(
                 .map_err(|err| GolemError(format!("Unexpected error: {err}")))?;
 
             if ans {
-                Config::set_active_profile_name(profile_name, config_dir)
+                Config::set_active_profile_name(profile_name.clone(), cli_kind, config_dir)
             } else {
                 Ok(())
             }
@@ -285,34 +316,14 @@ fn set_active_profile(
     }
 }
 
-async fn auth_cloud(profile_name: &ProfileName, config_dir: &Path) -> Result<(), GolemError> {
-    let ans = Confirm::new("Do you want to log in to Golem Cloud right now?")
+async fn ask_auth_cloud() -> Result<bool, GolemError> {
+    let res = Confirm::new("Do you want to log in to Golem Cloud right now?")
         .with_default(false)
         .with_help_message("You can safely skip this and log in to Golem Cloud later by calling any command that requires authentication.")
         .prompt()
         .map_err(|err| GolemError(format!("Unexpected error: {err}")))?;
 
-    if ans {
-        let profile = Config::get_profile(profile_name, config_dir)
-            .ok_or(GolemError("Can't find created profile.".to_string()))?;
-
-        let profile = if let Profile::GolemCloud(profile) = profile {
-            profile
-        } else {
-            return Err(GolemError("Unexpected profile type.".to_string()));
-        };
-
-        let factory = CloudServiceFactory::from_profile(&profile);
-
-        let _ = factory
-            .auth()?
-            .authenticate(None, profile_name, &profile, config_dir)
-            .await?;
-
-        Ok(())
-    } else {
-        Ok(())
-    }
+    Ok(res)
 }
 
 fn ask_for_component_url() -> Result<Url, GolemError> {
@@ -380,29 +391,39 @@ fn make_oss_profile() -> Result<Profile, GolemError> {
     }))
 }
 
+pub struct InitResult {
+    pub profile_name: ProfileName,
+    pub auth_required: bool,
+}
+
 pub async fn init_profile(
-    profile_name: Option<ProfileName>,
+    cli_kind: CliKind,
+    profile_name: ProfileName,
     config_dir: &Path,
-) -> Result<GolemResult, GolemError> {
+) -> Result<InitResult, GolemError> {
     validate_profile_override(&profile_name, config_dir)?;
-    let typ = select_type()?;
+    let typ = match cli_kind {
+        CliKind::Universal => select_type()?,
+        CliKind::Cloud => ProfileType::GolemCloud,
+    };
 
     let profile = match typ {
         ProfileType::Golem => make_oss_profile()?,
         ProfileType::GolemCloud => make_cloud_profile()?,
     };
 
-    Config::set_profile(
-        profile_name.clone().unwrap_or_default(),
-        profile,
-        config_dir,
-    )?;
+    Config::set_profile(profile_name.clone(), profile, config_dir)?;
 
-    set_active_profile(&profile_name, config_dir)?;
+    set_active_profile(cli_kind, &profile_name, config_dir)?;
 
-    if let ProfileType::GolemCloud = typ {
-        auth_cloud(&profile_name.clone().unwrap_or_default(), config_dir).await?
-    }
+    let auth_required = if let ProfileType::GolemCloud = typ {
+        ask_auth_cloud().await?
+    } else {
+        false
+    };
 
-    Ok(GolemResult::Str("Profile created.".to_string()))
+    Ok(InitResult {
+        profile_name,
+        auth_required,
+    })
 }
