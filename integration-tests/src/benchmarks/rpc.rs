@@ -188,9 +188,12 @@ impl Benchmark for Rpc {
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
 
                     if worker_id.same_worker_executor(&rt_clone) {
+                        dbg!("Same worker invocation for echo");
                         recorder_clone.duration(&"worker-echo-invocation-local".to_string(), elapsed);
 
                     } else {
+                        dbg!("Different worker invocation for echo");
+
                         recorder_clone.duration(&"worker-echo-invocation-remote".to_string(), elapsed);
                     }
                 }
@@ -222,13 +225,15 @@ impl Benchmark for Rpc {
                         )
                         .await
                         .expect("invoke_and_await failed");
-                    println!("worker-calculate-res: {:?}", res[0]);
+
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
 
                     if worker_id.same_worker_executor(&rt_clone) {
+                        dbg!("Same worker invocation for calculation");
                         recorder_clone.duration(&"worker-calculate-invocation-local".to_string(), elapsed);
 
                     } else {
+                        dbg!("Different worker invocation for calculation");
                         recorder_clone.duration(&"worker-calculate-invocation-remote".to_string(), elapsed);
                     }
                 }
@@ -264,9 +269,13 @@ impl Benchmark for Rpc {
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
                     
                     if worker_id.same_worker_executor(&rt_clone) {
+                        dbg!("Same worker invocation for process");
+
                         recorder_clone.duration(&"worker-process-invocation-local".to_string(), elapsed);
 
                     } else {
+                        dbg!("Different worker invocation for process");
+
                         recorder_clone.duration(&"worker-process-invocation-remote".to_string(), elapsed);
                     }
                 }
