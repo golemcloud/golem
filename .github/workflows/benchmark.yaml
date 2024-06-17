@@ -116,6 +116,11 @@ jobs:
           cat benchmark-data-current/benchmark_suspend_worker.json
           echo "Successfully ran suspend benchmark"
           
+          echo "Starting RPC benchmark"
+          ./target/debug/benchmark_rpc --quiet --json spawned > benchmark-rpc/benchmark_rpc.json
+          cat benchmark-data-current/benchmark_rpc.json
+          echo "Successfully ran RPC benchmark"
+          
           # echo "Starting throughput benchmark"
           # ./target/debug/benchmark_throughput --quiet --json spawned > benchmark-data-current/benchmark_throughput.json
           # cat benchmark-data-current/benchmark_throughput.json
