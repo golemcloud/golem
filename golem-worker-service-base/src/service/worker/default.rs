@@ -443,11 +443,7 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(format!("Failed to find the function {}", component_details
-                    .metadata
-                    .exports
-                    .iter()
-                    .flat_map(|x| x.function_names()).collect::<Vec<_>>().join(", ")))
+                WorkerServiceError::TypeChecker(format!("Failed to find the function {}, Available functions: {}", &function_name, component_details.function_names().join(", ")))
             })?;
 
         let params_val = params
@@ -509,7 +505,7 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker(format!("Failed to find the function {}, Available functions: {}", &function_name, component_details.function_names().join(", ")))
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -588,7 +584,7 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker(format!("Failed to find the function {}, Available functions: {}", &function_name,  component_details.function_names().join(", ")))
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -633,7 +629,7 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker(format!("Failed to find the function {}, Available functions: {}", &function_name, component_details.function_names().join(", ")))
             })?;
         let params_val = params
             .validate_function_parameters(

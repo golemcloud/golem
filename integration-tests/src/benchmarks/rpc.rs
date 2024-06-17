@@ -148,7 +148,7 @@ impl Benchmark for Rpc {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:itrpc/api.{echo}",
+                            "golem:itrpc/rpc-api.{echo}",
                             vec![Value::String("hello".to_string())],
                         )
                         .await
@@ -181,7 +181,7 @@ impl Benchmark for Rpc {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:itrpc/api.{calculate}",
+                            "golem:itrpc/rpc-api.{calculate}",
                             vec![Value::U64(calculate_iter)],
                         )
                         .await
@@ -212,7 +212,7 @@ impl Benchmark for Rpc {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:itrpc/api.{process}",
+                            "golem:itrpc/rpc-api.{process}",
                             vec![Value::List(values_clone.clone())],
                         )
                         .await

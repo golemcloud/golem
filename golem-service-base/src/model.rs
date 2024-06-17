@@ -3167,6 +3167,16 @@ pub struct Component {
     pub metadata: ComponentMetadata,
 }
 
+impl Component {
+    pub fn function_names(&self) -> Vec<String> {
+        self
+            .metadata
+            .exports
+            .iter()
+            .flat_map(|x| x.function_names()).collect::<Vec<_>>()
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     type Error = String;
 
