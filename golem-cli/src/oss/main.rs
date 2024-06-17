@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::OssProfile;
+use crate::config::{OssProfile, ProfileName};
 use crate::examples;
 use crate::factory::ServiceFactory;
+use crate::init::{CliKind, DummyProfileAuth};
+use crate::model::GolemResult;
 use crate::oss::command::{GolemOssCommand, OssCommand};
 use crate::oss::factory::OssServiceFactory;
 use crate::oss::model::OssContext;
@@ -97,8 +99,18 @@ pub async fn async_main(
                 )
                 .await
         }
-        OssCommand::Profile { subcommand } => subcommand.handle(&config_dir).await,
-        OssCommand::Init {} => crate::init::init_profile(None, &config_dir).await,
+        OssCommand::Profile { subcommand } => {
+            subcommand
+                .handle(CliKind::Universal, &config_dir, &DummyProfileAuth {})
+                .await
+        }
+        OssCommand::Init {} => crate::init::init_profile(
+            CliKind::Universal,
+            ProfileName::default(CliKind::Universal),
+            &config_dir,
+        )
+        .await
+        .map(|_| GolemResult::Str("Profile created".to_string())),
     };
 
     match res {

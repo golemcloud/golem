@@ -785,7 +785,7 @@ fn worker_invoke_indexed_resource(
         "counters.wasm",
     )?
     .component_id;
-    let worker_name = format!("{name}_worker_invoke_no_params");
+    let worker_name = format!("{name}_worker_invoke_indexed_resource");
     let cfg = &cli.config;
 
     cli.run_unit(&[

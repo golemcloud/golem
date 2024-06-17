@@ -15,7 +15,7 @@
 use crate::command::api_definition::ApiDefinitionSubcommand;
 use crate::command::api_deployment::ApiDeploymentSubcommand;
 use crate::command::component::ComponentSubCommand;
-use crate::command::profile::ProfileSubCommand;
+use crate::command::profile::{OssProfileAdd, ProfileSubCommand};
 use crate::command::worker::WorkerSubcommand;
 use crate::model::{ComponentIdOrName, Format};
 use crate::oss::model::OssContext;
@@ -93,7 +93,7 @@ pub enum OssCommand {
     #[command()]
     Profile {
         #[command(subcommand)]
-        subcommand: ProfileSubCommand,
+        subcommand: ProfileSubCommand<OssProfileAdd>,
     },
 
     /// Interactively creates default profile

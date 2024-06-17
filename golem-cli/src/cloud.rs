@@ -12,10 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod auth;
-pub mod clients;
-pub mod command;
-pub mod factory;
-pub mod main;
-pub mod model;
-pub mod service;
+use chrono::{DateTime, Utc};
+use derive_more::{Display, FromStr, Into};
+use serde::{Deserialize, Serialize};
+use std::fmt::{Debug, Display, Formatter};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAuthenticationConfig {
+    data: CloudAuthenticationConfigData,
+    secret: AuthSecret,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AuthSecret(pub Uuid);
+
+impl Debug for AuthSecret {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("AuthSecret").field(&"*******").finish()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAuthenticationConfigData {
+    id: Uuid,
+    account_id: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize, Deserialize)]
+pub struct AccountId {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Into, Serialize, Deserialize)]
+pub struct ProjectId(pub Uuid);
+
+impl Display for ProjectId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
