@@ -82,13 +82,16 @@ impl BenchmarkComparisonReport {
                     run_config_report.report_key.run_config.size,
                     run_config_report.report_key.run_config.length,
                     run_config_report.comparison.previous_avg,
-                    run_config_report.comparison.current_avg.map_or("Unavailable".to_string(), |x| format!("{:?}", x))
+                    run_config_report
+                        .comparison
+                        .current_avg
+                        .map_or("Unavailable".to_string(), |x| format!("{:?}", x))
                 ));
             }
 
             let table_str = table.join("\\n");
             outer_table.push(wrap_with_subtitle(
-                "Benchmark Comparison Report",
+                report.benchmark_type.0.as_str(),
                 &table_str,
             ))
         }
@@ -242,8 +245,6 @@ mod internal {
     use std::io::BufReader;
     use std::time::Duration;
 
-    let s = calculate_mean_avg_time();
-
     pub fn load_json(file_path: &str) -> Result<BenchmarkResult, String> {
         let file = File::open(file_path)
             .map_err(|err| format!("Failed to open file {}. {}", file_path, err))?;
@@ -273,7 +274,7 @@ mod internal {
             }
         }
 
-       result_map
+        result_map
     }
 
     pub fn wrap_with_subtitle(subtitle: &str, content: &String) -> String {
