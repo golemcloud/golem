@@ -1,0 +1,3 @@
+[workspace]
+members = ["rust-component-service", "rust-rpc-service", "rust-component-service-stub"]
+resolver = "2"

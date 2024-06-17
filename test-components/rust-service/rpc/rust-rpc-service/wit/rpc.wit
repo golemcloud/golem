@@ -1,0 +1,16 @@
+package golem:itrpc;
+
+interface rpc-api {
+  use golem:it/api.{data};
+
+  echo: func(input: string) -> string;
+
+  calculate: func(input: u64) -> u64;
+
+  process: func(input: list<data>) -> list<data>;
+}
+
+world rust-rpc-service {
+  import golem:it-stub/stub-rust-component-service;
+  export rpc-api;
+}
