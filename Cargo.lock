@@ -3610,6 +3610,7 @@ dependencies = [
 [[package]]
 name = "golem-wasm-rpc"
 version = "0.0.0"
+source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/pollable-rpc#f3c16522f380e1a6637a0d4de457158d9b9cd8d3"
 dependencies = [
  "arbitrary",
  "async-trait",
@@ -3681,6 +3682,7 @@ dependencies = [
 [[package]]
 name = "golem-wit"
 version = "0.0.0"
+source = "git+https://github.com/golemcloud/golem-wit?branch=vigoo/pollable-rpc#2c334b6db3ac705774edb22fa1e9f82a6e069090"
 
 [[package]]
 name = "golem-wit"

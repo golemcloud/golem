@@ -86,7 +86,7 @@ futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
 golem-wasm-ast = "0.2.2"
-golem-wasm-rpc = { path = "/Users/vigoo/projects/ziverge/wasm-rpc/wasm-rpc", default-features = false, features = [
+golem-wasm-rpc = { git = "https://github.com/golemcloud/wasm-rpc", branch = "vigoo/pollable-rpc", default-features = false, features = [
     "host",
 ] }
 http = "1.0.0" # keep in sync with wasmtime

@@ -47,6 +47,7 @@ pub struct ServerConfig {
     pub http_port: u16,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct WorkerServiceGrpcConfig {
     pub host: String,
@@ -54,6 +55,7 @@ pub struct WorkerServiceGrpcConfig {
     pub access_token: String,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct ComponentServiceConfig {
     pub host: String,
@@ -73,6 +75,7 @@ impl ComponentServiceConfig {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct UploadWorkerConfig {
     pub num_workers: usize,
