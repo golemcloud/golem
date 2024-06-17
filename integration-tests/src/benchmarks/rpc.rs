@@ -130,9 +130,10 @@ impl Benchmark for Rpc {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
+            let rt_clone = shard_manager_routing_table.clone();
             let length = self.config.length;
             let fiber = tokio::task::spawn(async move {
-                for _ in 2 {
+                for _ in 0..2 {
                     let start = SystemTime::now();
                     context_clone
                         .deps
@@ -146,8 +147,8 @@ impl Benchmark for Rpc {
 
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
 
-                    dbg!(shard_manager_routing_table.lookup(&worker_id_clone));
-                    
+                    dbg!(rt_clone.lookup(&worker_id_clone));
+
                     recorder_clone.duration(&"worker-echo-invocation".to_string(), elapsed);
                 }
             });
