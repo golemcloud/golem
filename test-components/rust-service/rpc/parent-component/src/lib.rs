@@ -10,7 +10,7 @@ struct Component;
 
 impl Guest for Component {
     fn echo(input: String) -> String {
-        dbg!("Invoked parent echo");
+        println!("Invoked parent echo");
         let component_id =
             env::var("CHILD_COMPONENT_ID").expect("PARENT_COMPONENT_ID not set");
 
@@ -22,7 +22,7 @@ impl Guest for Component {
     }
 
     fn calculate(input: u64) -> u64 {
-        dbg!("Invoked parent calculate");
+        println!("Invoked parent calculate");
         let component_id =
             env::var("CHILD_COMPONENT_ID").expect("PARENT_COMPONENT_ID not set");
 
@@ -34,10 +34,10 @@ impl Guest for Component {
     }
 
     fn process(input: Vec<Data>) -> Vec<Data> {
-        dbg!("Invoked parent process");
+        println!("Invoked parent process");
 
         let component_id =
-            env::var("ROOT_COMPONENT_ID").expect("ROOT_COMPONENT_ID not set");
+            env::var("CHILD_COMPONENT_ID").expect("ROOT_COMPONENT_ID not set");
 
         let uri = Uri { value: format!("worker://{component_id}/{}", "new-worker") };
 

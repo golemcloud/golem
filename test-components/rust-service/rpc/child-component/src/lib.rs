@@ -6,19 +6,19 @@ struct Component;
 
 impl Guest for Component {
     fn echo(input: String) -> String {
-        dbg!("Invoked child echo");
+        println!("Invoked child echo");
         common::echo(input)
     }
 
     fn calculate(input: u64) -> u64 {
-        dbg!("Invoked child calculate");
+        println!("Invoked child calculate");
         let (i, s) = common::calculate_sum(10000, input);
         let result = (s / i as u128) as u64;
         result
     }
 
     fn process(input: Vec<Data>) -> Vec<Data> {
-        dbg!("Invoked child process");
+        println!("Invoked child process");
         let result = common::process_data(input.into_iter().map(|i| i.into()).collect());
         result.into_iter().map(|i| i.into()).collect()
     }

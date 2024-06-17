@@ -33,13 +33,23 @@ struct Rpc {
     params: CliParams,
 }
 
+struct ParentChildWorkerId {
+    parent: WorkerId,
+    child: WorkerId
+}
+
+struct RpcBenchmarkIteratorContext {
+    worker_ids: Vec<ParentChildWorkerId>
+}
+
+
 #[async_trait]
 impl Benchmark for Rpc {
     type BenchmarkContext = BenchmarkContext;
     type IterationContext = IterationContext;
 
     fn name() -> &'static str {
-        "cold-start-large"
+        "rpc-benchmark"
     }
 
     async fn create_benchmark_context(
@@ -68,6 +78,11 @@ impl Benchmark for Rpc {
         let parent_worker_id = WorkerId {
             component_id: component_id.clone(),
             worker_name: "parent_worker".to_string(),
+        };
+
+        let child_worker_id = WorkerId {
+            component_id: child_component_id.clone(),
+            worker_name: "child_worker".to_string(),
         };
 
         let mut env = HashMap::new();
