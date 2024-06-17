@@ -38,6 +38,19 @@ struct ParentChildWorkerId {
     child: WorkerId
 }
 
+impl ParentChildWorkerId {
+    fn same_worker_executor(&self, routing_table: &RoutingTable) -> bool {
+        let parent_pod = routing_table.lookup(&self.parent);
+        let child_pod = routing_table.lookup(&self.child);
+
+        match (parent_pod, child_pod) {
+            (Some(parent_pod), Some(child_pod)) => parent_pod == child_pod,
+            _ => panic!("Failed to find the pod of parent and child workers in RPC benchmark")
+        }
+
+    }
+}
+
 struct RpcBenchmarkIteratorContext {
     worker_ids: Vec<ParentChildWorkerId>
 }
@@ -174,9 +187,12 @@ impl Benchmark for Rpc {
 
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
 
-                    dbg!(rt_clone.lookup(&worker_id_clone));
+                    if worker_id.same_worker_executor(&rt_clone) {
+                        recorder_clone.duration(&"worker-echo-invocation-local".to_string(), elapsed);
 
-                    recorder_clone.duration(&"worker-echo-invocation".to_string(), elapsed);
+                    } else {
+                        recorder_clone.duration(&"worker-echo-invocation-remote".to_string(), elapsed);
+                    }
                 }
             });
             fibers.push(fiber);
@@ -192,6 +208,8 @@ impl Benchmark for Rpc {
             let worker_id_clone = worker_id.parent.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
+            let rt_clone = shard_manager_routing_table.clone();
+
             let fiber = tokio::task::spawn(async move {
                 for _ in 0..3 {
                     let start = SystemTime::now();
@@ -206,7 +224,13 @@ impl Benchmark for Rpc {
                         .expect("invoke_and_await failed");
                     println!("worker-calculate-res: {:?}", res[0]);
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"worker-calculate-invocation".to_string(), elapsed);
+
+                    if worker_id.same_worker_executor(&rt_clone) {
+                        recorder_clone.duration(&"worker-calculate-invocation-local".to_string(), elapsed);
+
+                    } else {
+                        recorder_clone.duration(&"worker-calculate-invocation-remote".to_string(), elapsed);
+                    }
                 }
             });
             fibers.push(fiber);
@@ -223,6 +247,8 @@ impl Benchmark for Rpc {
             let recorder_clone = recorder.clone();
             let values_clone = values.clone();
             let length = self.config.length;
+            let rt_clone = shard_manager_routing_table.clone();
+
             let fiber = tokio::task::spawn(async move {
                 for _ in 0..3 {
                     let start = SystemTime::now();
@@ -236,7 +262,13 @@ impl Benchmark for Rpc {
                         .await
                         .expect("invoke_and_await failed");
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"worker-process-invocation".to_string(), elapsed);
+                    
+                    if worker_id.same_worker_executor(&rt_clone) {
+                        recorder_clone.duration(&"worker-process-invocation-local".to_string(), elapsed);
+
+                    } else {
+                        recorder_clone.duration(&"worker-process-invocation-remote".to_string(), elapsed);
+                    }
                 }
             });
             fibers.push(fiber);
@@ -252,7 +284,11 @@ impl Benchmark for Rpc {
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
     ) {
-        cleanup_iteration(benchmark_context, context).await
+
+        for worker_id in &context.worker_ids {
+            benchmark_context.deps.delete_worker(&worker_id.parent).await;
+            benchmark_context.deps.delete_worker(&worker_id.child).await;
+        }
     }
 }
 
