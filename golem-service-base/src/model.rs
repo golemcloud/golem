@@ -1318,6 +1318,19 @@ pub enum Export {
     Function(ExportFunction),
 }
 
+impl Export {
+    pub fn function_names(&self) -> Vec<String> {
+        match self {
+            Export::Instance(instance) => instance
+                .functions
+                .iter()
+                .map(|function| format!("{}.{{{}}}", instance.name, function.name))
+                .collect(),
+            Export::Function(function) => vec![function.name.clone()],
+        }
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::component::Export> for Export {
     type Error = String;
 

@@ -1,11 +1,11 @@
 [config]
 default_to_workspace = false
 
-[tasks.add-stub-dependency-rust-component-service-rust-rpc-service]
-args = ["stubgen", "add-stub-dependency", "--stub-wit-root", "rust-component-service-stub/wit", "--dest-wit-root", "rust-rpc-service/wit", "--overwrite", "--update-cargo-toml"]
+[tasks.add-stub-dependency-child-component-parent-component]
+args = ["stubgen", "add-stub-dependency", "--stub-wit-root", "child-component-stub/wit", "--dest-wit-root", "parent-component/wit", "--overwrite", "--update-cargo-toml"]
 command = "golem-cli"
 cwd = "."
-dependencies = ["generate-rust-component-service-stub"]
+dependencies = ["generate-child-component-stub"]
 
 [tasks.build]
 args = ["build"]
@@ -24,32 +24,32 @@ dependencies = ["clean", "regenerate-stubs"]
 args = ["clean"]
 command = "cargo-component"
 
-[tasks.compose-release-rust-rpc-service]
-args = ["stubgen", "compose", "--source-wasm", "target/wasm32-wasi/release/rust_rpc_service.wasm", "--stub-wasm", "target/wasm32-wasi/release/rust_component_service_stub.wasm", "--dest-wasm", "target/wasm32-wasi/release/rust_rpc_service_composed.wasm"]
+[tasks.compose-parent-component]
+args = ["stubgen", "compose", "--source-wasm", "target/wasm32-wasi/debug/parent_component.wasm", "--stub-wasm", "target/wasm32-wasi/debug/child_component_stub.wasm", "--dest-wasm", "target/wasm32-wasi/debug/parent_component_composed.wasm"]
 command = "golem-cli"
 cwd = "."
 
-[tasks.compose-rust-rpc-service]
-args = ["stubgen", "compose", "--source-wasm", "target/wasm32-wasi/debug/rust_rpc_service.wasm", "--stub-wasm", "target/wasm32-wasi/debug/rust_component_service_stub.wasm", "--dest-wasm", "target/wasm32-wasi/debug/rust_rpc_service_composed.wasm"]
+[tasks.compose-release-parent-component]
+args = ["stubgen", "compose", "--source-wasm", "target/wasm32-wasi/release/parent_component.wasm", "--stub-wasm", "target/wasm32-wasi/release/child_component_stub.wasm", "--dest-wasm", "target/wasm32-wasi/release/parent_component_composed.wasm"]
 command = "golem-cli"
 cwd = "."
 
 [tasks.default]
 alias = "build"
 
-[tasks.generate-rust-component-service-stub]
-args = ["stubgen", "generate", "-s", "rust-component-service/wit", "-d", "rust-component-service-stub"]
+[tasks.generate-child-component-stub]
+args = ["stubgen", "generate", "-s", "child-component/wit", "-d", "child-component-stub"]
 command = "golem-cli"
 cwd = "."
 
 [tasks.post-build]
-dependencies = ["compose-rust-rpc-service"]
+dependencies = ["compose-parent-component"]
 
 [tasks.post-build-release]
-dependencies = ["compose-release-rust-rpc-service"]
+dependencies = ["compose-release-parent-component"]
 
 [tasks.regenerate-stubs]
-dependencies = ["add-stub-dependency-rust-component-service-rust-rpc-service"]
+dependencies = ["add-stub-dependency-child-component-parent-component"]
 
 [tasks.release-build-flow]
 dependencies = ["build-release", "post-build-release"]

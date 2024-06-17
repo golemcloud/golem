@@ -25,7 +25,7 @@ use golem_test_framework::config::{
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
 use integration_tests::benchmarks::data::Data;
-use integration_tests::benchmarks::{run_benchmark, setup_with};
+use integration_tests::benchmarks::{get_worker_ids, run_benchmark, setup_with, start};
 use reqwest::Client;
 use reqwest::Url;
 

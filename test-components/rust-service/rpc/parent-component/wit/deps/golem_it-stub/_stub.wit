@@ -1,0 +1,18 @@
+package golem:it-stub;
+
+interface stub-child-component {
+  use golem:rpc/types@0.1.0.{uri};
+  use golem:it/api.{data};
+
+  resource api {
+    constructor(location: uri);
+    echo: func(input: string) -> string;
+    calculate: func(input: u64) -> u64;
+    process: func(input: list<data>) -> list<data>;
+  }
+
+}
+
+world wasm-rpc-stub-child-component {
+  export stub-child-component;
+}

@@ -36,6 +36,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "child-component"
+version = "0.0.1"
+dependencies = [
+ "common",
+ "once_cell",
+ "rand",
+ "wit-bindgen",
+]
+
+[[package]]
+name = "child-component-stub"
+version = "0.0.1"
+dependencies = [
+ "golem-wasm-rpc",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "common"
 version = "0.0.1"
 dependencies = [
@@ -170,6 +188,16 @@ name = "once_cell"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
+
+[[package]]
+name = "parent-component"
+version = "0.0.1"
+dependencies = [
+ "common",
+ "once_cell",
+ "rand",
+ "wit-bindgen",
+]
 
 [[package]]
 name = "petgraph"
@@ -326,34 +354,6 @@ name = "regex-syntax"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a66a03ae7c801facd77a29370b4faec201768915ac14a721ba36f20bc9c209b"
-
-[[package]]
-name = "rust-component-service"
-version = "0.0.1"
-dependencies = [
- "common",
- "once_cell",
- "rand",
- "wit-bindgen",
-]
-
-[[package]]
-name = "rust-component-service-stub"
-version = "0.0.1"
-dependencies = [
- "golem-wasm-rpc",
- "wit-bindgen",
-]
-
-[[package]]
-name = "rust-rpc-service"
-version = "0.0.1"
-dependencies = [
- "common",
- "once_cell",
- "rand",
- "wit-bindgen",
-]
 
 [[package]]
 name = "rustix"

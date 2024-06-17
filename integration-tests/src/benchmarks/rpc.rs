@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 // Copyright 2024 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,16 +61,24 @@ impl Benchmark for Rpc {
         &self,
         benchmark_context: &Self::BenchmarkContext,
     ) -> Self::IterationContext {
-        let worker_ids = setup_with(
-            1, //self.config.size,
-            "rust_component_service",
-            "worker",
-            true,
-            benchmark_context.deps.clone(),
-        )
-        .await;
+        let child_component_id = benchmark_context.deps.store_unique_component("child_component").await;
+        let component_id = benchmark_context.deps.store_unique_component("parent_component_composed").await;
 
-        IterationContext { worker_ids }
+        // Rpc parent worker-id
+        let parent_worker_id = WorkerId {
+            component_id: component_id.clone(),
+            worker_name: "parent_worker".to_string(),
+        };
+
+        let mut env = HashMap::new();
+
+        env.insert("CHILD_COMPONENT_ID".to_string(), child_component_id.0.to_string());
+
+        benchmark_context.deps
+            .start_worker_with(&parent_worker_id.component_id, &parent_worker_id.worker_name, vec![], env)
+            .await;
+
+        IterationContext { worker_ids: vec![parent_worker_id] }
     }
 
     async fn warmup(
@@ -139,7 +148,7 @@ impl Benchmark for Rpc {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:it/api.{echo}",
+                            "golem:itrpc/api.{echo}",
                             vec![Value::String("hello".to_string())],
                         )
                         .await
@@ -172,7 +181,7 @@ impl Benchmark for Rpc {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:it/api.{calculate}",
+                            "golem:itrpc/api.{calculate}",
                             vec![Value::U64(calculate_iter)],
                         )
                         .await
@@ -203,7 +212,7 @@ impl Benchmark for Rpc {
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
-                            "golem:it/api.{process}",
+                            "golem:itrpc/api.{process}",
                             vec![Value::List(values_clone.clone())],
                         )
                         .await

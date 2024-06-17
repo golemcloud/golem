@@ -443,7 +443,11 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker(format!("Failed to find the function {}", component_details
+                    .metadata
+                    .exports
+                    .iter()
+                    .flat_map(|x| x.function_names()).collect::<Vec<_>>().join(", ")))
             })?;
 
         let params_val = params
