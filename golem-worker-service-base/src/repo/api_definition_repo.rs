@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -10,10 +10,13 @@ use uuid::Uuid;
 
 use golem_common::config::RedisConfig;
 use golem_common::redis::{RedisError, RedisPool};
+use golem_service_base::model::ComponentMetadata;
 
 use crate::api_definition::{ApiDefinitionId, HasIsDraft};
+use crate::api_definition::http::HttpApiDefinition;
 use crate::repo::api_namespace::ApiNamespace;
 use crate::service::api_definition::ApiDefinitionKey;
+use crate::service::worker::ConnectProxyError::Json;
 
 #[async_trait]
 pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {
@@ -58,11 +61,17 @@ pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiRegistrationRepoError {
-    #[error("AlreadyExists: ApiDefinition with id: {} and version: {} already exists in the namespace {}", .0.id, .0.version, .0.namespace)]
+    #[error(
+        "AlreadyExists: ApiDefinition with id: {} and version: {} already exists in the namespace {}", .0.id, .0.version, .0.namespace
+    )]
     AlreadyExists(ApiDefinitionKey<String>),
-    #[error("NotDraft: ApiDefinition with id: {} and version: {} in namespace {} can not be updated", .0.id, .0.version, .0.namespace)]
+    #[error(
+        "NotDraft: ApiDefinition with id: {} and version: {} in namespace {} can not be updated", .0.id, .0.version, .0.namespace
+    )]
     NotDraft(ApiDefinitionKey<String>),
-    #[error("NotFound: ApiDefinition with id: {} and version: {} not found in the namespace {}", .0.id, .0.version, .0.namespace)]
+    #[error(
+        "NotFound: ApiDefinition with id: {} and version: {} not found in the namespace {}", .0.id, .0.version, .0.namespace
+    )]
     NotFound(ApiDefinitionKey<String>),
     #[error(transparent)]
     Internal(anyhow::Error),
@@ -88,7 +97,7 @@ impl<Namespace, ApiDefinition> Default for InMemoryRegistry<Namespace, ApiDefini
 
 #[async_trait]
 impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send + Clone + Sync>
-    ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition>
+ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition>
 {
     async fn create(
         &self,
@@ -482,27 +491,6 @@ mod redis_keys {
         golem_common::serialization::deserialize(&value)
             .map_err(|e| ApiRegistrationRepoError::Internal(anyhow::Error::msg(e)))
     }
-}
-
-/**
-CREATE TABLE api_definitions
-(
-    namespace            text      NOT NULL default '',
-    id                   uuid      NOT NULL,
-    version              bigint    NOT NULL,
-    draft                boolean   NOT NULL default true,
-    routes               jsonb     NOT NULL,
-    created_at           timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
-    PRIMARY KEY (namespace, id, version)
-);
-*/
-#[derive(sqlx::FromRow, Debug, Clone)]
-pub struct ApiDefinitionRecord {
-    pub namespace: String,
-    pub id: Uuid,
-    pub version: String,
-    pub draft: bool,
-    pub routes: String
 }
 
 #[cfg(test)]

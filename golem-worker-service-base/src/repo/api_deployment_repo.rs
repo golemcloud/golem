@@ -415,7 +415,7 @@ pub struct ApiDeploymentRecord {
     pub namespace: String,
     pub host: String,
     pub subdomain: Option<String>,
-    pub definition_id: Uuid,
+    pub definition_id: String,
     pub definition_version: String
 }
 

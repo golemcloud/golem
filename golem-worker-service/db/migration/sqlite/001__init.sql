@@ -1,10 +1,10 @@
 CREATE TABLE api_definitions
 (
     namespace  text    NOT NULL default '',
-    id         uuid    NOT NULL,
+    id         text    NOT NULL,
     version    text    NOT NULL,
     draft      boolean NOT NULL default true,
-    routes     jsonb   NOT NULL,
+    data       jsonb   NOT NULL,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     PRIMARY KEY (namespace, id, version)
 );
