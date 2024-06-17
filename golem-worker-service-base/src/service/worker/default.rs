@@ -443,7 +443,11 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(format!("Failed to find the function {}, Available functions: {}", &function_name, component_details.function_names().join(", ")))
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to find the function {}, Available functions: {}",
+                    &function_name,
+                    component_details.function_names().join(", ")
+                ))
             })?;
 
         let params_val = params
@@ -505,7 +509,11 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(format!("Failed to find the function {}, Available functions: {}", &function_name, component_details.function_names().join(", ")))
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to find the function {}, Available functions: {}",
+                    &function_name,
+                    component_details.function_names().join(", ")
+                ))
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -584,7 +592,11 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(format!("Failed to find the function {}, Available functions: {}", &function_name,  component_details.function_names().join(", ")))
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to find the function {}, Available functions: {}",
+                    &function_name,
+                    component_details.function_names().join(", ")
+                ))
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -629,7 +641,11 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(format!("Failed to find the function {}, Available functions: {}", &function_name, component_details.function_names().join(", ")))
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to find the function {}, Available functions: {}",
+                    &function_name,
+                    component_details.function_names().join(", ")
+                ))
             })?;
         let params_val = params
             .validate_function_parameters(

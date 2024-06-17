@@ -3169,11 +3169,11 @@ pub struct Component {
 
 impl Component {
     pub fn function_names(&self) -> Vec<String> {
-        self
-            .metadata
+        self.metadata
             .exports
             .iter()
-            .flat_map(|x| x.function_names()).collect::<Vec<_>>()
+            .flat_map(|x| x.function_names())
+            .collect::<Vec<_>>()
     }
 }
 
