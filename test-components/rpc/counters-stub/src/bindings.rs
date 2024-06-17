@@ -8,6 +8,7 @@ pub mod golem {
       #[doc(hidden)]
       #[cfg(target_arch = "wasm32")]
       static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+      pub type Pollable = super::super::super::wasi::io::poll::Pollable;
       pub type NodeIndex = i32;
       #[derive(Clone)]
       pub struct Uri {
@@ -194,6 +195,52 @@ pub mod golem {
             #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
             extern "C" {
               #[link_name = "[resource-drop]wasm-rpc"]
+              fn drop(_: u32);
+            }
+            
+            drop(_handle);
+          }
+        }
+      }
+      
+      
+      #[derive(Debug)]
+      #[repr(transparent)]
+      pub struct FutureInvokeResult{
+        handle: wit_bindgen::rt::Resource<FutureInvokeResult>,
+      }
+      
+      impl FutureInvokeResult{
+        #[doc(hidden)]
+        pub unsafe fn from_handle(handle: u32) -> Self {
+          Self {
+            handle: wit_bindgen::rt::Resource::from_handle(handle),
+          }
+        }
+        
+        #[doc(hidden)]
+        pub fn into_handle(self) -> u32 {
+          wit_bindgen::rt::Resource::into_handle(self.handle)
+        }
+        
+        #[doc(hidden)]
+        pub fn handle(&self) -> u32 {
+          wit_bindgen::rt::Resource::handle(&self.handle)
+        }
+      }
+      
+      
+      unsafe impl wit_bindgen::rt::WasmResource for FutureInvokeResult{
+        #[inline]
+        unsafe fn drop(_handle: u32) {
+          #[cfg(not(target_arch = "wasm32"))]
+          unreachable!();
+          
+          #[cfg(target_arch = "wasm32")]
+          {
+            #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+            extern "C" {
+              #[link_name = "[resource-drop]future-invoke-result"]
               fn drop(_: u32);
             }
             
@@ -1173,648 +1220,2400 @@ pub mod golem {
                               }
                             }
                           }
-                          
-                        }
-                        
-                      }
-                    }
-                    pub mod exports {
-                      pub mod rpc {
-                        pub mod counters_stub {
-                          
-                          #[allow(clippy::all)]
-                          pub mod stub_counters {
-                            #[used]
-                            #[doc(hidden)]
-                            #[cfg(target_arch = "wasm32")]
-                            static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_section;
-                            pub type Uri = super::super::super::super::golem::rpc::types::Uri;
-                            
-                            pub use super::super::super::super::super::Api as Api;
-                            const _: () = {
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[dtor]api"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn dtor(rep: usize) {
-                                wit_bindgen::rt::Resource::<Api>::dtor(rep)
-                              }
-                            };
-                            unsafe impl wit_bindgen::rt::RustResource for Api{
-                              unsafe fn new(_rep: usize) -> u32 {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                unreachable!();
-                                
-                                #[cfg(target_arch = "wasm32")]
-                                {
-                                  #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
-                                  extern "C" {
-                                    #[link_name = "[resource-new]api"]
-                                    fn new(_: usize) -> u32;
-                                  }
-                                  new(_rep)
-                                }
-                              }
+                          impl WasmRpc {
+                            #[allow(unused_unsafe, clippy::all)]
+                            pub fn async_invoke_and_await(&self,function_name: &str,function_params: &[WitValue],) -> FutureInvokeResult{
                               
-                              unsafe fn rep(_handle: u32) -> usize {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                unreachable!();
-                                
-                                #[cfg(target_arch = "wasm32")]
+                              #[allow(unused_imports)]
+                              use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                              unsafe {
+                                let mut cleanup_list = Vec::new();
+                                let vec0 = function_name;
+                                let ptr0 = vec0.as_ptr() as i32;
+                                let len0 = vec0.len() as i32;
+                                let vec12 = function_params;
+                                let len12 = vec12.len() as i32;
+                                let layout12 = alloc::Layout::from_size_align_unchecked(vec12.len() * 8, 4);
+                                let result12 = if layout12.size() != 0
                                 {
-                                  #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
-                                  extern "C" {
-                                    #[link_name = "[resource-rep]api"]
-                                    fn rep(_: u32) -> usize;
+                                  let ptr = alloc::alloc(layout12);
+                                  if ptr.is_null()
+                                  {
+                                    alloc::handle_alloc_error(layout12);
                                   }
-                                  rep(_handle)
-                                }
-                              }
-                            }
-                            pub type OwnApi = wit_bindgen::rt::Resource<Api>;
-                            
-                            
-                            unsafe impl wit_bindgen::rt::WasmResource for Api{
-                              #[inline]
-                              unsafe fn drop(_handle: u32) {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                unreachable!();
-                                
-                                #[cfg(target_arch = "wasm32")]
-                                {
-                                  #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
-                                  extern "C" {
-                                    #[link_name = "[resource-drop]api"]
-                                    fn drop(_: u32);
+                                  ptr
+                                }else {{
+                                  ::core::ptr::null_mut()
+                                }};
+                                for (i, e) in vec12.into_iter().enumerate() {
+                                  let base = result12 as i32 + (i as i32) * 8;
+                                  {
+                                    let WitValue{ nodes:nodes1, } = e;
+                                    let vec11 = nodes1;
+                                    let len11 = vec11.len() as i32;
+                                    let layout11 = alloc::Layout::from_size_align_unchecked(vec11.len() * 24, 8);
+                                    let result11 = if layout11.size() != 0
+                                    {
+                                      let ptr = alloc::alloc(layout11);
+                                      if ptr.is_null()
+                                      {
+                                        alloc::handle_alloc_error(layout11);
+                                      }
+                                      ptr
+                                    }else {{
+                                      ::core::ptr::null_mut()
+                                    }};
+                                    for (i, e) in vec11.into_iter().enumerate() {
+                                      let base = result11 as i32 + (i as i32) * 24;
+                                      {
+                                        match e {
+                                          WitNode::RecordValue(e) => {
+                                            *((base + 0) as *mut u8) = (0i32) as u8;
+                                            let vec2 = e;
+                                            let ptr2 = vec2.as_ptr() as i32;
+                                            let len2 = vec2.len() as i32;
+                                            *((base + 12) as *mut i32) = len2;
+                                            *((base + 8) as *mut i32) = ptr2;
+                                          },
+                                          WitNode::VariantValue(e) => {
+                                            *((base + 0) as *mut u8) = (1i32) as u8;
+                                            let (t3_0, t3_1, ) = e;
+                                            *((base + 8) as *mut i32) = wit_bindgen::rt::as_i32(t3_0);
+                                            match t3_1 {
+                                              Some(e) => {
+                                                *((base + 12) as *mut u8) = (1i32) as u8;
+                                                *((base + 16) as *mut i32) = wit_bindgen::rt::as_i32(e);
+                                              },
+                                              None => {
+                                                {
+                                                  *((base + 12) as *mut u8) = (0i32) as u8;
+                                                }
+                                              },
+                                            };},
+                                            WitNode::EnumValue(e) => {
+                                              *((base + 0) as *mut u8) = (2i32) as u8;
+                                              *((base + 8) as *mut i32) = wit_bindgen::rt::as_i32(e);
+                                            },
+                                            WitNode::FlagsValue(e) => {
+                                              *((base + 0) as *mut u8) = (3i32) as u8;
+                                              let vec4 = e;
+                                              let len4 = vec4.len() as i32;
+                                              let layout4 = alloc::Layout::from_size_align_unchecked(vec4.len() * 1, 1);
+                                              let result4 = if layout4.size() != 0
+                                              {
+                                                let ptr = alloc::alloc(layout4);
+                                                if ptr.is_null()
+                                                {
+                                                  alloc::handle_alloc_error(layout4);
+                                                }
+                                                ptr
+                                              }else {{
+                                                ::core::ptr::null_mut()
+                                              }};
+                                              for (i, e) in vec4.into_iter().enumerate() {
+                                                let base = result4 as i32 + (i as i32) * 1;
+                                                {
+                                                  *((base + 0) as *mut u8) = (match e { true => 1, false => 0 }) as u8;
+                                                }
+                                              }
+                                              *((base + 12) as *mut i32) = len4;
+                                              *((base + 8) as *mut i32) = result4 as i32;
+                                              cleanup_list.extend_from_slice(&[(result4, layout4),]);
+                                            },
+                                            WitNode::TupleValue(e) => {
+                                              *((base + 0) as *mut u8) = (4i32) as u8;
+                                              let vec5 = e;
+                                              let ptr5 = vec5.as_ptr() as i32;
+                                              let len5 = vec5.len() as i32;
+                                              *((base + 12) as *mut i32) = len5;
+                                              *((base + 8) as *mut i32) = ptr5;
+                                            },
+                                            WitNode::ListValue(e) => {
+                                              *((base + 0) as *mut u8) = (5i32) as u8;
+                                              let vec6 = e;
+                                              let ptr6 = vec6.as_ptr() as i32;
+                                              let len6 = vec6.len() as i32;
+                                              *((base + 12) as *mut i32) = len6;
+                                              *((base + 8) as *mut i32) = ptr6;
+                                            },
+                                            WitNode::OptionValue(e) => {
+                                              *((base + 0) as *mut u8) = (6i32) as u8;
+                                              match e {
+                                                Some(e) => {
+                                                  *((base + 8) as *mut u8) = (1i32) as u8;
+                                                  *((base + 12) as *mut i32) = wit_bindgen::rt::as_i32(e);
+                                                },
+                                                None => {
+                                                  {
+                                                    *((base + 8) as *mut u8) = (0i32) as u8;
+                                                  }
+                                                },
+                                              };},
+                                              WitNode::ResultValue(e) => {
+                                                *((base + 0) as *mut u8) = (7i32) as u8;
+                                                match e {
+                                                  Ok(e) => { {
+                                                    *((base + 8) as *mut u8) = (0i32) as u8;
+                                                    match e {
+                                                      Some(e) => {
+                                                        *((base + 12) as *mut u8) = (1i32) as u8;
+                                                        *((base + 16) as *mut i32) = wit_bindgen::rt::as_i32(e);
+                                                      },
+                                                      None => {
+                                                        {
+                                                          *((base + 12) as *mut u8) = (0i32) as u8;
+                                                        }
+                                                      },
+                                                    };} },
+                                                    Err(e) => { {
+                                                      *((base + 8) as *mut u8) = (1i32) as u8;
+                                                      match e {
+                                                        Some(e) => {
+                                                          *((base + 12) as *mut u8) = (1i32) as u8;
+                                                          *((base + 16) as *mut i32) = wit_bindgen::rt::as_i32(e);
+                                                        },
+                                                        None => {
+                                                          {
+                                                            *((base + 12) as *mut u8) = (0i32) as u8;
+                                                          }
+                                                        },
+                                                      };} },
+                                                    };},
+                                                    WitNode::PrimU8(e) => {
+                                                      *((base + 0) as *mut u8) = (8i32) as u8;
+                                                      *((base + 8) as *mut u8) = (wit_bindgen::rt::as_i32(e)) as u8;
+                                                    },
+                                                    WitNode::PrimU16(e) => {
+                                                      *((base + 0) as *mut u8) = (9i32) as u8;
+                                                      *((base + 8) as *mut u16) = (wit_bindgen::rt::as_i32(e)) as u16;
+                                                    },
+                                                    WitNode::PrimU32(e) => {
+                                                      *((base + 0) as *mut u8) = (10i32) as u8;
+                                                      *((base + 8) as *mut i32) = wit_bindgen::rt::as_i32(e);
+                                                    },
+                                                    WitNode::PrimU64(e) => {
+                                                      *((base + 0) as *mut u8) = (11i32) as u8;
+                                                      *((base + 8) as *mut i64) = wit_bindgen::rt::as_i64(e);
+                                                    },
+                                                    WitNode::PrimS8(e) => {
+                                                      *((base + 0) as *mut u8) = (12i32) as u8;
+                                                      *((base + 8) as *mut u8) = (wit_bindgen::rt::as_i32(e)) as u8;
+                                                    },
+                                                    WitNode::PrimS16(e) => {
+                                                      *((base + 0) as *mut u8) = (13i32) as u8;
+                                                      *((base + 8) as *mut u16) = (wit_bindgen::rt::as_i32(e)) as u16;
+                                                    },
+                                                    WitNode::PrimS32(e) => {
+                                                      *((base + 0) as *mut u8) = (14i32) as u8;
+                                                      *((base + 8) as *mut i32) = wit_bindgen::rt::as_i32(e);
+                                                    },
+                                                    WitNode::PrimS64(e) => {
+                                                      *((base + 0) as *mut u8) = (15i32) as u8;
+                                                      *((base + 8) as *mut i64) = wit_bindgen::rt::as_i64(e);
+                                                    },
+                                                    WitNode::PrimFloat32(e) => {
+                                                      *((base + 0) as *mut u8) = (16i32) as u8;
+                                                      *((base + 8) as *mut f32) = wit_bindgen::rt::as_f32(e);
+                                                    },
+                                                    WitNode::PrimFloat64(e) => {
+                                                      *((base + 0) as *mut u8) = (17i32) as u8;
+                                                      *((base + 8) as *mut f64) = wit_bindgen::rt::as_f64(e);
+                                                    },
+                                                    WitNode::PrimChar(e) => {
+                                                      *((base + 0) as *mut u8) = (18i32) as u8;
+                                                      *((base + 8) as *mut i32) = wit_bindgen::rt::as_i32(e);
+                                                    },
+                                                    WitNode::PrimBool(e) => {
+                                                      *((base + 0) as *mut u8) = (19i32) as u8;
+                                                      *((base + 8) as *mut u8) = (match e { true => 1, false => 0 }) as u8;
+                                                    },
+                                                    WitNode::PrimString(e) => {
+                                                      *((base + 0) as *mut u8) = (20i32) as u8;
+                                                      let vec7 = e;
+                                                      let ptr7 = vec7.as_ptr() as i32;
+                                                      let len7 = vec7.len() as i32;
+                                                      *((base + 12) as *mut i32) = len7;
+                                                      *((base + 8) as *mut i32) = ptr7;
+                                                    },
+                                                    WitNode::Handle(e) => {
+                                                      *((base + 0) as *mut u8) = (21i32) as u8;
+                                                      let (t8_0, t8_1, ) = e;
+                                                      let Uri{ value:value9, } = t8_0;
+                                                      let vec10 = value9;
+                                                      let ptr10 = vec10.as_ptr() as i32;
+                                                      let len10 = vec10.len() as i32;
+                                                      *((base + 12) as *mut i32) = len10;
+                                                      *((base + 8) as *mut i32) = ptr10;
+                                                      *((base + 16) as *mut i64) = wit_bindgen::rt::as_i64(t8_1);
+                                                    },
+                                                  }
+                                                }
+                                              }
+                                              *((base + 4) as *mut i32) = len11;
+                                              *((base + 0) as *mut i32) = result11 as i32;
+                                              cleanup_list.extend_from_slice(&[(result11, layout11),]);
+                                            }
+                                          }
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                                          extern "C" {
+                                            #[link_name = "[method]wasm-rpc.async-invoke-and-await"]
+                                            fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, ) -> i32;
+                                          }
+                                          
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          fn wit_import(_: i32, _: i32, _: i32, _: i32, _: i32, ) -> i32{ unreachable!() }
+                                          let ret = wit_import((self).handle() as i32, ptr0, len0, result12 as i32, len12);
+                                          if layout12.size() != 0 {
+                                            alloc::dealloc(result12, layout12);
+                                          }
+                                          for (ptr, layout) in cleanup_list {
+                                            
+                                            if layout.size() != 0 {
+                                              
+                                              alloc::dealloc(ptr, layout);
+                                              
+                                            }
+                                            
+                                          }
+                                          FutureInvokeResult::from_handle(ret as u32)
+                                        }
+                                      }
+                                    }
+                                    impl FutureInvokeResult {
+                                      #[allow(unused_unsafe, clippy::all)]
+                                      pub fn subscribe(&self,) -> Pollable{
+                                        
+                                        #[allow(unused_imports)]
+                                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                        unsafe {
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                                          extern "C" {
+                                            #[link_name = "[method]future-invoke-result.subscribe"]
+                                            fn wit_import(_: i32, ) -> i32;
+                                          }
+                                          
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                                          let ret = wit_import((self).handle() as i32);
+                                          super::super::super::wasi::io::poll::Pollable::from_handle(ret as u32)
+                                        }
+                                      }
+                                    }
+                                    impl FutureInvokeResult {
+                                      #[allow(unused_unsafe, clippy::all)]
+                                      pub fn get(&self,) -> Result<WitValue,RpcError>{
+                                        
+                                        #[allow(unused_imports)]
+                                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                        unsafe {
+                                          
+                                          #[repr(align(4))]
+                                          struct RetArea([u8; 16]);
+                                          let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                                          let ptr0 = ret_area.as_mut_ptr() as i32;
+                                          #[cfg(target_arch = "wasm32")]
+                                          #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                                          extern "C" {
+                                            #[link_name = "[method]future-invoke-result.get"]
+                                            fn wit_import(_: i32, _: i32, );
+                                          }
+                                          
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          fn wit_import(_: i32, _: i32, ){ unreachable!() }
+                                          wit_import((self).handle() as i32, ptr0);
+                                          let l1 = i32::from(*((ptr0 + 0) as *const u8));
+                                          match l1 {
+                                            0 => {
+                                              let e = {
+                                                let l2 = *((ptr0 + 4) as *const i32);
+                                                let l3 = *((ptr0 + 8) as *const i32);
+                                                let base49 = l2;
+                                                let len49 = l3;
+                                                let mut result49 = Vec::with_capacity(len49 as usize);
+                                                for i in 0..len49 {
+                                                  let base = base49 + i * 24;
+                                                  let e49 = {
+                                                    let l4 = i32::from(*((base + 0) as *const u8));
+                                                    let v48 = match l4 {
+                                                      0 => {
+                                                        let e48 = {
+                                                          let l5 = *((base + 8) as *const i32);
+                                                          let l6 = *((base + 12) as *const i32);
+                                                          let len7 = l6 as usize;
+                                                          
+                                                          Vec::from_raw_parts(l5 as *mut _, len7, len7)
+                                                        };
+                                                        WitNode::RecordValue(e48)
+                                                      }
+                                                      1 => {
+                                                        let e48 = {
+                                                          let l8 = *((base + 8) as *const i32);
+                                                          let l9 = i32::from(*((base + 12) as *const u8));
+                                                          
+                                                          (l8 as u32, match l9 {
+                                                            0 => None,
+                                                            1 => {
+                                                              let e = {
+                                                                let l10 = *((base + 16) as *const i32);
+                                                                
+                                                                l10
+                                                              };
+                                                              Some(e)
+                                                            }
+                                                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                          })
+                                                        };
+                                                        WitNode::VariantValue(e48)
+                                                      }
+                                                      2 => {
+                                                        let e48 = {
+                                                          let l11 = *((base + 8) as *const i32);
+                                                          
+                                                          l11 as u32
+                                                        };
+                                                        WitNode::EnumValue(e48)
+                                                      }
+                                                      3 => {
+                                                        let e48 = {
+                                                          let l12 = *((base + 8) as *const i32);
+                                                          let l13 = *((base + 12) as *const i32);
+                                                          let base15 = l12;
+                                                          let len15 = l13;
+                                                          let mut result15 = Vec::with_capacity(len15 as usize);
+                                                          for i in 0..len15 {
+                                                            let base = base15 + i * 1;
+                                                            let e15 = {
+                                                              let l14 = i32::from(*((base + 0) as *const u8));
+                                                              
+                                                              wit_bindgen::rt::bool_lift(l14 as u8)
+                                                            };
+                                                            result15.push(e15);
+                                                          }
+                                                          wit_bindgen::rt::dealloc(base15, (len15 as usize) * 1, 1);
+                                                          
+                                                          result15
+                                                        };
+                                                        WitNode::FlagsValue(e48)
+                                                      }
+                                                      4 => {
+                                                        let e48 = {
+                                                          let l16 = *((base + 8) as *const i32);
+                                                          let l17 = *((base + 12) as *const i32);
+                                                          let len18 = l17 as usize;
+                                                          
+                                                          Vec::from_raw_parts(l16 as *mut _, len18, len18)
+                                                        };
+                                                        WitNode::TupleValue(e48)
+                                                      }
+                                                      5 => {
+                                                        let e48 = {
+                                                          let l19 = *((base + 8) as *const i32);
+                                                          let l20 = *((base + 12) as *const i32);
+                                                          let len21 = l20 as usize;
+                                                          
+                                                          Vec::from_raw_parts(l19 as *mut _, len21, len21)
+                                                        };
+                                                        WitNode::ListValue(e48)
+                                                      }
+                                                      6 => {
+                                                        let e48 = {
+                                                          let l22 = i32::from(*((base + 8) as *const u8));
+                                                          
+                                                          match l22 {
+                                                            0 => None,
+                                                            1 => {
+                                                              let e = {
+                                                                let l23 = *((base + 12) as *const i32);
+                                                                
+                                                                l23
+                                                              };
+                                                              Some(e)
+                                                            }
+                                                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                          }
+                                                        };
+                                                        WitNode::OptionValue(e48)
+                                                      }
+                                                      7 => {
+                                                        let e48 = {
+                                                          let l24 = i32::from(*((base + 8) as *const u8));
+                                                          
+                                                          match l24 {
+                                                            0 => {
+                                                              let e = {
+                                                                let l25 = i32::from(*((base + 12) as *const u8));
+                                                                
+                                                                match l25 {
+                                                                  0 => None,
+                                                                  1 => {
+                                                                    let e = {
+                                                                      let l26 = *((base + 16) as *const i32);
+                                                                      
+                                                                      l26
+                                                                    };
+                                                                    Some(e)
+                                                                  }
+                                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                                }
+                                                              };
+                                                              Ok(e)
+                                                            }
+                                                            1 => {
+                                                              let e = {
+                                                                let l27 = i32::from(*((base + 12) as *const u8));
+                                                                
+                                                                match l27 {
+                                                                  0 => None,
+                                                                  1 => {
+                                                                    let e = {
+                                                                      let l28 = *((base + 16) as *const i32);
+                                                                      
+                                                                      l28
+                                                                    };
+                                                                    Some(e)
+                                                                  }
+                                                                  _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                                }
+                                                              };
+                                                              Err(e)
+                                                            }
+                                                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                                          }
+                                                        };
+                                                        WitNode::ResultValue(e48)
+                                                      }
+                                                      8 => {
+                                                        let e48 = {
+                                                          let l29 = i32::from(*((base + 8) as *const u8));
+                                                          
+                                                          l29 as u8
+                                                        };
+                                                        WitNode::PrimU8(e48)
+                                                      }
+                                                      9 => {
+                                                        let e48 = {
+                                                          let l30 = i32::from(*((base + 8) as *const u16));
+                                                          
+                                                          l30 as u16
+                                                        };
+                                                        WitNode::PrimU16(e48)
+                                                      }
+                                                      10 => {
+                                                        let e48 = {
+                                                          let l31 = *((base + 8) as *const i32);
+                                                          
+                                                          l31 as u32
+                                                        };
+                                                        WitNode::PrimU32(e48)
+                                                      }
+                                                      11 => {
+                                                        let e48 = {
+                                                          let l32 = *((base + 8) as *const i64);
+                                                          
+                                                          l32 as u64
+                                                        };
+                                                        WitNode::PrimU64(e48)
+                                                      }
+                                                      12 => {
+                                                        let e48 = {
+                                                          let l33 = i32::from(*((base + 8) as *const i8));
+                                                          
+                                                          l33 as i8
+                                                        };
+                                                        WitNode::PrimS8(e48)
+                                                      }
+                                                      13 => {
+                                                        let e48 = {
+                                                          let l34 = i32::from(*((base + 8) as *const i16));
+                                                          
+                                                          l34 as i16
+                                                        };
+                                                        WitNode::PrimS16(e48)
+                                                      }
+                                                      14 => {
+                                                        let e48 = {
+                                                          let l35 = *((base + 8) as *const i32);
+                                                          
+                                                          l35
+                                                        };
+                                                        WitNode::PrimS32(e48)
+                                                      }
+                                                      15 => {
+                                                        let e48 = {
+                                                          let l36 = *((base + 8) as *const i64);
+                                                          
+                                                          l36
+                                                        };
+                                                        WitNode::PrimS64(e48)
+                                                      }
+                                                      16 => {
+                                                        let e48 = {
+                                                          let l37 = *((base + 8) as *const f32);
+                                                          
+                                                          l37
+                                                        };
+                                                        WitNode::PrimFloat32(e48)
+                                                      }
+                                                      17 => {
+                                                        let e48 = {
+                                                          let l38 = *((base + 8) as *const f64);
+                                                          
+                                                          l38
+                                                        };
+                                                        WitNode::PrimFloat64(e48)
+                                                      }
+                                                      18 => {
+                                                        let e48 = {
+                                                          let l39 = *((base + 8) as *const i32);
+                                                          
+                                                          wit_bindgen::rt::char_lift(l39 as u32)
+                                                        };
+                                                        WitNode::PrimChar(e48)
+                                                      }
+                                                      19 => {
+                                                        let e48 = {
+                                                          let l40 = i32::from(*((base + 8) as *const u8));
+                                                          
+                                                          wit_bindgen::rt::bool_lift(l40 as u8)
+                                                        };
+                                                        WitNode::PrimBool(e48)
+                                                      }
+                                                      20 => {
+                                                        let e48 = {
+                                                          let l41 = *((base + 8) as *const i32);
+                                                          let l42 = *((base + 12) as *const i32);
+                                                          let len43 = l42 as usize;
+                                                          let bytes43 = Vec::from_raw_parts(l41 as *mut _, len43, len43);
+                                                          
+                                                          wit_bindgen::rt::string_lift(bytes43)
+                                                        };
+                                                        WitNode::PrimString(e48)
+                                                      }
+                                                      n => {
+                                                        debug_assert_eq!(n, 21, "invalid enum discriminant");
+                                                        let e48 = {
+                                                          let l44 = *((base + 8) as *const i32);
+                                                          let l45 = *((base + 12) as *const i32);
+                                                          let len46 = l45 as usize;
+                                                          let bytes46 = Vec::from_raw_parts(l44 as *mut _, len46, len46);
+                                                          let l47 = *((base + 16) as *const i64);
+                                                          
+                                                          (Uri{
+                                                            value: wit_bindgen::rt::string_lift(bytes46),
+                                                          }, l47 as u64)
+                                                        };
+                                                        WitNode::Handle(e48)
+                                                      }
+                                                    };
+                                                    
+                                                    v48
+                                                  };
+                                                  result49.push(e49);
+                                                }
+                                                wit_bindgen::rt::dealloc(base49, (len49 as usize) * 24, 8);
+                                                
+                                                WitValue{
+                                                  nodes: result49,
+                                                }
+                                              };
+                                              Ok(e)
+                                            }
+                                            1 => {
+                                              let e = {
+                                                let l50 = i32::from(*((ptr0 + 4) as *const u8));
+                                                let v63 = match l50 {
+                                                  0 => {
+                                                    let e63 = {
+                                                      let l51 = *((ptr0 + 8) as *const i32);
+                                                      let l52 = *((ptr0 + 12) as *const i32);
+                                                      let len53 = l52 as usize;
+                                                      let bytes53 = Vec::from_raw_parts(l51 as *mut _, len53, len53);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes53)
+                                                    };
+                                                    RpcError::ProtocolError(e63)
+                                                  }
+                                                  1 => {
+                                                    let e63 = {
+                                                      let l54 = *((ptr0 + 8) as *const i32);
+                                                      let l55 = *((ptr0 + 12) as *const i32);
+                                                      let len56 = l55 as usize;
+                                                      let bytes56 = Vec::from_raw_parts(l54 as *mut _, len56, len56);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes56)
+                                                    };
+                                                    RpcError::Denied(e63)
+                                                  }
+                                                  2 => {
+                                                    let e63 = {
+                                                      let l57 = *((ptr0 + 8) as *const i32);
+                                                      let l58 = *((ptr0 + 12) as *const i32);
+                                                      let len59 = l58 as usize;
+                                                      let bytes59 = Vec::from_raw_parts(l57 as *mut _, len59, len59);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes59)
+                                                    };
+                                                    RpcError::NotFound(e63)
+                                                  }
+                                                  n => {
+                                                    debug_assert_eq!(n, 3, "invalid enum discriminant");
+                                                    let e63 = {
+                                                      let l60 = *((ptr0 + 8) as *const i32);
+                                                      let l61 = *((ptr0 + 12) as *const i32);
+                                                      let len62 = l61 as usize;
+                                                      let bytes62 = Vec::from_raw_parts(l60 as *mut _, len62, len62);
+                                                      
+                                                      wit_bindgen::rt::string_lift(bytes62)
+                                                    };
+                                                    RpcError::RemoteInternalError(e63)
+                                                  }
+                                                };
+                                                
+                                                v63
+                                              };
+                                              Err(e)
+                                            }
+                                            _ => wit_bindgen::rt::invalid_enum_discriminant(),
+                                          }
+                                        }
+                                      }
+                                    }
+                                    
                                   }
                                   
-                                  drop(_handle);
                                 }
                               }
-                            }
-                            
-                            
-                            pub use super::super::super::super::super::Counter as Counter;
-                            const _: () = {
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[dtor]counter"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn dtor(rep: usize) {
-                                wit_bindgen::rt::Resource::<Counter>::dtor(rep)
-                              }
-                            };
-                            unsafe impl wit_bindgen::rt::RustResource for Counter{
-                              unsafe fn new(_rep: usize) -> u32 {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                unreachable!();
-                                
-                                #[cfg(target_arch = "wasm32")]
-                                {
-                                  #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
-                                  extern "C" {
-                                    #[link_name = "[resource-new]counter"]
-                                    fn new(_: usize) -> u32;
-                                  }
-                                  new(_rep)
-                                }
-                              }
-                              
-                              unsafe fn rep(_handle: u32) -> usize {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                unreachable!();
-                                
-                                #[cfg(target_arch = "wasm32")]
-                                {
-                                  #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
-                                  extern "C" {
-                                    #[link_name = "[resource-rep]counter"]
-                                    fn rep(_: u32) -> usize;
-                                  }
-                                  rep(_handle)
-                                }
-                              }
-                            }
-                            pub type OwnCounter = wit_bindgen::rt::Resource<Counter>;
-                            
-                            
-                            unsafe impl wit_bindgen::rt::WasmResource for Counter{
-                              #[inline]
-                              unsafe fn drop(_handle: u32) {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                unreachable!();
-                                
-                                #[cfg(target_arch = "wasm32")]
-                                {
-                                  #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
-                                  extern "C" {
-                                    #[link_name = "[resource-drop]counter"]
-                                    fn drop(_: u32);
+                              pub mod wasi {
+                                pub mod io {
+                                  
+                                  #[allow(clippy::all)]
+                                  pub mod poll {
+                                    #[used]
+                                    #[doc(hidden)]
+                                    #[cfg(target_arch = "wasm32")]
+                                    static __FORCE_SECTION_REF: fn() = super::super::super::__link_section;
+                                    /// `pollable` epresents a single I/O event which may be ready, or not.
+                                    
+                                    #[derive(Debug)]
+                                    #[repr(transparent)]
+                                    pub struct Pollable{
+                                      handle: wit_bindgen::rt::Resource<Pollable>,
+                                    }
+                                    
+                                    impl Pollable{
+                                      #[doc(hidden)]
+                                      pub unsafe fn from_handle(handle: u32) -> Self {
+                                        Self {
+                                          handle: wit_bindgen::rt::Resource::from_handle(handle),
+                                        }
+                                      }
+                                      
+                                      #[doc(hidden)]
+                                      pub fn into_handle(self) -> u32 {
+                                        wit_bindgen::rt::Resource::into_handle(self.handle)
+                                      }
+                                      
+                                      #[doc(hidden)]
+                                      pub fn handle(&self) -> u32 {
+                                        wit_bindgen::rt::Resource::handle(&self.handle)
+                                      }
+                                    }
+                                    
+                                    
+                                    unsafe impl wit_bindgen::rt::WasmResource for Pollable{
+                                      #[inline]
+                                      unsafe fn drop(_handle: u32) {
+                                        #[cfg(not(target_arch = "wasm32"))]
+                                        unreachable!();
+                                        
+                                        #[cfg(target_arch = "wasm32")]
+                                        {
+                                          #[link(wasm_import_module = "wasi:io/poll@0.2.0")]
+                                          extern "C" {
+                                            #[link_name = "[resource-drop]pollable"]
+                                            fn drop(_: u32);
+                                          }
+                                          
+                                          drop(_handle);
+                                        }
+                                      }
+                                    }
+                                    
+                                    impl Pollable {
+                                      #[allow(unused_unsafe, clippy::all)]
+                                      /// Return the readiness of a pollable. This function never blocks.
+                                      /// 
+                                      /// Returns `true` when the pollable is ready, and `false` otherwise.
+                                      pub fn ready(&self,) -> bool{
+                                        
+                                        #[allow(unused_imports)]
+                                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                        unsafe {
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          #[link(wasm_import_module = "wasi:io/poll@0.2.0")]
+                                          extern "C" {
+                                            #[link_name = "[method]pollable.ready"]
+                                            fn wit_import(_: i32, ) -> i32;
+                                          }
+                                          
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          fn wit_import(_: i32, ) -> i32{ unreachable!() }
+                                          let ret = wit_import((self).handle() as i32);
+                                          wit_bindgen::rt::bool_lift(ret as u8)
+                                        }
+                                      }
+                                    }
+                                    impl Pollable {
+                                      #[allow(unused_unsafe, clippy::all)]
+                                      /// `block` returns immediately if the pollable is ready, and otherwise
+                                      /// blocks until ready.
+                                      /// 
+                                      /// This function is equivalent to calling `poll.poll` on a list
+                                      /// containing only this pollable.
+                                      pub fn block(&self,){
+                                        
+                                        #[allow(unused_imports)]
+                                        use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                        unsafe {
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          #[link(wasm_import_module = "wasi:io/poll@0.2.0")]
+                                          extern "C" {
+                                            #[link_name = "[method]pollable.block"]
+                                            fn wit_import(_: i32, );
+                                          }
+                                          
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          fn wit_import(_: i32, ){ unreachable!() }
+                                          wit_import((self).handle() as i32);
+                                        }
+                                      }
+                                    }
+                                    #[allow(unused_unsafe, clippy::all)]
+                                    /// Poll for completion on a set of pollables.
+                                    /// 
+                                    /// This function takes a list of pollables, which identify I/O sources of
+                                    /// interest, and waits until one or more of the events is ready for I/O.
+                                    /// 
+                                    /// The result `list<u32>` contains one or more indices of handles in the
+                                    /// argument list that is ready for I/O.
+                                    /// 
+                                    /// If the list contains more elements than can be indexed with a `u32`
+                                    /// value, this function traps.
+                                    /// 
+                                    /// A timeout can be implemented by adding a pollable from the
+                                    /// wasi-clocks API to the list.
+                                    /// 
+                                    /// This function does not return a `result`; polling in itself does not
+                                    /// do any I/O so it doesn't fail. If any of the I/O sources identified by
+                                    /// the pollables has an error, it is indicated by marking the source as
+                                    /// being reaedy for I/O.
+                                    pub fn poll(in_: &[&Pollable],) -> wit_bindgen::rt::vec::Vec::<u32>{
+                                      
+                                      #[allow(unused_imports)]
+                                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                      unsafe {
+                                        
+                                        #[repr(align(4))]
+                                        struct RetArea([u8; 8]);
+                                        let mut ret_area = ::core::mem::MaybeUninit::<RetArea>::uninit();
+                                        let vec0 = in_;
+                                        let len0 = vec0.len() as i32;
+                                        let layout0 = alloc::Layout::from_size_align_unchecked(vec0.len() * 4, 4);
+                                        let result0 = if layout0.size() != 0
+                                        {
+                                          let ptr = alloc::alloc(layout0);
+                                          if ptr.is_null()
+                                          {
+                                            alloc::handle_alloc_error(layout0);
+                                          }
+                                          ptr
+                                        }else {{
+                                          ::core::ptr::null_mut()
+                                        }};
+                                        for (i, e) in vec0.into_iter().enumerate() {
+                                          let base = result0 as i32 + (i as i32) * 4;
+                                          {
+                                            *((base + 0) as *mut i32) = (e).handle() as i32;
+                                          }
+                                        }
+                                        let ptr1 = ret_area.as_mut_ptr() as i32;
+                                        #[cfg(target_arch = "wasm32")]
+                                        #[link(wasm_import_module = "wasi:io/poll@0.2.0")]
+                                        extern "C" {
+                                          #[link_name = "poll"]
+                                          fn wit_import(_: i32, _: i32, _: i32, );
+                                        }
+                                        
+                                        #[cfg(not(target_arch = "wasm32"))]
+                                        fn wit_import(_: i32, _: i32, _: i32, ){ unreachable!() }
+                                        wit_import(result0 as i32, len0, ptr1);
+                                        let l2 = *((ptr1 + 0) as *const i32);
+                                        let l3 = *((ptr1 + 4) as *const i32);
+                                        let len4 = l3 as usize;
+                                        if layout0.size() != 0 {
+                                          alloc::dealloc(result0, layout0);
+                                        }
+                                        Vec::from_raw_parts(l2 as *mut _, len4, len4)
+                                      }
+                                    }
+                                    
                                   }
                                   
-                                  drop(_handle);
                                 }
                               }
-                            }
-                            
-                            const _: () = {
-                              
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[constructor]api"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn __export_constructor_api(arg0: i32,arg1: i32,) -> i32 {
-                                #[allow(unused_imports)]
-                                use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                                
-                                // Before executing any other code, use this function to run all static
-                                // constructors, if they have not yet been run. This is a hack required
-                                // to work around wasi-libc ctors calling import functions to initialize
-                                // the environment.
-                                //
-                                // This functionality will be removed once rust 1.69.0 is stable, at which
-                                // point wasi-libc will no longer have this behavior.
-                                //
-                                // See
-                                // https://github.com/bytecodealliance/preview2-prototyping/issues/99
-                                // for more details.
-                                #[cfg(target_arch="wasm32")]
-                                wit_bindgen::rt::run_ctors_once();
-                                
-                                let len0 = arg1 as usize;
-                                let bytes0 = Vec::from_raw_parts(arg0 as *mut _, len0, len0);
-                                let result1 = OwnApi::new(<_ApiImpl as GuestApi>::new(super::super::super::super::golem::rpc::types::Uri{
-                                  value: wit_bindgen::rt::string_lift(bytes0),
-                                }));
-                                wit_bindgen::rt::Resource::into_handle(result1) as i32
-                              }
-                            };
-                            const _: () = {
-                              
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[method]api.blocking-inc-global-by"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn __export_method_api_blocking_inc_global_by(arg0: i32,arg1: i64,) {
-                                #[allow(unused_imports)]
-                                use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                                
-                                // Before executing any other code, use this function to run all static
-                                // constructors, if they have not yet been run. This is a hack required
-                                // to work around wasi-libc ctors calling import functions to initialize
-                                // the environment.
-                                //
-                                // This functionality will be removed once rust 1.69.0 is stable, at which
-                                // point wasi-libc will no longer have this behavior.
-                                //
-                                // See
-                                // https://github.com/bytecodealliance/preview2-prototyping/issues/99
-                                // for more details.
-                                #[cfg(target_arch="wasm32")]
-                                wit_bindgen::rt::run_ctors_once();
-                                
-                                <_ApiImpl as GuestApi>::blocking_inc_global_by(wit_bindgen::rt::Resource::<Api>::lift_borrow(arg0 as u32 as usize), arg1 as u64);
-                              }
-                            };
-                            const _: () = {
-                              
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[method]api.inc-global-by"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn __export_method_api_inc_global_by(arg0: i32,arg1: i64,) {
-                                #[allow(unused_imports)]
-                                use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                                
-                                // Before executing any other code, use this function to run all static
-                                // constructors, if they have not yet been run. This is a hack required
-                                // to work around wasi-libc ctors calling import functions to initialize
-                                // the environment.
-                                //
-                                // This functionality will be removed once rust 1.69.0 is stable, at which
-                                // point wasi-libc will no longer have this behavior.
-                                //
-                                // See
-                                // https://github.com/bytecodealliance/preview2-prototyping/issues/99
-                                // for more details.
-                                #[cfg(target_arch="wasm32")]
-                                wit_bindgen::rt::run_ctors_once();
-                                
-                                <_ApiImpl as GuestApi>::inc_global_by(wit_bindgen::rt::Resource::<Api>::lift_borrow(arg0 as u32 as usize), arg1 as u64);
-                              }
-                            };
-                            const _: () = {
-                              
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[method]api.get-global-value"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn __export_method_api_get_global_value(arg0: i32,) -> i64 {
-                                #[allow(unused_imports)]
-                                use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                                
-                                // Before executing any other code, use this function to run all static
-                                // constructors, if they have not yet been run. This is a hack required
-                                // to work around wasi-libc ctors calling import functions to initialize
-                                // the environment.
-                                //
-                                // This functionality will be removed once rust 1.69.0 is stable, at which
-                                // point wasi-libc will no longer have this behavior.
-                                //
-                                // See
-                                // https://github.com/bytecodealliance/preview2-prototyping/issues/99
-                                // for more details.
-                                #[cfg(target_arch="wasm32")]
-                                wit_bindgen::rt::run_ctors_once();
-                                
-                                let result0 = <_ApiImpl as GuestApi>::get_global_value(wit_bindgen::rt::Resource::<Api>::lift_borrow(arg0 as u32 as usize));
-                                wit_bindgen::rt::as_i64(result0)
-                              }
-                            };
-                            const _: () = {
-                              
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[method]api.get-all-dropped"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn __export_method_api_get_all_dropped(arg0: i32,) -> i32 {
-                                #[allow(unused_imports)]
-                                use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                                
-                                // Before executing any other code, use this function to run all static
-                                // constructors, if they have not yet been run. This is a hack required
-                                // to work around wasi-libc ctors calling import functions to initialize
-                                // the environment.
-                                //
-                                // This functionality will be removed once rust 1.69.0 is stable, at which
-                                // point wasi-libc will no longer have this behavior.
-                                //
-                                // See
-                                // https://github.com/bytecodealliance/preview2-prototyping/issues/99
-                                // for more details.
-                                #[cfg(target_arch="wasm32")]
-                                wit_bindgen::rt::run_ctors_once();
-                                
-                                let result0 = <_ApiImpl as GuestApi>::get_all_dropped(wit_bindgen::rt::Resource::<Api>::lift_borrow(arg0 as u32 as usize));
-                                let ptr1 = _RET_AREA.0.as_mut_ptr() as i32;
-                                let vec4 = result0;
-                                let len4 = vec4.len() as i32;
-                                let layout4 = alloc::Layout::from_size_align_unchecked(vec4.len() * 16, 8);
-                                let result4 = if layout4.size() != 0
-                                {
-                                  let ptr = alloc::alloc(layout4);
-                                  if ptr.is_null()
-                                  {
-                                    alloc::handle_alloc_error(layout4);
-                                  }
-                                  ptr
-                                }else {{
-                                  ::core::ptr::null_mut()
-                                }};
-                                for (i, e) in vec4.into_iter().enumerate() {
-                                  let base = result4 as i32 + (i as i32) * 16;
-                                  {
-                                    let (t2_0, t2_1, ) = e;
-                                    let vec3 = (t2_0.into_bytes()).into_boxed_slice();
-                                    let ptr3 = vec3.as_ptr() as i32;
-                                    let len3 = vec3.len() as i32;
-                                    ::core::mem::forget(vec3);
-                                    *((base + 4) as *mut i32) = len3;
-                                    *((base + 0) as *mut i32) = ptr3;
-                                    *((base + 8) as *mut i64) = wit_bindgen::rt::as_i64(t2_1);
-                                  }
-                                }
-                                *((ptr1 + 4) as *mut i32) = len4;
-                                *((ptr1 + 0) as *mut i32) = result4 as i32;
-                                ptr1
-                              }
-                              
-                              const _: () = {
-                                #[doc(hidden)]
-                                #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]api.get-all-dropped"]
-                                #[allow(non_snake_case)]
-                                unsafe extern "C" fn __post_return_method_api_get_all_dropped(arg0: i32,) {
-                                  let l2 = *((arg0 + 0) as *const i32);
-                                  let l3 = *((arg0 + 4) as *const i32);
-                                  let base4 = l2;
-                                  let len4 = l3;
-                                  for i in 0..len4 {
-                                    let base = base4 + i *16;
-                                    {
-                                      let l0 = *((base + 0) as *const i32);
-                                      let l1 = *((base + 4) as *const i32);
-                                      wit_bindgen::rt::dealloc(l0, (l1) as usize, 1);
+                              pub mod exports {
+                                pub mod rpc {
+                                  pub mod counters_stub {
+                                    
+                                    #[allow(clippy::all)]
+                                    pub mod stub_counters {
+                                      #[used]
+                                      #[doc(hidden)]
+                                      #[cfg(target_arch = "wasm32")]
+                                      static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_section;
+                                      pub type Uri = super::super::super::super::golem::rpc::types::Uri;
+                                      pub type Pollable = super::super::super::super::wasi::io::poll::Pollable;
+                                      
+                                      pub use super::super::super::super::super::FutureGetGlobalValueResult as FutureGetGlobalValueResult;
+                                      const _: () = {
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-get-global-value-result"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn dtor(rep: usize) {
+                                          wit_bindgen::rt::Resource::<FutureGetGlobalValueResult>::dtor(rep)
+                                        }
+                                      };
+                                      unsafe impl wit_bindgen::rt::RustResource for FutureGetGlobalValueResult{
+                                        unsafe fn new(_rep: usize) -> u32 {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-new]future-get-global-value-result"]
+                                              fn new(_: usize) -> u32;
+                                            }
+                                            new(_rep)
+                                          }
+                                        }
+                                        
+                                        unsafe fn rep(_handle: u32) -> usize {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-rep]future-get-global-value-result"]
+                                              fn rep(_: u32) -> usize;
+                                            }
+                                            rep(_handle)
+                                          }
+                                        }
+                                      }
+                                      pub type OwnFutureGetGlobalValueResult = wit_bindgen::rt::Resource<FutureGetGlobalValueResult>;
+                                      
+                                      
+                                      unsafe impl wit_bindgen::rt::WasmResource for FutureGetGlobalValueResult{
+                                        #[inline]
+                                        unsafe fn drop(_handle: u32) {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-drop]future-get-global-value-result"]
+                                              fn drop(_: u32);
+                                            }
+                                            
+                                            drop(_handle);
+                                          }
+                                        }
+                                      }
+                                      
+                                      
+                                      pub use super::super::super::super::super::FutureGetAllDroppedResult as FutureGetAllDroppedResult;
+                                      const _: () = {
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-get-all-dropped-result"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn dtor(rep: usize) {
+                                          wit_bindgen::rt::Resource::<FutureGetAllDroppedResult>::dtor(rep)
+                                        }
+                                      };
+                                      unsafe impl wit_bindgen::rt::RustResource for FutureGetAllDroppedResult{
+                                        unsafe fn new(_rep: usize) -> u32 {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-new]future-get-all-dropped-result"]
+                                              fn new(_: usize) -> u32;
+                                            }
+                                            new(_rep)
+                                          }
+                                        }
+                                        
+                                        unsafe fn rep(_handle: u32) -> usize {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-rep]future-get-all-dropped-result"]
+                                              fn rep(_: u32) -> usize;
+                                            }
+                                            rep(_handle)
+                                          }
+                                        }
+                                      }
+                                      pub type OwnFutureGetAllDroppedResult = wit_bindgen::rt::Resource<FutureGetAllDroppedResult>;
+                                      
+                                      
+                                      unsafe impl wit_bindgen::rt::WasmResource for FutureGetAllDroppedResult{
+                                        #[inline]
+                                        unsafe fn drop(_handle: u32) {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-drop]future-get-all-dropped-result"]
+                                              fn drop(_: u32);
+                                            }
+                                            
+                                            drop(_handle);
+                                          }
+                                        }
+                                      }
+                                      
+                                      
+                                      pub use super::super::super::super::super::FutureGetValueResult as FutureGetValueResult;
+                                      const _: () = {
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-get-value-result"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn dtor(rep: usize) {
+                                          wit_bindgen::rt::Resource::<FutureGetValueResult>::dtor(rep)
+                                        }
+                                      };
+                                      unsafe impl wit_bindgen::rt::RustResource for FutureGetValueResult{
+                                        unsafe fn new(_rep: usize) -> u32 {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-new]future-get-value-result"]
+                                              fn new(_: usize) -> u32;
+                                            }
+                                            new(_rep)
+                                          }
+                                        }
+                                        
+                                        unsafe fn rep(_handle: u32) -> usize {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-rep]future-get-value-result"]
+                                              fn rep(_: u32) -> usize;
+                                            }
+                                            rep(_handle)
+                                          }
+                                        }
+                                      }
+                                      pub type OwnFutureGetValueResult = wit_bindgen::rt::Resource<FutureGetValueResult>;
+                                      
+                                      
+                                      unsafe impl wit_bindgen::rt::WasmResource for FutureGetValueResult{
+                                        #[inline]
+                                        unsafe fn drop(_handle: u32) {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-drop]future-get-value-result"]
+                                              fn drop(_: u32);
+                                            }
+                                            
+                                            drop(_handle);
+                                          }
+                                        }
+                                      }
+                                      
+                                      
+                                      pub use super::super::super::super::super::FutureGetArgsResult as FutureGetArgsResult;
+                                      const _: () = {
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-get-args-result"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn dtor(rep: usize) {
+                                          wit_bindgen::rt::Resource::<FutureGetArgsResult>::dtor(rep)
+                                        }
+                                      };
+                                      unsafe impl wit_bindgen::rt::RustResource for FutureGetArgsResult{
+                                        unsafe fn new(_rep: usize) -> u32 {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-new]future-get-args-result"]
+                                              fn new(_: usize) -> u32;
+                                            }
+                                            new(_rep)
+                                          }
+                                        }
+                                        
+                                        unsafe fn rep(_handle: u32) -> usize {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-rep]future-get-args-result"]
+                                              fn rep(_: u32) -> usize;
+                                            }
+                                            rep(_handle)
+                                          }
+                                        }
+                                      }
+                                      pub type OwnFutureGetArgsResult = wit_bindgen::rt::Resource<FutureGetArgsResult>;
+                                      
+                                      
+                                      unsafe impl wit_bindgen::rt::WasmResource for FutureGetArgsResult{
+                                        #[inline]
+                                        unsafe fn drop(_handle: u32) {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-drop]future-get-args-result"]
+                                              fn drop(_: u32);
+                                            }
+                                            
+                                            drop(_handle);
+                                          }
+                                        }
+                                      }
+                                      
+                                      
+                                      pub use super::super::super::super::super::FutureGetEnvResult as FutureGetEnvResult;
+                                      const _: () = {
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-get-env-result"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn dtor(rep: usize) {
+                                          wit_bindgen::rt::Resource::<FutureGetEnvResult>::dtor(rep)
+                                        }
+                                      };
+                                      unsafe impl wit_bindgen::rt::RustResource for FutureGetEnvResult{
+                                        unsafe fn new(_rep: usize) -> u32 {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-new]future-get-env-result"]
+                                              fn new(_: usize) -> u32;
+                                            }
+                                            new(_rep)
+                                          }
+                                        }
+                                        
+                                        unsafe fn rep(_handle: u32) -> usize {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-rep]future-get-env-result"]
+                                              fn rep(_: u32) -> usize;
+                                            }
+                                            rep(_handle)
+                                          }
+                                        }
+                                      }
+                                      pub type OwnFutureGetEnvResult = wit_bindgen::rt::Resource<FutureGetEnvResult>;
+                                      
+                                      
+                                      unsafe impl wit_bindgen::rt::WasmResource for FutureGetEnvResult{
+                                        #[inline]
+                                        unsafe fn drop(_handle: u32) {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-drop]future-get-env-result"]
+                                              fn drop(_: u32);
+                                            }
+                                            
+                                            drop(_handle);
+                                          }
+                                        }
+                                      }
+                                      
+                                      
+                                      pub use super::super::super::super::super::Api as Api;
+                                      const _: () = {
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[dtor]api"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn dtor(rep: usize) {
+                                          wit_bindgen::rt::Resource::<Api>::dtor(rep)
+                                        }
+                                      };
+                                      unsafe impl wit_bindgen::rt::RustResource for Api{
+                                        unsafe fn new(_rep: usize) -> u32 {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-new]api"]
+                                              fn new(_: usize) -> u32;
+                                            }
+                                            new(_rep)
+                                          }
+                                        }
+                                        
+                                        unsafe fn rep(_handle: u32) -> usize {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-rep]api"]
+                                              fn rep(_: u32) -> usize;
+                                            }
+                                            rep(_handle)
+                                          }
+                                        }
+                                      }
+                                      pub type OwnApi = wit_bindgen::rt::Resource<Api>;
+                                      
+                                      
+                                      unsafe impl wit_bindgen::rt::WasmResource for Api{
+                                        #[inline]
+                                        unsafe fn drop(_handle: u32) {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-drop]api"]
+                                              fn drop(_: u32);
+                                            }
+                                            
+                                            drop(_handle);
+                                          }
+                                        }
+                                      }
+                                      
+                                      
+                                      pub use super::super::super::super::super::Counter as Counter;
+                                      const _: () = {
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[dtor]counter"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn dtor(rep: usize) {
+                                          wit_bindgen::rt::Resource::<Counter>::dtor(rep)
+                                        }
+                                      };
+                                      unsafe impl wit_bindgen::rt::RustResource for Counter{
+                                        unsafe fn new(_rep: usize) -> u32 {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-new]counter"]
+                                              fn new(_: usize) -> u32;
+                                            }
+                                            new(_rep)
+                                          }
+                                        }
+                                        
+                                        unsafe fn rep(_handle: u32) -> usize {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-rep]counter"]
+                                              fn rep(_: u32) -> usize;
+                                            }
+                                            rep(_handle)
+                                          }
+                                        }
+                                      }
+                                      pub type OwnCounter = wit_bindgen::rt::Resource<Counter>;
+                                      
+                                      
+                                      unsafe impl wit_bindgen::rt::WasmResource for Counter{
+                                        #[inline]
+                                        unsafe fn drop(_handle: u32) {
+                                          #[cfg(not(target_arch = "wasm32"))]
+                                          unreachable!();
+                                          
+                                          #[cfg(target_arch = "wasm32")]
+                                          {
+                                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                                            extern "C" {
+                                              #[link_name = "[resource-drop]counter"]
+                                              fn drop(_: u32);
+                                            }
+                                            
+                                            drop(_handle);
+                                          }
+                                        }
+                                      }
+                                      
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]future-get-global-value-result.subscribe"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_future_get_global_value_result_subscribe(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_FutureGetGlobalValueResultImpl as GuestFutureGetGlobalValueResult>::subscribe(wit_bindgen::rt::Resource::<FutureGetGlobalValueResult>::lift_borrow(arg0 as u32 as usize));
+                                          (result0).into_handle() as i32
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]future-get-global-value-result.get"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_future_get_global_value_result_get(arg0: i32,) -> i64 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_FutureGetGlobalValueResultImpl as GuestFutureGetGlobalValueResult>::get(wit_bindgen::rt::Resource::<FutureGetGlobalValueResult>::lift_borrow(arg0 as u32 as usize));
+                                          wit_bindgen::rt::as_i64(result0)
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]future-get-all-dropped-result.subscribe"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_future_get_all_dropped_result_subscribe(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_FutureGetAllDroppedResultImpl as GuestFutureGetAllDroppedResult>::subscribe(wit_bindgen::rt::Resource::<FutureGetAllDroppedResult>::lift_borrow(arg0 as u32 as usize));
+                                          (result0).into_handle() as i32
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]future-get-all-dropped-result.get"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_future_get_all_dropped_result_get(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_FutureGetAllDroppedResultImpl as GuestFutureGetAllDroppedResult>::get(wit_bindgen::rt::Resource::<FutureGetAllDroppedResult>::lift_borrow(arg0 as u32 as usize));
+                                          let ptr1 = _RET_AREA.0.as_mut_ptr() as i32;
+                                          let vec4 = result0;
+                                          let len4 = vec4.len() as i32;
+                                          let layout4 = alloc::Layout::from_size_align_unchecked(vec4.len() * 16, 8);
+                                          let result4 = if layout4.size() != 0
+                                          {
+                                            let ptr = alloc::alloc(layout4);
+                                            if ptr.is_null()
+                                            {
+                                              alloc::handle_alloc_error(layout4);
+                                            }
+                                            ptr
+                                          }else {{
+                                            ::core::ptr::null_mut()
+                                          }};
+                                          for (i, e) in vec4.into_iter().enumerate() {
+                                            let base = result4 as i32 + (i as i32) * 16;
+                                            {
+                                              let (t2_0, t2_1, ) = e;
+                                              let vec3 = (t2_0.into_bytes()).into_boxed_slice();
+                                              let ptr3 = vec3.as_ptr() as i32;
+                                              let len3 = vec3.len() as i32;
+                                              ::core::mem::forget(vec3);
+                                              *((base + 4) as *mut i32) = len3;
+                                              *((base + 0) as *mut i32) = ptr3;
+                                              *((base + 8) as *mut i64) = wit_bindgen::rt::as_i64(t2_1);
+                                            }
+                                          }
+                                          *((ptr1 + 4) as *mut i32) = len4;
+                                          *((ptr1 + 0) as *mut i32) = result4 as i32;
+                                          ptr1
+                                        }
+                                        
+                                        const _: () = {
+                                          #[doc(hidden)]
+                                          #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]future-get-all-dropped-result.get"]
+                                          #[allow(non_snake_case)]
+                                          unsafe extern "C" fn __post_return_method_future_get_all_dropped_result_get(arg0: i32,) {
+                                            let l2 = *((arg0 + 0) as *const i32);
+                                            let l3 = *((arg0 + 4) as *const i32);
+                                            let base4 = l2;
+                                            let len4 = l3;
+                                            for i in 0..len4 {
+                                              let base = base4 + i *16;
+                                              {
+                                                let l0 = *((base + 0) as *const i32);
+                                                let l1 = *((base + 4) as *const i32);
+                                                wit_bindgen::rt::dealloc(l0, (l1) as usize, 1);
+                                              }
+                                            }
+                                            wit_bindgen::rt::dealloc(base4, (len4 as usize) * 16, 8);
+                                          }
+                                        };
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]future-get-value-result.subscribe"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_future_get_value_result_subscribe(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_FutureGetValueResultImpl as GuestFutureGetValueResult>::subscribe(wit_bindgen::rt::Resource::<FutureGetValueResult>::lift_borrow(arg0 as u32 as usize));
+                                          (result0).into_handle() as i32
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]future-get-value-result.get"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_future_get_value_result_get(arg0: i32,) -> i64 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_FutureGetValueResultImpl as GuestFutureGetValueResult>::get(wit_bindgen::rt::Resource::<FutureGetValueResult>::lift_borrow(arg0 as u32 as usize));
+                                          wit_bindgen::rt::as_i64(result0)
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]future-get-args-result.subscribe"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_future_get_args_result_subscribe(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_FutureGetArgsResultImpl as GuestFutureGetArgsResult>::subscribe(wit_bindgen::rt::Resource::<FutureGetArgsResult>::lift_borrow(arg0 as u32 as usize));
+                                          (result0).into_handle() as i32
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]future-get-args-result.get"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_future_get_args_result_get(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_FutureGetArgsResultImpl as GuestFutureGetArgsResult>::get(wit_bindgen::rt::Resource::<FutureGetArgsResult>::lift_borrow(arg0 as u32 as usize));
+                                          let ptr1 = _RET_AREA.0.as_mut_ptr() as i32;
+                                          let vec3 = result0;
+                                          let len3 = vec3.len() as i32;
+                                          let layout3 = alloc::Layout::from_size_align_unchecked(vec3.len() * 8, 4);
+                                          let result3 = if layout3.size() != 0
+                                          {
+                                            let ptr = alloc::alloc(layout3);
+                                            if ptr.is_null()
+                                            {
+                                              alloc::handle_alloc_error(layout3);
+                                            }
+                                            ptr
+                                          }else {{
+                                            ::core::ptr::null_mut()
+                                          }};
+                                          for (i, e) in vec3.into_iter().enumerate() {
+                                            let base = result3 as i32 + (i as i32) * 8;
+                                            {
+                                              let vec2 = (e.into_bytes()).into_boxed_slice();
+                                              let ptr2 = vec2.as_ptr() as i32;
+                                              let len2 = vec2.len() as i32;
+                                              ::core::mem::forget(vec2);
+                                              *((base + 4) as *mut i32) = len2;
+                                              *((base + 0) as *mut i32) = ptr2;
+                                            }
+                                          }
+                                          *((ptr1 + 4) as *mut i32) = len3;
+                                          *((ptr1 + 0) as *mut i32) = result3 as i32;
+                                          ptr1
+                                        }
+                                        
+                                        const _: () = {
+                                          #[doc(hidden)]
+                                          #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]future-get-args-result.get"]
+                                          #[allow(non_snake_case)]
+                                          unsafe extern "C" fn __post_return_method_future_get_args_result_get(arg0: i32,) {
+                                            let l2 = *((arg0 + 0) as *const i32);
+                                            let l3 = *((arg0 + 4) as *const i32);
+                                            let base4 = l2;
+                                            let len4 = l3;
+                                            for i in 0..len4 {
+                                              let base = base4 + i *8;
+                                              {
+                                                let l0 = *((base + 0) as *const i32);
+                                                let l1 = *((base + 4) as *const i32);
+                                                wit_bindgen::rt::dealloc(l0, (l1) as usize, 1);
+                                              }
+                                            }
+                                            wit_bindgen::rt::dealloc(base4, (len4 as usize) * 8, 4);
+                                          }
+                                        };
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]future-get-env-result.subscribe"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_future_get_env_result_subscribe(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_FutureGetEnvResultImpl as GuestFutureGetEnvResult>::subscribe(wit_bindgen::rt::Resource::<FutureGetEnvResult>::lift_borrow(arg0 as u32 as usize));
+                                          (result0).into_handle() as i32
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]future-get-env-result.get"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_future_get_env_result_get(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_FutureGetEnvResultImpl as GuestFutureGetEnvResult>::get(wit_bindgen::rt::Resource::<FutureGetEnvResult>::lift_borrow(arg0 as u32 as usize));
+                                          let ptr1 = _RET_AREA.0.as_mut_ptr() as i32;
+                                          let vec5 = result0;
+                                          let len5 = vec5.len() as i32;
+                                          let layout5 = alloc::Layout::from_size_align_unchecked(vec5.len() * 16, 4);
+                                          let result5 = if layout5.size() != 0
+                                          {
+                                            let ptr = alloc::alloc(layout5);
+                                            if ptr.is_null()
+                                            {
+                                              alloc::handle_alloc_error(layout5);
+                                            }
+                                            ptr
+                                          }else {{
+                                            ::core::ptr::null_mut()
+                                          }};
+                                          for (i, e) in vec5.into_iter().enumerate() {
+                                            let base = result5 as i32 + (i as i32) * 16;
+                                            {
+                                              let (t2_0, t2_1, ) = e;
+                                              let vec3 = (t2_0.into_bytes()).into_boxed_slice();
+                                              let ptr3 = vec3.as_ptr() as i32;
+                                              let len3 = vec3.len() as i32;
+                                              ::core::mem::forget(vec3);
+                                              *((base + 4) as *mut i32) = len3;
+                                              *((base + 0) as *mut i32) = ptr3;
+                                              let vec4 = (t2_1.into_bytes()).into_boxed_slice();
+                                              let ptr4 = vec4.as_ptr() as i32;
+                                              let len4 = vec4.len() as i32;
+                                              ::core::mem::forget(vec4);
+                                              *((base + 12) as *mut i32) = len4;
+                                              *((base + 8) as *mut i32) = ptr4;
+                                            }
+                                          }
+                                          *((ptr1 + 4) as *mut i32) = len5;
+                                          *((ptr1 + 0) as *mut i32) = result5 as i32;
+                                          ptr1
+                                        }
+                                        
+                                        const _: () = {
+                                          #[doc(hidden)]
+                                          #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]future-get-env-result.get"]
+                                          #[allow(non_snake_case)]
+                                          unsafe extern "C" fn __post_return_method_future_get_env_result_get(arg0: i32,) {
+                                            let l4 = *((arg0 + 0) as *const i32);
+                                            let l5 = *((arg0 + 4) as *const i32);
+                                            let base6 = l4;
+                                            let len6 = l5;
+                                            for i in 0..len6 {
+                                              let base = base6 + i *16;
+                                              {
+                                                let l0 = *((base + 0) as *const i32);
+                                                let l1 = *((base + 4) as *const i32);
+                                                wit_bindgen::rt::dealloc(l0, (l1) as usize, 1);
+                                                let l2 = *((base + 8) as *const i32);
+                                                let l3 = *((base + 12) as *const i32);
+                                                wit_bindgen::rt::dealloc(l2, (l3) as usize, 1);
+                                              }
+                                            }
+                                            wit_bindgen::rt::dealloc(base6, (len6 as usize) * 16, 4);
+                                          }
+                                        };
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[constructor]api"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_constructor_api(arg0: i32,arg1: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let len0 = arg1 as usize;
+                                          let bytes0 = Vec::from_raw_parts(arg0 as *mut _, len0, len0);
+                                          let result1 = OwnApi::new(<_ApiImpl as GuestApi>::new(super::super::super::super::golem::rpc::types::Uri{
+                                            value: wit_bindgen::rt::string_lift(bytes0),
+                                          }));
+                                          wit_bindgen::rt::Resource::into_handle(result1) as i32
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]api.blocking-inc-global-by"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_api_blocking_inc_global_by(arg0: i32,arg1: i64,) {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          <_ApiImpl as GuestApi>::blocking_inc_global_by(wit_bindgen::rt::Resource::<Api>::lift_borrow(arg0 as u32 as usize), arg1 as u64);
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]api.inc-global-by"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_api_inc_global_by(arg0: i32,arg1: i64,) {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          <_ApiImpl as GuestApi>::inc_global_by(wit_bindgen::rt::Resource::<Api>::lift_borrow(arg0 as u32 as usize), arg1 as u64);
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]api.blocking-get-global-value"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_api_blocking_get_global_value(arg0: i32,) -> i64 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_ApiImpl as GuestApi>::blocking_get_global_value(wit_bindgen::rt::Resource::<Api>::lift_borrow(arg0 as u32 as usize));
+                                          wit_bindgen::rt::as_i64(result0)
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]api.get-global-value"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_api_get_global_value(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_ApiImpl as GuestApi>::get_global_value(wit_bindgen::rt::Resource::<Api>::lift_borrow(arg0 as u32 as usize));
+                                          wit_bindgen::rt::Resource::into_handle(result0) as i32
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]api.blocking-get-all-dropped"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_api_blocking_get_all_dropped(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_ApiImpl as GuestApi>::blocking_get_all_dropped(wit_bindgen::rt::Resource::<Api>::lift_borrow(arg0 as u32 as usize));
+                                          let ptr1 = _RET_AREA.0.as_mut_ptr() as i32;
+                                          let vec4 = result0;
+                                          let len4 = vec4.len() as i32;
+                                          let layout4 = alloc::Layout::from_size_align_unchecked(vec4.len() * 16, 8);
+                                          let result4 = if layout4.size() != 0
+                                          {
+                                            let ptr = alloc::alloc(layout4);
+                                            if ptr.is_null()
+                                            {
+                                              alloc::handle_alloc_error(layout4);
+                                            }
+                                            ptr
+                                          }else {{
+                                            ::core::ptr::null_mut()
+                                          }};
+                                          for (i, e) in vec4.into_iter().enumerate() {
+                                            let base = result4 as i32 + (i as i32) * 16;
+                                            {
+                                              let (t2_0, t2_1, ) = e;
+                                              let vec3 = (t2_0.into_bytes()).into_boxed_slice();
+                                              let ptr3 = vec3.as_ptr() as i32;
+                                              let len3 = vec3.len() as i32;
+                                              ::core::mem::forget(vec3);
+                                              *((base + 4) as *mut i32) = len3;
+                                              *((base + 0) as *mut i32) = ptr3;
+                                              *((base + 8) as *mut i64) = wit_bindgen::rt::as_i64(t2_1);
+                                            }
+                                          }
+                                          *((ptr1 + 4) as *mut i32) = len4;
+                                          *((ptr1 + 0) as *mut i32) = result4 as i32;
+                                          ptr1
+                                        }
+                                        
+                                        const _: () = {
+                                          #[doc(hidden)]
+                                          #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]api.blocking-get-all-dropped"]
+                                          #[allow(non_snake_case)]
+                                          unsafe extern "C" fn __post_return_method_api_blocking_get_all_dropped(arg0: i32,) {
+                                            let l2 = *((arg0 + 0) as *const i32);
+                                            let l3 = *((arg0 + 4) as *const i32);
+                                            let base4 = l2;
+                                            let len4 = l3;
+                                            for i in 0..len4 {
+                                              let base = base4 + i *16;
+                                              {
+                                                let l0 = *((base + 0) as *const i32);
+                                                let l1 = *((base + 4) as *const i32);
+                                                wit_bindgen::rt::dealloc(l0, (l1) as usize, 1);
+                                              }
+                                            }
+                                            wit_bindgen::rt::dealloc(base4, (len4 as usize) * 16, 8);
+                                          }
+                                        };
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]api.get-all-dropped"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_api_get_all_dropped(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_ApiImpl as GuestApi>::get_all_dropped(wit_bindgen::rt::Resource::<Api>::lift_borrow(arg0 as u32 as usize));
+                                          wit_bindgen::rt::Resource::into_handle(result0) as i32
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[constructor]counter"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_constructor_counter(arg0: i32,arg1: i32,arg2: i32,arg3: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let len0 = arg1 as usize;
+                                          let bytes0 = Vec::from_raw_parts(arg0 as *mut _, len0, len0);
+                                          let len1 = arg3 as usize;
+                                          let bytes1 = Vec::from_raw_parts(arg2 as *mut _, len1, len1);
+                                          let result2 = OwnCounter::new(<_CounterImpl as GuestCounter>::new(super::super::super::super::golem::rpc::types::Uri{
+                                            value: wit_bindgen::rt::string_lift(bytes0),
+                                          }, wit_bindgen::rt::string_lift(bytes1)));
+                                          wit_bindgen::rt::Resource::into_handle(result2) as i32
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-inc-by"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_counter_blocking_inc_by(arg0: i32,arg1: i64,) {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          <_CounterImpl as GuestCounter>::blocking_inc_by(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize), arg1 as u64);
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]counter.inc-by"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_counter_inc_by(arg0: i32,arg1: i64,) {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          <_CounterImpl as GuestCounter>::inc_by(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize), arg1 as u64);
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-get-value"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_counter_blocking_get_value(arg0: i32,) -> i64 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_CounterImpl as GuestCounter>::blocking_get_value(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize));
+                                          wit_bindgen::rt::as_i64(result0)
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]counter.get-value"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_counter_get_value(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_CounterImpl as GuestCounter>::get_value(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize));
+                                          wit_bindgen::rt::Resource::into_handle(result0) as i32
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-get-args"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_counter_blocking_get_args(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_CounterImpl as GuestCounter>::blocking_get_args(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize));
+                                          let ptr1 = _RET_AREA.0.as_mut_ptr() as i32;
+                                          let vec3 = result0;
+                                          let len3 = vec3.len() as i32;
+                                          let layout3 = alloc::Layout::from_size_align_unchecked(vec3.len() * 8, 4);
+                                          let result3 = if layout3.size() != 0
+                                          {
+                                            let ptr = alloc::alloc(layout3);
+                                            if ptr.is_null()
+                                            {
+                                              alloc::handle_alloc_error(layout3);
+                                            }
+                                            ptr
+                                          }else {{
+                                            ::core::ptr::null_mut()
+                                          }};
+                                          for (i, e) in vec3.into_iter().enumerate() {
+                                            let base = result3 as i32 + (i as i32) * 8;
+                                            {
+                                              let vec2 = (e.into_bytes()).into_boxed_slice();
+                                              let ptr2 = vec2.as_ptr() as i32;
+                                              let len2 = vec2.len() as i32;
+                                              ::core::mem::forget(vec2);
+                                              *((base + 4) as *mut i32) = len2;
+                                              *((base + 0) as *mut i32) = ptr2;
+                                            }
+                                          }
+                                          *((ptr1 + 4) as *mut i32) = len3;
+                                          *((ptr1 + 0) as *mut i32) = result3 as i32;
+                                          ptr1
+                                        }
+                                        
+                                        const _: () = {
+                                          #[doc(hidden)]
+                                          #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]counter.blocking-get-args"]
+                                          #[allow(non_snake_case)]
+                                          unsafe extern "C" fn __post_return_method_counter_blocking_get_args(arg0: i32,) {
+                                            let l2 = *((arg0 + 0) as *const i32);
+                                            let l3 = *((arg0 + 4) as *const i32);
+                                            let base4 = l2;
+                                            let len4 = l3;
+                                            for i in 0..len4 {
+                                              let base = base4 + i *8;
+                                              {
+                                                let l0 = *((base + 0) as *const i32);
+                                                let l1 = *((base + 4) as *const i32);
+                                                wit_bindgen::rt::dealloc(l0, (l1) as usize, 1);
+                                              }
+                                            }
+                                            wit_bindgen::rt::dealloc(base4, (len4 as usize) * 8, 4);
+                                          }
+                                        };
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]counter.get-args"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_counter_get_args(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_CounterImpl as GuestCounter>::get_args(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize));
+                                          wit_bindgen::rt::Resource::into_handle(result0) as i32
+                                        }
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-get-env"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_counter_blocking_get_env(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_CounterImpl as GuestCounter>::blocking_get_env(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize));
+                                          let ptr1 = _RET_AREA.0.as_mut_ptr() as i32;
+                                          let vec5 = result0;
+                                          let len5 = vec5.len() as i32;
+                                          let layout5 = alloc::Layout::from_size_align_unchecked(vec5.len() * 16, 4);
+                                          let result5 = if layout5.size() != 0
+                                          {
+                                            let ptr = alloc::alloc(layout5);
+                                            if ptr.is_null()
+                                            {
+                                              alloc::handle_alloc_error(layout5);
+                                            }
+                                            ptr
+                                          }else {{
+                                            ::core::ptr::null_mut()
+                                          }};
+                                          for (i, e) in vec5.into_iter().enumerate() {
+                                            let base = result5 as i32 + (i as i32) * 16;
+                                            {
+                                              let (t2_0, t2_1, ) = e;
+                                              let vec3 = (t2_0.into_bytes()).into_boxed_slice();
+                                              let ptr3 = vec3.as_ptr() as i32;
+                                              let len3 = vec3.len() as i32;
+                                              ::core::mem::forget(vec3);
+                                              *((base + 4) as *mut i32) = len3;
+                                              *((base + 0) as *mut i32) = ptr3;
+                                              let vec4 = (t2_1.into_bytes()).into_boxed_slice();
+                                              let ptr4 = vec4.as_ptr() as i32;
+                                              let len4 = vec4.len() as i32;
+                                              ::core::mem::forget(vec4);
+                                              *((base + 12) as *mut i32) = len4;
+                                              *((base + 8) as *mut i32) = ptr4;
+                                            }
+                                          }
+                                          *((ptr1 + 4) as *mut i32) = len5;
+                                          *((ptr1 + 0) as *mut i32) = result5 as i32;
+                                          ptr1
+                                        }
+                                        
+                                        const _: () = {
+                                          #[doc(hidden)]
+                                          #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]counter.blocking-get-env"]
+                                          #[allow(non_snake_case)]
+                                          unsafe extern "C" fn __post_return_method_counter_blocking_get_env(arg0: i32,) {
+                                            let l4 = *((arg0 + 0) as *const i32);
+                                            let l5 = *((arg0 + 4) as *const i32);
+                                            let base6 = l4;
+                                            let len6 = l5;
+                                            for i in 0..len6 {
+                                              let base = base6 + i *16;
+                                              {
+                                                let l0 = *((base + 0) as *const i32);
+                                                let l1 = *((base + 4) as *const i32);
+                                                wit_bindgen::rt::dealloc(l0, (l1) as usize, 1);
+                                                let l2 = *((base + 8) as *const i32);
+                                                let l3 = *((base + 12) as *const i32);
+                                                wit_bindgen::rt::dealloc(l2, (l3) as usize, 1);
+                                              }
+                                            }
+                                            wit_bindgen::rt::dealloc(base6, (len6 as usize) * 16, 4);
+                                          }
+                                        };
+                                      };
+                                      const _: () = {
+                                        
+                                        #[doc(hidden)]
+                                        #[export_name = "rpc:counters-stub/stub-counters#[method]counter.get-env"]
+                                        #[allow(non_snake_case)]
+                                        unsafe extern "C" fn __export_method_counter_get_env(arg0: i32,) -> i32 {
+                                          #[allow(unused_imports)]
+                                          use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                          
+                                          // Before executing any other code, use this function to run all static
+                                          // constructors, if they have not yet been run. This is a hack required
+                                          // to work around wasi-libc ctors calling import functions to initialize
+                                          // the environment.
+                                          //
+                                          // This functionality will be removed once rust 1.69.0 is stable, at which
+                                          // point wasi-libc will no longer have this behavior.
+                                          //
+                                          // See
+                                          // https://github.com/bytecodealliance/preview2-prototyping/issues/99
+                                          // for more details.
+                                          #[cfg(target_arch="wasm32")]
+                                          wit_bindgen::rt::run_ctors_once();
+                                          
+                                          let result0 = <_CounterImpl as GuestCounter>::get_env(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize));
+                                          wit_bindgen::rt::Resource::into_handle(result0) as i32
+                                        }
+                                      };
+                                      use super::super::super::super::super::Api as _ApiImpl;
+                                      pub trait GuestApi {
+                                        fn new(location: Uri,) -> Self;
+                                        fn blocking_inc_global_by(&self,value: u64,);
+                                        fn inc_global_by(&self,value: u64,);
+                                        fn blocking_get_global_value(&self,) -> u64;
+                                        fn get_global_value(&self,) -> OwnFutureGetGlobalValueResult;
+                                        fn blocking_get_all_dropped(&self,) -> wit_bindgen::rt::vec::Vec::<(wit_bindgen::rt::string::String,u64,)>;
+                                        fn get_all_dropped(&self,) -> OwnFutureGetAllDroppedResult;
+                                      }
+                                      use super::super::super::super::super::Counter as _CounterImpl;
+                                      pub trait GuestCounter {
+                                        fn new(location: Uri,name: wit_bindgen::rt::string::String,) -> Self;
+                                        fn blocking_inc_by(&self,value: u64,);
+                                        fn inc_by(&self,value: u64,);
+                                        fn blocking_get_value(&self,) -> u64;
+                                        fn get_value(&self,) -> OwnFutureGetValueResult;
+                                        fn blocking_get_args(&self,) -> wit_bindgen::rt::vec::Vec::<wit_bindgen::rt::string::String>;
+                                        fn get_args(&self,) -> OwnFutureGetArgsResult;
+                                        fn blocking_get_env(&self,) -> wit_bindgen::rt::vec::Vec::<(wit_bindgen::rt::string::String,wit_bindgen::rt::string::String,)>;
+                                        fn get_env(&self,) -> OwnFutureGetEnvResult;
+                                      }
+                                      use super::super::super::super::super::FutureGetAllDroppedResult as _FutureGetAllDroppedResultImpl;
+                                      pub trait GuestFutureGetAllDroppedResult {
+                                        fn subscribe(&self,) -> Pollable;
+                                        fn get(&self,) -> wit_bindgen::rt::vec::Vec::<(wit_bindgen::rt::string::String,u64,)>;
+                                      }
+                                      use super::super::super::super::super::FutureGetArgsResult as _FutureGetArgsResultImpl;
+                                      pub trait GuestFutureGetArgsResult {
+                                        fn subscribe(&self,) -> Pollable;
+                                        fn get(&self,) -> wit_bindgen::rt::vec::Vec::<wit_bindgen::rt::string::String>;
+                                      }
+                                      use super::super::super::super::super::FutureGetEnvResult as _FutureGetEnvResultImpl;
+                                      pub trait GuestFutureGetEnvResult {
+                                        fn subscribe(&self,) -> Pollable;
+                                        fn get(&self,) -> wit_bindgen::rt::vec::Vec::<(wit_bindgen::rt::string::String,wit_bindgen::rt::string::String,)>;
+                                      }
+                                      use super::super::super::super::super::FutureGetGlobalValueResult as _FutureGetGlobalValueResultImpl;
+                                      pub trait GuestFutureGetGlobalValueResult {
+                                        fn subscribe(&self,) -> Pollable;
+                                        fn get(&self,) -> u64;
+                                      }
+                                      use super::super::super::super::super::FutureGetValueResult as _FutureGetValueResultImpl;
+                                      pub trait GuestFutureGetValueResult {
+                                        fn subscribe(&self,) -> Pollable;
+                                        fn get(&self,) -> u64;
+                                      }
+                                      
+                                      #[allow(unused_imports)]
+                                      use wit_bindgen::rt::{alloc, vec::Vec, string::String};
+                                      
+                                      #[repr(align(4))]
+                                      struct _RetArea([u8; 8]);
+                                      static mut _RET_AREA: _RetArea = _RetArea([0; 8]);
+                                      
                                     }
-                                  }
-                                  wit_bindgen::rt::dealloc(base4, (len4 as usize) * 16, 8);
-                                }
-                              };
-                            };
-                            const _: () = {
-                              
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[constructor]counter"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn __export_constructor_counter(arg0: i32,arg1: i32,arg2: i32,arg3: i32,) -> i32 {
-                                #[allow(unused_imports)]
-                                use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                                
-                                // Before executing any other code, use this function to run all static
-                                // constructors, if they have not yet been run. This is a hack required
-                                // to work around wasi-libc ctors calling import functions to initialize
-                                // the environment.
-                                //
-                                // This functionality will be removed once rust 1.69.0 is stable, at which
-                                // point wasi-libc will no longer have this behavior.
-                                //
-                                // See
-                                // https://github.com/bytecodealliance/preview2-prototyping/issues/99
-                                // for more details.
-                                #[cfg(target_arch="wasm32")]
-                                wit_bindgen::rt::run_ctors_once();
-                                
-                                let len0 = arg1 as usize;
-                                let bytes0 = Vec::from_raw_parts(arg0 as *mut _, len0, len0);
-                                let len1 = arg3 as usize;
-                                let bytes1 = Vec::from_raw_parts(arg2 as *mut _, len1, len1);
-                                let result2 = OwnCounter::new(<_CounterImpl as GuestCounter>::new(super::super::super::super::golem::rpc::types::Uri{
-                                  value: wit_bindgen::rt::string_lift(bytes0),
-                                }, wit_bindgen::rt::string_lift(bytes1)));
-                                wit_bindgen::rt::Resource::into_handle(result2) as i32
-                              }
-                            };
-                            const _: () = {
-                              
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-inc-by"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn __export_method_counter_blocking_inc_by(arg0: i32,arg1: i64,) {
-                                #[allow(unused_imports)]
-                                use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                                
-                                // Before executing any other code, use this function to run all static
-                                // constructors, if they have not yet been run. This is a hack required
-                                // to work around wasi-libc ctors calling import functions to initialize
-                                // the environment.
-                                //
-                                // This functionality will be removed once rust 1.69.0 is stable, at which
-                                // point wasi-libc will no longer have this behavior.
-                                //
-                                // See
-                                // https://github.com/bytecodealliance/preview2-prototyping/issues/99
-                                // for more details.
-                                #[cfg(target_arch="wasm32")]
-                                wit_bindgen::rt::run_ctors_once();
-                                
-                                <_CounterImpl as GuestCounter>::blocking_inc_by(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize), arg1 as u64);
-                              }
-                            };
-                            const _: () = {
-                              
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[method]counter.inc-by"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn __export_method_counter_inc_by(arg0: i32,arg1: i64,) {
-                                #[allow(unused_imports)]
-                                use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                                
-                                // Before executing any other code, use this function to run all static
-                                // constructors, if they have not yet been run. This is a hack required
-                                // to work around wasi-libc ctors calling import functions to initialize
-                                // the environment.
-                                //
-                                // This functionality will be removed once rust 1.69.0 is stable, at which
-                                // point wasi-libc will no longer have this behavior.
-                                //
-                                // See
-                                // https://github.com/bytecodealliance/preview2-prototyping/issues/99
-                                // for more details.
-                                #[cfg(target_arch="wasm32")]
-                                wit_bindgen::rt::run_ctors_once();
-                                
-                                <_CounterImpl as GuestCounter>::inc_by(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize), arg1 as u64);
-                              }
-                            };
-                            const _: () = {
-                              
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[method]counter.get-value"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn __export_method_counter_get_value(arg0: i32,) -> i64 {
-                                #[allow(unused_imports)]
-                                use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                                
-                                // Before executing any other code, use this function to run all static
-                                // constructors, if they have not yet been run. This is a hack required
-                                // to work around wasi-libc ctors calling import functions to initialize
-                                // the environment.
-                                //
-                                // This functionality will be removed once rust 1.69.0 is stable, at which
-                                // point wasi-libc will no longer have this behavior.
-                                //
-                                // See
-                                // https://github.com/bytecodealliance/preview2-prototyping/issues/99
-                                // for more details.
-                                #[cfg(target_arch="wasm32")]
-                                wit_bindgen::rt::run_ctors_once();
-                                
-                                let result0 = <_CounterImpl as GuestCounter>::get_value(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize));
-                                wit_bindgen::rt::as_i64(result0)
-                              }
-                            };
-                            const _: () = {
-                              
-                              #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[method]counter.get-args"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn __export_method_counter_get_args(arg0: i32,) -> i32 {
-                                #[allow(unused_imports)]
-                                use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                                
-                                // Before executing any other code, use this function to run all static
-                                // constructors, if they have not yet been run. This is a hack required
-                                // to work around wasi-libc ctors calling import functions to initialize
-                                // the environment.
-                                //
-                                // This functionality will be removed once rust 1.69.0 is stable, at which
-                                // point wasi-libc will no longer have this behavior.
-                                //
-                                // See
-                                // https://github.com/bytecodealliance/preview2-prototyping/issues/99
-                                // for more details.
-                                #[cfg(target_arch="wasm32")]
-                                wit_bindgen::rt::run_ctors_once();
-                                
-                                let result0 = <_CounterImpl as GuestCounter>::get_args(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize));
-                                let ptr1 = _RET_AREA.0.as_mut_ptr() as i32;
-                                let vec3 = result0;
-                                let len3 = vec3.len() as i32;
-                                let layout3 = alloc::Layout::from_size_align_unchecked(vec3.len() * 8, 4);
-                                let result3 = if layout3.size() != 0
-                                {
-                                  let ptr = alloc::alloc(layout3);
-                                  if ptr.is_null()
-                                  {
-                                    alloc::handle_alloc_error(layout3);
-                                  }
-                                  ptr
-                                }else {{
-                                  ::core::ptr::null_mut()
-                                }};
-                                for (i, e) in vec3.into_iter().enumerate() {
-                                  let base = result3 as i32 + (i as i32) * 8;
-                                  {
-                                    let vec2 = (e.into_bytes()).into_boxed_slice();
-                                    let ptr2 = vec2.as_ptr() as i32;
-                                    let len2 = vec2.len() as i32;
-                                    ::core::mem::forget(vec2);
-                                    *((base + 4) as *mut i32) = len2;
-                                    *((base + 0) as *mut i32) = ptr2;
+                                    
                                   }
                                 }
-                                *((ptr1 + 4) as *mut i32) = len3;
-                                *((ptr1 + 0) as *mut i32) = result3 as i32;
-                                ptr1
                               }
                               
-                              const _: () = {
-                                #[doc(hidden)]
-                                #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]counter.get-args"]
-                                #[allow(non_snake_case)]
-                                unsafe extern "C" fn __post_return_method_counter_get_args(arg0: i32,) {
-                                  let l2 = *((arg0 + 0) as *const i32);
-                                  let l3 = *((arg0 + 4) as *const i32);
-                                  let base4 = l2;
-                                  let len4 = l3;
-                                  for i in 0..len4 {
-                                    let base = base4 + i *8;
-                                    {
-                                      let l0 = *((base + 0) as *const i32);
-                                      let l1 = *((base + 4) as *const i32);
-                                      wit_bindgen::rt::dealloc(l0, (l1) as usize, 1);
-                                    }
-                                  }
-                                  wit_bindgen::rt::dealloc(base4, (len4 as usize) * 8, 4);
-                                }
-                              };
-                            };
-                            const _: () = {
-                              
+                              #[cfg(target_arch = "wasm32")]
+                              #[link_section = "component-type:wasm-rpc-stub-counters"]
                               #[doc(hidden)]
-                              #[export_name = "rpc:counters-stub/stub-counters#[method]counter.get-env"]
-                              #[allow(non_snake_case)]
-                              unsafe extern "C" fn __export_method_counter_get_env(arg0: i32,) -> i32 {
-                                #[allow(unused_imports)]
-                                use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                                
-                                // Before executing any other code, use this function to run all static
-                                // constructors, if they have not yet been run. This is a hack required
-                                // to work around wasi-libc ctors calling import functions to initialize
-                                // the environment.
-                                //
-                                // This functionality will be removed once rust 1.69.0 is stable, at which
-                                // point wasi-libc will no longer have this behavior.
-                                //
-                                // See
-                                // https://github.com/bytecodealliance/preview2-prototyping/issues/99
-                                // for more details.
-                                #[cfg(target_arch="wasm32")]
-                                wit_bindgen::rt::run_ctors_once();
-                                
-                                let result0 = <_CounterImpl as GuestCounter>::get_env(wit_bindgen::rt::Resource::<Counter>::lift_borrow(arg0 as u32 as usize));
-                                let ptr1 = _RET_AREA.0.as_mut_ptr() as i32;
-                                let vec5 = result0;
-                                let len5 = vec5.len() as i32;
-                                let layout5 = alloc::Layout::from_size_align_unchecked(vec5.len() * 16, 4);
-                                let result5 = if layout5.size() != 0
-                                {
-                                  let ptr = alloc::alloc(layout5);
-                                  if ptr.is_null()
-                                  {
-                                    alloc::handle_alloc_error(layout5);
-                                  }
-                                  ptr
-                                }else {{
-                                  ::core::ptr::null_mut()
-                                }};
-                                for (i, e) in vec5.into_iter().enumerate() {
-                                  let base = result5 as i32 + (i as i32) * 16;
-                                  {
-                                    let (t2_0, t2_1, ) = e;
-                                    let vec3 = (t2_0.into_bytes()).into_boxed_slice();
-                                    let ptr3 = vec3.as_ptr() as i32;
-                                    let len3 = vec3.len() as i32;
-                                    ::core::mem::forget(vec3);
-                                    *((base + 4) as *mut i32) = len3;
-                                    *((base + 0) as *mut i32) = ptr3;
-                                    let vec4 = (t2_1.into_bytes()).into_boxed_slice();
-                                    let ptr4 = vec4.as_ptr() as i32;
-                                    let len4 = vec4.len() as i32;
-                                    ::core::mem::forget(vec4);
-                                    *((base + 12) as *mut i32) = len4;
-                                    *((base + 8) as *mut i32) = ptr4;
-                                  }
-                                }
-                                *((ptr1 + 4) as *mut i32) = len5;
-                                *((ptr1 + 0) as *mut i32) = result5 as i32;
-                                ptr1
-                              }
+                              pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5172] = [3, 0, 22, 119, 97, 115, 109, 45, 114, 112, 99, 45, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 0, 97, 115, 109, 13, 0, 1, 0, 7, 167, 17, 1, 65, 8, 1, 66, 1, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 1, 3, 1, 18, 119, 97, 115, 105, 58, 105, 111, 47, 112, 111, 108, 108, 64, 48, 46, 50, 46, 48, 5, 0, 2, 3, 0, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 1, 66, 21, 2, 3, 2, 1, 1, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 0, 1, 122, 4, 0, 10, 110, 111, 100, 101, 45, 105, 110, 100, 101, 120, 3, 0, 2, 1, 114, 1, 5, 118, 97, 108, 117, 101, 115, 4, 0, 3, 117, 114, 105, 3, 0, 4, 1, 112, 3, 1, 107, 3, 1, 111, 2, 121, 7, 1, 112, 127, 1, 106, 1, 7, 1, 7, 1, 111, 2, 5, 119, 1, 113, 22, 12, 114, 101, 99, 111, 114, 100, 45, 118, 97, 108, 117, 101, 1, 6, 0, 13, 118, 97, 114, 105, 97, 110, 116, 45, 118, 97, 108, 117, 101, 1, 8, 0, 10, 101, 110, 117, 109, 45, 118, 97, 108, 117, 101, 1, 121, 0, 11, 102, 108, 97, 103, 115, 45, 118, 97, 108, 117, 101, 1, 9, 0, 11, 116, 117, 112, 108, 101, 45, 118, 97, 108, 117, 101, 1, 6, 0, 10, 108, 105, 115, 116, 45, 118, 97, 108, 117, 101, 1, 6, 0, 12, 111, 112, 116, 105, 111, 110, 45, 118, 97, 108, 117, 101, 1, 7, 0, 12, 114, 101, 115, 117, 108, 116, 45, 118, 97, 108, 117, 101, 1, 10, 0, 7, 112, 114, 105, 109, 45, 117, 56, 1, 125, 0, 8, 112, 114, 105, 109, 45, 117, 49, 54, 1, 123, 0, 8, 112, 114, 105, 109, 45, 117, 51, 50, 1, 121, 0, 8, 112, 114, 105, 109, 45, 117, 54, 52, 1, 119, 0, 7, 112, 114, 105, 109, 45, 115, 56, 1, 126, 0, 8, 112, 114, 105, 109, 45, 115, 49, 54, 1, 124, 0, 8, 112, 114, 105, 109, 45, 115, 51, 50, 1, 122, 0, 8, 112, 114, 105, 109, 45, 115, 54, 52, 1, 120, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 51, 50, 1, 118, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 54, 52, 1, 117, 0, 9, 112, 114, 105, 109, 45, 99, 104, 97, 114, 1, 116, 0, 9, 112, 114, 105, 109, 45, 98, 111, 111, 108, 1, 127, 0, 11, 112, 114, 105, 109, 45, 115, 116, 114, 105, 110, 103, 1, 115, 0, 6, 104, 97, 110, 100, 108, 101, 1, 11, 0, 4, 0, 8, 119, 105, 116, 45, 110, 111, 100, 101, 3, 0, 12, 1, 112, 13, 1, 114, 1, 5, 110, 111, 100, 101, 115, 14, 4, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 0, 15, 1, 113, 4, 14, 112, 114, 111, 116, 111, 99, 111, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 6, 100, 101, 110, 105, 101, 100, 1, 115, 0, 9, 110, 111, 116, 45, 102, 111, 117, 110, 100, 1, 115, 0, 21, 114, 101, 109, 111, 116, 101, 45, 105, 110, 116, 101, 114, 110, 97, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 4, 0, 9, 114, 112, 99, 45, 101, 114, 114, 111, 114, 3, 0, 17, 4, 0, 8, 119, 97, 115, 109, 45, 114, 112, 99, 3, 1, 4, 0, 20, 102, 117, 116, 117, 114, 101, 45, 105, 110, 118, 111, 107, 101, 45, 114, 101, 115, 117, 108, 116, 3, 1, 3, 1, 21, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 116, 121, 112, 101, 115, 64, 48, 46, 49, 46, 48, 5, 2, 2, 3, 0, 1, 3, 117, 114, 105, 1, 66, 81, 2, 3, 2, 1, 3, 4, 0, 3, 117, 114, 105, 3, 0, 0, 2, 3, 2, 1, 1, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 2, 4, 0, 30, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 3, 1, 4, 0, 29, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 45, 114, 101, 115, 117, 108, 116, 3, 1, 4, 0, 23, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 3, 1, 4, 0, 22, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 114, 103, 115, 45, 114, 101, 115, 117, 108, 116, 3, 1, 4, 0, 21, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 101, 110, 118, 45, 114, 101, 115, 117, 108, 116, 3, 1, 4, 0, 3, 97, 112, 105, 3, 1, 4, 0, 7, 99, 111, 117, 110, 116, 101, 114, 3, 1, 1, 104, 4, 1, 105, 3, 1, 64, 1, 4, 115, 101, 108, 102, 11, 0, 12, 4, 0, 48, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 13, 1, 64, 1, 4, 115, 101, 108, 102, 11, 0, 119, 4, 0, 42, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 46, 103, 101, 116, 1, 14, 1, 104, 5, 1, 64, 1, 4, 115, 101, 108, 102, 15, 0, 12, 4, 0, 47, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 45, 114, 101, 115, 117, 108, 116, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 16, 1, 111, 2, 115, 119, 1, 112, 17, 1, 64, 1, 4, 115, 101, 108, 102, 15, 0, 18, 4, 0, 41, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 45, 114, 101, 115, 117, 108, 116, 46, 103, 101, 116, 1, 19, 1, 104, 6, 1, 64, 1, 4, 115, 101, 108, 102, 20, 0, 12, 4, 0, 41, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 21, 1, 64, 1, 4, 115, 101, 108, 102, 20, 0, 119, 4, 0, 35, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 46, 103, 101, 116, 1, 22, 1, 104, 7, 1, 64, 1, 4, 115, 101, 108, 102, 23, 0, 12, 4, 0, 40, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 114, 103, 115, 45, 114, 101, 115, 117, 108, 116, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 24, 1, 112, 115, 1, 64, 1, 4, 115, 101, 108, 102, 23, 0, 25, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 114, 103, 115, 45, 114, 101, 115, 117, 108, 116, 46, 103, 101, 116, 1, 26, 1, 104, 8, 1, 64, 1, 4, 115, 101, 108, 102, 27, 0, 12, 4, 0, 39, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 101, 110, 118, 45, 114, 101, 115, 117, 108, 116, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 28, 1, 111, 2, 115, 115, 1, 112, 29, 1, 64, 1, 4, 115, 101, 108, 102, 27, 0, 30, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 101, 110, 118, 45, 114, 101, 115, 117, 108, 116, 46, 103, 101, 116, 1, 31, 1, 105, 9, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 1, 0, 32, 4, 0, 16, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 97, 112, 105, 1, 33, 1, 104, 9, 1, 64, 2, 4, 115, 101, 108, 102, 34, 5, 118, 97, 108, 117, 101, 119, 1, 0, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 105, 110, 99, 45, 103, 108, 111, 98, 97, 108, 45, 98, 121, 1, 35, 4, 0, 25, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 105, 110, 99, 45, 103, 108, 111, 98, 97, 108, 45, 98, 121, 1, 35, 1, 64, 1, 4, 115, 101, 108, 102, 34, 0, 119, 4, 0, 37, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 1, 36, 1, 105, 4, 1, 64, 1, 4, 115, 101, 108, 102, 34, 0, 37, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 1, 38, 1, 64, 1, 4, 115, 101, 108, 102, 34, 0, 18, 4, 0, 36, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 1, 39, 1, 105, 5, 1, 64, 1, 4, 115, 101, 108, 102, 34, 0, 40, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 1, 41, 1, 105, 10, 1, 64, 2, 8, 108, 111, 99, 97, 116, 105, 111, 110, 1, 4, 110, 97, 109, 101, 115, 0, 42, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 99, 111, 117, 110, 116, 101, 114, 1, 43, 1, 104, 10, 1, 64, 2, 4, 115, 101, 108, 102, 44, 5, 118, 97, 108, 117, 101, 119, 1, 0, 4, 0, 31, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 105, 110, 99, 45, 98, 121, 1, 45, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 105, 110, 99, 45, 98, 121, 1, 45, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 119, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 103, 101, 116, 45, 118, 97, 108, 117, 101, 1, 46, 1, 105, 6, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 47, 4, 0, 25, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 118, 97, 108, 117, 101, 1, 48, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 25, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 103, 101, 116, 45, 97, 114, 103, 115, 1, 49, 1, 105, 7, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 50, 4, 0, 24, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 97, 114, 103, 115, 1, 51, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 30, 4, 0, 32, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 103, 101, 116, 45, 101, 110, 118, 1, 52, 1, 105, 8, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 53, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 101, 110, 118, 1, 54, 4, 1, 31, 114, 112, 99, 58, 99, 111, 117, 110, 116, 101, 114, 115, 45, 115, 116, 117, 98, 47, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 5, 4, 11, 19, 1, 0, 13, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 3, 0, 0, 7, 217, 21, 1, 65, 2, 1, 65, 8, 1, 66, 10, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 1, 1, 104, 0, 1, 64, 1, 4, 115, 101, 108, 102, 1, 0, 127, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 114, 101, 97, 100, 121, 1, 2, 1, 64, 1, 4, 115, 101, 108, 102, 1, 1, 0, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 98, 108, 111, 99, 107, 1, 3, 1, 112, 1, 1, 112, 121, 1, 64, 1, 2, 105, 110, 4, 0, 5, 4, 0, 4, 112, 111, 108, 108, 1, 6, 3, 1, 18, 119, 97, 115, 105, 58, 105, 111, 47, 112, 111, 108, 108, 64, 48, 46, 50, 46, 48, 5, 0, 2, 3, 0, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 1, 66, 41, 2, 3, 2, 1, 1, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 0, 1, 122, 4, 0, 10, 110, 111, 100, 101, 45, 105, 110, 100, 101, 120, 3, 0, 2, 1, 114, 1, 5, 118, 97, 108, 117, 101, 115, 4, 0, 3, 117, 114, 105, 3, 0, 4, 1, 112, 3, 1, 107, 3, 1, 111, 2, 121, 7, 1, 112, 127, 1, 106, 1, 7, 1, 7, 1, 111, 2, 5, 119, 1, 113, 22, 12, 114, 101, 99, 111, 114, 100, 45, 118, 97, 108, 117, 101, 1, 6, 0, 13, 118, 97, 114, 105, 97, 110, 116, 45, 118, 97, 108, 117, 101, 1, 8, 0, 10, 101, 110, 117, 109, 45, 118, 97, 108, 117, 101, 1, 121, 0, 11, 102, 108, 97, 103, 115, 45, 118, 97, 108, 117, 101, 1, 9, 0, 11, 116, 117, 112, 108, 101, 45, 118, 97, 108, 117, 101, 1, 6, 0, 10, 108, 105, 115, 116, 45, 118, 97, 108, 117, 101, 1, 6, 0, 12, 111, 112, 116, 105, 111, 110, 45, 118, 97, 108, 117, 101, 1, 7, 0, 12, 114, 101, 115, 117, 108, 116, 45, 118, 97, 108, 117, 101, 1, 10, 0, 7, 112, 114, 105, 109, 45, 117, 56, 1, 125, 0, 8, 112, 114, 105, 109, 45, 117, 49, 54, 1, 123, 0, 8, 112, 114, 105, 109, 45, 117, 51, 50, 1, 121, 0, 8, 112, 114, 105, 109, 45, 117, 54, 52, 1, 119, 0, 7, 112, 114, 105, 109, 45, 115, 56, 1, 126, 0, 8, 112, 114, 105, 109, 45, 115, 49, 54, 1, 124, 0, 8, 112, 114, 105, 109, 45, 115, 51, 50, 1, 122, 0, 8, 112, 114, 105, 109, 45, 115, 54, 52, 1, 120, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 51, 50, 1, 118, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 54, 52, 1, 117, 0, 9, 112, 114, 105, 109, 45, 99, 104, 97, 114, 1, 116, 0, 9, 112, 114, 105, 109, 45, 98, 111, 111, 108, 1, 127, 0, 11, 112, 114, 105, 109, 45, 115, 116, 114, 105, 110, 103, 1, 115, 0, 6, 104, 97, 110, 100, 108, 101, 1, 11, 0, 4, 0, 8, 119, 105, 116, 45, 110, 111, 100, 101, 3, 0, 12, 1, 112, 13, 1, 114, 1, 5, 110, 111, 100, 101, 115, 14, 4, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 0, 15, 1, 113, 4, 14, 112, 114, 111, 116, 111, 99, 111, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 6, 100, 101, 110, 105, 101, 100, 1, 115, 0, 9, 110, 111, 116, 45, 102, 111, 117, 110, 100, 1, 115, 0, 21, 114, 101, 109, 111, 116, 101, 45, 105, 110, 116, 101, 114, 110, 97, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 4, 0, 9, 114, 112, 99, 45, 101, 114, 114, 111, 114, 3, 0, 17, 4, 0, 8, 119, 97, 115, 109, 45, 114, 112, 99, 3, 1, 4, 0, 20, 102, 117, 116, 117, 114, 101, 45, 105, 110, 118, 111, 107, 101, 45, 114, 101, 115, 117, 108, 116, 3, 1, 1, 105, 19, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 5, 0, 21, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 119, 97, 115, 109, 45, 114, 112, 99, 1, 22, 1, 104, 19, 1, 112, 16, 1, 106, 1, 16, 1, 18, 1, 64, 3, 4, 115, 101, 108, 102, 23, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 24, 0, 25, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 1, 26, 1, 106, 0, 1, 18, 1, 64, 3, 4, 115, 101, 108, 102, 23, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 24, 0, 27, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 1, 28, 1, 105, 20, 1, 64, 3, 4, 115, 101, 108, 102, 23, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 24, 0, 29, 4, 0, 39, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 97, 115, 121, 110, 99, 45, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 1, 30, 1, 104, 20, 1, 105, 1, 1, 64, 1, 4, 115, 101, 108, 102, 31, 0, 32, 4, 0, 38, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 105, 110, 118, 111, 107, 101, 45, 114, 101, 115, 117, 108, 116, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 33, 1, 64, 1, 4, 115, 101, 108, 102, 31, 0, 25, 4, 0, 32, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 105, 110, 118, 111, 107, 101, 45, 114, 101, 115, 117, 108, 116, 46, 103, 101, 116, 1, 34, 3, 1, 21, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 116, 121, 112, 101, 115, 64, 48, 46, 49, 46, 48, 5, 2, 2, 3, 0, 1, 3, 117, 114, 105, 1, 66, 81, 2, 3, 2, 1, 3, 4, 0, 3, 117, 114, 105, 3, 0, 0, 2, 3, 2, 1, 1, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 2, 4, 0, 30, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 3, 1, 4, 0, 29, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 45, 114, 101, 115, 117, 108, 116, 3, 1, 4, 0, 23, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 3, 1, 4, 0, 22, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 114, 103, 115, 45, 114, 101, 115, 117, 108, 116, 3, 1, 4, 0, 21, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 101, 110, 118, 45, 114, 101, 115, 117, 108, 116, 3, 1, 4, 0, 3, 97, 112, 105, 3, 1, 4, 0, 7, 99, 111, 117, 110, 116, 101, 114, 3, 1, 1, 104, 4, 1, 105, 3, 1, 64, 1, 4, 115, 101, 108, 102, 11, 0, 12, 4, 0, 48, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 13, 1, 64, 1, 4, 115, 101, 108, 102, 11, 0, 119, 4, 0, 42, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 46, 103, 101, 116, 1, 14, 1, 104, 5, 1, 64, 1, 4, 115, 101, 108, 102, 15, 0, 12, 4, 0, 47, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 45, 114, 101, 115, 117, 108, 116, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 16, 1, 111, 2, 115, 119, 1, 112, 17, 1, 64, 1, 4, 115, 101, 108, 102, 15, 0, 18, 4, 0, 41, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 45, 114, 101, 115, 117, 108, 116, 46, 103, 101, 116, 1, 19, 1, 104, 6, 1, 64, 1, 4, 115, 101, 108, 102, 20, 0, 12, 4, 0, 41, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 21, 1, 64, 1, 4, 115, 101, 108, 102, 20, 0, 119, 4, 0, 35, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 118, 97, 108, 117, 101, 45, 114, 101, 115, 117, 108, 116, 46, 103, 101, 116, 1, 22, 1, 104, 7, 1, 64, 1, 4, 115, 101, 108, 102, 23, 0, 12, 4, 0, 40, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 114, 103, 115, 45, 114, 101, 115, 117, 108, 116, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 24, 1, 112, 115, 1, 64, 1, 4, 115, 101, 108, 102, 23, 0, 25, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 97, 114, 103, 115, 45, 114, 101, 115, 117, 108, 116, 46, 103, 101, 116, 1, 26, 1, 104, 8, 1, 64, 1, 4, 115, 101, 108, 102, 27, 0, 12, 4, 0, 39, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 101, 110, 118, 45, 114, 101, 115, 117, 108, 116, 46, 115, 117, 98, 115, 99, 114, 105, 98, 101, 1, 28, 1, 111, 2, 115, 115, 1, 112, 29, 1, 64, 1, 4, 115, 101, 108, 102, 27, 0, 30, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 102, 117, 116, 117, 114, 101, 45, 103, 101, 116, 45, 101, 110, 118, 45, 114, 101, 115, 117, 108, 116, 46, 103, 101, 116, 1, 31, 1, 105, 9, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 1, 0, 32, 4, 0, 16, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 97, 112, 105, 1, 33, 1, 104, 9, 1, 64, 2, 4, 115, 101, 108, 102, 34, 5, 118, 97, 108, 117, 101, 119, 1, 0, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 105, 110, 99, 45, 103, 108, 111, 98, 97, 108, 45, 98, 121, 1, 35, 4, 0, 25, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 105, 110, 99, 45, 103, 108, 111, 98, 97, 108, 45, 98, 121, 1, 35, 1, 64, 1, 4, 115, 101, 108, 102, 34, 0, 119, 4, 0, 37, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 1, 36, 1, 105, 4, 1, 64, 1, 4, 115, 101, 108, 102, 34, 0, 37, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 1, 38, 1, 64, 1, 4, 115, 101, 108, 102, 34, 0, 18, 4, 0, 36, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 1, 39, 1, 105, 5, 1, 64, 1, 4, 115, 101, 108, 102, 34, 0, 40, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 1, 41, 1, 105, 10, 1, 64, 2, 8, 108, 111, 99, 97, 116, 105, 111, 110, 1, 4, 110, 97, 109, 101, 115, 0, 42, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 99, 111, 117, 110, 116, 101, 114, 1, 43, 1, 104, 10, 1, 64, 2, 4, 115, 101, 108, 102, 44, 5, 118, 97, 108, 117, 101, 119, 1, 0, 4, 0, 31, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 105, 110, 99, 45, 98, 121, 1, 45, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 105, 110, 99, 45, 98, 121, 1, 45, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 119, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 103, 101, 116, 45, 118, 97, 108, 117, 101, 1, 46, 1, 105, 6, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 47, 4, 0, 25, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 118, 97, 108, 117, 101, 1, 48, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 25, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 103, 101, 116, 45, 97, 114, 103, 115, 1, 49, 1, 105, 7, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 50, 4, 0, 24, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 97, 114, 103, 115, 1, 51, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 30, 4, 0, 32, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 103, 101, 116, 45, 101, 110, 118, 1, 52, 1, 105, 8, 1, 64, 1, 4, 115, 101, 108, 102, 44, 0, 53, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 101, 110, 118, 1, 54, 4, 1, 31, 114, 112, 99, 58, 99, 111, 117, 110, 116, 101, 114, 115, 45, 115, 116, 117, 98, 47, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 5, 4, 4, 1, 40, 114, 112, 99, 58, 99, 111, 117, 110, 116, 101, 114, 115, 45, 115, 116, 117, 98, 47, 119, 97, 115, 109, 45, 114, 112, 99, 45, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 4, 0, 11, 28, 1, 0, 22, 119, 97, 115, 109, 45, 114, 112, 99, 45, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 3, 2, 0, 0, 16, 12, 112, 97, 99, 107, 97, 103, 101, 45, 100, 111, 99, 115, 0, 123, 125, 0, 70, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 2, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 6, 48, 46, 49, 56, 46, 50, 16, 119, 105, 116, 45, 98, 105, 110, 100, 103, 101, 110, 45, 114, 117, 115, 116, 6, 48, 46, 49, 54, 46, 48];
                               
-                              const _: () = {
-                                #[doc(hidden)]
-                                #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]counter.get-env"]
-                                #[allow(non_snake_case)]
-                                unsafe extern "C" fn __post_return_method_counter_get_env(arg0: i32,) {
-                                  let l4 = *((arg0 + 0) as *const i32);
-                                  let l5 = *((arg0 + 4) as *const i32);
-                                  let base6 = l4;
-                                  let len6 = l5;
-                                  for i in 0..len6 {
-                                    let base = base6 + i *16;
-                                    {
-                                      let l0 = *((base + 0) as *const i32);
-                                      let l1 = *((base + 4) as *const i32);
-                                      wit_bindgen::rt::dealloc(l0, (l1) as usize, 1);
-                                      let l2 = *((base + 8) as *const i32);
-                                      let l3 = *((base + 12) as *const i32);
-                                      wit_bindgen::rt::dealloc(l2, (l3) as usize, 1);
-                                    }
-                                  }
-                                  wit_bindgen::rt::dealloc(base6, (len6 as usize) * 16, 4);
-                                }
-                              };
-                            };
-                            use super::super::super::super::super::Api as _ApiImpl;
-                            pub trait GuestApi {
-                              fn new(location: Uri,) -> Self;
-                              fn blocking_inc_global_by(&self,value: u64,);
-                              fn inc_global_by(&self,value: u64,);
-                              fn get_global_value(&self,) -> u64;
-                              fn get_all_dropped(&self,) -> wit_bindgen::rt::vec::Vec::<(wit_bindgen::rt::string::String,u64,)>;
-                            }
-                            use super::super::super::super::super::Counter as _CounterImpl;
-                            pub trait GuestCounter {
-                              fn new(location: Uri,name: wit_bindgen::rt::string::String,) -> Self;
-                              fn blocking_inc_by(&self,value: u64,);
-                              fn inc_by(&self,value: u64,);
-                              fn get_value(&self,) -> u64;
-                              fn get_args(&self,) -> wit_bindgen::rt::vec::Vec::<wit_bindgen::rt::string::String>;
-                              fn get_env(&self,) -> wit_bindgen::rt::vec::Vec::<(wit_bindgen::rt::string::String,wit_bindgen::rt::string::String,)>;
-                            }
-                            
-                            #[allow(unused_imports)]
-                            use wit_bindgen::rt::{alloc, vec::Vec, string::String};
-                            
-                            #[repr(align(4))]
-                            struct _RetArea([u8; 8]);
-                            static mut _RET_AREA: _RetArea = _RetArea([0; 8]);
-                            
-                          }
-                          
-                        }
-                      }
-                    }
-                    
-                    #[cfg(target_arch = "wasm32")]
-                    #[link_section = "component-type:wasm-rpc-stub-counters"]
-                    #[doc(hidden)]
-                    pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2651] = [3, 0, 22, 119, 97, 115, 109, 45, 114, 112, 99, 45, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 0, 97, 115, 109, 13, 0, 1, 0, 7, 209, 8, 1, 65, 5, 1, 66, 18, 1, 122, 4, 0, 10, 110, 111, 100, 101, 45, 105, 110, 100, 101, 120, 3, 0, 0, 1, 114, 1, 5, 118, 97, 108, 117, 101, 115, 4, 0, 3, 117, 114, 105, 3, 0, 2, 1, 112, 1, 1, 107, 1, 1, 111, 2, 121, 5, 1, 112, 127, 1, 106, 1, 5, 1, 5, 1, 111, 2, 3, 119, 1, 113, 22, 12, 114, 101, 99, 111, 114, 100, 45, 118, 97, 108, 117, 101, 1, 4, 0, 13, 118, 97, 114, 105, 97, 110, 116, 45, 118, 97, 108, 117, 101, 1, 6, 0, 10, 101, 110, 117, 109, 45, 118, 97, 108, 117, 101, 1, 121, 0, 11, 102, 108, 97, 103, 115, 45, 118, 97, 108, 117, 101, 1, 7, 0, 11, 116, 117, 112, 108, 101, 45, 118, 97, 108, 117, 101, 1, 4, 0, 10, 108, 105, 115, 116, 45, 118, 97, 108, 117, 101, 1, 4, 0, 12, 111, 112, 116, 105, 111, 110, 45, 118, 97, 108, 117, 101, 1, 5, 0, 12, 114, 101, 115, 117, 108, 116, 45, 118, 97, 108, 117, 101, 1, 8, 0, 7, 112, 114, 105, 109, 45, 117, 56, 1, 125, 0, 8, 112, 114, 105, 109, 45, 117, 49, 54, 1, 123, 0, 8, 112, 114, 105, 109, 45, 117, 51, 50, 1, 121, 0, 8, 112, 114, 105, 109, 45, 117, 54, 52, 1, 119, 0, 7, 112, 114, 105, 109, 45, 115, 56, 1, 126, 0, 8, 112, 114, 105, 109, 45, 115, 49, 54, 1, 124, 0, 8, 112, 114, 105, 109, 45, 115, 51, 50, 1, 122, 0, 8, 112, 114, 105, 109, 45, 115, 54, 52, 1, 120, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 51, 50, 1, 118, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 54, 52, 1, 117, 0, 9, 112, 114, 105, 109, 45, 99, 104, 97, 114, 1, 116, 0, 9, 112, 114, 105, 109, 45, 98, 111, 111, 108, 1, 127, 0, 11, 112, 114, 105, 109, 45, 115, 116, 114, 105, 110, 103, 1, 115, 0, 6, 104, 97, 110, 100, 108, 101, 1, 9, 0, 4, 0, 8, 119, 105, 116, 45, 110, 111, 100, 101, 3, 0, 10, 1, 112, 11, 1, 114, 1, 5, 110, 111, 100, 101, 115, 12, 4, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 0, 13, 1, 113, 4, 14, 112, 114, 111, 116, 111, 99, 111, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 6, 100, 101, 110, 105, 101, 100, 1, 115, 0, 9, 110, 111, 116, 45, 102, 111, 117, 110, 100, 1, 115, 0, 21, 114, 101, 109, 111, 116, 101, 45, 105, 110, 116, 101, 114, 110, 97, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 4, 0, 9, 114, 112, 99, 45, 101, 114, 114, 111, 114, 3, 0, 15, 4, 0, 8, 119, 97, 115, 109, 45, 114, 112, 99, 3, 1, 3, 1, 21, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 116, 121, 112, 101, 115, 64, 48, 46, 49, 46, 48, 5, 0, 2, 3, 0, 0, 3, 117, 114, 105, 1, 66, 33, 2, 3, 2, 1, 1, 4, 0, 3, 117, 114, 105, 3, 0, 0, 4, 0, 3, 97, 112, 105, 3, 1, 4, 0, 7, 99, 111, 117, 110, 116, 101, 114, 3, 1, 1, 105, 2, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 1, 0, 4, 4, 0, 16, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 97, 112, 105, 1, 5, 1, 104, 2, 1, 64, 2, 4, 115, 101, 108, 102, 6, 5, 118, 97, 108, 117, 101, 119, 1, 0, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 105, 110, 99, 45, 103, 108, 111, 98, 97, 108, 45, 98, 121, 1, 7, 4, 0, 25, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 105, 110, 99, 45, 103, 108, 111, 98, 97, 108, 45, 98, 121, 1, 7, 1, 64, 1, 4, 115, 101, 108, 102, 6, 0, 119, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 1, 8, 1, 111, 2, 115, 119, 1, 112, 9, 1, 64, 1, 4, 115, 101, 108, 102, 6, 0, 10, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 1, 11, 1, 105, 3, 1, 64, 2, 8, 108, 111, 99, 97, 116, 105, 111, 110, 1, 4, 110, 97, 109, 101, 115, 0, 12, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 99, 111, 117, 110, 116, 101, 114, 1, 13, 1, 104, 3, 1, 64, 2, 4, 115, 101, 108, 102, 14, 5, 118, 97, 108, 117, 101, 119, 1, 0, 4, 0, 31, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 105, 110, 99, 45, 98, 121, 1, 15, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 105, 110, 99, 45, 98, 121, 1, 15, 1, 64, 1, 4, 115, 101, 108, 102, 14, 0, 119, 4, 0, 25, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 118, 97, 108, 117, 101, 1, 16, 1, 112, 115, 1, 64, 1, 4, 115, 101, 108, 102, 14, 0, 17, 4, 0, 24, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 97, 114, 103, 115, 1, 18, 1, 111, 2, 115, 115, 1, 112, 19, 1, 64, 1, 4, 115, 101, 108, 102, 14, 0, 20, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 101, 110, 118, 1, 21, 4, 1, 31, 114, 112, 99, 58, 99, 111, 117, 110, 116, 101, 114, 115, 45, 115, 116, 117, 98, 47, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 5, 2, 11, 19, 1, 0, 13, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 3, 0, 0, 7, 214, 10, 1, 65, 2, 1, 65, 5, 1, 66, 29, 1, 122, 4, 0, 10, 110, 111, 100, 101, 45, 105, 110, 100, 101, 120, 3, 0, 0, 1, 114, 1, 5, 118, 97, 108, 117, 101, 115, 4, 0, 3, 117, 114, 105, 3, 0, 2, 1, 112, 1, 1, 107, 1, 1, 111, 2, 121, 5, 1, 112, 127, 1, 106, 1, 5, 1, 5, 1, 111, 2, 3, 119, 1, 113, 22, 12, 114, 101, 99, 111, 114, 100, 45, 118, 97, 108, 117, 101, 1, 4, 0, 13, 118, 97, 114, 105, 97, 110, 116, 45, 118, 97, 108, 117, 101, 1, 6, 0, 10, 101, 110, 117, 109, 45, 118, 97, 108, 117, 101, 1, 121, 0, 11, 102, 108, 97, 103, 115, 45, 118, 97, 108, 117, 101, 1, 7, 0, 11, 116, 117, 112, 108, 101, 45, 118, 97, 108, 117, 101, 1, 4, 0, 10, 108, 105, 115, 116, 45, 118, 97, 108, 117, 101, 1, 4, 0, 12, 111, 112, 116, 105, 111, 110, 45, 118, 97, 108, 117, 101, 1, 5, 0, 12, 114, 101, 115, 117, 108, 116, 45, 118, 97, 108, 117, 101, 1, 8, 0, 7, 112, 114, 105, 109, 45, 117, 56, 1, 125, 0, 8, 112, 114, 105, 109, 45, 117, 49, 54, 1, 123, 0, 8, 112, 114, 105, 109, 45, 117, 51, 50, 1, 121, 0, 8, 112, 114, 105, 109, 45, 117, 54, 52, 1, 119, 0, 7, 112, 114, 105, 109, 45, 115, 56, 1, 126, 0, 8, 112, 114, 105, 109, 45, 115, 49, 54, 1, 124, 0, 8, 112, 114, 105, 109, 45, 115, 51, 50, 1, 122, 0, 8, 112, 114, 105, 109, 45, 115, 54, 52, 1, 120, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 51, 50, 1, 118, 0, 12, 112, 114, 105, 109, 45, 102, 108, 111, 97, 116, 54, 52, 1, 117, 0, 9, 112, 114, 105, 109, 45, 99, 104, 97, 114, 1, 116, 0, 9, 112, 114, 105, 109, 45, 98, 111, 111, 108, 1, 127, 0, 11, 112, 114, 105, 109, 45, 115, 116, 114, 105, 110, 103, 1, 115, 0, 6, 104, 97, 110, 100, 108, 101, 1, 9, 0, 4, 0, 8, 119, 105, 116, 45, 110, 111, 100, 101, 3, 0, 10, 1, 112, 11, 1, 114, 1, 5, 110, 111, 100, 101, 115, 12, 4, 0, 9, 119, 105, 116, 45, 118, 97, 108, 117, 101, 3, 0, 13, 1, 113, 4, 14, 112, 114, 111, 116, 111, 99, 111, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 6, 100, 101, 110, 105, 101, 100, 1, 115, 0, 9, 110, 111, 116, 45, 102, 111, 117, 110, 100, 1, 115, 0, 21, 114, 101, 109, 111, 116, 101, 45, 105, 110, 116, 101, 114, 110, 97, 108, 45, 101, 114, 114, 111, 114, 1, 115, 0, 4, 0, 9, 114, 112, 99, 45, 101, 114, 114, 111, 114, 3, 0, 15, 4, 0, 8, 119, 97, 115, 109, 45, 114, 112, 99, 3, 1, 1, 105, 17, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 3, 0, 18, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 119, 97, 115, 109, 45, 114, 112, 99, 1, 19, 1, 104, 17, 1, 112, 14, 1, 106, 1, 14, 1, 16, 1, 64, 3, 4, 115, 101, 108, 102, 20, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 21, 0, 22, 4, 0, 33, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 45, 97, 110, 100, 45, 97, 119, 97, 105, 116, 1, 23, 1, 106, 0, 1, 16, 1, 64, 3, 4, 115, 101, 108, 102, 20, 13, 102, 117, 110, 99, 116, 105, 111, 110, 45, 110, 97, 109, 101, 115, 15, 102, 117, 110, 99, 116, 105, 111, 110, 45, 112, 97, 114, 97, 109, 115, 21, 0, 24, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 119, 97, 115, 109, 45, 114, 112, 99, 46, 105, 110, 118, 111, 107, 101, 1, 25, 3, 1, 21, 103, 111, 108, 101, 109, 58, 114, 112, 99, 47, 116, 121, 112, 101, 115, 64, 48, 46, 49, 46, 48, 5, 0, 2, 3, 0, 0, 3, 117, 114, 105, 1, 66, 33, 2, 3, 2, 1, 1, 4, 0, 3, 117, 114, 105, 3, 0, 0, 4, 0, 3, 97, 112, 105, 3, 1, 4, 0, 7, 99, 111, 117, 110, 116, 101, 114, 3, 1, 1, 105, 2, 1, 64, 1, 8, 108, 111, 99, 97, 116, 105, 111, 110, 1, 0, 4, 4, 0, 16, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 97, 112, 105, 1, 5, 1, 104, 2, 1, 64, 2, 4, 115, 101, 108, 102, 6, 5, 118, 97, 108, 117, 101, 119, 1, 0, 4, 0, 34, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 105, 110, 99, 45, 103, 108, 111, 98, 97, 108, 45, 98, 121, 1, 7, 4, 0, 25, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 105, 110, 99, 45, 103, 108, 111, 98, 97, 108, 45, 98, 121, 1, 7, 1, 64, 1, 4, 115, 101, 108, 102, 6, 0, 119, 4, 0, 28, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 103, 101, 116, 45, 103, 108, 111, 98, 97, 108, 45, 118, 97, 108, 117, 101, 1, 8, 1, 111, 2, 115, 119, 1, 112, 9, 1, 64, 1, 4, 115, 101, 108, 102, 6, 0, 10, 4, 0, 27, 91, 109, 101, 116, 104, 111, 100, 93, 97, 112, 105, 46, 103, 101, 116, 45, 97, 108, 108, 45, 100, 114, 111, 112, 112, 101, 100, 1, 11, 1, 105, 3, 1, 64, 2, 8, 108, 111, 99, 97, 116, 105, 111, 110, 1, 4, 110, 97, 109, 101, 115, 0, 12, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 99, 111, 117, 110, 116, 101, 114, 1, 13, 1, 104, 3, 1, 64, 2, 4, 115, 101, 108, 102, 14, 5, 118, 97, 108, 117, 101, 119, 1, 0, 4, 0, 31, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 98, 108, 111, 99, 107, 105, 110, 103, 45, 105, 110, 99, 45, 98, 121, 1, 15, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 105, 110, 99, 45, 98, 121, 1, 15, 1, 64, 1, 4, 115, 101, 108, 102, 14, 0, 119, 4, 0, 25, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 118, 97, 108, 117, 101, 1, 16, 1, 112, 115, 1, 64, 1, 4, 115, 101, 108, 102, 14, 0, 17, 4, 0, 24, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 97, 114, 103, 115, 1, 18, 1, 111, 2, 115, 115, 1, 112, 19, 1, 64, 1, 4, 115, 101, 108, 102, 14, 0, 20, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 99, 111, 117, 110, 116, 101, 114, 46, 103, 101, 116, 45, 101, 110, 118, 1, 21, 4, 1, 31, 114, 112, 99, 58, 99, 111, 117, 110, 116, 101, 114, 115, 45, 115, 116, 117, 98, 47, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 5, 2, 4, 1, 40, 114, 112, 99, 58, 99, 111, 117, 110, 116, 101, 114, 115, 45, 115, 116, 117, 98, 47, 119, 97, 115, 109, 45, 114, 112, 99, 45, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 4, 0, 11, 28, 1, 0, 22, 119, 97, 115, 109, 45, 114, 112, 99, 45, 115, 116, 117, 98, 45, 99, 111, 117, 110, 116, 101, 114, 115, 3, 2, 0, 0, 16, 12, 112, 97, 99, 107, 97, 103, 101, 45, 100, 111, 99, 115, 0, 123, 125, 0, 70, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 2, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 6, 48, 46, 49, 56, 46, 50, 16, 119, 105, 116, 45, 98, 105, 110, 100, 103, 101, 110, 45, 114, 117, 115, 116, 6, 48, 46, 49, 54, 46, 48];
-                    
-                    #[inline(never)]
-                    #[doc(hidden)]
-                    #[cfg(target_arch = "wasm32")]
-                    pub fn __link_section() {}
-                    
+                              #[inline(never)]
+                              #[doc(hidden)]
+                              #[cfg(target_arch = "wasm32")]
+                              pub fn __link_section() {}
+                              

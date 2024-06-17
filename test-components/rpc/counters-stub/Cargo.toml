@@ -16,8 +16,11 @@ path = "wit/deps/wasm-rpc"
 [package.metadata.component.target.dependencies."rpc:counters"]
 path = "wit/deps/rpc_counters"
 
+[package.metadata.component.target.dependencies."wasi:io"]
+path = "wit/deps/io"
+
 [dependencies.golem-wasm-rpc]
-version = "0.0.25"
+path = "/Users/vigoo/projects/ziverge/wasm-rpc/wasm-rpc"
 features = ["stub"]
 default-features = false
 

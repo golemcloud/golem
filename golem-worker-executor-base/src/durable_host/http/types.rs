@@ -616,7 +616,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 })
                 .unwrap();
 
-            if matches!(serialized_response, SerializableResponse::Pending) {
+            if !matches!(serialized_response, SerializableResponse::Pending) {
                 match self.state.open_function_table.get(&handle) {
                     Some(begin_index) => {
                         self.state

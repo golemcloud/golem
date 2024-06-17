@@ -10,6 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(target_file, preview2_mod_gen(&golem_wit_root)).unwrap();
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=Cargo.toml");
 
     Ok(())
 }

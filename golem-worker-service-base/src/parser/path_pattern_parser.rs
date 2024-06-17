@@ -47,8 +47,7 @@ fn path_parser(input: &str) -> IResult<&str, Vec<PathPattern>> {
 
     let indexed_patterns = patterns
         .into_iter()
-        .enumerate()
-        .map(|(_, pattern)| match pattern {
+        .map(|pattern| match pattern {
             ParsedPattern::Literal(literal) => PathPattern::literal(literal),
             ParsedPattern::Var(var) => PathPattern::var(var),
         })

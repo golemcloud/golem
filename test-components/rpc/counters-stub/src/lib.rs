@@ -6,6 +6,12 @@ pub struct Api {
     rpc: WasmRpc,
 }
 impl Api {}
+pub struct FutureGetGlobalValueResult {
+    pub future_invoke_result: FutureInvokeResult,
+}
+pub struct FutureGetAllDroppedResult {
+    pub future_invoke_result: FutureInvokeResult,
+}
 pub struct Counter {
     rpc: WasmRpc,
     id: u64,
@@ -18,6 +24,76 @@ impl Counter {
             id,
             uri,
         }
+    }
+}
+pub struct FutureGetValueResult {
+    pub future_invoke_result: FutureInvokeResult,
+}
+pub struct FutureGetArgsResult {
+    pub future_invoke_result: FutureInvokeResult,
+}
+pub struct FutureGetEnvResult {
+    pub future_invoke_result: FutureInvokeResult,
+}
+impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureGetGlobalValueResult
+for FutureGetGlobalValueResult {
+    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+        let pollable = self.future_invoke_result.subscribe();
+        let pollable = unsafe {
+            bindings::wasi::io::poll::Pollable::from_handle(pollable.into_handle())
+        };
+        pollable
+    }
+    fn get(&self) -> u64 {
+        let result = self
+            .future_invoke_result
+            .get()
+            .expect(
+                &format!(
+                    "Failed to invoke remote {}", "rpc:counters/api.{get-global-value}"
+                ),
+            );
+        (result.tuple_element(0).expect("tuple not found").u64().expect("u64 not found"))
+    }
+}
+impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureGetAllDroppedResult
+for FutureGetAllDroppedResult {
+    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+        let pollable = self.future_invoke_result.subscribe();
+        let pollable = unsafe {
+            bindings::wasi::io::poll::Pollable::from_handle(pollable.into_handle())
+        };
+        pollable
+    }
+    fn get(&self) -> Vec<(String, u64)> {
+        let result = self
+            .future_invoke_result
+            .get()
+            .expect(
+                &format!(
+                    "Failed to invoke remote {}", "rpc:counters/api.{get-all-dropped}"
+                ),
+            );
+        (result
+            .tuple_element(0)
+            .expect("tuple not found")
+            .list_elements(|item| {
+                let tuple = item;
+                (
+                    tuple
+                        .tuple_element(0usize)
+                        .expect("tuple element not found")
+                        .string()
+                        .expect("string not found")
+                        .to_string(),
+                    tuple
+                        .tuple_element(1usize)
+                        .expect("tuple element not found")
+                        .u64()
+                        .expect("u64 not found"),
+                )
+            })
+            .expect("list not found"))
     }
 }
 impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestApi for Api {
@@ -58,7 +134,7 @@ impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestApi for A
             );
         ()
     }
-    fn get_global_value(&self) -> u64 {
+    fn blocking_get_global_value(&self) -> u64 {
         let result = self
             .rpc
             .invoke_and_await("rpc:counters/api.{get-global-value}", &[])
@@ -70,7 +146,15 @@ impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestApi for A
             );
         (result.tuple_element(0).expect("tuple not found").u64().expect("u64 not found"))
     }
-    fn get_all_dropped(&self) -> Vec<(String, u64)> {
+    fn get_global_value(&self) -> wit_bindgen::rt::Resource<FutureGetGlobalValueResult> {
+        let result = self
+            .rpc
+            .async_invoke_and_await("rpc:counters/api.{get-global-value}", &[]);
+        wit_bindgen::rt::Resource::new(FutureGetGlobalValueResult {
+            future_invoke_result: result,
+        })
+    }
+    fn blocking_get_all_dropped(&self) -> Vec<(String, u64)> {
         let result = self
             .rpc
             .invoke_and_await("rpc:counters/api.{get-all-dropped}", &[])
@@ -97,6 +181,101 @@ impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestApi for A
                         .expect("tuple element not found")
                         .u64()
                         .expect("u64 not found"),
+                )
+            })
+            .expect("list not found"))
+    }
+    fn get_all_dropped(&self) -> wit_bindgen::rt::Resource<FutureGetAllDroppedResult> {
+        let result = self
+            .rpc
+            .async_invoke_and_await("rpc:counters/api.{get-all-dropped}", &[]);
+        wit_bindgen::rt::Resource::new(FutureGetAllDroppedResult {
+            future_invoke_result: result,
+        })
+    }
+}
+impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureGetValueResult
+for FutureGetValueResult {
+    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+        let pollable = self.future_invoke_result.subscribe();
+        let pollable = unsafe {
+            bindings::wasi::io::poll::Pollable::from_handle(pollable.into_handle())
+        };
+        pollable
+    }
+    fn get(&self) -> u64 {
+        let result = self
+            .future_invoke_result
+            .get()
+            .expect(
+                &format!(
+                    "Failed to invoke remote {}", "rpc:counters/api.{counter.get-value}"
+                ),
+            );
+        (result.tuple_element(0).expect("tuple not found").u64().expect("u64 not found"))
+    }
+}
+impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureGetArgsResult
+for FutureGetArgsResult {
+    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+        let pollable = self.future_invoke_result.subscribe();
+        let pollable = unsafe {
+            bindings::wasi::io::poll::Pollable::from_handle(pollable.into_handle())
+        };
+        pollable
+    }
+    fn get(&self) -> Vec<String> {
+        let result = self
+            .future_invoke_result
+            .get()
+            .expect(
+                &format!(
+                    "Failed to invoke remote {}", "rpc:counters/api.{counter.get-args}"
+                ),
+            );
+        (result
+            .tuple_element(0)
+            .expect("tuple not found")
+            .list_elements(|item| item.string().expect("string not found").to_string())
+            .expect("list not found"))
+    }
+}
+impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureGetEnvResult
+for FutureGetEnvResult {
+    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+        let pollable = self.future_invoke_result.subscribe();
+        let pollable = unsafe {
+            bindings::wasi::io::poll::Pollable::from_handle(pollable.into_handle())
+        };
+        pollable
+    }
+    fn get(&self) -> Vec<(String, String)> {
+        let result = self
+            .future_invoke_result
+            .get()
+            .expect(
+                &format!(
+                    "Failed to invoke remote {}", "rpc:counters/api.{counter.get-env}"
+                ),
+            );
+        (result
+            .tuple_element(0)
+            .expect("tuple not found")
+            .list_elements(|item| {
+                let tuple = item;
+                (
+                    tuple
+                        .tuple_element(0usize)
+                        .expect("tuple element not found")
+                        .string()
+                        .expect("string not found")
+                        .to_string(),
+                    tuple
+                        .tuple_element(1usize)
+                        .expect("tuple element not found")
+                        .string()
+                        .expect("string not found")
+                        .to_string(),
                 )
             })
             .expect("list not found"))
@@ -164,7 +343,7 @@ for Counter {
             );
         ()
     }
-    fn get_value(&self) -> u64 {
+    fn blocking_get_value(&self) -> u64 {
         let result = self
             .rpc
             .invoke_and_await(
@@ -179,7 +358,18 @@ for Counter {
             );
         (result.tuple_element(0).expect("tuple not found").u64().expect("u64 not found"))
     }
-    fn get_args(&self) -> Vec<String> {
+    fn get_value(&self) -> wit_bindgen::rt::Resource<FutureGetValueResult> {
+        let result = self
+            .rpc
+            .async_invoke_and_await(
+                "rpc:counters/api.{counter.get-value}",
+                &[WitValue::builder().handle(self.uri.clone(), self.id)],
+            );
+        wit_bindgen::rt::Resource::new(FutureGetValueResult {
+            future_invoke_result: result,
+        })
+    }
+    fn blocking_get_args(&self) -> Vec<String> {
         let result = self
             .rpc
             .invoke_and_await(
@@ -198,7 +388,18 @@ for Counter {
             .list_elements(|item| item.string().expect("string not found").to_string())
             .expect("list not found"))
     }
-    fn get_env(&self) -> Vec<(String, String)> {
+    fn get_args(&self) -> wit_bindgen::rt::Resource<FutureGetArgsResult> {
+        let result = self
+            .rpc
+            .async_invoke_and_await(
+                "rpc:counters/api.{counter.get-args}",
+                &[WitValue::builder().handle(self.uri.clone(), self.id)],
+            );
+        wit_bindgen::rt::Resource::new(FutureGetArgsResult {
+            future_invoke_result: result,
+        })
+    }
+    fn blocking_get_env(&self) -> Vec<(String, String)> {
         let result = self
             .rpc
             .invoke_and_await(
@@ -232,6 +433,17 @@ for Counter {
                 )
             })
             .expect("list not found"))
+    }
+    fn get_env(&self) -> wit_bindgen::rt::Resource<FutureGetEnvResult> {
+        let result = self
+            .rpc
+            .async_invoke_and_await(
+                "rpc:counters/api.{counter.get-env}",
+                &[WitValue::builder().handle(self.uri.clone(), self.id)],
+            );
+        wit_bindgen::rt::Resource::new(FutureGetEnvResult {
+            future_invoke_result: result,
+        })
     }
 }
 impl Drop for Counter {

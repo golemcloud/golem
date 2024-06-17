@@ -1,6 +1,8 @@
 package golem:rpc@0.1.0;
 
 interface types {
+  use wasi:io/poll@0.2.0.{pollable};
+
   type node-index = s32;
 
   record wit-value {
@@ -48,6 +50,13 @@ interface types {
 
     invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> result<wit-value, rpc-error>;
     invoke: func(function-name: string, function-params: list<wit-value>) -> result<_, rpc-error>;
+
+    async-invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> future-invoke-result;
+  }
+
+  resource future-invoke-result {
+    subscribe: func() -> pollable;
+    get: func() -> option<result<wit-value, rpc-error>>;
   }
 }
 
