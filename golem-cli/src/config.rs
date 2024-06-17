@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::auth::CloudAuthenticationConfig;
+use crate::cloud::CloudAuthenticationConfig;
+use crate::init::CliKind;
 use crate::model::text::TextFormat;
 use crate::model::{Format, GolemError};
 use derive_more::FromStr;
@@ -32,6 +33,8 @@ pub struct Config {
     pub profiles: HashMap<ProfileName, Profile>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub active_profile: Option<ProfileName>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub active_cloud_profile: Option<ProfileName>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, FromStr)]
@@ -43,9 +46,12 @@ impl Display for ProfileName {
     }
 }
 
-impl Default for ProfileName {
-    fn default() -> Self {
-        ProfileName("default".to_string())
+impl ProfileName {
+    pub fn default(cli_kind: CliKind) -> ProfileName {
+        match cli_kind {
+            CliKind::Universal => ProfileName("default".to_string()),
+            CliKind::Cloud => ProfileName("cloud_default".to_string()),
+        }
     }
 }
 
@@ -169,32 +175,52 @@ impl Config {
 
     pub fn set_active_profile_name(
         profile_name: ProfileName,
+        cli_kind: CliKind,
         config_dir: &Path,
     ) -> Result<(), GolemError> {
         let mut config = Self::read_from_file(config_dir);
 
-        if !config.profiles.contains_key(&profile_name) {
+        if let Some(profile) = config.profiles.get(&profile_name) {
+            match profile {
+                Profile::Golem(_) => {
+                    if cli_kind == CliKind::Cloud {
+                        return Err(GolemError(format!("Profile {profile_name} is not a Cloud profile. Use `golem-cli` instead of `golem-cloud-cli` for this profile.")));
+                    }
+                }
+                Profile::GolemCloud(_) => {}
+            }
+        } else {
             return Err(GolemError(format!(
                 "No profile {profile_name} in configuration. Available profiles: [{}]",
                 config.profiles.keys().map(|n| &n.0).join(", ")
             )));
         }
 
-        config.active_profile = Some(profile_name);
+        match cli_kind {
+            CliKind::Universal => config.active_profile = Some(profile_name),
+            CliKind::Cloud => config.active_cloud_profile = Some(profile_name),
+        }
 
         config.store_file(config_dir)?;
 
         Ok(())
     }
 
-    pub fn get_active_profile(config_dir: &Path) -> Option<NamedProfile> {
+    pub fn get_active_profile(cli_kind: CliKind, config_dir: &Path) -> Option<NamedProfile> {
         let mut config = Self::read_from_file(config_dir);
 
+        let name = match cli_kind {
+            CliKind::Universal => config
+                .active_profile
+                .unwrap_or_else(|| ProfileName::default(cli_kind)),
+            CliKind::Cloud => config
+                .active_cloud_profile
+                .unwrap_or_else(|| ProfileName::default(cli_kind)),
+        };
+
         Some(NamedProfile {
-            name: config.active_profile.clone().unwrap_or_default(),
-            profile: config
-                .profiles
-                .remove(&config.active_profile.unwrap_or_default())?,
+            name: name.clone(),
+            profile: config.profiles.remove(&name)?,
         })
     }
 
@@ -219,8 +245,22 @@ impl Config {
     pub fn delete_profile(name: &ProfileName, config_dir: &Path) -> Result<(), GolemError> {
         let mut config = Self::read_from_file(config_dir);
 
-        if &config.active_profile.clone().unwrap_or_default() == name {
+        if &config
+            .active_profile
+            .clone()
+            .unwrap_or_else(|| ProfileName::default(CliKind::Universal))
+            == name
+        {
             return Err(GolemError("Can't remove active profile".to_string()));
+        }
+
+        if &config
+            .active_cloud_profile
+            .clone()
+            .unwrap_or_else(|| ProfileName::default(CliKind::Cloud))
+            == name
+        {
+            return Err(GolemError("Can't remove active cloud profile".to_string()));
         }
 
         let _ = config
