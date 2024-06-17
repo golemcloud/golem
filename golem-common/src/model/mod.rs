@@ -27,8 +27,8 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
-use poem::http::Uri;
 use golem_api_grpc::proto::golem::worker::Cursor;
+use poem::http::Uri;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use poem_openapi::{Enum, Object, Union};
@@ -522,7 +522,6 @@ impl From<golem_api_grpc::proto::golem::shardmanager::ShardId> for ShardId {
     }
 }
 
-
 #[derive(Clone)]
 pub struct NumberOfShards {
     pub value: usize,
@@ -612,7 +611,6 @@ impl From<GrpcRoutingTableEntry> for RoutingTableEntry {
         }
     }
 }
-
 
 #[derive(Clone, Debug, Default)]
 pub struct ShardAssignment {

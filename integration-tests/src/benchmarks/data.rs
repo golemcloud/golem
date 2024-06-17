@@ -1,6 +1,6 @@
-use std::time::SystemTime;
 use golem_wasm_rpc::Value;
 use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
 
 use rand::distributions::{Alphanumeric, DistString};
 use rand::thread_rng;

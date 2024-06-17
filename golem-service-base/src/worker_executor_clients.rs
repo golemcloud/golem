@@ -15,9 +15,9 @@
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::Pod;
 use std::time::Duration;
 use tonic::transport::Channel;
-use golem_common::model::Pod;
 
 #[async_trait]
 pub trait WorkerExecutorClients {

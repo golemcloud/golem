@@ -16,9 +16,9 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client;
 use golem_common::cache::*;
+use golem_common::model::RoutingTable;
 use serde::Deserialize;
 use url::Url;
-use golem_common::model::RoutingTable;
 
 #[derive(Debug, Clone)]
 pub enum RoutingTableError {

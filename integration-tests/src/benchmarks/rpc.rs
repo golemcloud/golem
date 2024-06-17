@@ -11,18 +11,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::time::SystemTime;
 use async_trait::async_trait;
-use golem_wasm_rpc::Value;
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::GetRoutingTableRequest;
 use golem_common::model::WorkerId;
+use golem_wasm_rpc::Value;
+use std::time::SystemTime;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
-use integration_tests::benchmarks::{cleanup_iteration, get_worker_ids, run_benchmark, setup_benchmark, start, BenchmarkContext, IterationContext, setup_with};
 use integration_tests::benchmarks::data::Data;
+use integration_tests::benchmarks::{
+    cleanup_iteration, get_worker_ids, run_benchmark, setup_benchmark, setup_with, start,
+    BenchmarkContext, IterationContext,
+};
 
 struct Rpc {
     config: RunConfig,
@@ -57,7 +60,6 @@ impl Benchmark for Rpc {
         &self,
         benchmark_context: &Self::BenchmarkContext,
     ) -> Self::IterationContext {
-
         let worker_ids = setup_with(
             1, //self.config.size,
             "rust_rpc_service",
@@ -65,7 +67,7 @@ impl Benchmark for Rpc {
             true,
             benchmark_context.deps.clone(),
         )
-            .await;
+        .await;
 
         IterationContext { worker_ids }
     }
@@ -82,7 +84,7 @@ impl Benchmark for Rpc {
                     get_worker_ids(context.worker_ids.len(), component_id, "warmup-worker"),
                     benchmark_context.deps.clone(),
                 )
-                    .await
+                .await
             }
         }
     }
@@ -108,23 +110,23 @@ impl Benchmark for Rpc {
 
         let mut shard_manager_client = shard_manager.client().await;
 
-        let routing_table =
-            shard_manager_client.get_routing_table(GetRoutingTableRequest{}).await.expect("Unable to fetch the routing table");
+        let routing_table = shard_manager_client
+            .get_routing_table(GetRoutingTableRequest {})
+            .await
+            .expect("Unable to fetch the routing table");
 
-        let shard_manager_routing_table =
-            match routing_table.into_inner() {
-                shardmanager::GetRoutingTableResponse {
-                    result:
+        let shard_manager_routing_table = match routing_table.into_inner() {
+            shardmanager::GetRoutingTableResponse {
+                result:
                     Some(shardmanager::get_routing_table_response::Result::Success(routing_table)),
-                } => routing_table,
-                _ => panic!("Failed to fetch the routing table")
+            } => routing_table,
+            _ => panic!("Failed to fetch the routing table"),
         };
 
         let mut fibers = Vec::new();
 
         // For parent worker-id, we will have a child worker once the parent's function is invoked
         for worker_id in context.worker_ids.iter() {
-
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
