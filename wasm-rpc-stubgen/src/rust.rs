@@ -74,7 +74,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
 
         for function in &interface.functions {
             if !function.results.is_empty() {
-                let result_wrapper = result_wrapper_ident(function);
+                let result_wrapper = result_wrapper_ident(function, interface);
                 struct_defs.push(quote! {
                     pub struct #result_wrapper {
                         pub future_invoke_result: FutureInvokeResult
@@ -84,7 +84,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         }
         for function in &interface.static_functions {
             if !function.results.is_empty() {
-                let result_wrapper = result_wrapper_ident(function);
+                let result_wrapper = result_wrapper_ident(function, interface);
                 struct_defs.push(quote! {
                     pub struct #result_wrapper {
                         pub future_invoke_result: FutureInvokeResult
@@ -115,16 +115,12 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                 FunctionMode::Global
             };
             fn_impls.push(generate_function_stub_source(
-                def,
-                function,
-                interface.interface_name(),
-                interface.resource_name(),
-                mode,
+                def, function, interface, mode,
             )?);
 
             if !function.results.is_empty() {
-                let result_wrapper = result_wrapper_ident(function);
-                let result_wrapper_interface = result_wrapper_interface_ident(function);
+                let result_wrapper = result_wrapper_ident(function, interface);
+                let result_wrapper_interface = result_wrapper_interface_ident(function, interface);
 
                 let subscribe = quote! {
                     fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
@@ -154,14 +150,13 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             fn_impls.push(generate_function_stub_source(
                 def,
                 function,
-                interface.interface_name(),
-                interface.resource_name(),
+                interface,
                 FunctionMode::Static,
             )?);
 
             if !function.results.is_empty() {
-                let result_wrapper = result_wrapper_ident(function);
-                let result_wrapper_interface = result_wrapper_interface_ident(function);
+                let result_wrapper = result_wrapper_ident(function, interface);
+                let result_wrapper_interface = result_wrapper_interface_ident(function, interface);
 
                 let subscribe = quote! {
                     fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
@@ -201,8 +196,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             generate_function_stub_source(
                 def,
                 &constructor_stub,
-                interface.interface_name(),
-                interface.resource_name(),
+                interface,
                 FunctionMode::Constructor,
             )?
         } else {
@@ -279,16 +273,17 @@ enum FunctionMode {
     Constructor,
 }
 
-fn result_wrapper_ident(function: &FunctionStub) -> Ident {
+fn result_wrapper_ident(function: &FunctionStub, owner: &InterfaceStub) -> Ident {
     Ident::new(
-        &to_rust_ident(&format!("future-{}-result", function.name)).to_upper_camel_case(),
+        &to_rust_ident(&function.async_result_type(owner)).to_upper_camel_case(),
         Span::call_site(),
     )
 }
 
-fn result_wrapper_interface_ident(function: &FunctionStub) -> Ident {
+fn result_wrapper_interface_ident(function: &FunctionStub, owner: &InterfaceStub) -> Ident {
     Ident::new(
-        &to_rust_ident(&format!("guest-future-{}-result", function.name)).to_upper_camel_case(),
+        &to_rust_ident(&format!("guest-{}", function.async_result_type(owner)))
+            .to_upper_camel_case(),
         Span::call_site(),
     )
 }
@@ -320,8 +315,7 @@ fn generate_result_wrapper_get_source(
 fn generate_function_stub_source(
     def: &StubDefinition,
     function: &FunctionStub,
-    interface_name: Option<String>,
-    resource_name: Option<String>,
+    owner: &InterfaceStub,
     mode: FunctionMode,
 ) -> anyhow::Result<TokenStream> {
     let function_name = Ident::new(&to_rust_ident(&function.name), Span::call_site());
@@ -365,8 +359,8 @@ fn generate_function_stub_source(
     let remote_function_name = get_remote_function_name(
         def,
         &function.name,
-        interface_name.as_ref(),
-        resource_name.as_ref(),
+        owner.interface_name().as_ref(),
+        owner.resource_name().as_ref(),
     );
 
     let rpc = match mode {
@@ -432,7 +426,7 @@ fn generate_function_stub_source(
                 }
             }
         } else {
-            let result_wrapper = result_wrapper_ident(function);
+            let result_wrapper = result_wrapper_ident(function, owner);
             quote! {
                 fn #function_name(#(#params),*) -> wit_bindgen::rt::Resource<#result_wrapper> {
                     #init

@@ -389,7 +389,11 @@ pub fn encode_output(
             Ok(Value::Tuple(encoded_values))
         }
         Val::Variant(variant) => {
-            let wasm_variant = unsafe { std::mem::transmute(variant.clone()) };
+            let wasm_variant = unsafe {
+                std::mem::transmute::<wasmtime::component::Variant, crate::wasmtime::WasmVariant>(
+                    variant.clone(),
+                )
+            };
             let WasmVariant {
                 ty: _,
                 discriminant,
@@ -404,7 +408,11 @@ pub fn encode_output(
             })
         }
         Val::Enum(enum0) => {
-            let wasm_enum = unsafe { std::mem::transmute(enum0.clone()) };
+            let wasm_enum = unsafe {
+                std::mem::transmute::<wasmtime::component::Enum, crate::wasmtime::WasmEnum>(
+                    enum0.clone(),
+                )
+            };
             let WasmEnum {
                 ty: _,
                 discriminant,
@@ -433,7 +441,11 @@ pub fn encode_output(
             }
         },
         Val::Flags(flags) => {
-            let wasm_flags = unsafe { std::mem::transmute(flags.clone()) };
+            let wasm_flags = unsafe {
+                std::mem::transmute::<wasmtime::component::Flags, crate::wasmtime::WasmFlags>(
+                    flags.clone(),
+                )
+            };
             let WasmFlags {
                 ty: _,
                 count,

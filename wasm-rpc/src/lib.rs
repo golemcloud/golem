@@ -48,7 +48,6 @@ mod type_annotated_value;
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
 
-use std::any::Any;
 use crate::builder::WitValueBuilder;
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 pub use extractor::{WitNodePointer, WitValueExtractor};
@@ -95,8 +94,8 @@ pub struct WasmRpcEntry {
 #[async_trait::async_trait]
 pub trait SubscribeAny: std::any::Any {
     async fn ready(&mut self);
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 #[cfg(feature = "host")]
