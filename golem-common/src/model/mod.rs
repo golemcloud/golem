@@ -562,7 +562,7 @@ pub struct RoutingTable {
 impl RoutingTable {
     pub fn lookup(&self, worker_id: &WorkerId) -> Option<&Pod> {
         self.shard_assignments.get(&ShardId::from_worker_id(
-            &worker_id.clone().into(),
+            &worker_id.clone(),
             self.number_of_shards.value,
         ))
     }
