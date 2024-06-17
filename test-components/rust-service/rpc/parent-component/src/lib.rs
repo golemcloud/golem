@@ -10,11 +10,13 @@ struct Component;
 
 impl Guest for Component {
     fn echo(input: String) -> String {
-        println!("Invoked parent echo");
-        let component_id =
+        let remote_component_id =
             env::var("CHILD_COMPONENT_ID").expect("PARENT_COMPONENT_ID not set");
 
-        let uri = Uri { value: format!("worker://{component_id}/{}", "new-worker") };
+        let remote_worker_name =
+            env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
+
+        let uri = Uri { value: format!("worker://{remote_component_id}/{remote_worker_name}") };
 
         let api = Api::new(&uri);
 
@@ -22,11 +24,13 @@ impl Guest for Component {
     }
 
     fn calculate(input: u64) -> u64 {
-        println!("Invoked parent calculate");
-        let component_id =
+        let remote_component_id =
             env::var("CHILD_COMPONENT_ID").expect("PARENT_COMPONENT_ID not set");
 
-        let uri = Uri { value: format!("worker://{component_id}/{}", "new-worker") };
+        let remote_worker_name =
+            env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
+
+        let uri = Uri { value: format!("worker://{remote_component_id}/{remote_worker_name}") };
 
         let api = Api::new(&uri);
 
@@ -34,12 +38,13 @@ impl Guest for Component {
     }
 
     fn process(input: Vec<Data>) -> Vec<Data> {
-        println!("Invoked parent process");
+        let remote_component_id =
+            env::var("CHILD_COMPONENT_ID").expect("PARENT_COMPONENT_ID not set");
 
-        let component_id =
-            env::var("CHILD_COMPONENT_ID").expect("ROOT_COMPONENT_ID not set");
+        let remote_worker_name =
+            env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
 
-        let uri = Uri { value: format!("worker://{component_id}/{}", "new-worker") };
+        let uri = Uri { value: format!("worker://{remote_component_id}/{remote_worker_name}") };
 
         let api = Api::new(&uri);
 
