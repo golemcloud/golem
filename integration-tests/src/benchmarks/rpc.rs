@@ -144,9 +144,10 @@ impl Benchmark for Rpc {
                         .await
                         .expect("invoke_and_await failed");
 
-                    dbg!(shard_manager_routing_table.number_of_shards);
-
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
+
+                    dbg!(shard_manager_routing_table.lookup(&worker_id_clone));
+                    
                     recorder_clone.duration(&"worker-echo-invocation".to_string(), elapsed);
                 }
             });
