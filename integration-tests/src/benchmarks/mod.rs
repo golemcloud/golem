@@ -24,6 +24,8 @@ use golem_test_framework::dsl::benchmark::{
 };
 use golem_test_framework::dsl::TestDsl;
 
+pub mod data;
+
 #[derive(Clone)]
 pub struct BenchmarkContext {
     pub deps: CliTestDependencies,
