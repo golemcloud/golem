@@ -46,7 +46,7 @@ struct RpcBenchmarkIteratorContext {
 #[async_trait]
 impl Benchmark for Rpc {
     type BenchmarkContext = BenchmarkContext;
-    type IterationContext = IterationContext;
+    type IterationContext = RpcBenchmarkIteratorContext;
 
     fn name() -> &'static str {
         "rpc-benchmark"
@@ -82,7 +82,7 @@ impl Benchmark for Rpc {
 
         let child_worker_id = WorkerId {
             component_id: child_component_id.clone(),
-            worker_name: "child_worker".to_string(),
+            worker_name: "new-worker".to_string(),
         };
 
         let mut env = HashMap::new();
@@ -93,7 +93,10 @@ impl Benchmark for Rpc {
             .start_worker_with(&parent_worker_id.component_id, &parent_worker_id.worker_name, vec![], env)
             .await;
 
-        IterationContext { worker_ids: vec![parent_worker_id] }
+        RpcBenchmarkIteratorContext { worker_ids: vec![ParentChildWorkerId {
+            parent: parent_worker_id,
+            child: child_worker_id
+        }]}
     }
 
     async fn warmup(
@@ -152,7 +155,7 @@ impl Benchmark for Rpc {
         // For parent worker-id, we will have a child worker once the parent's function is invoked
         for worker_id in context.worker_ids.iter() {
             let context_clone = benchmark_context.clone();
-            let worker_id_clone = worker_id.clone();
+            let worker_id_clone = worker_id.parent.clone();
             let recorder_clone = recorder.clone();
             let rt_clone = shard_manager_routing_table.clone();
             let length = self.config.length;
@@ -186,7 +189,7 @@ impl Benchmark for Rpc {
         let mut fibers = Vec::new();
         for worker_id in context.worker_ids.iter() {
             let context_clone = benchmark_context.clone();
-            let worker_id_clone = worker_id.clone();
+            let worker_id_clone = worker_id.parent.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
             let fiber = tokio::task::spawn(async move {
@@ -216,7 +219,7 @@ impl Benchmark for Rpc {
         let mut fibers = Vec::new();
         for worker_id in context.worker_ids.iter() {
             let context_clone = benchmark_context.clone();
-            let worker_id_clone = worker_id.clone();
+            let worker_id_clone = worker_id.parent.clone();
             let recorder_clone = recorder.clone();
             let values_clone = values.clone();
             let length = self.config.length;
