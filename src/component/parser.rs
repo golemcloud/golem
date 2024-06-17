@@ -180,8 +180,8 @@ impl TryFrom<wasmparser::PrimitiveValType> for PrimitiveValueType {
             wasmparser::PrimitiveValType::U32 => Ok(PrimitiveValueType::U32),
             wasmparser::PrimitiveValType::S64 => Ok(PrimitiveValueType::S64),
             wasmparser::PrimitiveValType::U64 => Ok(PrimitiveValueType::U64),
-            wasmparser::PrimitiveValType::Float32 => Ok(PrimitiveValueType::F32),
-            wasmparser::PrimitiveValType::Float64 => Ok(PrimitiveValueType::F64),
+            wasmparser::PrimitiveValType::F32 => Ok(PrimitiveValueType::F32),
+            wasmparser::PrimitiveValType::F64 => Ok(PrimitiveValueType::F64),
             wasmparser::PrimitiveValType::Char => Ok(PrimitiveValueType::Chr),
             wasmparser::PrimitiveValType::String => Ok(PrimitiveValueType::Str),
         }
@@ -752,9 +752,13 @@ where
                     sections.push(ComponentSection::CoreType(core_type.try_into()?))
                 }
             }
-            Payload::ModuleSection { parser, range } => {
-                let module: Module<Ast> = (parser, &remaining[..range.len()]).try_into()?;
-                remaining = &remaining[(range.end - range.start)..];
+            Payload::ModuleSection {
+                parser,
+                unchecked_range,
+            } => {
+                let module: Module<Ast> =
+                    (parser, &remaining[..unchecked_range.len()]).try_into()?;
+                remaining = &remaining[(unchecked_range.end - unchecked_range.start)..];
                 sections.push(ComponentSection::Module(module))
             }
             Payload::ComponentSection { parser, .. } => {

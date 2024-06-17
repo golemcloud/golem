@@ -425,8 +425,8 @@ impl From<&PrimitiveValueType> for wasm_encoder::PrimitiveValType {
             PrimitiveValueType::U32 => wasm_encoder::PrimitiveValType::U32,
             PrimitiveValueType::S64 => wasm_encoder::PrimitiveValType::S64,
             PrimitiveValueType::U64 => wasm_encoder::PrimitiveValType::U64,
-            PrimitiveValueType::F32 => wasm_encoder::PrimitiveValType::Float32,
-            PrimitiveValueType::F64 => wasm_encoder::PrimitiveValType::Float64,
+            PrimitiveValueType::F32 => wasm_encoder::PrimitiveValType::F32,
+            PrimitiveValueType::F64 => wasm_encoder::PrimitiveValType::F64,
             PrimitiveValueType::Chr => wasm_encoder::PrimitiveValType::Char,
             PrimitiveValueType::Str => wasm_encoder::PrimitiveValType::String,
         }

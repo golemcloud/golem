@@ -92,8 +92,8 @@ impl TryFrom<wasmparser::MemoryType> for MemType {
         } else {
             Ok(MemType {
                 limits: Limits {
-                    min: value.initial as u32,
-                    max: value.maximum.map(|m| m as u32),
+                    min: value.initial,
+                    max: value.maximum,
                 },
             })
         }
@@ -218,6 +218,9 @@ impl TryFrom<wasmparser::HeapType> for RefType {
             wasmparser::HeapType::Array => Err("GC proposal is not supported".to_string()),
             wasmparser::HeapType::I31 => Err("GC proposal is not supported".to_string()),
             wasmparser::HeapType::Exn => {
+                Err("Exception handling proposal is not supported".to_string())
+            }
+            wasmparser::HeapType::NoExn => {
                 Err("Exception handling proposal is not supported".to_string())
             }
         }
@@ -1680,6 +1683,12 @@ impl<'a> TryFrom<OperatorsReader<'a>> for Expr {
                 }
                 Operator::ExternConvertAny => {
                     return Err("GC Proposal is not supported".to_string());
+                }
+                Operator::GlobalAtomicGet { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
+                }
+                Operator::GlobalAtomicSet { .. } => {
+                    return Err("Shared Everything Threads proposal is not supported".to_string());
                 }
             };
 

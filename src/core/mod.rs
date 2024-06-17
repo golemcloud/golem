@@ -371,8 +371,8 @@ impl Section<CoreIndexSpace, CoreSectionType> for FuncType {
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Limits {
-    min: u32,
-    max: Option<u32>,
+    min: u64,
+    max: Option<u64>,
 }
 
 /// Memory types classify linear memories and their size range.
