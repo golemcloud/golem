@@ -428,8 +428,8 @@ fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStre
         Type::S16 => Ok(quote! { i16 }),
         Type::S32 => Ok(quote! { i32 }),
         Type::S64 => Ok(quote! { i64 }),
-        Type::Float32 => Ok(quote! { f32 }),
-        Type::Float64 => Ok(quote! { f64 }),
+        Type::F32 => Ok(quote! { f32 }),
+        Type::F64 => Ok(quote! { f64 }),
         Type::Char => Ok(quote! { char }),
         Type::String => Ok(quote! { String }),
         Type::Id(type_id) => {
@@ -673,7 +673,7 @@ fn wit_value_builder(
                 })
             }
         }
-        Type::Float32 => {
+        Type::F32 => {
             if is_reference {
                 Ok(quote! {
                     #builder_expr.f32(*#name)
@@ -684,7 +684,7 @@ fn wit_value_builder(
                 })
             }
         }
-        Type::Float64 => {
+        Type::F64 => {
             if is_reference {
                 Ok(quote! {
                     #builder_expr.f64(*#name)
@@ -1044,10 +1044,10 @@ fn extract_from_wit_value(
         Type::S64 => Ok(quote! {
             #base_expr.s64().expect("i64 not found")
         }),
-        Type::Float32 => Ok(quote! {
+        Type::F32 => Ok(quote! {
             #base_expr.f32().expect("f32 not found")
         }),
-        Type::Float64 => Ok(quote! {
+        Type::F64 => Ok(quote! {
             #base_expr.f64().expect("f64 not found")
         }),
         Type::Char => Ok(quote! {

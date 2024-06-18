@@ -40,7 +40,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo binstall --no-confirm cargo-component@0.7.0
+        run: cargo binstall --no-confirm cargo-component@0.13.2
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy

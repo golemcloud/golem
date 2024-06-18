@@ -545,8 +545,8 @@ impl TypeExtensions for Type {
             Type::S16 => Ok("s16".to_string()),
             Type::S32 => Ok("s32".to_string()),
             Type::S64 => Ok("s64".to_string()),
-            Type::Float32 => Ok("f32".to_string()),
-            Type::Float64 => Ok("f64".to_string()),
+            Type::F32 => Ok("f32".to_string()),
+            Type::F64 => Ok("f64".to_string()),
             Type::Char => Ok("char".to_string()),
             Type::String => Ok("string".to_string()),
             Type::Id(type_id) => {
