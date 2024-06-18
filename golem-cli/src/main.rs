@@ -39,10 +39,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match p.profile {
             Profile::Golem(p) => {
-                let command = GolemOssCommand::parse();
+                let command = GolemOssCommand::<OssProfileAdd>::parse();
 
                 init_tracing(&command.verbosity);
-                info!("Golem Cloud CLI with profile: {}", name);
+                info!("Golem CLI with profile: {}", name);
 
                 tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
