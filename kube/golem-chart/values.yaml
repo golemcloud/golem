@@ -61,6 +61,17 @@ workerService:
       fromSecret:
         name: "" #golem-redis
         key: password
+  postgres:
+    port: 5432
+    host: golem-postgres-postgresql
+    database: golem_db
+    username: golem_user
+    schema: golem_worker
+    password:
+      plain: ""
+      fromSecret:
+        name: golem-postgres-postgresql
+        key: password
 #  nodeSelector:
 
 componentService:
@@ -77,7 +88,7 @@ componentService:
     host: golem-postgres-postgresql
     database: golem_db
     username: golem_user
-    schema: public
+    schema: golem_component
     password:
       plain: ""
       fromSecret:

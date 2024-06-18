@@ -1,22 +1,18 @@
 use std::collections::HashMap;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::de::DeserializeOwned;
 use tracing::{debug, info};
-use uuid::Uuid;
 
 use golem_common::config::RedisConfig;
 use golem_common::redis::{RedisError, RedisPool};
-use golem_service_base::model::ComponentMetadata;
 
-use crate::api_definition::http::HttpApiDefinition;
 use crate::api_definition::{ApiDefinitionId, HasIsDraft};
 use crate::repo::api_namespace::ApiNamespace;
 use crate::service::api_definition::ApiDefinitionKey;
-use crate::service::worker::ConnectProxyError::Json;
 
 #[async_trait]
 pub trait ApiDefinitionRepo<Namespace: ApiNamespace, ApiDefinition> {

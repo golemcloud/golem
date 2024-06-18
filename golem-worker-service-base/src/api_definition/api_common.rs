@@ -13,6 +13,12 @@ use poem_openapi::Object;
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct ApiDefinitionId(pub String);
 
+impl From<String> for ApiDefinitionId {
+    fn from(id: String) -> Self {
+        ApiDefinitionId(id)
+    }
+}
+
 impl Display for ApiDefinitionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -21,6 +27,12 @@ impl Display for ApiDefinitionId {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct ApiVersion(pub String);
+
+impl From<String> for ApiVersion {
+    fn from(id: String) -> Self {
+        ApiVersion(id)
+    }
+}
 
 impl Display for ApiVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

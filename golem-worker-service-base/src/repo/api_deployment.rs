@@ -1,4 +1,3 @@
-use crate::repo::api_deployment_repo::ApiDeploymentRepoError;
 use crate::repo::RepoError;
 use async_trait::async_trait;
 use sqlx::{Database, Pool};
@@ -16,7 +15,7 @@ pub struct ApiDeploymentRecord {
 
 #[async_trait]
 pub trait ApiDeploymentRepo {
-    async fn create(&self, deployment: &ApiDeploymentRecord) -> Result<(), ApiDeploymentRepoError>;
+    async fn create(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError>;
 
     async fn get(
         &self,
@@ -49,23 +48,107 @@ impl<DB: Database> DbApiDeploymentRepoRepo<DB> {
 
 #[async_trait]
 impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Sqlite> {
-    async fn create(&self, definition: &ApiDeploymentRecord) -> Result<(), RepoError> {
+    async fn create(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError> {
+        if !deployments.is_empty() {
+            let mut transaction = self.db_pool.begin().await?;
+
+            for deployment in deployments {
+                sqlx::query(
+                    r#"
+                      INSERT INTO api_deployments
+                        (namespace, host, subdomain, definition_id, definition_version)
+                      VALUES
+                        ($1, $2, $3, $4, $5)
+                       "#,
+                )
+                .bind(deployment.namespace.clone())
+                .bind(deployment.host.clone())
+                .bind(deployment.subdomain.clone())
+                .bind(deployment.definition_id.clone())
+                .bind(deployment.definition_version.clone())
+                .execute(&mut *transaction)
+                .await?;
+            }
+            transaction.commit().await?;
+        }
+        Ok(())
+    }
+
+    async fn get(
+        &self,
+        namespace: &str,
+        host: &str,
+        subdomain: &str,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDeploymentRecord>("SELECT namespace, host, subdomain, definition_id, definition_version FROM api_deployments WHERE namespace = $1 AND host = $2 AND subdomain = $3")
+            .bind(namespace)
+            .bind(host)
+            .bind(subdomain)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    async fn delete(
+        &self,
+        namespace: &str,
+        host: &str,
+        subdomain: &str,
+    ) -> Result<bool, RepoError> {
         sqlx::query(
-            r#"
-              INSERT INTO api_deployments
-                (namespace, host, subdomain, definition_id, definition_version)
-              VALUES
-                ($1, $2, $3, $4, $5)
-               "#,
+            "DELETE FROM api_deployments WHERE namespace = $1 AND host = $2 AND subdomain = $3",
         )
-        .bind(definition.namespace.clone())
-        .bind(definition.host.clone())
-        .bind(definition.subdomain.clone())
-        .bind(definition.definition_id.clone())
-        .bind(definition.definition_version.clone())
+        .bind(namespace)
+        .bind(host)
+        .bind(subdomain)
         .execute(self.db_pool.deref())
         .await?;
+        Ok(true)
+    }
 
+    async fn get_by_id(
+        &self,
+        namespace: &str,
+        host: &str,
+        subdomain: &str,
+        definition_id: &str,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDeploymentRecord>("SELECT namespace, host, subdomain, definition_id, definition_version FROM api_deployments WHERE namespace = $1 AND host = $2 AND subdomain = $3, definition_id = $4")
+            .bind(namespace)
+            .bind(host)
+            .bind(subdomain)
+            .bind(definition_id)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+}
+
+#[async_trait]
+impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Postgres> {
+    async fn create(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError> {
+        if !deployments.is_empty() {
+            let mut transaction = self.db_pool.begin().await?;
+
+            for deployment in deployments {
+                sqlx::query(
+                    r#"
+                      INSERT INTO api_deployments
+                        (namespace, host, subdomain, definition_id, definition_version)
+                      VALUES
+                        ($1, $2, $3, $4, $5)
+                       "#,
+                )
+                .bind(deployment.namespace.clone())
+                .bind(deployment.host.clone())
+                .bind(deployment.subdomain.clone())
+                .bind(deployment.definition_id.clone())
+                .bind(deployment.definition_version.clone())
+                .execute(&mut *transaction)
+                .await?;
+            }
+            transaction.commit().await?;
+        }
         Ok(())
     }
 

@@ -52,7 +52,7 @@ pub enum DbConfig {
 impl Default for DbConfig {
     fn default() -> Self {
         DbConfig::Sqlite(DbSqliteConfig {
-            database: "golem_component_service.db".to_string(),
+            database: "golem_service.db".to_string(),
             max_connections: 10,
         })
     }

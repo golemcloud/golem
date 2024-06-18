@@ -134,9 +134,9 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Sqlite> {
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
         )
-        .bind(namespace.clone())
-        .bind(id.clone())
-        .bind(version.clone())
+        .bind(namespace)
+        .bind(id)
+        .bind(version)
         .bind(false)
         .execute(self.db_pool.deref())
         .await?;
@@ -247,9 +247,9 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Postgres> {
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
         )
-        .bind(namespace.clone())
-        .bind(id.clone())
-        .bind(version.clone())
+        .bind(namespace)
+        .bind(id)
+        .bind(version)
         .bind(false)
         .execute(self.db_pool.deref())
         .await?;

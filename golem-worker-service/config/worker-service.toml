@@ -7,6 +7,13 @@ port = 9005
 custom_request_port = 9006
 worker_grpc_port = 9007
 
+[db]
+type = "Sqlite"
+
+[db.config]
+max_connections = 10
+database = "../data/golem_worker.sqlite"
+
 [redis]
 host = "localhost"
 port = 6380
