@@ -67,6 +67,7 @@ bindgen!({
     ",
     tracing: false,
     async: true,
+    trappable_imports: true,
     with: {
         "golem:rpc/types/wasm-rpc": WasmRpcEntry
     }
