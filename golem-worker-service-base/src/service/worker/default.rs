@@ -443,7 +443,11 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to find the function {}, Available functions: {}",
+                    &function_name,
+                    component_details.function_names().join(", ")
+                ))
             })?;
 
         let params_val = params
@@ -505,7 +509,11 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to find the function {}, Available functions: {}",
+                    &function_name,
+                    component_details.function_names().join(", ")
+                ))
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -584,7 +592,11 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to find the function {}, Available functions: {}",
+                    &function_name,
+                    component_details.function_names().join(", ")
+                ))
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -629,7 +641,11 @@ where
                 ))
             })?
             .ok_or_else(|| {
-                WorkerServiceError::TypeChecker("Failed to find the function".to_string())
+                WorkerServiceError::TypeChecker(format!(
+                    "Failed to find the function {}, Available functions: {}",
+                    &function_name,
+                    component_details.function_names().join(", ")
+                ))
             })?;
         let params_val = params
             .validate_function_parameters(
@@ -1004,7 +1020,12 @@ where
             .get_routing_table()
             .await
             .map_err(GetWorkerExecutorClientError::FailedToGetRoutingTable)?;
-        match routing_table.lookup(worker_id) {
+
+        // TODO; Delete the WorkerId in service-base in favour of WorkerId in golem-common
+        match routing_table.lookup(&golem_common::model::WorkerId {
+            component_id: worker_id.component_id.clone(),
+            worker_name: worker_id.worker_name.to_string(),
+        }) {
             None => Ok(None),
             Some(pod) => {
                 let worker_executor_client = self

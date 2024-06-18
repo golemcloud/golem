@@ -28,9 +28,11 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
 use golem_api_grpc::proto::golem::worker::Cursor;
+use poem::http::Uri;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use poem_openapi::{Enum, Object, Union};
+use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
@@ -43,6 +45,10 @@ use crate::newtype_uuid;
 pub mod function_name;
 pub mod oplog;
 pub mod regions;
+
+use golem_api_grpc::proto::golem::shardmanager::{
+    Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
+};
 
 newtype_uuid!(
     ComponentId,
@@ -513,6 +519,96 @@ impl From<ShardId> for golem_api_grpc::proto::golem::shardmanager::ShardId {
 impl From<golem_api_grpc::proto::golem::shardmanager::ShardId> for ShardId {
     fn from(proto: golem_api_grpc::proto::golem::shardmanager::ShardId) -> Self {
         Self { value: proto.value }
+    }
+}
+
+#[derive(Clone)]
+pub struct NumberOfShards {
+    pub value: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Pod {
+    host: String,
+    port: u16,
+}
+
+impl Pod {
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build URI")
+    }
+}
+
+impl From<GrpcPod> for Pod {
+    fn from(value: GrpcPod) -> Self {
+        Self {
+            host: value.host,
+            port: value.port as u16,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RoutingTable {
+    pub number_of_shards: NumberOfShards,
+    shard_assignments: HashMap<ShardId, Pod>,
+}
+
+impl RoutingTable {
+    pub fn lookup(&self, worker_id: &WorkerId) -> Option<&Pod> {
+        self.shard_assignments.get(&ShardId::from_worker_id(
+            &worker_id.clone(),
+            self.number_of_shards.value,
+        ))
+    }
+
+    pub fn random(&self) -> Option<&Pod> {
+        self.shard_assignments
+            .values()
+            .choose(&mut rand::thread_rng())
+    }
+
+    pub fn first(&self) -> Option<&Pod> {
+        self.shard_assignments.values().next()
+    }
+
+    pub fn all(&self) -> HashSet<&Pod> {
+        self.shard_assignments.values().collect()
+    }
+}
+
+impl From<GrpcRoutingTable> for RoutingTable {
+    fn from(value: GrpcRoutingTable) -> Self {
+        Self {
+            number_of_shards: NumberOfShards {
+                value: value.number_of_shards as usize,
+            },
+            shard_assignments: value
+                .shard_assignments
+                .into_iter()
+                .map(RoutingTableEntry::from)
+                .map(|routing_table_entry| (routing_table_entry.shard_id, routing_table_entry.pod))
+                .collect(),
+        }
+    }
+}
+
+pub struct RoutingTableEntry {
+    shard_id: ShardId,
+    pod: Pod,
+}
+
+impl From<GrpcRoutingTableEntry> for RoutingTableEntry {
+    fn from(value: GrpcRoutingTableEntry) -> Self {
+        Self {
+            shard_id: value.shard_id.unwrap().into(),
+            pod: value.pod.unwrap().into(),
+        }
     }
 }
 

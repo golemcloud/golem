@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::RoutingTable;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client;
 use golem_common::cache::*;
+use golem_common::model::RoutingTable;
 use serde::Deserialize;
 use url::Url;
 
