@@ -33,8 +33,16 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         &format!("{}_stub", def.root_package_name.name.to_snake_case()),
         Span::call_site(),
     );
+    let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+    let stub_interface_name = Ident::new(
+        &to_rust_ident(&stub_interface_name).to_snake_case(),
+        Span::call_site(),
+    );
 
     let mut struct_defs = Vec::new();
+    let mut exports = Vec::new();
+    let mut resource_type_aliases = Vec::new();
+
     for interface in &def.interfaces {
         let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
         let interface_name = Ident::new(&interface_ident, Span::call_site());
@@ -71,6 +79,10 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
              #(#struct_fns)*
            }
         });
+
+        resource_type_aliases.push(quote! {
+            type #interface_name = crate::#interface_name;
+        });
     }
 
     let mut interface_impls = Vec::new();
@@ -104,12 +116,6 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                 FunctionMode::Static,
             )?);
         }
-
-        let stub_interface_name = format!("stub-{}", def.source_world_name()?);
-        let stub_interface_name = Ident::new(
-            &to_rust_ident(&stub_interface_name).to_snake_case(),
-            Span::call_site(),
-        );
 
         let constructor = if interface.is_resource() {
             let constructor_stub = FunctionStub {
@@ -165,6 +171,17 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         }
     }
 
+    struct_defs.push(quote! {
+        struct Component;
+
+        impl crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::Guest for Component {
+            #(#resource_type_aliases)*
+        }
+    });
+    exports.push(quote! {
+       bindings::export!(Component with_types_in bindings);
+    });
+
     let lib = quote! {
         #![allow(warnings)]
 
@@ -176,6 +193,8 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         #(#struct_defs)*
 
         #(#interface_impls)*
+
+        #(#exports)*
     };
 
     let syntax_tree = syn::parse2(lib)?;
@@ -226,7 +245,7 @@ fn generate_function_stub_source(
 
     for param in &function.params {
         let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
-        let param_typ = type_to_rust_ident(&param.typ, &def.resolve)?;
+        let param_typ = type_to_rust_ident(&param.typ, def)?;
         params.push(quote! {
             #param_name: #param_typ
         });
@@ -235,7 +254,7 @@ fn generate_function_stub_source(
         input_values.push(wit_value_builder(
             &param.typ,
             &param_name_access,
-            &def.resolve,
+            def,
             quote! { WitValue::builder() },
             false,
         )?);
@@ -243,7 +262,7 @@ fn generate_function_stub_source(
 
     let result_type = match &function.results {
         FunctionResultStub::Single(typ) => {
-            let typ = type_to_rust_ident(typ, &def.resolve)?;
+            let typ = type_to_rust_ident(typ, def)?;
             quote! {
                 #typ
             }
@@ -252,7 +271,7 @@ fn generate_function_stub_source(
             let mut results = Vec::new();
             for param in params {
                 let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
-                let param_typ = type_to_rust_ident(&param.typ, &def.resolve)?;
+                let param_typ = type_to_rust_ident(&param.typ, def)?;
                 results.push(quote! {
                     #param_name: #param_typ
                 });
@@ -274,7 +293,7 @@ fn generate_function_stub_source(
         FunctionResultStub::Single(typ) => {
             output_values.push(extract_from_wit_value(
                 typ,
-                &def.resolve,
+                def,
                 quote! { result.tuple_element(0).expect("tuple not found") },
             )?);
         }
@@ -282,7 +301,7 @@ fn generate_function_stub_source(
             for (n, param) in params.iter().enumerate() {
                 output_values.push(extract_from_wit_value(
                     &param.typ,
-                    &def.resolve,
+                    def,
                     quote! { result.tuple_element(#n).expect("tuple not found") },
                 )?);
             }
@@ -321,7 +340,26 @@ fn generate_function_stub_source(
                 .ok_or(anyhow!("static function has no params"))?;
             let first_param_ident =
                 Ident::new(&to_rust_ident(&first_param.name), Span::call_site());
-            quote! { #first_param_ident.rpc }
+
+            let type_id = match &first_param.typ {
+                Type::Id(type_id) => {
+                    let typedef = def
+                        .resolve
+                        .types
+                        .get(*type_id)
+                        .ok_or(anyhow!("type not found"))?;
+
+                    match &typedef.kind {
+                        TypeDefKind::Handle(Handle::Borrow(type_id)) => Ok(type_id),
+                        TypeDefKind::Handle(Handle::Own(type_id)) => Ok(type_id),
+                        _ => Err(anyhow!("first parameter of static method is not a handle")),
+                    }
+                }
+                _ => Err(anyhow!("first parameter of static method is not a handle")),
+            }?;
+            let first_param_type = resource_type_ident(type_id, &def.resolve)?;
+
+            quote! { #first_param_ident.get::<#first_param_type>().rpc }
         }
         FunctionMode::Constructor => {
             quote! { rpc }
@@ -417,7 +455,7 @@ fn get_remote_function_name(
     }
 }
 
-fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStream> {
+fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenStream> {
     match typ {
         Type::Bool => Ok(quote! { bool }),
         Type::U8 => Ok(quote! { u8 }),
@@ -428,40 +466,41 @@ fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStre
         Type::S16 => Ok(quote! { i16 }),
         Type::S32 => Ok(quote! { i32 }),
         Type::S64 => Ok(quote! { i64 }),
-        Type::Float32 => Ok(quote! { f32 }),
-        Type::Float64 => Ok(quote! { f64 }),
+        Type::F32 => Ok(quote! { f32 }),
+        Type::F64 => Ok(quote! { f64 }),
         Type::Char => Ok(quote! { char }),
         Type::String => Ok(quote! { String }),
         Type::Id(type_id) => {
-            let typedef = resolve
+            let typedef = def
+                .resolve
                 .types
                 .get(*type_id)
                 .ok_or(anyhow!("type not found"))?;
 
             match &typedef.kind {
                 TypeDefKind::Option(inner) => {
-                    let inner = type_to_rust_ident(inner, resolve)?;
+                    let inner = type_to_rust_ident(inner, def)?;
                     Ok(quote! { Option<#inner> })
                 }
                 TypeDefKind::List(inner) => {
-                    let inner = type_to_rust_ident(inner, resolve)?;
+                    let inner = type_to_rust_ident(inner, def)?;
                     Ok(quote! { Vec<#inner> })
                 }
                 TypeDefKind::Tuple(tuple) => {
                     let types = tuple
                         .types
                         .iter()
-                        .map(|t| type_to_rust_ident(t, resolve))
+                        .map(|t| type_to_rust_ident(t, def))
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     Ok(quote! { (#(#types),*) })
                 }
                 TypeDefKind::Result(result) => {
                     let ok = match &result.ok {
-                        Some(ok) => type_to_rust_ident(ok, resolve)?,
+                        Some(ok) => type_to_rust_ident(ok, def)?,
                         None => quote! { () },
                     };
                     let err = match &result.err {
-                        Some(err) => type_to_rust_ident(err, resolve)?,
+                        Some(err) => type_to_rust_ident(err, def)?,
                         None => quote! { () },
                     };
                     Ok(quote! { Result<#ok, #err> })
@@ -472,11 +511,36 @@ fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStre
                         Handle::Borrow(type_id) => (type_id, true),
                     };
 
-                    let ident = resource_type_ident(type_id, resolve)?;
+                    let root_ns = Ident::new(
+                        &def.root_package_name.namespace.to_snake_case(),
+                        Span::call_site(),
+                    );
+                    let root_name = Ident::new(
+                        &format!("{}_stub", def.root_package_name.name.to_snake_case()),
+                        Span::call_site(),
+                    );
+                    let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+                    let stub_interface_name = Ident::new(
+                        &to_rust_ident(&stub_interface_name).to_snake_case(),
+                        Span::call_site(),
+                    );
+
+                    let ident = resource_type_ident(type_id, &def.resolve)?;
                     if is_ref {
-                        Ok(quote! { &#ident })
+                        let borrow_ident = Ident::new(
+                            &format!(
+                                "{}Borrow",
+                                to_rust_ident(&ident.to_string()).to_upper_camel_case()
+                            ),
+                            Span::call_site(),
+                        );
+                        Ok(
+                            quote! { crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#borrow_ident<'_> },
+                        )
                     } else {
-                        Ok(quote! { wit_bindgen::rt::Resource<#ident> })
+                        Ok(
+                            quote! { crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#ident },
+                        )
                     }
                 }
                 _ => {
@@ -490,13 +554,15 @@ fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStre
                     path.push(quote! { bindings });
                     match &typedef.owner {
                         TypeOwner::World(world_id) => {
-                            let world = resolve
+                            let world = def
+                                .resolve
                                 .worlds
                                 .get(*world_id)
                                 .ok_or(anyhow!("type's owner world not found"))?;
                             let package_id =
                                 world.package.ok_or(anyhow!("world has no package"))?;
-                            let package = resolve
+                            let package = def
+                                .resolve
                                 .packages
                                 .get(package_id)
                                 .ok_or(anyhow!("package not found"))?;
@@ -510,7 +576,8 @@ fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStre
                             path.push(quote! { #name_ident });
                         }
                         TypeOwner::Interface(interface_id) => {
-                            let interface = resolve
+                            let interface = def
+                                .resolve
                                 .interfaces
                                 .get(*interface_id)
                                 .ok_or(anyhow!("type's owner interface not found"))?;
@@ -518,7 +585,8 @@ fn type_to_rust_ident(typ: &Type, resolve: &Resolve) -> anyhow::Result<TokenStre
                             let package_id = interface
                                 .package
                                 .ok_or(anyhow!("interface has no package"))?;
-                            let package = resolve
+                            let package = def
+                                .resolve
                                 .packages
                                 .get(package_id)
                                 .ok_or(anyhow!("package not found"))?;
@@ -569,7 +637,7 @@ fn resource_type_ident(type_id: &TypeId, resolve: &Resolve) -> anyhow::Result<Id
 fn wit_value_builder(
     typ: &Type,
     name: &TokenStream,
-    resolve: &Resolve,
+    def: &StubDefinition,
     builder_expr: TokenStream,
     is_reference: bool,
 ) -> anyhow::Result<TokenStream> {
@@ -673,7 +741,7 @@ fn wit_value_builder(
                 })
             }
         }
-        Type::Float32 => {
+        Type::F32 => {
             if is_reference {
                 Ok(quote! {
                     #builder_expr.f32(*#name)
@@ -684,7 +752,7 @@ fn wit_value_builder(
                 })
             }
         }
-        Type::Float64 => {
+        Type::F64 => {
             if is_reference {
                 Ok(quote! {
                     #builder_expr.f64(*#name)
@@ -718,44 +786,51 @@ fn wit_value_builder(
             }
         }
         Type::Id(type_id) => {
-            let typedef = resolve
+            let typedef = def
+                .resolve
                 .types
                 .get(*type_id)
                 .ok_or(anyhow!("type not found"))?;
             match &typedef.kind {
                 TypeDefKind::Record(record) => {
-                    wit_record_value_builder(record, name, resolve, builder_expr)
+                    wit_record_value_builder(record, name, def, builder_expr)
                 }
                 TypeDefKind::Resource => Err(anyhow!("Resource cannot directly appear in a function signature, just through a Handle")),
-                TypeDefKind::Handle(_) => {
+                TypeDefKind::Handle(handle) => {
+                    let ident = match handle {
+                        Handle::Own(type_id) =>
+                            resource_type_ident(type_id, &def.resolve)?,
+                            Handle::Borrow(type_id) =>
+                                resource_type_ident(type_id, &def.resolve)?,
+                    };
                     Ok(quote! {
-                        #builder_expr.handle(#name.uri.clone(), #name.id)
+                        #builder_expr.handle(#name.get::<#ident>().uri.clone(), #name.get::<#ident>().id)
                     })
                 }
                 TypeDefKind::Flags(flags) => {
-                    wit_flags_value_builder(flags, typ, name, resolve, builder_expr)
+                    wit_flags_value_builder(flags, typ, name, def, builder_expr)
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    wit_tuple_value_builder(tuple, name, resolve, builder_expr)
+                    wit_tuple_value_builder(tuple, name, def, builder_expr)
                 }
                 TypeDefKind::Variant(variant) => {
-                    wit_variant_value_builder(variant, typ, name, resolve, builder_expr)
+                    wit_variant_value_builder(variant, typ, name, def, builder_expr)
                 }
                 TypeDefKind::Enum(enum_def) => {
-                    wit_enum_value_builder(enum_def, typ, name, resolve, builder_expr)
+                    wit_enum_value_builder(enum_def, typ, name, def, builder_expr)
                 }
                 TypeDefKind::Option(inner) => {
-                    wit_option_value_builder(inner, name, resolve, builder_expr)
+                    wit_option_value_builder(inner, name, def, builder_expr)
                 }
                 TypeDefKind::Result(result) => {
-                    wit_result_value_builder(result, name, resolve, builder_expr)
+                    wit_result_value_builder(result, name, def, builder_expr)
                 }
                 TypeDefKind::List(elem) => {
-                    wit_list_value_builder(elem, name, resolve, builder_expr)
+                    wit_list_value_builder(elem, name, def, builder_expr)
                 }
                 TypeDefKind::Future(_) => Ok(quote!(todo!("future"))),
                 TypeDefKind::Stream(_) => Ok(quote!(todo!("stream"))),
-                TypeDefKind::Type(typ) => wit_value_builder(typ, name, resolve, builder_expr, is_reference),
+                TypeDefKind::Type(typ) => wit_value_builder(typ, name, def, builder_expr, is_reference),
                 TypeDefKind::Unknown => Ok(quote!(todo!("unknown"))),
             }
         }
@@ -765,7 +840,7 @@ fn wit_value_builder(
 fn wit_record_value_builder(
     record: &Record,
     name: &TokenStream,
-    resolve: &Resolve,
+    def: &StubDefinition,
     mut builder_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
     builder_expr = quote! { #builder_expr.record() };
@@ -776,7 +851,7 @@ fn wit_record_value_builder(
         builder_expr = wit_value_builder(
             &field.ty,
             &field_access,
-            resolve,
+            def,
             quote! { #builder_expr.item() },
             false,
         )?;
@@ -789,10 +864,10 @@ fn wit_flags_value_builder(
     flags: &Flags,
     typ: &Type,
     name: &TokenStream,
-    resolve: &Resolve,
+    def: &StubDefinition,
     builder_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let flags_type = type_to_rust_ident(typ, resolve)?;
+    let flags_type = type_to_rust_ident(typ, def)?;
 
     let mut flags_vec_values = Vec::new();
     for flag in &flags.flags {
@@ -808,7 +883,7 @@ fn wit_flags_value_builder(
 fn wit_tuple_value_builder(
     tuple: &Tuple,
     name: &TokenStream,
-    resolve: &Resolve,
+    def: &StubDefinition,
     mut builder_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
     builder_expr = quote! { #builder_expr.tuple() };
@@ -819,7 +894,7 @@ fn wit_tuple_value_builder(
         builder_expr = wit_value_builder(
             typ,
             &field_access,
-            resolve,
+            def,
             quote! { #builder_expr.item() },
             false,
         )?;
@@ -832,10 +907,10 @@ fn wit_variant_value_builder(
     variant: &Variant,
     typ: &Type,
     name: &TokenStream,
-    resolve: &Resolve,
+    def: &StubDefinition,
     builder_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let variant_type = type_to_rust_ident(typ, resolve)?;
+    let variant_type = type_to_rust_ident(typ, def)?;
 
     let mut case_idx_patterns = Vec::new();
     let mut is_unit_patterns = Vec::new();
@@ -866,7 +941,7 @@ fn wit_variant_value_builder(
                 let inner_builder_expr = wit_value_builder(
                     inner_ty,
                     &quote! { inner },
-                    resolve,
+                    def,
                     quote! { case_builder },
                     true,
                 )?;
@@ -905,10 +980,10 @@ fn wit_enum_value_builder(
     enum_def: &Enum,
     typ: &Type,
     name: &TokenStream,
-    resolve: &Resolve,
+    def: &StubDefinition,
     builder_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let enum_type = type_to_rust_ident(typ, resolve)?;
+    let enum_type = type_to_rust_ident(typ, def)?;
 
     let mut cases = Vec::new();
     for (n, case) in enum_def.cases.iter().enumerate() {
@@ -929,13 +1004,13 @@ fn wit_enum_value_builder(
 fn wit_option_value_builder(
     inner: &Type,
     name: &TokenStream,
-    resolve: &Resolve,
+    def: &StubDefinition,
     builder_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
     let inner_builder_expr = wit_value_builder(
         inner,
         &quote! { #name.as_ref().unwrap() },
-        resolve,
+        def,
         quote! { some_builder },
         true,
     )?;
@@ -950,14 +1025,14 @@ fn wit_option_value_builder(
 fn wit_result_value_builder(
     result: &Result_,
     name: &TokenStream,
-    resolve: &Resolve,
+    def: &StubDefinition,
     builder_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
     let ok_expr = match &result.ok {
         Some(ok) => wit_value_builder(
             ok,
             &quote! { ok_value },
-            resolve,
+            def,
             quote! { result_builder },
             true,
         )?,
@@ -967,7 +1042,7 @@ fn wit_result_value_builder(
         Some(err) => wit_value_builder(
             err,
             &quote! { err_value },
-            resolve,
+            def,
             quote! { result_builder },
             true,
         )?,
@@ -993,16 +1068,11 @@ fn wit_result_value_builder(
 fn wit_list_value_builder(
     inner: &Type,
     name: &TokenStream,
-    resolve: &Resolve,
+    def: &StubDefinition,
     builder_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let inner_builder_expr = wit_value_builder(
-        inner,
-        &quote! { item },
-        resolve,
-        quote! { item_builder },
-        true,
-    )?;
+    let inner_builder_expr =
+        wit_value_builder(inner, &quote! { item }, def, quote! { item_builder }, true)?;
 
     Ok(quote! {
         #builder_expr.list_fn(&#name, |item, item_builder| {
@@ -1013,7 +1083,7 @@ fn wit_list_value_builder(
 
 fn extract_from_wit_value(
     typ: &Type,
-    resolve: &Resolve,
+    def: &StubDefinition,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
     match typ {
@@ -1044,10 +1114,10 @@ fn extract_from_wit_value(
         Type::S64 => Ok(quote! {
             #base_expr.s64().expect("i64 not found")
         }),
-        Type::Float32 => Ok(quote! {
+        Type::F32 => Ok(quote! {
             #base_expr.f32().expect("f32 not found")
         }),
-        Type::Float64 => Ok(quote! {
+        Type::F64 => Ok(quote! {
             #base_expr.f64().expect("f64 not found")
         }),
         Type::Char => Ok(quote! {
@@ -1057,34 +1127,35 @@ fn extract_from_wit_value(
             #base_expr.string().expect("string not found").to_string()
         }),
         Type::Id(type_id) => {
-            let typedef = resolve
+            let typedef = def
+                .resolve
                 .types
                 .get(*type_id)
                 .ok_or(anyhow!("type not found"))?;
             match &typedef.kind {
                 TypeDefKind::Record(record) => {
-                    extract_from_record_value(record, typ, resolve, base_expr)
+                    extract_from_record_value(record, typ, def, base_expr)
                 }
                 TypeDefKind::Resource => Err(anyhow!("Resource cannot directly appear in a function signature, just through a Handle")),
-                TypeDefKind::Handle(handle) => extract_from_handle_value(handle, resolve, base_expr),
+                TypeDefKind::Handle(handle) => extract_from_handle_value(handle, def, base_expr),
                 TypeDefKind::Flags(flags) => {
-                    extract_from_flags_value(flags, typ, resolve, base_expr)
+                    extract_from_flags_value(flags, typ, def, base_expr)
                 }
-                TypeDefKind::Tuple(tuple) => extract_from_tuple_value(tuple, resolve, base_expr),
+                TypeDefKind::Tuple(tuple) => extract_from_tuple_value(tuple, def, base_expr),
                 TypeDefKind::Variant(variant) => {
-                    extract_from_variant_value(variant, typ, resolve, base_expr)
+                    extract_from_variant_value(variant, typ, def, base_expr)
                 }
                 TypeDefKind::Enum(enum_def) => {
-                    extract_from_enum_value(enum_def, typ, resolve, base_expr)
+                    extract_from_enum_value(enum_def, typ, def, base_expr)
                 }
-                TypeDefKind::Option(inner) => extract_from_option_value(inner, resolve, base_expr),
+                TypeDefKind::Option(inner) => extract_from_option_value(inner, def, base_expr),
                 TypeDefKind::Result(result) => {
-                    extract_from_result_value(result, resolve, base_expr)
+                    extract_from_result_value(result, def, base_expr)
                 }
-                TypeDefKind::List(elem) => extract_from_list_value(elem, resolve, base_expr),
+                TypeDefKind::List(elem) => extract_from_list_value(elem, def, base_expr),
                 TypeDefKind::Future(_) => Ok(quote!(todo!("future"))),
                 TypeDefKind::Stream(_) => Ok(quote!(todo!("stream"))),
-                TypeDefKind::Type(typ) => extract_from_wit_value(typ, resolve, base_expr),
+                TypeDefKind::Type(typ) => extract_from_wit_value(typ, def, base_expr),
                 TypeDefKind::Unknown => Ok(quote!(todo!("unknown"))),
             }
         }
@@ -1094,7 +1165,7 @@ fn extract_from_wit_value(
 fn extract_from_record_value(
     record: &Record,
     record_type: &Type,
-    resolve: &Resolve,
+    def: &StubDefinition,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
     let mut field_extractors = Vec::new();
@@ -1102,7 +1173,7 @@ fn extract_from_record_value(
         let field_name = Ident::new(&to_rust_ident(&field.name), Span::call_site());
         let field_expr = extract_from_wit_value(
             &field.ty,
-            resolve,
+            def,
             quote! { record.field(#field_idx).expect("record field not found") },
         )?;
         field_extractors.push(quote! {
@@ -1110,7 +1181,7 @@ fn extract_from_record_value(
         });
     }
 
-    let record_type = type_to_rust_ident(record_type, resolve)?;
+    let record_type = type_to_rust_ident(record_type, def)?;
 
     Ok(quote! {
         {
@@ -1125,10 +1196,10 @@ fn extract_from_record_value(
 fn extract_from_flags_value(
     flags: &Flags,
     flags_type: &Type,
-    resolve: &Resolve,
+    def: &StubDefinition,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let flags_type = type_to_rust_ident(flags_type, resolve)?;
+    let flags_type = type_to_rust_ident(flags_type, def)?;
     let mut flag_exprs = Vec::new();
     for (flag_idx, flag) in flags.flags.iter().enumerate() {
         let flag_name = Ident::new(&flag.name.to_shouty_snake_case(), Span::call_site());
@@ -1151,14 +1222,14 @@ fn extract_from_flags_value(
 
 fn extract_from_tuple_value(
     tuple: &Tuple,
-    resolve: &Resolve,
+    def: &StubDefinition,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
     let mut elem_extractors = Vec::new();
     for (field_idx, typ) in tuple.types.iter().enumerate() {
         let elem_expr = extract_from_wit_value(
             typ,
-            resolve,
+            def,
             quote! { tuple.tuple_element(#field_idx).expect("tuple element not found") },
         )?;
         elem_extractors.push(elem_expr);
@@ -1175,10 +1246,10 @@ fn extract_from_tuple_value(
 fn extract_from_variant_value(
     variant: &Variant,
     variant_type: &Type,
-    resolve: &Resolve,
+    def: &StubDefinition,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let variant_type = type_to_rust_ident(variant_type, resolve)?;
+    let variant_type = type_to_rust_ident(variant_type, def)?;
 
     let mut case_extractors = Vec::new();
     for (n, case) in variant.cases.iter().enumerate() {
@@ -1192,7 +1263,7 @@ fn extract_from_variant_value(
             Some(ty) => {
                 let case_expr = extract_from_wit_value(
                     ty,
-                    resolve,
+                    def,
                     quote! { inner.expect("variant case not found") },
                 )?;
                 case_extractors.push(quote! {
@@ -1221,10 +1292,10 @@ fn extract_from_variant_value(
 fn extract_from_enum_value(
     enum_def: &Enum,
     enum_type: &Type,
-    resolve: &Resolve,
+    def: &StubDefinition,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let enum_type = type_to_rust_ident(enum_type, resolve)?;
+    let enum_type = type_to_rust_ident(enum_type, def)?;
 
     let mut case_extractors = Vec::new();
     for (n, case) in enum_def.cases.iter().enumerate() {
@@ -1248,10 +1319,10 @@ fn extract_from_enum_value(
 
 fn extract_from_option_value(
     inner: &Type,
-    resolve: &Resolve,
+    def: &StubDefinition,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let inner_expr = extract_from_wit_value(inner, resolve, quote! { inner })?;
+    let inner_expr = extract_from_wit_value(inner, def, quote! { inner })?;
 
     Ok(quote! {
         #base_expr.option().expect("option not found").map(|inner| #inner_expr)
@@ -1260,13 +1331,13 @@ fn extract_from_option_value(
 
 fn extract_from_result_value(
     result: &Result_,
-    resolve: &Resolve,
+    def: &StubDefinition,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
     let ok_expr = match &result.ok {
         Some(ok) => extract_from_wit_value(
             ok,
-            resolve,
+            def,
             quote! { ok_value.expect("result ok value not found") },
         )?,
         None => quote! { () },
@@ -1274,7 +1345,7 @@ fn extract_from_result_value(
     let err_expr = match &result.err {
         Some(err) => extract_from_wit_value(
             err,
-            resolve,
+            def,
             quote! { err_value.expect("result err value not found") },
         )?,
         None => quote! { () },
@@ -1293,10 +1364,10 @@ fn extract_from_result_value(
 
 fn extract_from_list_value(
     inner: &Type,
-    resolve: &Resolve,
+    def: &StubDefinition,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
-    let inner_expr = extract_from_wit_value(inner, resolve, quote! { item })?;
+    let inner_expr = extract_from_wit_value(inner, def, quote! { item })?;
 
     Ok(quote! {
         #base_expr.list_elements(|item| #inner_expr).expect("list not found")
@@ -1305,25 +1376,46 @@ fn extract_from_list_value(
 
 fn extract_from_handle_value(
     handle: &Handle,
-    resolve: &Resolve,
+    def: &StubDefinition,
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
+    let root_ns = Ident::new(
+        &def.root_package_name.namespace.to_snake_case(),
+        Span::call_site(),
+    );
+    let root_name = Ident::new(
+        &format!("{}_stub", def.root_package_name.name.to_snake_case()),
+        Span::call_site(),
+    );
+    let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+    let stub_interface_name = Ident::new(
+        &to_rust_ident(&stub_interface_name).to_snake_case(),
+        Span::call_site(),
+    );
+
     match handle {
         Handle::Own(type_id) => {
-            let ident = resource_type_ident(type_id, resolve)?;
+            let ident = resource_type_ident(type_id, &def.resolve)?;
             Ok(quote! {
                 {
                     let (uri, id) = #base_expr.handle().expect("handle not found");
-                    wit_bindgen::rt::Resource::new(#ident::from_remote_handle(uri, id))
+                    crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#ident::new(#ident::from_remote_handle(uri, id))
                 }
             })
         }
         Handle::Borrow(type_id) => {
-            let ident = resource_type_ident(type_id, resolve)?;
+            let ident = resource_type_ident(type_id, &def.resolve)?;
+            let borrow_ident = Ident::new(
+                &format!(
+                    "{}Borrow",
+                    to_rust_ident(&ident.to_string()).to_upper_camel_case()
+                ),
+                Span::call_site(),
+            );
             Ok(quote! {
                 {
                     let (uri, id) = #base_expr.handle().expect("handle not found");
-                    #ident::from_remote_handle(uri, id)
+                    crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#borrow_ident::new(#ident::from_remote_handle(uri, id))
                 }
             })
         }

@@ -164,9 +164,8 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     };
 
     let dep_wit_bindgen = Dependency::Detailed(Box::new(DependencyDetail {
-        version: Some("0.17.0".to_string()),
-        default_features: false,
-        features: vec!["realloc".to_string()],
+        version: Some("0.26.0".to_string()),
+        features: vec!["bitflags".to_string()],
         ..Default::default()
     }));
 
@@ -183,7 +182,7 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     }));
 
     let mut deps = DepsSet::new();
-    deps.insert("wit-bindgen".to_string(), dep_wit_bindgen);
+    deps.insert("wit-bindgen-rt".to_string(), dep_wit_bindgen);
     deps.insert("golem-wasm-rpc".to_string(), dep_golem_wasm_rpc);
     manifest.dependencies = deps;
 
