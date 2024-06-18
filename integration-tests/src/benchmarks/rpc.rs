@@ -23,9 +23,7 @@ use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
 use integration_tests::benchmarks::data::Data;
-use integration_tests::benchmarks::{
-    get_worker_ids, run_benchmark, setup_benchmark, start, BenchmarkContext,
-};
+use integration_tests::benchmarks::{run_benchmark, setup_benchmark, start, BenchmarkContext};
 
 struct Rpc {
     config: RunConfig,
@@ -141,16 +139,13 @@ impl Benchmark for Rpc {
     ) {
         if !self.params.mode.component_compilation_disabled() {
             // warmup with other workers
-            if let Some(ParentChildWorkerId { parent, .. }) = context.worker_ids.clone().first() {
+            if let Some(ParentChildWorkerId { parent, child }) = context.worker_ids.clone().first()
+            {
                 start(
-                    get_worker_ids(
-                        context.worker_ids.len(),
-                        &parent.component_id,
-                        "warmup-worker",
-                    ),
+                    vec![parent.clone(), child.clone()],
                     benchmark_context.deps.clone(),
                 )
-                .await
+                .await;
             }
         }
     }
