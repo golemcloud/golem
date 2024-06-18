@@ -21,8 +21,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudAuthenticationConfig {
-    data: CloudAuthenticationConfigData,
-    secret: AuthSecret,
+    pub data: CloudAuthenticationConfigData,
+    pub secret: AuthSecret,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -37,10 +37,10 @@ impl Debug for AuthSecret {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudAuthenticationConfigData {
-    id: Uuid,
-    account_id: String,
-    created_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
+    pub id: Uuid,
+    pub account_id: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Serialize, Deserialize)]
