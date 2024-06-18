@@ -111,9 +111,7 @@ pub async fn sqlite_migrate(config: &DbSqliteConfig) -> Result<(), Box<dyn Error
     info!("DB migration: sqlite://{}", config.database);
     let conn_options = SqliteConnectOptions::from(config);
     let mut conn = SqliteConnection::connect_with(&conn_options).await?;
-    sqlx::migrate!("db/migration/sqlite")
-        .run(&mut conn)
-        .await?;
+    sqlx::migrate!("db/migration/sqlite").run(&mut conn).await?;
     let _ = conn.close().await;
     Ok(())
 }

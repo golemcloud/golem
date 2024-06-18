@@ -20,9 +20,9 @@ use golem_component_service_base::service::component_compilation::{
     ComponentCompilationServiceDisabled,
 };
 use golem_service_base::config::ComponentStoreConfig;
+use golem_service_base::db;
 use golem_service_base::service::component_object_store;
 use std::sync::Arc;
-use golem_service_base::db;
 
 use crate::config::{ComponentServiceConfig, DbConfig};
 use crate::repo::component::{ComponentRepo, DbComponentRepo};

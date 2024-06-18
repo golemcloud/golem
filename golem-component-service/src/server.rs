@@ -16,6 +16,7 @@ use golem_component_service::api::make_open_api_service;
 use golem_component_service::config::{ComponentServiceConfig, DbConfig};
 use golem_component_service::service::Services;
 use golem_component_service::{api, grpcapi, metrics};
+use golem_service_base::db;
 use opentelemetry::global;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
@@ -27,7 +28,6 @@ use tokio::select;
 use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::EnvFilter;
-use golem_service_base::db;
 
 fn main() -> Result<(), std::io::Error> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {

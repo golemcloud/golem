@@ -410,16 +410,6 @@ mod redis_keys {
     }
 }
 
-#[derive(sqlx::FromRow, Debug, Clone)]
-pub struct ApiDeploymentRecord {
-    pub namespace: String,
-    pub host: String,
-    pub subdomain: Option<String>,
-    pub definition_id: String,
-    pub definition_version: String
-}
-
-
 #[cfg(test)]
 mod tests {
     use crate::api_definition::{

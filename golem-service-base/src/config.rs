@@ -42,8 +42,6 @@ pub struct ComponentStoreLocalConfig {
     pub object_prefix: String,
 }
 
-
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum DbConfig {

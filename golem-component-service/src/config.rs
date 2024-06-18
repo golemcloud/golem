@@ -19,7 +19,6 @@ use golem_service_base::config::{ComponentStoreConfig, DbConfig};
 use serde::Deserialize;
 use std::time::Duration;
 
-
 #[derive(Clone, Debug, Deserialize)]
 pub struct WorkerExecutorClientCacheConfig {
     pub max_capacity: usize,

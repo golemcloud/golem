@@ -12,8 +12,8 @@ use golem_common::config::RedisConfig;
 use golem_common::redis::{RedisError, RedisPool};
 use golem_service_base::model::ComponentMetadata;
 
-use crate::api_definition::{ApiDefinitionId, HasIsDraft};
 use crate::api_definition::http::HttpApiDefinition;
+use crate::api_definition::{ApiDefinitionId, HasIsDraft};
 use crate::repo::api_namespace::ApiNamespace;
 use crate::service::api_definition::ApiDefinitionKey;
 use crate::service::worker::ConnectProxyError::Json;
@@ -97,7 +97,7 @@ impl<Namespace, ApiDefinition> Default for InMemoryRegistry<Namespace, ApiDefini
 
 #[async_trait]
 impl<Namespace: ApiNamespace, ApiDefinition: HasIsDraft + Send + Clone + Sync>
-ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition>
+    ApiDefinitionRepo<Namespace, ApiDefinition> for InMemoryRegistry<Namespace, ApiDefinition>
 {
     async fn create(
         &self,
