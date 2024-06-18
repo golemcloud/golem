@@ -15,7 +15,7 @@
 use crate::command::api_definition::ApiDefinitionSubcommand;
 use crate::command::api_deployment::ApiDeploymentSubcommand;
 use crate::command::component::ComponentSubCommand;
-use crate::command::profile::{OssProfileAdd, ProfileSubCommand};
+use crate::command::profile::ProfileSubCommand;
 use crate::command::worker::WorkerSubcommand;
 use crate::model::{ComponentIdOrName, Format};
 use crate::oss::model::OssContext;
@@ -25,7 +25,7 @@ use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, Packa
 
 #[derive(Subcommand, Debug)]
 #[command()]
-pub enum OssCommand {
+pub enum OssCommand<ProfileAdd: clap::Args> {
     /// Upload and manage Golem components
     #[command()]
     Component {
@@ -93,7 +93,7 @@ pub enum OssCommand {
     #[command()]
     Profile {
         #[command(subcommand)]
-        subcommand: ProfileSubCommand<OssProfileAdd>,
+        subcommand: ProfileSubCommand<ProfileAdd>,
     },
 
     /// Interactively creates default profile
@@ -104,7 +104,7 @@ pub enum OssCommand {
 #[derive(Parser, Debug)]
 #[command(author, version = option_env ! ("VERSION").unwrap_or(env ! ("CARGO_PKG_VERSION")), about, long_about, rename_all = "kebab-case")]
 /// Command line interface for OSS version of Golem.
-pub struct GolemOssCommand {
+pub struct GolemOssCommand<ProfileAdd: clap::Args> {
     #[command(flatten)]
     pub verbosity: Verbosity,
 
@@ -112,5 +112,5 @@ pub struct GolemOssCommand {
     pub format: Option<Format>,
 
     #[command(subcommand)]
-    pub command: OssCommand,
+    pub command: OssCommand<ProfileAdd>,
 }
