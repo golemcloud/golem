@@ -2178,6 +2178,8 @@ components:
           type:
             example: ComponentDownloadFailed
             type: string
+            enum:
+            - ComponentDownloadFailed
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorComponentDownloadFailed'
@@ -2188,6 +2190,8 @@ components:
           type:
             example: ComponentParseFailed
             type: string
+            enum:
+            - ComponentParseFailed
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorComponentParseFailed'
@@ -2198,6 +2202,8 @@ components:
           type:
             example: FailedToResumeWorker
             type: string
+            enum:
+            - FailedToResumeWorker
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorFailedToResumeWorker'
@@ -2208,6 +2214,8 @@ components:
           type:
             example: GetLatestVersionOfComponentFailed
             type: string
+            enum:
+            - GetLatestVersionOfComponentFailed
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorGetLatestVersionOfComponentFailed'
@@ -2218,6 +2226,8 @@ components:
           type:
             example: Interrupted
             type: string
+            enum:
+            - Interrupted
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorInterrupted'
@@ -2228,6 +2238,8 @@ components:
           type:
             example: InvalidAccount
             type: string
+            enum:
+            - InvalidAccount
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorInvalidAccount'
@@ -2238,6 +2250,8 @@ components:
           type:
             example: InvalidRequest
             type: string
+            enum:
+            - InvalidRequest
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorInvalidRequest'
@@ -2248,6 +2262,8 @@ components:
           type:
             example: InvalidShardId
             type: string
+            enum:
+            - InvalidShardId
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorInvalidShardId'
@@ -2258,6 +2274,8 @@ components:
           type:
             example: NoValueInMessage
             type: string
+            enum:
+            - NoValueInMessage
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorNoValueInMessage'
@@ -2268,6 +2286,8 @@ components:
           type:
             example: ParamTypeMismatch
             type: string
+            enum:
+            - ParamTypeMismatch
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorParamTypeMismatch'
@@ -2278,6 +2298,8 @@ components:
           type:
             example: PreviousInvocationExited
             type: string
+            enum:
+            - PreviousInvocationExited
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorPreviousInvocationExited'
@@ -2288,6 +2310,8 @@ components:
           type:
             example: PreviousInvocationFailed
             type: string
+            enum:
+            - PreviousInvocationFailed
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorPreviousInvocationFailed'
@@ -2298,6 +2322,8 @@ components:
           type:
             example: PromiseAlreadyCompleted
             type: string
+            enum:
+            - PromiseAlreadyCompleted
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorPromiseAlreadyCompleted'
@@ -2308,6 +2334,8 @@ components:
           type:
             example: PromiseDropped
             type: string
+            enum:
+            - PromiseDropped
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorPromiseDropped'
@@ -2318,6 +2346,8 @@ components:
           type:
             example: PromiseNotFound
             type: string
+            enum:
+            - PromiseNotFound
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorPromiseNotFound'
@@ -2328,6 +2358,8 @@ components:
           type:
             example: RuntimeError
             type: string
+            enum:
+            - RuntimeError
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorRuntimeError'
@@ -2338,6 +2370,8 @@ components:
           type:
             example: UnexpectedOplogEntry
             type: string
+            enum:
+            - UnexpectedOplogEntry
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorUnexpectedOplogEntry'
@@ -2348,6 +2382,8 @@ components:
           type:
             example: Unknown
             type: string
+            enum:
+            - Unknown
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorUnknown'
@@ -2358,6 +2394,8 @@ components:
           type:
             example: ValueMismatch
             type: string
+            enum:
+            - ValueMismatch
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorValueMismatch'
@@ -2368,6 +2406,8 @@ components:
           type:
             example: WorkerAlreadyExists
             type: string
+            enum:
+            - WorkerAlreadyExists
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorWorkerAlreadyExists'
@@ -2378,6 +2418,8 @@ components:
           type:
             example: WorkerCreationFailed
             type: string
+            enum:
+            - WorkerCreationFailed
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorWorkerCreationFailed'
@@ -2388,6 +2430,8 @@ components:
           type:
             example: WorkerNotFound
             type: string
+            enum:
+            - WorkerNotFound
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorWorkerNotFound'
@@ -2577,6 +2621,8 @@ components:
           type:
             example: failedUpdate
             type: string
+            enum:
+            - failedUpdate
         required:
         - type
       - $ref: '#/components/schemas/FailedUpdate'
@@ -2587,6 +2633,8 @@ components:
           type:
             example: pendingUpdate
             type: string
+            enum:
+            - pendingUpdate
         required:
         - type
       - $ref: '#/components/schemas/PendingUpdate'
@@ -2597,6 +2645,8 @@ components:
           type:
             example: successfulUpdate
             type: string
+            enum:
+            - successfulUpdate
         required:
         - type
       - $ref: '#/components/schemas/SuccessfulUpdate'
@@ -2731,6 +2781,8 @@ components:
           type:
             example: And
             type: string
+            enum:
+            - And
         required:
         - type
       - $ref: '#/components/schemas/WorkerAndFilter'
@@ -2741,6 +2793,8 @@ components:
           type:
             example: CreatedAt
             type: string
+            enum:
+            - CreatedAt
         required:
         - type
       - $ref: '#/components/schemas/WorkerCreatedAtFilter'
@@ -2751,6 +2805,8 @@ components:
           type:
             example: Env
             type: string
+            enum:
+            - Env
         required:
         - type
       - $ref: '#/components/schemas/WorkerEnvFilter'
@@ -2761,6 +2817,8 @@ components:
           type:
             example: Name
             type: string
+            enum:
+            - Name
         required:
         - type
       - $ref: '#/components/schemas/WorkerNameFilter'
@@ -2771,6 +2829,8 @@ components:
           type:
             example: Not
             type: string
+            enum:
+            - Not
         required:
         - type
       - $ref: '#/components/schemas/WorkerNotFilter'
@@ -2781,6 +2841,8 @@ components:
           type:
             example: Or
             type: string
+            enum:
+            - Or
         required:
         - type
       - $ref: '#/components/schemas/WorkerOrFilter'
@@ -2791,6 +2853,8 @@ components:
           type:
             example: Status
             type: string
+            enum:
+            - Status
         required:
         - type
       - $ref: '#/components/schemas/WorkerStatusFilter'
@@ -2801,6 +2865,8 @@ components:
           type:
             example: Version
             type: string
+            enum:
+            - Version
         required:
         - type
       - $ref: '#/components/schemas/WorkerVersionFilter'
@@ -2901,6 +2967,8 @@ components:
           type:
             example: Messages
             type: string
+            enum:
+            - Messages
         required:
         - type
       - $ref: '#/components/schemas/MessagesErrorsBody'
@@ -2911,6 +2979,8 @@ components:
           type:
             example: Validation
             type: string
+            enum:
+            - Validation
         required:
         - type
       - $ref: '#/components/schemas/ValidationErrorsBody'
@@ -3061,6 +3131,8 @@ components:
           type:
             example: Function
             type: string
+            enum:
+            - Function
         required:
         - type
       - $ref: '#/components/schemas/ExportFunction'
@@ -3071,6 +3143,8 @@ components:
           type:
             example: Instance
             type: string
+            enum:
+            - Instance
         required:
         - type
       - $ref: '#/components/schemas/ExportInstance'
@@ -3305,6 +3379,8 @@ components:
           type:
             example: Bool
             type: string
+            enum:
+            - Bool
         required:
         - type
       - $ref: '#/components/schemas/TypeBool'
@@ -3315,6 +3391,8 @@ components:
           type:
             example: Chr
             type: string
+            enum:
+            - Chr
         required:
         - type
       - $ref: '#/components/schemas/TypeChr'
@@ -3325,6 +3403,8 @@ components:
           type:
             example: Enum
             type: string
+            enum:
+            - Enum
         required:
         - type
       - $ref: '#/components/schemas/TypeEnum'
@@ -3335,6 +3415,8 @@ components:
           type:
             example: F32
             type: string
+            enum:
+            - F32
         required:
         - type
       - $ref: '#/components/schemas/TypeF32'
@@ -3345,6 +3427,8 @@ components:
           type:
             example: F64
             type: string
+            enum:
+            - F64
         required:
         - type
       - $ref: '#/components/schemas/TypeF64'
@@ -3355,6 +3439,8 @@ components:
           type:
             example: Flags
             type: string
+            enum:
+            - Flags
         required:
         - type
       - $ref: '#/components/schemas/TypeFlags'
@@ -3365,6 +3451,8 @@ components:
           type:
             example: Handle
             type: string
+            enum:
+            - Handle
         required:
         - type
       - $ref: '#/components/schemas/TypeHandle'
@@ -3375,6 +3463,8 @@ components:
           type:
             example: List
             type: string
+            enum:
+            - List
         required:
         - type
       - $ref: '#/components/schemas/TypeList'
@@ -3385,6 +3475,8 @@ components:
           type:
             example: Option
             type: string
+            enum:
+            - Option
         required:
         - type
       - $ref: '#/components/schemas/TypeOption'
@@ -3395,6 +3487,8 @@ components:
           type:
             example: Record
             type: string
+            enum:
+            - Record
         required:
         - type
       - $ref: '#/components/schemas/TypeRecord'
@@ -3405,6 +3499,8 @@ components:
           type:
             example: Result
             type: string
+            enum:
+            - Result
         required:
         - type
       - $ref: '#/components/schemas/TypeResult'
@@ -3415,6 +3511,8 @@ components:
           type:
             example: S16
             type: string
+            enum:
+            - S16
         required:
         - type
       - $ref: '#/components/schemas/TypeS16'
@@ -3425,6 +3523,8 @@ components:
           type:
             example: S32
             type: string
+            enum:
+            - S32
         required:
         - type
       - $ref: '#/components/schemas/TypeS32'
@@ -3435,6 +3535,8 @@ components:
           type:
             example: S64
             type: string
+            enum:
+            - S64
         required:
         - type
       - $ref: '#/components/schemas/TypeS64'
@@ -3445,6 +3547,8 @@ components:
           type:
             example: S8
             type: string
+            enum:
+            - S8
         required:
         - type
       - $ref: '#/components/schemas/TypeS8'
@@ -3455,6 +3559,8 @@ components:
           type:
             example: Str
             type: string
+            enum:
+            - Str
         required:
         - type
       - $ref: '#/components/schemas/TypeStr'
@@ -3465,6 +3571,8 @@ components:
           type:
             example: Tuple
             type: string
+            enum:
+            - Tuple
         required:
         - type
       - $ref: '#/components/schemas/TypeTuple'
@@ -3475,6 +3583,8 @@ components:
           type:
             example: U16
             type: string
+            enum:
+            - U16
         required:
         - type
       - $ref: '#/components/schemas/TypeU16'
@@ -3485,6 +3595,8 @@ components:
           type:
             example: U32
             type: string
+            enum:
+            - U32
         required:
         - type
       - $ref: '#/components/schemas/TypeU32'
@@ -3495,6 +3607,8 @@ components:
           type:
             example: U64
             type: string
+            enum:
+            - U64
         required:
         - type
       - $ref: '#/components/schemas/TypeU64'
@@ -3505,6 +3619,8 @@ components:
           type:
             example: U8
             type: string
+            enum:
+            - U8
         required:
         - type
       - $ref: '#/components/schemas/TypeU8'
@@ -3515,6 +3631,8 @@ components:
           type:
             example: Variant
             type: string
+            enum:
+            - Variant
         required:
         - type
       - $ref: '#/components/schemas/TypeVariant'
