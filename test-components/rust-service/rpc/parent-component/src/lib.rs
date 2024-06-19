@@ -51,3 +51,5 @@ impl Guest for Component {
         api.process(&input)
     }
 }
+
+bindings::export!(Component with_types_in bindings);

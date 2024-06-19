@@ -101,3 +101,5 @@ impl Guest for Component {
         root.metadata_hash_at(PathFlags::empty(), &path).map_err(|err| err.to_string())
     }
 }
+
+bindings::export!(Component with_types_in bindings);

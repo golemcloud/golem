@@ -20,6 +20,11 @@ impl RunningAuction {
         }
     }
 }
+struct Component;
+impl crate::bindings::exports::auction::auction_stub::stub_auction::Guest for Component {
+    type Api = crate::Api;
+    type RunningAuction = crate::RunningAuction;
+}
 impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestApi for Api {
     fn new(location: crate::bindings::golem::rpc::types::Uri) -> Self {
         let location = golem_wasm_rpc::Uri {
@@ -290,3 +295,4 @@ impl Drop for RunningAuction {
             .expect("Failed to invoke remote drop");
     }
 }
+bindings::export!(Component with_types_in bindings);
