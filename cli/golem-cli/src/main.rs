@@ -17,8 +17,8 @@ extern crate derive_more;
 use clap::Parser;
 use clap_verbosity_flag::{Level, Verbosity};
 use golem_cli::command::profile::OssProfileAdd;
-use golem_cli::config::{Config, Profile};
-use indoc::formatdoc;
+use golem_cli::config::{Config, NamedProfile, Profile};
+use indoc::eprintdoc;
 use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
@@ -34,24 +34,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or(default_conf_dir);
 
-    if let Some(p) = Config::get_active_profile(CliKind::Universal, &config_dir) {
-        let name = p.name.clone();
+    let cli_kind = CliKind::Golem;
 
-        match p.profile {
-            Profile::Golem(p) => {
-                let command = GolemOssCommand::<OssProfileAdd>::parse();
-
-                init_tracing(&command.verbosity);
-                info!("Golem CLI with profile: {}", name);
-
-                tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap()
-                    .block_on(oss::main::async_main(command, p, config_dir))
-            }
-            Profile::GolemCloud(_) => {
-                let message = formatdoc!(
+    let oss_profile = match Config::get_active_profile(cli_kind, &config_dir) {
+        Some(NamedProfile {
+            name,
+            profile: Profile::Golem(p),
+        }) => Some((name, p)),
+        Some(NamedProfile {
+            name: _,
+            profile: Profile::GolemCloud(_),
+        }) => {
+            eprintdoc!(
                     "Golem Cloud profile is not supported in this CLI version.
                     To use Golem Cloud please install golem-cloud-cli with feature 'universal' to replace golem-cli
                     cargo install --features universal golem-cloud-cli
@@ -61,9 +55,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     To manage profiles use `golem-cli profile` command."
                 );
 
-                Err(message)?
-            }
+            None
         }
+        None => None,
+    };
+
+    if let Some((name, p)) = oss_profile {
+        let command = GolemOssCommand::<OssProfileAdd>::parse();
+
+        init_tracing(&command.verbosity);
+        info!("Golem CLI with profile: {}", name);
+
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(oss::main::async_main(command, p, cli_kind, config_dir))
     } else {
         let command = GolemInitCommand::<OssProfileAdd>::parse();
 
@@ -76,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap()
             .block_on(golem_cli::init::async_main(
                 command,
-                CliKind::Universal,
+                cli_kind,
                 config_dir,
                 Box::new(DummyProfileAuth {}),
             ))
