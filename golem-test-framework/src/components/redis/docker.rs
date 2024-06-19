@@ -16,41 +16,42 @@ use crate::components::redis::Redis;
 use crate::components::NETWORK;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use testcontainers::runners::SyncRunner;
-use testcontainers::{Container, ImageExt};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::redis::REDIS_PORT;
 use tracing::info;
 
 pub struct DockerRedis {
-    container: Container<testcontainers_modules::redis::Redis>,
+    container: ContainerAsync<testcontainers_modules::redis::Redis>,
     prefix: String,
     valid: AtomicBool,
+    public_port: u16,
 }
 
 impl DockerRedis {
     const NAME: &'static str = "golem_redis";
 
-    pub fn new(prefix: String) -> Self {
+    pub async fn new(prefix: String) -> Self {
         info!("Starting Redis container");
 
         let image = testcontainers_modules::redis::Redis
             .with_tag("7.2")
             .with_container_name(Self::NAME)
             .with_network(NETWORK);
-        let container = image.start().expect("Failed to start container");
+        let container = image.start().await.expect("Failed to start container");
 
-        super::wait_for_startup(
-            "localhost",
-            container
-                .get_host_port_ipv4(REDIS_PORT)
-                .expect("Failed to get Redis port"),
-            Duration::from_secs(10),
-        );
+        let public_port = container
+            .get_host_port_ipv4(REDIS_PORT)
+            .await
+            .expect("Failed to get Redis port");
+
+        super::wait_for_startup("localhost", public_port, Duration::from_secs(10));
 
         Self {
             container,
             prefix,
             valid: AtomicBool::new(true),
+            public_port,
         }
     }
 }
@@ -75,9 +76,7 @@ impl Redis for DockerRedis {
     }
 
     fn public_port(&self) -> u16 {
-        self.container
-            .get_host_port_ipv4(REDIS_PORT)
-            .expect("Failed to get Redis port")
+        self.public_port
     }
 
     fn prefix(&self) -> &str {
@@ -86,8 +85,11 @@ impl Redis for DockerRedis {
 
     fn kill(&self) {
         info!("Stopping Redis container");
-        self.valid.store(false, Ordering::Release);
-        self.container.stop().expect("Failed to stop container");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move { self.container.stop().await.expect("Failed to stop container") });
     }
 }
 

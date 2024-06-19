@@ -21,13 +21,15 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
-use testcontainers::runners::SyncRunner;
-use testcontainers::{Container, Image, ImageExt};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, Image, ImageExt};
 
 use tracing::{info, Level};
 
 pub struct DockerShardManager {
-    container: Container<ShardManagerImage>,
+    container: ContainerAsync<ShardManagerImage>,
+    public_http_port: u16,
+    public_grpc_port: u16,
 }
 
 impl DockerShardManager {
@@ -35,7 +37,7 @@ impl DockerShardManager {
     const HTTP_PORT: u16 = 9021;
     const GRPC_PORT: u16 = 9020;
 
-    pub fn new(redis: Arc<dyn Redis + Send + Sync + 'static>, verbosity: Level) -> Self {
+    pub async fn new(redis: Arc<dyn Redis + Send + Sync + 'static>, verbosity: Level) -> Self {
         info!("Starting golem-shard-manager container");
 
         let env_vars = env_vars(Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity);
@@ -43,9 +45,22 @@ impl DockerShardManager {
         let image = ShardManagerImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
             .with_container_name(Self::NAME)
             .with_network(NETWORK);
-        let container = image.start().expect("Failed to start container");
+        let container = image.start().await.expect("Failed to start container");
 
-        Self { container }
+        let public_http_port = container
+            .get_host_port_ipv4(Self::HTTP_PORT)
+            .await
+            .expect("Failed to get public HTTP port");
+        let public_grpc_port = container
+            .get_host_port_ipv4(Self::GRPC_PORT)
+            .await
+            .expect("Failed to get public gRPC port");
+
+        Self {
+            container,
+            public_http_port,
+            public_grpc_port,
+        }
     }
 }
 
@@ -68,23 +83,23 @@ impl ShardManager for DockerShardManager {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container
-            .get_host_port_ipv4(Self::HTTP_PORT)
-            .expect("Failed to get HTTP port")
+        self.public_http_port
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container
-            .get_host_port_ipv4(Self::GRPC_PORT)
-            .expect("Failed to get gRPC port")
+        self.public_grpc_port
     }
 
     fn kill(&self) {
-        self.container.stop().expect("Failed to stop container");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move { self.container.stop().await.expect("Failed to stop container") });
     }
 
     async fn restart(&self) {
-        self.container.start().expect("Failed to start container");
+        self.container.start().await.expect("Failed to start container");
     }
 }
 

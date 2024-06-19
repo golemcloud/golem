@@ -15,12 +15,12 @@
 use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use crate::components::NETWORK;
 use std::time::Duration;
-use testcontainers::runners::SyncRunner;
-use testcontainers::{Container, ImageExt};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, ImageExt};
 use tracing::info;
 
 pub struct DockerPostgresRdb {
-    container: Container<testcontainers_modules::postgres::Postgres>,
+    container: ContainerAsync<testcontainers_modules::postgres::Postgres>,
     host: String,
     port: u16,
     host_port: u16,
@@ -42,12 +42,13 @@ impl DockerPostgresRdb {
             image.with_container_name(name).with_network(NETWORK)
         };
 
-        let container = image.start().expect("Failed to start container");
+        let container = image.start().await.expect("Failed to start container");
 
         let host = if local_env { "localhost" } else { name };
         let port = if local_env {
             container
                 .get_host_port_ipv4(Self::DEFAULT_PORT)
+                .await
                 .expect("Failed to get host port")
         } else {
             Self::DEFAULT_PORT
@@ -55,6 +56,7 @@ impl DockerPostgresRdb {
 
         let host_port = container
             .get_host_port_ipv4(Self::DEFAULT_PORT)
+            .await
             .expect("Failed to get host port");
 
         wait_for_startup("localhost", host_port, Duration::from_secs(30)).await;
@@ -82,7 +84,13 @@ impl Rdb for DockerPostgresRdb {
 
     fn kill(&self) {
         info!("Stopping Postgres container");
-        self.container.stop().expect("Failed to stop container");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                self.container.stop().await.expect("Failed to stop container");
+            });
     }
 }
 

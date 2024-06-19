@@ -47,7 +47,7 @@ impl DockerWorkerExecutorCluster {
             shard_manager,
             worker_service,
             verbosity,
-        ))
+        ).await)
     }
 
     pub async fn new(

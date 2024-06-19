@@ -21,8 +21,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
-use testcontainers::runners::SyncRunner;
-use testcontainers::{Container, Image, ImageExt};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, Image, ImageExt};
 
 use crate::components::component_service::ComponentService;
 use crate::components::shard_manager::ShardManager;
@@ -33,11 +33,13 @@ pub struct DockerWorkerExecutor {
     name: String,
     http_port: u16,
     grpc_port: u16,
-    container: Container<WorkerExecutorImage>,
+    public_http_port: u16,
+    public_grpc_port: u16,
+    container: ContainerAsync<WorkerExecutorImage>,
 }
 
 impl DockerWorkerExecutor {
-    pub fn new(
+    pub async fn new(
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -63,12 +65,23 @@ impl DockerWorkerExecutor {
         let image = WorkerExecutorImage::new(grpc_port, http_port, env_vars)
             .with_container_name(&name)
             .with_network(NETWORK);
-        let container = image.start().expect("Failed to start container");
+        let container = image.start().await.expect("Failed to start container");
+
+        let public_http_port = container
+            .get_host_port_ipv4(http_port)
+            .await
+            .expect("Failed to get public HTTP port");
+        let public_grpc_port = container
+            .get_host_port_ipv4(grpc_port)
+            .await
+            .expect("Failed to get public gRPC port");
 
         Self {
             name,
             http_port,
             grpc_port,
+            public_http_port,
+            public_grpc_port,
             container,
         }
     }
@@ -93,23 +106,26 @@ impl WorkerExecutor for DockerWorkerExecutor {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container
-            .get_host_port_ipv4(self.http_port)
-            .expect("Failed to get HTTP port")
+        self.public_http_port
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container
-            .get_host_port_ipv4(self.grpc_port)
-            .expect("Failed to get gRPC port")
+        self.public_grpc_port
     }
 
     fn kill(&self) {
-        self.container.stop().expect("Failed to stop container")
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move { self.container.stop().await.expect("Failed to stop container") });
     }
 
     async fn restart(&self) {
-        self.container.start().expect("Failed to start container");
+        self.container
+            .start()
+            .await
+            .expect("Failed to start container");
     }
 }
 

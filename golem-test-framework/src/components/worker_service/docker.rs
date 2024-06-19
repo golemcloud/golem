@@ -23,12 +23,15 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
-use testcontainers::runners::SyncRunner;
-use testcontainers::{Container, Image, ImageExt};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, Image, ImageExt};
 use tracing::{info, Level};
 
 pub struct DockerWorkerService {
-    container: Container<GolemWorkerServiceImage>,
+    container: ContainerAsync<GolemWorkerServiceImage>,
+    public_http_port: u16,
+    public_grpc_port: u16,
+    public_custom_request_port: u16,
 }
 
 impl DockerWorkerService {
@@ -37,7 +40,7 @@ impl DockerWorkerService {
     const GRPC_PORT: u16 = 9092;
     const CUSTOM_REQUEST_PORT: u16 = 9093;
 
-    pub fn new(
+    pub async fn new(
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
@@ -65,9 +68,27 @@ impl DockerWorkerService {
         )
         .with_container_name(Self::NAME)
         .with_network(NETWORK);
-        let container = image.start().expect("Failed to start container");
+        let container = image.start().await.expect("Failed to start container");
 
-        Self { container }
+        let public_http_port = container
+            .get_host_port_ipv4(Self::HTTP_PORT)
+            .await
+            .expect("Failed to get public HTTP port");
+        let public_grpc_port = container
+            .get_host_port_ipv4(Self::GRPC_PORT)
+            .await
+            .expect("Failed to get public gRPC port");
+        let public_custom_request_port = container
+            .get_host_port_ipv4(Self::CUSTOM_REQUEST_PORT)
+            .await
+            .expect("Failed to get public custom request port");
+
+        Self {
+            container,
+            public_http_port,
+            public_grpc_port,
+            public_custom_request_port,
+        }
     }
 }
 
@@ -94,25 +115,28 @@ impl WorkerService for DockerWorkerService {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container
-            .get_host_port_ipv4(Self::HTTP_PORT)
-            .expect("Failed to get HTTP port")
+        self.public_http_port
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container
-            .get_host_port_ipv4(Self::GRPC_PORT)
-            .expect("Failed to get gRPC port")
+        self.public_grpc_port
     }
 
     fn public_custom_request_port(&self) -> u16 {
-        self.container
-            .get_host_port_ipv4(Self::CUSTOM_REQUEST_PORT)
-            .expect("Failed to get custom request port")
+        self.public_custom_request_port
     }
 
     fn kill(&self) {
-        self.container.stop().expect("Failed to stop container")
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                self.container
+                    .stop()
+                    .await
+                    .expect("Failed to stop container")
+            });
     }
 }
 

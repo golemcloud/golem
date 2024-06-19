@@ -343,45 +343,51 @@ impl CliTestDependencies {
                 None
             };
 
-            let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
-                Arc::new(DockerComponentService::new(
+            let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                DockerComponentService::new(
                     component_compilation_service,
                     rdb.clone(),
                     params_clone.service_verbosity(),
-                ));
+                )
+                .await,
+            );
 
             let component_compilation_service: Arc<
                 dyn ComponentCompilationService + Send + Sync + 'static,
-            > = Arc::new(DockerComponentCompilationService::new(
-                component_service.clone(),
-                params_clone.service_verbosity(),
-            ));
+            > = Arc::new(
+                DockerComponentCompilationService::new(
+                    component_service.clone(),
+                    params_clone.service_verbosity(),
+                )
+                .await,
+            );
 
             (rdb, component_service, component_compilation_service)
         });
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> =
-            Arc::new(DockerRedis::new(redis_prefix.to_string()));
+            Arc::new(DockerRedis::new(redis_prefix.to_string()).await);
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
             SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
         );
-        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
-            DockerShardManager::new(redis.clone(), params.service_verbosity()),
-        );
+        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> =
+            Arc::new(DockerShardManager::new(redis.clone(), params.service_verbosity()).await);
 
         let (rdb, component_service, component_compilation_service) =
             rdb_and_component_service_join
                 .await
                 .expect("Failed to join");
 
-        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
-            Arc::new(DockerWorkerService::new(
+        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+            DockerWorkerService::new(
                 component_service.clone(),
                 shard_manager.clone(),
                 rdb.clone(),
                 redis.clone(),
                 params.service_verbosity(),
-            ));
+            )
+            .await,
+        );
         let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> =
             Arc::new(
                 DockerWorkerExecutorCluster::new(
