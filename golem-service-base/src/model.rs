@@ -12,19 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_api_grpc::proto::golem::shardmanager::{
-    Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
-};
 use golem_common::model::function_name::ParsedFunctionName;
 use golem_common::model::{
     ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
-use http::Uri;
 use poem_openapi::{Enum, NewType, Object, Union};
-use rand::seq::IteratorRandom;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashSet;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -1324,6 +1318,19 @@ pub enum Export {
     Function(ExportFunction),
 }
 
+impl Export {
+    pub fn function_names(&self) -> Vec<String> {
+        match self {
+            Export::Instance(instance) => instance
+                .functions
+                .iter()
+                .map(|function| format!("{}.{{{}}}", instance.name, function.name))
+                .collect(),
+            Export::Function(function) => vec![function.name.clone()],
+        }
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::component::Export> for Export {
     type Error = String;
 
@@ -1832,6 +1839,12 @@ impl TryFrom<String> for Id {
     fn try_from(value: String) -> Result<Self, Self::Error> {
         let _ = valid_id(value.as_str())?;
         Ok(Self(value))
+    }
+}
+
+impl Display for Id {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.clone())
     }
 }
 
@@ -3154,6 +3167,16 @@ pub struct Component {
     pub metadata: ComponentMetadata,
 }
 
+impl Component {
+    pub fn function_names(&self) -> Vec<String> {
+        self.metadata
+            .exports
+            .iter()
+            .flat_map(|x| x.function_names())
+            .collect::<Vec<_>>()
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     type Error = String;
 
@@ -3209,96 +3232,6 @@ impl Component {
                 versioned_component_id: new_version,
             },
             ..self
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct NumberOfShards {
-    pub value: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Pod {
-    host: String,
-    port: u16,
-}
-
-impl Pod {
-    pub fn uri(&self) -> Uri {
-        Uri::builder()
-            .scheme("http")
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build URI")
-    }
-}
-
-impl From<GrpcPod> for Pod {
-    fn from(value: GrpcPod) -> Self {
-        Self {
-            host: value.host,
-            port: value.port as u16,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct RoutingTable {
-    pub number_of_shards: NumberOfShards,
-    shard_assignments: HashMap<ShardId, Pod>,
-}
-
-impl RoutingTable {
-    pub fn lookup(&self, worker_id: &WorkerId) -> Option<&Pod> {
-        self.shard_assignments.get(&ShardId::from_worker_id(
-            &worker_id.clone().into(),
-            self.number_of_shards.value,
-        ))
-    }
-
-    pub fn random(&self) -> Option<&Pod> {
-        self.shard_assignments
-            .values()
-            .choose(&mut rand::thread_rng())
-    }
-
-    pub fn first(&self) -> Option<&Pod> {
-        self.shard_assignments.values().next()
-    }
-
-    pub fn all(&self) -> HashSet<&Pod> {
-        self.shard_assignments.values().collect()
-    }
-}
-
-impl From<GrpcRoutingTable> for RoutingTable {
-    fn from(value: GrpcRoutingTable) -> Self {
-        Self {
-            number_of_shards: NumberOfShards {
-                value: value.number_of_shards as usize,
-            },
-            shard_assignments: value
-                .shard_assignments
-                .into_iter()
-                .map(RoutingTableEntry::from)
-                .map(|routing_table_entry| (routing_table_entry.shard_id, routing_table_entry.pod))
-                .collect(),
-        }
-    }
-}
-
-pub struct RoutingTableEntry {
-    shard_id: ShardId,
-    pod: Pod,
-}
-
-impl From<GrpcRoutingTableEntry> for RoutingTableEntry {
-    fn from(value: GrpcRoutingTableEntry) -> Self {
-        Self {
-            shard_id: value.shard_id.unwrap().into(),
-            pod: value.pod.unwrap().into(),
         }
     }
 }

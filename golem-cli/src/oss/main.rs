@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command::profile::UniversalProfileAdd;
 use crate::config::{OssProfile, ProfileName};
 use crate::examples;
 use crate::factory::ServiceFactory;
@@ -24,8 +25,8 @@ use crate::stubgen::handle_stubgen;
 use colored::Colorize;
 use std::path::PathBuf;
 
-pub async fn async_main(
-    cmd: GolemOssCommand,
+pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
+    cmd: GolemOssCommand<ProfileAdd>,
     profile: OssProfile,
     config_dir: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
