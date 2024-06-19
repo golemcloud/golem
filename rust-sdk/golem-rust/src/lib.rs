@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #[allow(unused)]
+#[allow(warnings)]
 #[rustfmt::skip]
 pub mod bindings;
 

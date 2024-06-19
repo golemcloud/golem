@@ -31,7 +31,7 @@ version = "0.0.0"
 dependencies = [
  "golem-rust-macro",
  "uuid",
- "wit-bindgen",
+ "wit-bindgen-rt",
 ]
 
 [[package]]
@@ -107,10 +107,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
 
 [[package]]
-name = "wit-bindgen"
-version = "0.17.0"
+name = "wit-bindgen-rt"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6237168d93497b26dacdab157b08ad2787d74cdce10f89735f791b2a225eba4d"
+checksum = "29c7526379ace8709ee9ab9f2bb50f112d95581063a59ef3097d9c10153886c9"
 dependencies = [
  "bitflags",
 ]
