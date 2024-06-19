@@ -99,6 +99,7 @@ pub struct GolemInitCommand<ProfileAdd: clap::Args> {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CliKind {
     Universal,
+    Golem,
     Cloud,
 }
 
@@ -404,6 +405,7 @@ pub async fn init_profile(
     validate_profile_override(&profile_name, config_dir)?;
     let typ = match cli_kind {
         CliKind::Universal => select_type()?,
+        CliKind::Golem => ProfileType::Golem,
         CliKind::Cloud => ProfileType::GolemCloud,
     };
 
