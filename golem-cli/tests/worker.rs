@@ -255,11 +255,11 @@ fn worker_invoke_and_await_wave_params(
         &worker_name,
         &cfg.arg('f', "function"),
         "golem:it/api.{set}",
-        &cfg.arg('p', "param"),
+        &cfg.arg('a', "arg"),
         r#""bucket name""#,
-        &cfg.arg('p', "param"),
+        &cfg.arg('a', "arg"),
         r#""key name""#,
-        &cfg.arg('p', "param"),
+        &cfg.arg('a', "arg"),
         r#"[1, 2, 3]"#,
     ])?;
     assert_eq!(res_set, "Empty result.\n");
@@ -273,9 +273,9 @@ fn worker_invoke_and_await_wave_params(
         &worker_name,
         &cfg.arg('f', "function"),
         "golem:it/api.{get}",
-        &cfg.arg('p', "param"),
+        &cfg.arg('a', "arg"),
         r#""bucket name""#,
-        &cfg.arg('p', "param"),
+        &cfg.arg('a', "arg"),
         r#""key name""#,
     ])?;
     assert_eq!(
@@ -393,11 +393,11 @@ fn worker_invoke_wave_params(
         &worker_name,
         &cfg.arg('f', "function"),
         "golem:it/api.{set}",
-        &cfg.arg('p', "param"),
+        &cfg.arg('a', "arg"),
         r#""bucket name""#,
-        &cfg.arg('p', "param"),
+        &cfg.arg('a', "arg"),
         r#""key name""#,
-        &cfg.arg('p', "param"),
+        &cfg.arg('a', "arg"),
         r#"[1, 2, 3]"#,
     ])?;
 
@@ -797,7 +797,7 @@ fn worker_invoke_indexed_resource(
         &worker_name,
         &cfg.arg('f', "function"),
         r#"rpc:counters/api.{counter("counter1").inc-by}"#,
-        &cfg.arg('p', "param"),
+        &cfg.arg('a', "arg"),
         "1",
     ])?;
     cli.run_unit(&[
@@ -809,7 +809,7 @@ fn worker_invoke_indexed_resource(
         &worker_name,
         &cfg.arg('f', "function"),
         r#"rpc:counters/api.{counter("counter1").inc-by}"#,
-        &cfg.arg('p', "param"),
+        &cfg.arg('a', "arg"),
         "2",
     ])?;
     cli.run_unit(&[
@@ -821,7 +821,7 @@ fn worker_invoke_indexed_resource(
         &worker_name,
         &cfg.arg('f', "function"),
         r#"rpc:counters/api.{counter("counter2").inc-by}"#,
-        &cfg.arg('p', "param"),
+        &cfg.arg('a', "arg"),
         "5",
     ])?;
     let result = cli.run_json(&[
