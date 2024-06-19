@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
     branches:
       - main
   pull_request:
@@ -13,7 +13,6 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -33,7 +32,7 @@ jobs:
           override: true
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo binstall --no-confirm cargo-component@0.7.0
+        run: cargo binstall --no-confirm cargo-component@0.13.2
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy
@@ -44,7 +43,7 @@ jobs:
         run: cargo component build -p golem-rust
 
   publish:
-    needs: [ build ]
+    needs: [build]
     if: "startsWith(github.ref, 'refs/tags/v')"
     runs-on: ubuntu-latest
     steps:
