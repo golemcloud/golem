@@ -21,17 +21,21 @@ pub trait ApiDeploymentRepo {
         &self,
         namespace: &str,
         host: &str,
-        subdomain: &str,
+        subdomain: Option<&str>,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
 
-    async fn delete(&self, namespace: &str, host: &str, subdomain: &str)
-        -> Result<bool, RepoError>;
+    async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
+
+    async fn delete(
+        &self,
+        namespace: &str,
+        host: &str,
+        subdomain: Option<&str>,
+    ) -> Result<bool, RepoError>;
 
     async fn get_by_id(
         &self,
         namespace: &str,
-        host: &str,
-        subdomain: &str,
         definition_id: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
 }
@@ -51,7 +55,6 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Sqlite> {
     async fn create(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError> {
         if !deployments.is_empty() {
             let mut transaction = self.db_pool.begin().await?;
-
             for deployment in deployments {
                 sqlx::query(
                     r#"
@@ -78,7 +81,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Sqlite> {
         &self,
         namespace: &str,
         host: &str,
-        subdomain: &str,
+        subdomain: Option<&str>,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>("SELECT namespace, host, subdomain, definition_id, definition_version FROM api_deployments WHERE namespace = $1 AND host = $2 AND subdomain = $3")
             .bind(namespace)
@@ -93,7 +96,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Sqlite> {
         &self,
         namespace: &str,
         host: &str,
-        subdomain: &str,
+        subdomain: Option<&str>,
     ) -> Result<bool, RepoError> {
         sqlx::query(
             "DELETE FROM api_deployments WHERE namespace = $1 AND host = $2 AND subdomain = $3",
@@ -109,15 +112,26 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Sqlite> {
     async fn get_by_id(
         &self,
         namespace: &str,
-        host: &str,
-        subdomain: &str,
         definition_id: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>("SELECT namespace, host, subdomain, definition_id, definition_version FROM api_deployments WHERE namespace = $1 AND host = $2 AND subdomain = $3, definition_id = $4")
+        sqlx::query_as::<_, ApiDeploymentRecord>("SELECT namespace, host, subdomain, definition_id, definition_version FROM api_deployments WHERE namespace = $1 AND definition_id = $2")
             .bind(namespace)
-            .bind(host)
-            .bind(subdomain)
             .bind(definition_id)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDeploymentRecord>(
+            r#"
+                SELECT namespace, host, subdomain, definition_id, definition_version
+                FROM api_deployments
+                WHERE
+                 (submdomain IS NULL AND host = $1) OR (subdomain IS NOT NULL AND CONCAT(subdomain, '.', host) = $1)
+                "#
+        )
+            .bind(site)
             .fetch_all(self.db_pool.deref())
             .await
             .map_err(|e| e.into())
@@ -129,7 +143,6 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Postgres> {
     async fn create(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError> {
         if !deployments.is_empty() {
             let mut transaction = self.db_pool.begin().await?;
-
             for deployment in deployments {
                 sqlx::query(
                     r#"
@@ -156,7 +169,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Postgres> {
         &self,
         namespace: &str,
         host: &str,
-        subdomain: &str,
+        subdomain: Option<&str>,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>("SELECT namespace, host, subdomain, definition_id, definition_version FROM api_deployments WHERE namespace = $1 AND host = $2 AND subdomain = $3")
             .bind(namespace)
@@ -171,7 +184,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Postgres> {
         &self,
         namespace: &str,
         host: &str,
-        subdomain: &str,
+        subdomain: Option<&str>,
     ) -> Result<bool, RepoError> {
         sqlx::query(
             "DELETE FROM api_deployments WHERE namespace = $1 AND host = $2 AND subdomain = $3",
@@ -184,17 +197,28 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Postgres> {
         Ok(true)
     }
 
+    async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDeploymentRecord>(
+            r#"
+                SELECT namespace, host, subdomain, definition_id, definition_version
+                FROM api_deployments
+                WHERE
+                 (submdomain IS NULL AND host = $1) OR (subdomain IS NOT NULL AND CONCAT(subdomain, '.', host) = $1)
+                "#
+        )
+            .bind(site)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
     async fn get_by_id(
         &self,
         namespace: &str,
-        host: &str,
-        subdomain: &str,
         definition_id: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>("SELECT namespace, host, subdomain, definition_id, definition_version FROM api_deployments WHERE namespace = $1 AND host = $2 AND subdomain = $3, definition_id = $4")
+        sqlx::query_as::<_, ApiDeploymentRecord>("SELECT namespace, host, subdomain, definition_id, definition_version FROM api_deployments WHERE namespace = $1 AND definition_id = $2")
             .bind(namespace)
-            .bind(host)
-            .bind(subdomain)
             .bind(definition_id)
             .fetch_all(self.db_pool.deref())
             .await
