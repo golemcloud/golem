@@ -28,6 +28,7 @@ use std::path::PathBuf;
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
     cmd: GolemOssCommand<ProfileAdd>,
     profile: OssProfile,
+    cli_kind: CliKind,
     config_dir: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let OssProfile {
@@ -102,16 +103,14 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         }
         OssCommand::Profile { subcommand } => {
             subcommand
-                .handle(CliKind::Universal, &config_dir, &DummyProfileAuth {})
+                .handle(cli_kind, &config_dir, &DummyProfileAuth {})
                 .await
         }
-        OssCommand::Init {} => crate::init::init_profile(
-            CliKind::Universal,
-            ProfileName::default(CliKind::Universal),
-            &config_dir,
-        )
-        .await
-        .map(|_| GolemResult::Str("Profile created".to_string())),
+        OssCommand::Init {} => {
+            crate::init::init_profile(cli_kind, ProfileName::default(cli_kind), &config_dir)
+                .await
+                .map(|_| GolemResult::Str("Profile created".to_string()))
+        }
     };
 
     match res {
