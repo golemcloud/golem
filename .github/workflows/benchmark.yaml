@@ -117,7 +117,7 @@ jobs:
           echo "Successfully ran suspend benchmark"
           
           echo "Starting RPC benchmark"
-          ./target/debug/benchmark_rpc --quiet --json spawned > benchmark-rpc/benchmark_rpc.json
+          ./target/debug/benchmark_rpc --quiet --json spawned > benchmark-data-current/benchmark_rpc.json
           cat benchmark-data-current/benchmark_rpc.json
           echo "Successfully ran RPC benchmark"
           
@@ -167,6 +167,7 @@ jobs:
                echo "Running comparison with command: $compare_command"
                $compare_command > benchmark_comparison.md
                COMPARISON_MD=$(<benchmark_comparison.md)
+               echo $COMPARISON_MD
                curl -L \
                -X POST \
                -H "Accept: application/vnd.github+json" \
@@ -182,7 +183,7 @@ jobs:
                $get_report_command > report.md
                echo "Successfully ran the report command"
                REPORT_MD=$(<report.md)
-               echo "$REPORT_MD"
+               echo $REPORT_MD
                curl -L \
                -X POST \
                -H "Accept: application/vnd.github+json" \
