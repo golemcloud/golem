@@ -14,18 +14,20 @@
 
 use crate::components::component_service::{env_vars, ComponentService};
 use crate::components::rdb::Rdb;
-use crate::components::{DOCKER, NETWORK};
+use crate::components::NETWORK;
 use async_trait::async_trait;
+use std::borrow::Cow;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use testcontainers::core::WaitFor;
-use testcontainers::{Container, Image, RunnableImage};
+use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::runners::SyncRunner;
+use testcontainers::{Container, Image, ImageExt};
 
 use tracing::{info, Level};
 
 pub struct DockerComponentService {
-    container: Container<'static, GolemComponentServiceImage>,
+    container: Container<GolemComponentServiceImage>,
 }
 
 impl DockerComponentService {
@@ -48,14 +50,10 @@ impl DockerComponentService {
             verbosity,
         );
 
-        let image = RunnableImage::from(GolemComponentServiceImage::new(
-            Self::GRPC_PORT,
-            Self::HTTP_PORT,
-            env_vars,
-        ))
-        .with_container_name(Self::NAME)
-        .with_network(NETWORK);
-        let container = DOCKER.run(image);
+        let image = GolemComponentServiceImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
+            .with_container_name(Self::NAME)
+            .with_network(NETWORK);
+        let container = image.start().expect("Failed to start container");
 
         Self { container }
     }
@@ -80,15 +78,19 @@ impl ComponentService for DockerComponentService {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::HTTP_PORT)
+        self.container
+            .get_host_port_ipv4(Self::HTTP_PORT)
+            .expect("HTTP port not found")
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::GRPC_PORT)
+        self.container
+            .get_host_port_ipv4(Self::GRPC_PORT)
+            .expect("gRPC port not found")
     }
 
     fn kill(&self) {
-        self.container.stop()
+        self.container.stop().expect("Failed to stop container")
     }
 }
 
@@ -100,9 +102,8 @@ impl Drop for DockerComponentService {
 
 #[derive(Debug)]
 struct GolemComponentServiceImage {
-    grpc_port: u16,
-    http_port: u16,
     env_vars: HashMap<String, String>,
+    expose_ports: [ContainerPort; 2],
 }
 
 impl GolemComponentServiceImage {
@@ -112,33 +113,32 @@ impl GolemComponentServiceImage {
         env_vars: HashMap<String, String>,
     ) -> GolemComponentServiceImage {
         GolemComponentServiceImage {
-            grpc_port,
-            http_port,
             env_vars,
+            expose_ports: [ContainerPort::Tcp(grpc_port), ContainerPort::Tcp(http_port)],
         }
     }
 }
 
 impl Image for GolemComponentServiceImage {
-    type Args = ();
-
-    fn name(&self) -> String {
-        "golemservices/golem-component-service".to_string()
+    fn name(&self) -> &str {
+        "golemservices/golem-component-service"
     }
 
-    fn tag(&self) -> String {
-        "latest".to_string()
+    fn tag(&self) -> &str {
+        "latest"
     }
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
         vec![WaitFor::message_on_stdout("server started")]
     }
 
-    fn env_vars(&self) -> Box<dyn Iterator<Item = (&String, &String)> + '_> {
+    fn env_vars(
+        &self,
+    ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
         Box::new(self.env_vars.iter())
     }
 
-    fn expose_ports(&self) -> Vec<u16> {
-        vec![self.grpc_port, self.http_port]
+    fn expose_ports(&self) -> &[ContainerPort] {
+        &self.expose_ports
     }
 }

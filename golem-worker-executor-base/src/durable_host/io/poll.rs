@@ -16,7 +16,7 @@ use crate::model::InterruptKind;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::bindings::wasi::io::poll::{Host, HostPollable, Pollable};
+use wasmtime_wasi::bindings::io::poll::{Host, HostPollable, Pollable};
 
 use crate::durable_host::{DurableWorkerCtx, SuspendForSleep};
 use crate::metrics::wasm::record_host_function_call;
@@ -55,6 +55,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
             None => result,
         }
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostPollable for &mut DurableWorkerCtx<Ctx> {
+    async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
+        (*self).ready(self_).await
+    }
+
+    async fn block(&mut self, self_: Resource<Pollable>) -> anyhow::Result<()> {
+        (*self).block(self_).await
+    }
+
+    fn drop(&mut self, rep: Resource<Pollable>) -> anyhow::Result<()> {
+        (*self).drop(rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
+        (*self).poll(in_).await
     }
 }
 

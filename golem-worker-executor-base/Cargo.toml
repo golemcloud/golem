@@ -32,9 +32,9 @@ aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
 bitflags = "2.4.2"
 bytes = { workspace = true }
-cap-fs-ext = "2.0.0"                                # keep in sync with wasmtime
+cap-fs-ext = "3.0.0"                                # keep in sync with wasmtime
 cap-std = { workspace = true }
-cap-time-ext = "2.0.0"                              # keep in sync with wasmtime
+cap-time-ext = "3.0.0"                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
 evicting_cache_map = "0.4.0"
@@ -77,7 +77,6 @@ url = { workspace = true }
 uuid = { workspace = true }
 warp = { workspace = true }
 wasmtime = { workspace = true }
-wasmtime-runtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 windows-sys = "0.52.0"

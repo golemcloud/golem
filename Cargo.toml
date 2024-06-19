@@ -63,7 +63,7 @@ aws-config = "1.1.3"
 aws-sdk-s3 = "1.13.0"
 bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 bytes = "1.5.0"
-cap-std = "2.0.0" # keep in sync with wasmtime
+cap-std = "3.0.0" # keep in sync with wasmtime
 chrono = { version = "0.4.32", features = ["serde"] }
 clap = { version = "4.5.4", features = [
     "derive",
@@ -72,12 +72,12 @@ clap = { version = "4.5.4", features = [
     "help",
 ] }
 cli-table = "0.4.7"
-console-subscriber = "0.2.0"
+console-subscriber = "0.3.0"
 ctor = "0.2.6"
 dashmap = "5.5.3"
 derive_more = "0.99.17"
 figment = { version = "0.10.14", features = ["toml", "env"] }
-fred = { version = "8.0.0", features = [
+fred = { version = "9.0.3", features = [
     "metrics",
     "serde-json",
     "partial-tracing",
@@ -85,8 +85,8 @@ fred = { version = "8.0.0", features = [
 futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
-golem-wasm-ast = "0.2.2"
-golem-wasm-rpc = { version = "0.0.26", default-features = false, features = [
+golem-wasm-ast = "0.3.0"
+golem-wasm-rpc = { version = "0.0.29", default-features = false, features = [
     "host",
 ] }
 http = "1.0.0" # keep in sync with wasmtime
@@ -94,18 +94,18 @@ http_02 = { package = "http", version = "0.2.11" }
 humantime-serde = "1.1.1"
 hyper = { version = "1.0.1", features = ["full"] } # keep in sync with wasmtime
 iso8601-timestamp = "0.2.16"
-itertools = "0.12.1"
-k8s-openapi = { version = "0.21.1", features = ["earliest"] }
-kube = { version = "0.88.1", features = ["runtime", "derive"] }
-kube-derive = "0.88.1"
+itertools = "0.13.0"
+k8s-openapi = { version = "0.22.0", features = ["earliest"] }
+kube = { version = "0.92.0", features = ["runtime", "derive"] }
+kube-derive = "0.92.0"
 lazy_static = "1.4.0"
 nom = "7.1.3"
 once_cell = "1.19.0"
 openapiv3 = "2.0.0"
-opentelemetry = "0.21.0"
-opentelemetry-prometheus = "0.14.1"
-opentelemetry_sdk = "0.21.2"
-poem-openapi = { version = "4.0.0", features = [
+opentelemetry = "0.23.0"
+opentelemetry-prometheus = "0.16.0"
+opentelemetry_sdk = "0.23.0"
+poem-openapi = { version = "5.0.2", features = [
     "swagger-ui",
     "chrono",
     "time",
@@ -114,7 +114,7 @@ poem-openapi = { version = "4.0.0", features = [
     "url",
     "websocket",
 ] }
-poem = { version = "2.0.0", features = ["prometheus", "opentelemetry", "test"] }
+poem = { version = "3.0.1", features = ["prometheus", "opentelemetry", "test"] }
 postgres = "0.19.7"
 prometheus = { version = "0.13.3", features = ["process"] }
 proptest = "1.4.0"
@@ -122,13 +122,13 @@ prost = "0.12.3"
 prost-types = "0.12.3"
 redis = { version = "0.25.2", features = ["default"] }
 regex = "1.10.3"
-reqwest = { version = "0.11.27", features = [
+reqwest = { version = "0.12.5", features = [
     "gzip",
     "json",
     "multipart",
     "stream",
 ] }
-rustls = { version = "0.22.2" }
+rustls = { version = "0.23.10" }
 rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
@@ -137,8 +137,8 @@ strum = "0.26.1"
 strum_macros = "0.26.1"
 tap = "1.0.1"
 tempfile = "3.9.0"
-testcontainers = { version = "0.15.0", features = ["async-trait", "tokio"] }
-testcontainers-modules = { version = "0.3.2", features = ["postgres", "redis", "minio"] }
+testcontainers = { version = "0.18.0", features = ["blocking"] }
+testcontainers-modules = { version = "0.6.1", features = ["postgres", "redis", "minio"] }
 thiserror = "1.0.56"
 tokio = { version = "1.0", features = [
     "macros",
@@ -150,14 +150,14 @@ tokio = { version = "1.0", features = [
     "process",
 ] }
 tokio-postgres = "0.7.10"
-tokio-rustls = { version = "0.25.0" }
+tokio-rustls = { version = "0.26.0" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7.10"
-tonic = "0.10.2"
-tonic-reflection = "0.10.2"
-tonic-health = "0.10.2"
+tonic = "0.11.0"
+tonic-reflection = "0.11.0"
+tonic-health = "0.11.0"
 tracing = { version = "0.1.40", features = ["log"] }
-tracing-opentelemetry = "0.22.0"
+tracing-opentelemetry = "0.24.0"
 tracing-subscriber = { version = "0.3.18", features = [
     "env-filter",
     "fmt",
@@ -167,15 +167,13 @@ tracing-subscriber = { version = "0.3.18", features = [
 url = "2.5.0"
 uuid = { version = "1.7.0", features = ["serde", "v4"] }
 warp = "0.3.6"
-wasm-wave = "=0.4.0"
-wasmtime = { version = "=17.0.0", features = ["component-model"] }
-wasmtime-runtime = { version = "=17.0.0" }
-wasmtime-wasi = { version = "=17.0.0" }
-wasmtime-wasi-http = { version = "=17.0.0" }
+wasm-wave = "=0.6.0"
+wasmtime = { version = "=21.0.1", features = ["component-model"] }
+wasmtime-wasi = { version = "=21.0.1" }
+wasmtime-wasi-http = { version = "=21.0.1" }
 webpki-roots = { version = "0.26.0" }
 
 [patch.crates-io]
-wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-17" }
-wasmtime-runtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-17" }
-wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-17" }
-wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-17" }
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v21.0.1" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v21.0.1" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v21.0.1" }

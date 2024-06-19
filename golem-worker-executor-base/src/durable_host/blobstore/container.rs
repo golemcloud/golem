@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::WasiView;
+use wasmtime_wasi::WasiView;
 
 use crate::durable_host::blobstore::types::{
     ContainerEntry, IncomingValueEntry, OutgoingValueEntry, StreamObjectNamesEntry,
@@ -94,7 +94,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Ok(get_data) => {
                 let incoming_value = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(IncomingValueEntry::new(get_data))?;
                 Ok(Ok(incoming_value))
             }
@@ -168,7 +168,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Ok(list_objects) => {
                 let stream_object_names = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(StreamObjectNamesEntry::new(list_objects))?;
                 Ok(Ok(stream_object_names))
             }
@@ -342,7 +342,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, container: Resource<Container>) -> anyhow::Result<()> {
         record_host_function_call("blobstore::container::container", "drop");
         self.as_wasi_view()
-            .table_mut()
+            .table()
             .delete::<ContainerEntry>(container)?;
         Ok(())
     }
@@ -404,10 +404,119 @@ impl<Ctx: WorkerCtx> HostStreamObjectNames for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<StreamObjectNames>) -> anyhow::Result<()> {
         record_host_function_call("blobstore::container::stream_object_names", "drop");
-        self.as_wasi_view().table_mut().delete(rep)?;
+        self.as_wasi_view().table().delete(rep)?;
         Ok(())
     }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostContainer for &mut DurableWorkerCtx<Ctx> {
+    async fn name(
+        &mut self,
+        container: Resource<Container>,
+    ) -> anyhow::Result<Result<String, Error>> {
+        (*self).name(container).await
+    }
+
+    async fn info(
+        &mut self,
+        container: Resource<Container>,
+    ) -> anyhow::Result<Result<ContainerMetadata, Error>> {
+        (*self).info(container).await
+    }
+
+    async fn get_data(
+        &mut self,
+        container: Resource<Container>,
+        name: ObjectName,
+        start: u64,
+        end: u64,
+    ) -> anyhow::Result<Result<Resource<IncomingValue>, Error>> {
+        (*self).get_data(container, name, start, end).await
+    }
+
+    async fn write_data(
+        &mut self,
+        container: Resource<Container>,
+        name: ObjectName,
+        data: Resource<OutgoingValue>,
+    ) -> anyhow::Result<Result<(), Error>> {
+        (*self).write_data(container, name, data).await
+    }
+
+    async fn list_objects(
+        &mut self,
+        container: Resource<Container>,
+    ) -> anyhow::Result<Result<Resource<StreamObjectNames>, Error>> {
+        (*self).list_objects(container).await
+    }
+
+    async fn delete_object(
+        &mut self,
+        container: Resource<Container>,
+        name: ObjectName,
+    ) -> anyhow::Result<Result<(), Error>> {
+        (*self).delete_object(container, name).await
+    }
+
+    async fn delete_objects(
+        &mut self,
+        container: Resource<Container>,
+        names: Vec<ObjectName>,
+    ) -> anyhow::Result<Result<(), Error>> {
+        (*self).delete_objects(container, names).await
+    }
+
+    async fn has_object(
+        &mut self,
+        container: Resource<Container>,
+        name: ObjectName,
+    ) -> anyhow::Result<Result<bool, Error>> {
+        (*self).has_object(container, name).await
+    }
+
+    async fn object_info(
+        &mut self,
+        container: Resource<Container>,
+        name: ObjectName,
+    ) -> anyhow::Result<Result<ObjectMetadata, Error>> {
+        (*self).object_info(container, name).await
+    }
+
+    async fn clear(&mut self, container: Resource<Container>) -> anyhow::Result<Result<(), Error>> {
+        (*self).clear(container).await
+    }
+
+    fn drop(&mut self, rep: Resource<ContainerEntry>) -> anyhow::Result<()> {
+        HostContainer::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostStreamObjectNames for &mut DurableWorkerCtx<Ctx> {
+    async fn read_stream_object_names(
+        &mut self,
+        self_: Resource<StreamObjectNames>,
+        len: u64,
+    ) -> anyhow::Result<Result<(Vec<ObjectName>, bool), Error>> {
+        (*self).read_stream_object_names(self_, len).await
+    }
+
+    async fn skip_stream_object_names(
+        &mut self,
+        self_: Resource<StreamObjectNames>,
+        num: u64,
+    ) -> anyhow::Result<Result<(u64, bool), Error>> {
+        (*self).skip_stream_object_names(self_, num).await
+    }
+
+    fn drop(&mut self, rep: Resource<StreamObjectNames>) -> anyhow::Result<()> {
+        HostStreamObjectNames::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}

@@ -17,16 +17,18 @@ use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{env_vars, WorkerService};
-use crate::components::{DOCKER, NETWORK};
+use crate::components::NETWORK;
 use async_trait::async_trait;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
-use testcontainers::core::WaitFor;
-use testcontainers::{Container, Image, RunnableImage};
+use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::runners::SyncRunner;
+use testcontainers::{Container, Image, ImageExt};
 use tracing::{info, Level};
 
 pub struct DockerWorkerService {
-    container: Container<'static, GolemWorkerServiceImage>,
+    container: Container<GolemWorkerServiceImage>,
 }
 
 impl DockerWorkerService {
@@ -55,15 +57,15 @@ impl DockerWorkerService {
             verbosity,
         );
 
-        let image = RunnableImage::from(GolemWorkerServiceImage::new(
+        let image = GolemWorkerServiceImage::new(
             Self::GRPC_PORT,
             Self::HTTP_PORT,
             Self::CUSTOM_REQUEST_PORT,
             env_vars,
-        ))
+        )
         .with_container_name(Self::NAME)
         .with_network(NETWORK);
-        let container = DOCKER.run(image);
+        let container = image.start().expect("Failed to start container");
 
         Self { container }
     }
@@ -92,19 +94,25 @@ impl WorkerService for DockerWorkerService {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::HTTP_PORT)
+        self.container
+            .get_host_port_ipv4(Self::HTTP_PORT)
+            .expect("Failed to get HTTP port")
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::GRPC_PORT)
+        self.container
+            .get_host_port_ipv4(Self::GRPC_PORT)
+            .expect("Failed to get gRPC port")
     }
 
     fn public_custom_request_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::CUSTOM_REQUEST_PORT)
+        self.container
+            .get_host_port_ipv4(Self::CUSTOM_REQUEST_PORT)
+            .expect("Failed to get custom request port")
     }
 
     fn kill(&self) {
-        self.container.stop()
+        self.container.stop().expect("Failed to stop container")
     }
 }
 
@@ -116,10 +124,8 @@ impl Drop for DockerWorkerService {
 
 #[derive(Debug)]
 struct GolemWorkerServiceImage {
-    grpc_port: u16,
-    http_port: u16,
-    custom_request_port: u16,
     env_vars: HashMap<String, String>,
+    expose_ports: [ContainerPort; 3],
 }
 
 impl GolemWorkerServiceImage {
@@ -130,34 +136,36 @@ impl GolemWorkerServiceImage {
         env_vars: HashMap<String, String>,
     ) -> GolemWorkerServiceImage {
         GolemWorkerServiceImage {
-            grpc_port,
-            http_port,
-            custom_request_port,
             env_vars,
+            expose_ports: [
+                ContainerPort::Tcp(grpc_port),
+                ContainerPort::Tcp(http_port),
+                ContainerPort::Tcp(custom_request_port),
+            ],
         }
     }
 }
 
 impl Image for GolemWorkerServiceImage {
-    type Args = ();
-
-    fn name(&self) -> String {
-        "golemservices/golem-worker-service".to_string()
+    fn name(&self) -> &str {
+        "golemservices/golem-worker-service"
     }
 
-    fn tag(&self) -> String {
-        "latest".to_string()
+    fn tag(&self) -> &str {
+        "latest"
     }
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
         vec![WaitFor::message_on_stdout("server started")]
     }
 
-    fn env_vars(&self) -> Box<dyn Iterator<Item = (&String, &String)> + '_> {
+    fn env_vars(
+        &self,
+    ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
         Box::new(self.env_vars.iter())
     }
 
-    fn expose_ports(&self) -> Vec<u16> {
-        vec![self.grpc_port, self.http_port, self.custom_request_port]
+    fn expose_ports(&self) -> &[ContainerPort] {
+        &self.expose_ports
     }
 }

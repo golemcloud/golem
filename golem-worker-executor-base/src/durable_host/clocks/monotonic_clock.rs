@@ -20,9 +20,7 @@ use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
-use wasmtime_wasi::preview2::bindings::wasi::clocks::monotonic_clock::{
-    Duration, Host, Instant, Pollable,
-};
+use wasmtime_wasi::bindings::clocks::monotonic_clock::{Duration, Host, Instant, Pollable};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -59,5 +57,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.state.oplog.commit().await;
         let when = now.saturating_add(when);
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn now(&mut self) -> anyhow::Result<Instant> {
+        (*self).now().await
+    }
+
+    async fn resolution(&mut self) -> anyhow::Result<Instant> {
+        (*self).resolution().await
+    }
+
+    async fn subscribe_instant(&mut self, when: Instant) -> anyhow::Result<Resource<Pollable>> {
+        (*self).subscribe_instant(when).await
+    }
+
+    async fn subscribe_duration(&mut self, when: Duration) -> anyhow::Result<Resource<Pollable>> {
+        (*self).subscribe_duration(when).await
     }
 }

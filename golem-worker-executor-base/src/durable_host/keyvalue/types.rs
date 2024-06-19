@@ -25,7 +25,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bytes::Bytes;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::{
+use wasmtime_wasi::{
     HostInputStream, HostOutputStream, InputStream, StreamResult, Subscribe, WasiView,
 };
 
@@ -36,16 +36,13 @@ impl<Ctx: WorkerCtx> HostBucket for DurableWorkerCtx<Ctx> {
         name: String,
     ) -> anyhow::Result<Result<Resource<BucketEntry>, Resource<Error>>> {
         record_host_function_call("keyvalue::types::bucket", "open");
-        let bucket = self
-            .as_wasi_view()
-            .table_mut()
-            .push(BucketEntry::new(name))?;
+        let bucket = self.as_wasi_view().table().push(BucketEntry::new(name))?;
         Ok(Ok(bucket))
     }
 
     fn drop(&mut self, rep: Resource<BucketEntry>) -> anyhow::Result<()> {
         record_host_function_call("keyvalue::types::bucket", "drop");
-        self.as_wasi_view().table_mut().delete::<BucketEntry>(rep)?;
+        self.as_wasi_view().table().delete::<BucketEntry>(rep)?;
         Ok(())
     }
 }
@@ -56,7 +53,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
         record_host_function_call("keyvalue::types::outgoing_value", "new_outgoing_value");
         let outgoing_value = self
             .as_wasi_view()
-            .table_mut()
+            .table()
             .push(OutgoingValueEntry::new())?;
         Ok(outgoing_value)
     }
@@ -76,7 +73,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
             .body
             .clone();
         let body: Box<dyn HostOutputStream> = Box::new(OutgoingValueEntryStream::new(body));
-        let outgoing_value_async_body = self.as_wasi_view().table_mut().push(body)?;
+        let outgoing_value_async_body = self.as_wasi_view().table().push(body)?;
         Ok(Ok(outgoing_value_async_body))
     }
 
@@ -102,7 +99,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, rep: Resource<OutgoingValueEntry>) -> anyhow::Result<()> {
         record_host_function_call("keyvalue::types::outgoing_value", "drop");
         self.as_wasi_view()
-            .table_mut()
+            .table()
             .delete::<OutgoingValueEntry>(rep)?;
         Ok(())
     }
@@ -144,7 +141,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
             .clone();
         let input_stream: InputStream =
             InputStream::Host(Box::new(IncomingValueEntryStream::new(body)));
-        let incoming_value_async_body = self.as_wasi_view().table_mut().push(input_stream)?;
+        let incoming_value_async_body = self.as_wasi_view().table().push(input_stream)?;
         Ok(Ok(incoming_value_async_body))
     }
 
@@ -166,7 +163,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, rep: Resource<IncomingValue>) -> anyhow::Result<()> {
         record_host_function_call("keyvalue::types::incoming_value", "drop");
         self.as_wasi_view()
-            .table_mut()
+            .table()
             .delete::<IncomingValueEntry>(rep)?;
         Ok(())
     }
@@ -174,6 +171,77 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostIncomingValue for &mut DurableWorkerCtx<Ctx> {
+    async fn incoming_value_consume_sync(
+        &mut self,
+        self_: Resource<IncomingValueEntry>,
+    ) -> anyhow::Result<Result<IncomingValueSyncBody, Resource<Error>>> {
+        (*self).incoming_value_consume_sync(self_).await
+    }
+
+    async fn incoming_value_consume_async(
+        &mut self,
+        self_: Resource<IncomingValueEntry>,
+    ) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Resource<Error>>> {
+        (*self).incoming_value_consume_async(self_).await
+    }
+
+    async fn incoming_value_size(
+        &mut self,
+        self_: Resource<IncomingValueEntry>,
+    ) -> anyhow::Result<Result<u64, Resource<Error>>> {
+        (*self).incoming_value_size(self_).await
+    }
+
+    fn drop(&mut self, rep: Resource<IncomingValueEntry>) -> anyhow::Result<()> {
+        HostIncomingValue::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostOutgoingValue for &mut DurableWorkerCtx<Ctx> {
+    async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueEntry>> {
+        (*self).new_outgoing_value().await
+    }
+
+    async fn outgoing_value_write_body_async(
+        &mut self,
+        self_: Resource<OutgoingValueEntry>,
+    ) -> anyhow::Result<Result<Resource<OutgoingValueBodyAsync>, Resource<Error>>> {
+        (*self).outgoing_value_write_body_async(self_).await
+    }
+
+    async fn outgoing_value_write_body_sync(
+        &mut self,
+        self_: Resource<OutgoingValueEntry>,
+        value: OutgoingValueBodySync,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        (*self).outgoing_value_write_body_sync(self_, value).await
+    }
+
+    fn drop(&mut self, rep: Resource<OutgoingValueEntry>) -> anyhow::Result<()> {
+        HostOutgoingValue::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostBucket for &mut DurableWorkerCtx<Ctx> {
+    async fn open_bucket(
+        &mut self,
+        name: String,
+    ) -> anyhow::Result<Result<Resource<BucketEntry>, Resource<Error>>> {
+        (*self).open_bucket(name).await
+    }
+
+    fn drop(&mut self, rep: Resource<BucketEntry>) -> anyhow::Result<()> {
+        HostBucket::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
 
 pub struct BucketEntry {
     pub name: String,

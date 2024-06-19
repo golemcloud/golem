@@ -17,8 +17,8 @@ use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::Client;
 use golem_common::model::{AccountId, ComponentId};
-use once_cell::sync::Lazy;
 use tempfile::{tempdir, TempDir};
+use testcontainers::runners::SyncRunner;
 use testcontainers::Container;
 use testcontainers_modules::minio::MinIO;
 use uuid::Uuid;
@@ -325,12 +325,12 @@ impl GetBlobStorage for FsTest {
     }
 }
 
-struct S3Test<'a> {
-    _container: Container<'a, MinIO>,
+struct S3Test {
+    _container: Container<MinIO>,
     storage: s3::S3BlobStorage,
 }
 
-impl<'a> GetBlobStorage for S3Test<'a> {
+impl GetBlobStorage for S3Test {
     fn get_blob_storage(&self) -> &dyn BlobStorage {
         &self.storage
     }
@@ -351,15 +351,10 @@ pub(crate) async fn fs() -> impl GetBlobStorage {
     }
 }
 
-// Using a global docker client to avoid the restrictions of the testcontainers library,
-// binding the container lifetime to the client.
-static DOCKER: Lazy<testcontainers::clients::Cli> =
-    Lazy::new(testcontainers::clients::Cli::default);
-
 pub(crate) async fn s3() -> impl GetBlobStorage {
     let minio = MinIO::default();
-    let node = DOCKER.run(minio);
-    let host_port = node.get_host_port_ipv4(9000);
+    let node = minio.start().unwrap();
+    let host_port = node.get_host_port_ipv4(9000).unwrap();
 
     let config = S3BlobStorageConfig {
         retries: Default::default(),
@@ -378,8 +373,8 @@ pub(crate) async fn s3() -> impl GetBlobStorage {
 
 pub(crate) async fn s3_prefixed() -> impl GetBlobStorage {
     let minio = MinIO::default();
-    let node = DOCKER.run(minio);
-    let host_port = node.get_host_port_ipv4(9000);
+    let node = minio.start().unwrap();
+    let host_port = node.get_host_port_ipv4(9000).unwrap();
 
     let config = S3BlobStorageConfig {
         retries: Default::default(),

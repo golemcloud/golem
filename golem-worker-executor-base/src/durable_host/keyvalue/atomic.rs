@@ -43,3 +43,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         unimplemented!("compare_and_swap")
     }
 }
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn increment(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key: Key,
+        delta: u64,
+    ) -> anyhow::Result<Result<u64, Resource<Error>>> {
+        (*self).increment(bucket, key, delta).await
+    }
+
+    async fn compare_and_swap(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key: Key,
+        old: u64,
+        new: u64,
+    ) -> anyhow::Result<Result<bool, Resource<Error>>> {
+        (*self).compare_and_swap(bucket, key, old, new).await
+    }
+}

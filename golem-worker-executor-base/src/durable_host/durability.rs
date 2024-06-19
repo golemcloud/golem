@@ -151,7 +151,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         } else {
             let (_, oplog_entry) =
                 crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
-            Self::validate_oplog_entry(&oplog_entry, function_name)?;
+            DurableWorkerCtx::<Ctx>::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = self
                 .state
                 .oplog
@@ -217,7 +217,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         } else {
             let (_, oplog_entry) =
                 crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
-            Self::validate_oplog_entry(&oplog_entry, function_name)?;
+            DurableWorkerCtx::<Ctx>::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = self
                 .state
                 .oplog

@@ -14,13 +14,15 @@
 
 use crate::components::redis::Redis;
 use crate::components::worker_executor::{env_vars, WorkerExecutor};
-use crate::components::{DOCKER, NETWORK};
+use crate::components::NETWORK;
 use async_trait::async_trait;
+use std::borrow::Cow;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use testcontainers::core::WaitFor;
-use testcontainers::{Container, Image, RunnableImage};
+use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::runners::SyncRunner;
+use testcontainers::{Container, Image, ImageExt};
 
 use crate::components::component_service::ComponentService;
 use crate::components::shard_manager::ShardManager;
@@ -31,7 +33,7 @@ pub struct DockerWorkerExecutor {
     name: String,
     http_port: u16,
     grpc_port: u16,
-    container: Container<'static, WorkerExecutorImage>,
+    container: Container<WorkerExecutorImage>,
 }
 
 impl DockerWorkerExecutor {
@@ -58,10 +60,10 @@ impl DockerWorkerExecutor {
 
         let name = format!("golem-worker-executor-{grpc_port}");
 
-        let image = RunnableImage::from(WorkerExecutorImage::new(grpc_port, http_port, env_vars))
+        let image = WorkerExecutorImage::new(grpc_port, http_port, env_vars)
             .with_container_name(&name)
             .with_network(NETWORK);
-        let container = DOCKER.run(image);
+        let container = image.start().expect("Failed to start container");
 
         Self {
             name,
@@ -91,19 +93,23 @@ impl WorkerExecutor for DockerWorkerExecutor {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(self.http_port)
+        self.container
+            .get_host_port_ipv4(self.http_port)
+            .expect("Failed to get HTTP port")
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(self.grpc_port)
+        self.container
+            .get_host_port_ipv4(self.grpc_port)
+            .expect("Failed to get gRPC port")
     }
 
     fn kill(&self) {
-        self.container.stop()
+        self.container.stop().expect("Failed to stop container")
     }
 
     async fn restart(&self) {
-        self.container.start();
+        self.container.start().expect("Failed to start container");
     }
 }
 
@@ -115,9 +121,8 @@ impl Drop for DockerWorkerExecutor {
 
 #[derive(Debug)]
 struct WorkerExecutorImage {
-    grpc_port: u16,
-    http_port: u16,
     env_vars: HashMap<String, String>,
+    expose_ports: [ContainerPort; 2],
 }
 
 impl WorkerExecutorImage {
@@ -127,33 +132,32 @@ impl WorkerExecutorImage {
         env_vars: HashMap<String, String>,
     ) -> WorkerExecutorImage {
         WorkerExecutorImage {
-            grpc_port,
-            http_port,
             env_vars,
+            expose_ports: [ContainerPort::Tcp(grpc_port), ContainerPort::Tcp(http_port)],
         }
     }
 }
 
 impl Image for WorkerExecutorImage {
-    type Args = ();
-
-    fn name(&self) -> String {
-        "golemservices/golem-worker-executor".to_string()
+    fn name(&self) -> &str {
+        "golemservices/golem-worker-executor"
     }
 
-    fn tag(&self) -> String {
-        "latest".to_string()
+    fn tag(&self) -> &str {
+        "latest"
     }
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
         vec![WaitFor::message_on_stdout("Registering worker executor")]
     }
 
-    fn env_vars(&self) -> Box<dyn Iterator<Item = (&String, &String)> + '_> {
+    fn env_vars(
+        &self,
+    ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
         Box::new(self.env_vars.iter())
     }
 
-    fn expose_ports(&self) -> Vec<u16> {
-        vec![self.grpc_port, self.http_port]
+    fn expose_ports(&self) -> &[ContainerPort] {
+        &self.expose_ports
     }
 }

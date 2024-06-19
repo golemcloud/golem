@@ -646,7 +646,7 @@ impl WorkerCtx for TestWorkerCtx {
     }
 
     fn get_public_state(&self) -> &Self::PublicState {
-        self.durable_ctx.get_public_state()
+        &self.durable_ctx.public_state
     }
 
     fn resource_limiter(&mut self) -> &mut dyn ResourceLimiterAsync {
@@ -774,18 +774,13 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
     }
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
-        let mut linker =
-            create_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(engine, |x| {
-                &mut x.durable_ctx
-            })?;
-        api::host::add_to_linker::<TestWorkerCtx, DurableWorkerCtx<TestWorkerCtx>>(
-            &mut linker,
-            |x| &mut x.durable_ctx,
-        )?;
-        golem_wasm_rpc::golem::rpc::types::add_to_linker::<
-            TestWorkerCtx,
-            DurableWorkerCtx<TestWorkerCtx>,
-        >(&mut linker, |x| &mut x.durable_ctx)?;
+        let mut linker = create_linker(engine, get_durable_ctx)?;
+        api::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }
+}
+
+fn get_durable_ctx(ctx: &mut TestWorkerCtx) -> &mut DurableWorkerCtx<TestWorkerCtx> {
+    &mut ctx.durable_ctx
 }

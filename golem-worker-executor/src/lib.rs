@@ -131,17 +131,15 @@ impl Bootstrap<Context> for ServerBootstrap {
     }
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
-        let mut linker =
-            create_linker::<Context, DurableWorkerCtx<Context>>(engine, |x| &mut x.durable_ctx)?;
-        golem::api::host::add_to_linker::<Context, DurableWorkerCtx<Context>>(&mut linker, |x| {
-            &mut x.durable_ctx
-        })?;
-        golem_wasm_rpc::golem::rpc::types::add_to_linker::<Context, DurableWorkerCtx<Context>>(
-            &mut linker,
-            |x| &mut x.durable_ctx,
-        )?;
+        let mut linker = create_linker(engine, get_durable_ctx)?;
+        golem::api::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }
+}
+
+fn get_durable_ctx(ctx: &mut Context) -> &mut DurableWorkerCtx<Context> {
+    &mut ctx.durable_ctx
 }
 
 pub async fn run(

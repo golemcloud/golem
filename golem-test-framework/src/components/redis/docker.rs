@@ -13,15 +13,16 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
-use crate::components::{DOCKER, NETWORK};
+use crate::components::NETWORK;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use testcontainers::{Container, RunnableImage};
+use testcontainers::runners::SyncRunner;
+use testcontainers::{Container, ImageExt};
 use testcontainers_modules::redis::REDIS_PORT;
 use tracing::info;
 
 pub struct DockerRedis {
-    container: Container<'static, testcontainers_modules::redis::Redis>,
+    container: Container<testcontainers_modules::redis::Redis>,
     prefix: String,
     valid: AtomicBool,
 }
@@ -32,15 +33,17 @@ impl DockerRedis {
     pub fn new(prefix: String) -> Self {
         info!("Starting Redis container");
 
-        let image = RunnableImage::from(testcontainers_modules::redis::Redis)
+        let image = testcontainers_modules::redis::Redis
             .with_tag("7.2")
             .with_container_name(Self::NAME)
             .with_network(NETWORK);
-        let container = DOCKER.run(image);
+        let container = image.start().expect("Failed to start container");
 
         super::wait_for_startup(
             "localhost",
-            container.get_host_port_ipv4(REDIS_PORT),
+            container
+                .get_host_port_ipv4(REDIS_PORT)
+                .expect("Failed to get Redis port"),
             Duration::from_secs(10),
         );
 
@@ -72,7 +75,9 @@ impl Redis for DockerRedis {
     }
 
     fn public_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(REDIS_PORT)
+        self.container
+            .get_host_port_ipv4(REDIS_PORT)
+            .expect("Failed to get Redis port")
     }
 
     fn prefix(&self) -> &str {
@@ -82,7 +87,7 @@ impl Redis for DockerRedis {
     fn kill(&self) {
         info!("Stopping Redis container");
         self.valid.store(false, Ordering::Release);
-        self.container.stop();
+        self.container.stop().expect("Failed to stop container");
     }
 }
 
