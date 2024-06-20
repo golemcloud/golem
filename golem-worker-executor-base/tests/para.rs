@@ -22,7 +22,7 @@ async fn para_contact_to_generator() {
 
     env.insert(
         "ASSET_GENERATOR_COMPONENT_ID".to_string(),
-        campaign_contact_component_id.to_string(),
+        asset_generator_component_id.to_string(),
     );
 
     let registry_worker_id = executor
