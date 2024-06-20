@@ -52,7 +52,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     And remove golem-cli:
                     cargo remove golem-cli
                     To create another default profile use `golem-cli init`.
-                    To manage profiles use `golem-cli profile` command."
+                    To manage profiles use `golem-cli profile` command.
+                    "
                 );
 
             None
