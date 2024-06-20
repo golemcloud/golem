@@ -492,9 +492,8 @@ mod internal {
                 && dependency_package.name.name == self_stub_name)
     }
 
-    // For those dependencies we add to the source, if they, by any chance, imports from the skipped/invalid dependencies (basically they are destination_wit package itself)
-    // we simply replace. This is the reasoning
-    // The dependencies we import never logically end up using these imports in the WIT files.
+    // For those dependencies we add to the source, if they are importing from the skipped/invalid dependencies
+    // we simply make sure to delete them
     pub(crate) fn replace_self_imports_from_dependencies(
         dependency_wit_path: &PathBuf,
         destination_wit_root: &UnresolvedPackage,
