@@ -82,7 +82,7 @@ pub struct GenerateArgs {
     /// Always inline all the data types defined in the source WIT instead of copying and depending on
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
-    #[clap(long, default_value = "false")]
+    #[clap(long, default_value_t = false)]
     pub always_inline_types: bool,
 }
 
@@ -117,7 +117,7 @@ pub struct BuildArgs {
     /// Always inline all the data types defined in the source WIT instead of copying and depending on
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
-    #[clap(long, default_value = "false")]
+    #[clap(long, default_value_t = false)]
     pub always_inline_types: bool,
 }
 
@@ -185,6 +185,7 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         &args.world,
         &args.stub_crate_version,
         &args.wasm_rpc_path_override,
+        args.always_inline_types
     )
     .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
 
@@ -214,6 +215,7 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
         &args.world,
         &args.stub_crate_version,
         &args.wasm_rpc_path_override,
+        args.always_inline_types,
     )
     .context("Failed to gather information for the stub generator")?;
 
@@ -330,7 +332,8 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
             stub_root,
             &Some(world_name),
             "0.0.1", // Version is unused when it comes to re-generating stub at this stage.
-            &None, // wasm-rpc path is is unused when it comes to re-generating stub during dependency addition
+            &None, // wasm-rpc path is unused when it comes to re-generating stub during dependency addition
+            true,
         )?;
 
         // We filter the dependencies of stub that's already existing in dest_wit_root
