@@ -1,0 +1,74 @@
+[package]
+name = "golem-cloud-cli"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem"
+authors = ["Simon Popugaev <simon.popugaev@ziverge.com>"]
+readme = "README.md"
+description = "Command line interface for Golem."
+autotests = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "golem-cloud-cli"
+path = "src/cloud_main.rs"
+
+[[bin]]
+name = "golem-cli"
+path = "src/universal_main.rs"
+required-features = ["universal"]
+
+[dependencies]
+golem-cloud-client = { path = "../golem-cloud-client", version = "0.0.0"}
+golem-client = "0.0.108"
+golem-cli = "0.0.108"
+
+async-trait = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+clap-verbosity-flag = "2.1.1"
+derive_more = { workspace = true }
+dirs = "5.0.1"
+futures-util = { workspace = true }
+golem-examples = "0.2.1"
+golem-wasm-ast = { workspace = true }
+golem-wasm-rpc = { workspace = true }
+golem-wasm-rpc-stubgen = { version = "0.0.26", optional = true }
+h2 = "0.3.24"
+http = { workspace = true }
+hyper = { workspace = true }
+indoc = "2.0.4"
+itertools = "0.12.1"
+native-tls = "0.2.11"
+openapiv3 = "2.0.0"
+rand = "0.8.5"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+testcontainers-modules = { version = "0.3.2", features = ["postgres", "redis"] }
+tokio = { workspace = true }
+tokio-tungstenite = { version = "0.20.1", features = ["native-tls"] }
+tower = "0.4.13"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tungstenite = "0.20.1"
+url = { workspace = true }
+uuid = { workspace = true }
+version-compare = "=0.0.11"
+cli-table = "0.4.7"
+textwrap = "0.16.1"
+anyhow.workspace = true
+colored = "2.1.0"
+inquire = "0.7.5"
+
+[features]
+default = ["stubgen"]
+stubgen = ["dep:golem-wasm-rpc-stubgen"]
+universal = []
