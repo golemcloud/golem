@@ -36,3 +36,5 @@ impl Guest for Component {
         with_state(|state| state.total)
     }
 }
+
+bindings::export!(Component with_types_in bindings);

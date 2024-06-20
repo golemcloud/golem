@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::{ResourceTableError, WasiView};
+use wasmtime_wasi::{ResourceTableError, WasiView};
 
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
@@ -64,7 +64,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         Some(incoming_value) => {
                             let value = self
                                 .as_wasi_view()
-                                .table_mut()
+                                .table()
                                 .push(IncomingValueEntry::new(incoming_value))?;
                             result.push(Some(value));
                         }
@@ -78,7 +78,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Err(e) => {
                 let error = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
@@ -156,7 +156,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Err(e) => {
                 let error = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
@@ -194,10 +194,44 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Err(e) => {
                 let error = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn get_many(
+        &mut self,
+        bucket: Resource<Bucket>,
+        keys: Vec<Key>,
+    ) -> anyhow::Result<Result<Vec<Option<Resource<IncomingValue>>>, Resource<Error>>> {
+        (*self).get_many(bucket, keys).await
+    }
+
+    async fn keys(
+        &mut self,
+        bucket: Resource<Bucket>,
+    ) -> anyhow::Result<Result<Vec<Key>, Resource<Error>>> {
+        (*self).keys(bucket).await
+    }
+
+    async fn set_many(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key_values: Vec<(Key, Resource<OutgoingValue>)>,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        (*self).set_many(bucket, key_values).await
+    }
+
+    async fn delete_many(
+        &mut self,
+        bucket: Resource<Bucket>,
+        keys: Vec<Key>,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        (*self).delete_many(bucket, keys).await
     }
 }

@@ -31,11 +31,13 @@ pub struct DockerWorkerExecutor {
     name: String,
     http_port: u16,
     grpc_port: u16,
+    public_http_port: u16,
+    public_grpc_port: u16,
     container: Container<'static, WorkerExecutorImage>,
 }
 
 impl DockerWorkerExecutor {
-    pub fn new(
+    pub async fn new(
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -63,10 +65,15 @@ impl DockerWorkerExecutor {
             .with_network(NETWORK);
         let container = DOCKER.run(image);
 
+        let public_http_port = container.get_host_port_ipv4(http_port);
+        let public_grpc_port = container.get_host_port_ipv4(grpc_port);
+
         Self {
             name,
             http_port,
             grpc_port,
+            public_http_port,
+            public_grpc_port,
             container,
         }
     }
@@ -91,15 +98,15 @@ impl WorkerExecutor for DockerWorkerExecutor {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(self.http_port)
+        self.public_http_port
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(self.grpc_port)
+        self.public_grpc_port
     }
 
     fn kill(&self) {
-        self.container.stop()
+        self.container.stop();
     }
 
     async fn restart(&self) {
@@ -115,9 +122,8 @@ impl Drop for DockerWorkerExecutor {
 
 #[derive(Debug)]
 struct WorkerExecutorImage {
-    grpc_port: u16,
-    http_port: u16,
     env_vars: HashMap<String, String>,
+    expose_ports: [u16; 2],
 }
 
 impl WorkerExecutorImage {
@@ -127,9 +133,8 @@ impl WorkerExecutorImage {
         env_vars: HashMap<String, String>,
     ) -> WorkerExecutorImage {
         WorkerExecutorImage {
-            grpc_port,
-            http_port,
             env_vars,
+            expose_ports: [grpc_port, http_port],
         }
     }
 }
@@ -154,6 +159,6 @@ impl Image for WorkerExecutorImage {
     }
 
     fn expose_ports(&self) -> Vec<u16> {
-        vec![self.grpc_port, self.http_port]
+        self.expose_ports.to_vec()
     }
 }

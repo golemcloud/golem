@@ -18,9 +18,7 @@ use wasmtime::component::Resource;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::preview2::bindings::wasi::cli::terminal_output::{
-    Host, HostTerminalOutput, TerminalOutput,
-};
+use wasmtime_wasi::bindings::cli::terminal_output::{Host, HostTerminalOutput, TerminalOutput};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostTerminalOutput for DurableWorkerCtx<Ctx> {
@@ -32,3 +30,13 @@ impl<Ctx: WorkerCtx> HostTerminalOutput for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostTerminalOutput for &mut DurableWorkerCtx<Ctx> {
+    fn drop(&mut self, rep: Resource<TerminalOutput>) -> anyhow::Result<()> {
+        (*self).drop(rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}

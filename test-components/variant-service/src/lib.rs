@@ -9,3 +9,5 @@ impl Guest for Component {
         BidResult::Success
     }
 }
+
+bindings::export!(Component with_types_in bindings);

@@ -40,3 +40,5 @@ impl Guest for Component {
         (count1 as u32, root_entries, test_entries, count2 as u32)
     }
 }
+
+bindings::export!(Component with_types_in bindings);

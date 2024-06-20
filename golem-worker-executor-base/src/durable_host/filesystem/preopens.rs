@@ -21,7 +21,7 @@ use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
-use wasmtime_wasi::preview2::bindings::wasi::filesystem::preopens::{Descriptor, Host};
+use wasmtime_wasi::bindings::filesystem::preopens::{Descriptor, Host};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -62,5 +62,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             },
         )
         .await
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn get_directories(&mut self) -> anyhow::Result<Vec<(Resource<Descriptor>, String)>> {
+        (*self).get_directories().await
     }
 }

@@ -16,3 +16,5 @@ impl Guest for Component {
         container_exists(&container_name).unwrap()
     }
 }
+
+bindings::export!(Component with_types_in bindings);

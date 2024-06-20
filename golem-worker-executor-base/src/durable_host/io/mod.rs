@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use wasmtime_wasi::preview2::{
+use wasmtime_wasi::{
     HostInputStream, HostOutputStream, Stderr, StdinStream, StdoutStream, StreamError,
     StreamResult, Subscribe,
 };

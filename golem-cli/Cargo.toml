@@ -33,7 +33,7 @@ futures-util = { workspace = true }
 golem-examples = "0.2.1"
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
-golem-wasm-rpc-stubgen = { version = "0.0.26", optional = true }
+golem-wasm-rpc-stubgen = { version = "0.0.29", optional = true }
 h2 = "0.3.24"
 http = { workspace = true }
 hyper = { workspace = true }
@@ -48,7 +48,7 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
-testcontainers-modules = { version = "0.3.2", features = ["postgres", "redis"] }
+testcontainers-modules = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { version = "0.20.1", features = ["native-tls"] }
 tower = "0.4.13"

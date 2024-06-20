@@ -103,3 +103,5 @@ impl Guest for Component {
         with_state(|s| s.global)
     }
 }
+
+bindings::export!(Component with_types_in bindings);

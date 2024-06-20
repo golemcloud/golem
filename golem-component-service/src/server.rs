@@ -17,7 +17,6 @@ use golem_component_service::config::{ComponentServiceConfig, DbConfig};
 use golem_component_service::service::Services;
 use golem_component_service::{api, db, grpcapi, metrics};
 use opentelemetry::global;
-use opentelemetry_sdk::metrics::MeterProvider;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::EndpointExt;
@@ -60,7 +59,11 @@ fn main() -> Result<(), std::io::Error> {
             .build()
             .unwrap();
 
-        global::set_meter_provider(MeterProvider::builder().with_reader(exporter).build());
+        global::set_meter_provider(
+            opentelemetry_sdk::metrics::MeterProviderBuilder::default()
+                .with_reader(exporter)
+                .build(),
+        );
 
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()

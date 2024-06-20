@@ -14,7 +14,7 @@
 
 include!(concat!(env!("OUT_DIR"), "/preview2_mod.rs"));
 
-pub type InputStream = wasmtime_wasi::preview2::InputStream;
-pub type OutputStream = wasmtime_wasi::preview2::OutputStream;
+pub type InputStream = wasmtime_wasi::InputStream;
+pub type OutputStream = wasmtime_wasi::OutputStream;
 
-pub type Pollable = wasmtime_wasi::preview2::Pollable;
+pub type Pollable = wasmtime_wasi::Pollable;

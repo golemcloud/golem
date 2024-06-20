@@ -304,3 +304,5 @@ fn read_body(incoming_response: &wasi::http::types::IncomingResponse) -> Vec<u8>
     }
     body
 }
+
+bindings::export!(Component with_types_in bindings);

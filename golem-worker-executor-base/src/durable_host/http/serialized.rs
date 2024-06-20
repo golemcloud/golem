@@ -17,7 +17,6 @@ use http::{HeaderName, HeaderValue, Version};
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use crate::durable_host::serialized::SerializableError;
 use wasmtime_wasi_http::bindings::http::types::{
@@ -110,15 +109,12 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
             headers.insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
         }
 
-        let fake_worker = tokio::spawn(async {}).into();
-
         Ok(Self {
             status: value.status,
             headers,
             body: Some(HostIncomingBody::failing(
                 "Body stream was interrupted due to a restart".to_string(),
             )), // NOTE: high enough timeout so it does not matter, but not as high to overflow instants
-            worker: Arc::new(fake_worker),
         })
     }
 }
