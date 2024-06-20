@@ -249,7 +249,7 @@ impl<Namespace> ApiDeploymentServiceDefault2<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Display + TryFrom<String>> ApiDeploymentService<Namespace>
+impl<Namespace: Display + TryFrom<String> + Eq + Clone> ApiDeploymentService<Namespace>
     for ApiDeploymentServiceDefault2<Namespace>
 {
     async fn deploy(
@@ -296,8 +296,8 @@ impl<Namespace: Display + TryFrom<String>> ApiDeploymentService<Namespace>
                     .definition_repo
                     .exists(
                         deployment.namespace.to_string().as_str(),
-                        api_definition_key.id.as_str(),
-                        api_definition_key.version.as_str(),
+                        api_definition_key.id.0.as_str(),
+                        api_definition_key.version.0.as_str(),
                     )
                     .await?;
 
@@ -312,8 +312,8 @@ impl<Namespace: Display + TryFrom<String>> ApiDeploymentService<Namespace>
                     namespace: deployment.namespace.to_string(),
                     subdomain: deployment.site.subdomain.clone(),
                     host: deployment.site.host.clone(),
-                    definition_id: api_definition_key.id.into(),
-                    definition_version: api_definition_key.version.into(),
+                    definition_id: api_definition_key.id.0.clone(),
+                    definition_version: api_definition_key.version.0.clone(),
                 });
             }
         }
@@ -342,8 +342,8 @@ impl<Namespace: Display + TryFrom<String>> ApiDeploymentService<Namespace>
                 subdomain: deployment_record.subdomain,
             };
 
-            let namespace: Namespace = deployment_record.namespace.try_into().map_err(|e| {
-                ApiDeploymentError::InternalError(format!("Failed to convert namespace: {}", e))
+            let namespace: Namespace = deployment_record.namespace.try_into().map_err(|_| {
+                ApiDeploymentError::InternalError("Failed to convert namespace".to_string())
             })?;
 
             let api_definition_key = ApiDefinitionIdWithVersion {
@@ -387,16 +387,16 @@ impl<Namespace: Display + TryFrom<String>> ApiDeploymentService<Namespace>
         let mut namespace: Option<Namespace> = None;
 
         for deployment_record in existing_deployment_records {
-            if site.is_empty() {
+            if site.is_none() {
                 site = Some(ApiSite {
                     host: deployment_record.host,
                     subdomain: deployment_record.subdomain,
                 });
             }
 
-            if namespace.is_empty() {
-                namespace = Some(deployment_record.namespace.try_into().map_err(|e| {
-                    ApiDeploymentError::InternalError(format!("Failed to convert namespace: {}", e))
+            if namespace.is_none() {
+                namespace = Some(deployment_record.namespace.try_into().map_err(|_| {
+                    ApiDeploymentError::InternalError("Failed to convert namespace".to_string())
                 })?);
             }
 

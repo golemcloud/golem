@@ -180,21 +180,26 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Postgres> {
             .map_err(|e| e.into())
     }
 
-    async fn delete(
-        &self,
-        namespace: &str,
-        host: &str,
-        subdomain: Option<&str>,
-    ) -> Result<bool, RepoError> {
-        sqlx::query(
-            "DELETE FROM api_deployments WHERE namespace = $1 AND host = $2 AND subdomain = $3",
-        )
-        .bind(namespace)
-        .bind(host)
-        .bind(subdomain)
-        .execute(self.db_pool.deref())
-        .await?;
-        Ok(true)
+    async fn delete(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<bool, RepoError> {
+        if !deployments.is_empty() {
+            let mut transaction = self.db_pool.begin().await?;
+            for deployment in deployments {
+                sqlx::query(
+                    "DELETE FROM api_deployments WHERE namespace = $1 AND host = $2 AND subdomain = $3 AND definition_id = $4 AND definition_version = $5",
+                )
+                    .bind(deployment.namespace.clone())
+                    .bind(deployment.host.clone())
+                    .bind(deployment.subdomain.clone())
+                    .bind(deployment.definition_id.clone())
+                    .bind(deployment.definition_version.clone())
+                    .execute(&mut *transaction)
+                    .await?;
+            }
+            transaction.commit().await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::api::HttpApiDefinition;
+use crate::api_definition::http::HttpApiDefinition;
 use golem_common::model::ComponentId;
 use golem_service_base::model::Component;
 
@@ -381,14 +381,14 @@ pub trait ApiDefinitionService2<AuthCtx, Namespace, ValidationError> {
     async fn create(
         &self,
         definition: &HttpApiDefinition,
-        namespace: Namespace,
+        namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError>;
 
     async fn update(
         &self,
         definition: &HttpApiDefinition,
-        namespace: Namespace,
+        namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError>;
 
@@ -396,7 +396,7 @@ pub trait ApiDefinitionService2<AuthCtx, Namespace, ValidationError> {
         &self,
         id: &ApiDefinitionId,
         version: &ApiVersion,
-        namespace: Namespace,
+        namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<HttpApiDefinition>, ValidationError>;
 
@@ -404,20 +404,20 @@ pub trait ApiDefinitionService2<AuthCtx, Namespace, ValidationError> {
         &self,
         id: &ApiDefinitionId,
         version: &ApiVersion,
-        namespace: Namespace,
+        namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinitionId>, ValidationError>;
 
     async fn get_all(
         &self,
-        namespace: Namespace,
+        namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError>;
 
     async fn get_all_versions(
         &self,
         api_id: &ApiDefinitionId,
-        namespace: Namespace,
+        namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError>;
 }
@@ -429,17 +429,74 @@ pub struct ApiDefinitionServiceDefault2<AuthCtx, Namespace, ValidationError> {
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send>,
 }
 
+impl<AuthCtx, Namespace, ValidationError>
+    ApiDefinitionServiceDefault2<AuthCtx, Namespace, ValidationError>
+{
+    pub fn new(
+        component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
+        definition_repo: Arc<dyn crate::repo::api_definition::ApiDefinitionRepo + Sync + Send>,
+        api_definition_validator: Arc<
+            dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send,
+        >,
+    ) -> Self {
+        Self {
+            component_service,
+            definition_repo,
+            api_definition_validator,
+        }
+    }
+
+    async fn get_all_components(
+        &self,
+        definition: &HttpApiDefinition,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Vec<Component>, ApiRegistrationError<ValidationError>> {
+        let get_components = definition
+            .get_golem_worker_bindings()
+            .iter()
+            .cloned()
+            .map(|binding| async move {
+                let id = &binding.component_id;
+                self.component_service
+                    .get_latest(id, auth_ctx)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Error getting latest component: {:?}", e);
+                        id.clone()
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        let components: Vec<Component> = {
+            let results = futures::future::join_all(get_components).await;
+            let (successes, errors) = results
+                .into_iter()
+                .partition::<Vec<_>, _>(|result| result.is_ok());
+
+            // Ensure that all components were retrieved.
+            if !errors.is_empty() {
+                let errors: Vec<ComponentId> = errors.into_iter().map(|r| r.unwrap_err()).collect();
+                return Err(ApiRegistrationError::ComponentNotFoundError(errors));
+            }
+
+            successes.into_iter().map(|r| r.unwrap()).collect()
+        };
+
+        Ok(components)
+    }
+}
+
 #[async_trait]
 impl<AuthCtx, Namespace, ValidationError> ApiDefinitionService2<AuthCtx, Namespace, ValidationError>
     for ApiDefinitionServiceDefault2<AuthCtx, Namespace, ValidationError>
 where
     AuthCtx: Send + Sync,
-    Namespace: Display,
+    Namespace: Display + Clone,
 {
     async fn create(
         &self,
         definition: &HttpApiDefinition,
-        namespace: Namespace,
+        namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
         let components = self.get_all_components(definition, auth_ctx).await?;
@@ -448,7 +505,7 @@ where
             .validate(definition, components.as_slice())?;
 
         self.definition_repo
-            .create(ApiDefinitionRecord::new(namespace, definition))
+            .create(&ApiDefinitionRecord::new(namespace, definition.clone()))
             .await?;
 
         Ok(definition.id.clone())
@@ -457,7 +514,7 @@ where
     async fn update(
         &self,
         definition: &HttpApiDefinition,
-        namespace: Namespace,
+        namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
         let components = self.get_all_components(definition, auth_ctx).await?;
@@ -466,7 +523,10 @@ where
             .validate(definition, components.as_slice())?;
 
         self.definition_repo
-            .update(ApiDefinitionRecord::new(namespace, definition))
+            .update(&ApiDefinitionRecord::new(
+                namespace.clone(),
+                definition.clone(),
+            ))
             .await?;
 
         Ok(definition.id.clone())
@@ -476,12 +536,12 @@ where
         &self,
         id: &ApiDefinitionId,
         version: &ApiVersion,
-        namespace: Namespace,
+        namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<HttpApiDefinition>, ValidationError> {
         let value = self
             .definition_repo
-            .get(&namespace.to_string(), id.0.as_str(), version.as_str())
+            .get(&namespace.to_string(), id.0.as_str(), version.0.as_str())
             .await?;
 
         Ok(value.map(|v| v.into()))
@@ -491,12 +551,12 @@ where
         &self,
         id: &ApiDefinitionId,
         version: &ApiVersion,
-        namespace: Namespace,
+        namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinitionId>, ValidationError> {
         let deleted = self
             .definition_repo
-            .delete(&namespace.to_string(), id.0.as_str(), version.as_str())
+            .delete(&namespace.to_string(), id.0.as_str(), version.0.as_str())
             .await?;
 
         let value = if deleted { Some(id.clone()) } else { None };
@@ -506,7 +566,7 @@ where
 
     async fn get_all(
         &self,
-        namespace: Namespace,
+        namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
         let values = self.definition_repo.get_all(&namespace.to_string()).await?;
@@ -517,7 +577,7 @@ where
     async fn get_all_versions(
         &self,
         id: &ApiDefinitionId,
-        namespace: Namespace,
+        namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
         let values = self
