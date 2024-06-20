@@ -296,7 +296,6 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
             file_name: "_stub.wit".to_string(),
         });
     } else {
-        dbg!("Destination doesn't own stub world");
         let main_wit_package_name = wit::get_package_name(&main_wit)?;
 
         for source_dir in source_deps {
