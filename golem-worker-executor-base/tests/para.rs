@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use golem_common::model::WorkerId;
 use golem_test_framework::dsl::TestDsl;
@@ -12,8 +13,10 @@ async fn para_contact_to_generator() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
 
-    let campaign_contact_component_id = executor.store_component("campaign-contact-composed").await;
-    let asset_generator_component_id = executor.store_component("asset-generator").await;
+    let (asset_generator_component_id, campaign_contact_component_id) = tokio::join!(
+        executor.store_component("asset-generator"),
+        executor.store_component("campaign-contact-composed")
+    );
 
     let mut env = HashMap::new();
 
@@ -61,4 +64,25 @@ async fn para_contact_to_generator() {
 
     println!("initialize_contact: {:?}", initialize_contact);
     println!("send_campaign: {:?}", send_campaign);
+}
+
+use golem_wasm_ast::analysis::AnalysisContext;
+use golem_wasm_ast::component::Component;
+use golem_wasm_ast::core::{Expr, Module};
+use golem_wasm_ast::DefaultAst;
+
+#[test]
+fn debug_para_wasm() {
+    let wasm_component = Path::new("../test-components")
+        .to_path_buf()
+        // .join("campaign-contact-composed.wasm");
+        .join("asset-generator.wasm");
+    let module_bytes: Vec<u8> = std::fs::read(wasm_component).unwrap();
+    let component: Component<DefaultAst> = Component::from_bytes(&module_bytes).unwrap();
+
+    println!("component metadata {:?}", component.get_metadata());
+
+    let state = AnalysisContext::new(component);
+    let analysed_exports = state.get_top_level_exports().unwrap();
+    println!("{analysed_exports:#?}");
 }
