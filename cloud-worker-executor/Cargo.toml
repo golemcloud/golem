@@ -22,10 +22,10 @@ async-trait = { workspace = true }
 bincode = { workspace = true }
 bitflags = "2.4.2"
 bytes = { workspace = true }
-cap-fs-ext = "2.0.0" # keep in sync with wasmtime
+cap-fs-ext = "3.0.0" # keep in sync with wasmtime
 cap-rand = { version = "3.0.0", features = ["small_rng"] } # keep in sync with wasmtime
-cap-std = "2.0.0" # keep in sync with wasmtime
-cap-time-ext = "2.0.0" # keep in sync with wasmtime
+cap-std = "3.0.0" # keep in sync with wasmtime
+cap-time-ext = "3.0.0" # keep in sync with wasmtime
 chrono = { workspace = true }
 console-subscriber = { workspace = true }
 dashmap = "5.5.3"
@@ -57,10 +57,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-wasmtime = { version = "=17.0.0", features = ["component-model"] }
-wasmtime-runtime = { version = "=17.0.0" }
-wasmtime-wasi = { version = "=17.0.0" }
-wasmtime-wasi-http = { version = "=17.0.0" }
+wasmtime = { version = "=21.0.1", features = ["component-model"] }
+wasmtime-wasi = { version = "=21.0.1" }
+wasmtime-wasi-http = { version = "=21.0.1" }
 webpki-roots = { workspace = true }
 windows-sys = "0.52.0"
 log = "0.4.20"

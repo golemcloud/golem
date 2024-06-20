@@ -137,8 +137,9 @@ impl TryFrom<Claims> for OAuth2Session {
     type Error = String;
 
     fn try_from(value: Claims) -> Result<Self, Self::Error> {
-        let expires_at = chrono::NaiveDateTime::from_timestamp_opt(value.exp as i64, 0)
-            .ok_or_else(|| "Invalid Timestamp".to_string())?;
+        let expires_at = chrono::DateTime::from_timestamp(value.exp as i64, 0)
+            .ok_or_else(|| "Invalid Timestamp".to_string())?
+            .naive_utc();
         let expires_at = chrono::DateTime::from_naive_utc_and_offset(expires_at, chrono::Utc);
         Ok(OAuth2Session {
             expires_at,

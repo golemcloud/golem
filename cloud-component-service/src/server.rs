@@ -17,7 +17,7 @@ use cloud_component_service::config::{ComponentServiceConfig, DbConfig};
 use cloud_component_service::service::Services;
 use cloud_component_service::{api, db, grpcapi, metrics};
 use opentelemetry::global;
-use opentelemetry_sdk::metrics::MeterProvider;
+use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::endpoint::PrometheusExporter;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
@@ -60,7 +60,11 @@ fn main() -> Result<(), std::io::Error> {
             .build()
             .unwrap();
 
-        global::set_meter_provider(MeterProvider::builder().with_reader(exporter).build());
+        global::set_meter_provider(
+            MeterProviderBuilder::default()
+                .with_reader(exporter)
+                .build(),
+        );
 
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()

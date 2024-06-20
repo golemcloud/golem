@@ -35,7 +35,7 @@ pub async fn ws(
     request: &Request,
 ) -> Response {
     // FIXME figure out how to do this better
-    let token = match ApiExtractor::from_request(
+    let token = match GolemSecurityScheme::from_request(
         request,
         &mut RequestBody::new(Body::empty()),
         ExtractParamOptions::default(),
@@ -43,7 +43,7 @@ pub async fn ws(
     .await
     {
         Ok(token) => token,
-        Err(err) => return err.into_response(),
+        Err(err @ Error { .. }) => return err.into_response(),
     };
 
     get_worker_stream(service, component_id, worker_name, token)

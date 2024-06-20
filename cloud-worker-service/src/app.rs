@@ -1,5 +1,5 @@
 use opentelemetry::global;
-use opentelemetry_sdk::metrics::MeterProvider;
+use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::endpoint::PrometheusExporter;
 use poem::middleware::{Cors, OpenTelemetryMetrics, Tracing};
 use poem::{EndpointExt, Route};
@@ -24,7 +24,11 @@ pub async fn app(config: &WorkerServiceCloudConfig) -> std::io::Result<()> {
         .build()
         .unwrap();
 
-    global::set_meter_provider(MeterProvider::builder().with_reader(exporter).build());
+    global::set_meter_provider(
+        MeterProviderBuilder::default()
+            .with_reader(exporter)
+            .build(),
+    );
 
     let services: ApiServices = if config.is_local_env() {
         get_api_services_local(config)
