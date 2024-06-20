@@ -118,7 +118,12 @@ impl WorkerExecutor for DockerWorkerExecutor {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(async move { self.container.stop().await.expect("Failed to stop container") });
+            .block_on(async move {
+                self.container
+                    .stop()
+                    .await
+                    .expect("Failed to stop container")
+            });
     }
 
     async fn restart(&self) {

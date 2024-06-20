@@ -89,7 +89,10 @@ impl Rdb for DockerPostgresRdb {
             .build()
             .unwrap()
             .block_on(async move {
-                self.container.stop().await.expect("Failed to stop container");
+                self.container
+                    .stop()
+                    .await
+                    .expect("Failed to stop container");
             });
     }
 }

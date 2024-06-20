@@ -95,11 +95,19 @@ impl ShardManager for DockerShardManager {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(async move { self.container.stop().await.expect("Failed to stop container") });
+            .block_on(async move {
+                self.container
+                    .stop()
+                    .await
+                    .expect("Failed to stop container")
+            });
     }
 
     async fn restart(&self) {
-        self.container.start().await.expect("Failed to start container");
+        self.container
+            .start()
+            .await
+            .expect("Failed to start container");
     }
 }
 
