@@ -52,7 +52,7 @@ pub static DEPS: EnvBasedTestDependencies = {
         "Started a cluster of {} worker executors",
         deps.worker_executor_cluster().size()
     );
-
+    
     deps
 };
 

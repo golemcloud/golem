@@ -18,6 +18,7 @@ use std::io::{BufRead, BufReader};
 use std::process::Child;
 use std::thread::JoinHandle;
 use std::time::Duration;
+use once_cell::sync::Lazy;
 use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
@@ -130,3 +131,8 @@ async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str, timeout: 
         }
     }
 }
+
+// Using a global docker client to avoid the restrictions of the testcontainers library,
+// binding the container lifetime to the client.
+static DOCKER: Lazy<testcontainers::clients::Cli> =
+    Lazy::new(testcontainers::clients::Cli::default);

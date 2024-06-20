@@ -137,8 +137,8 @@ strum = "0.26.1"
 strum_macros = "0.26.1"
 tap = "1.0.1"
 tempfile = "3.9.0"
-testcontainers = { version = "0.18.0", features = ["blocking"] }
-testcontainers-modules = { version = "0.6.1", features = ["postgres", "redis", "minio"] }
+testcontainers = { version = "0.15.0", features = ["async-trait", "tokio"] }
+testcontainers-modules = { version = "0.3.2", features = ["postgres", "redis", "minio"] }
 thiserror = "1.0.56"
 tokio = { version = "1.0", features = [
     "macros",

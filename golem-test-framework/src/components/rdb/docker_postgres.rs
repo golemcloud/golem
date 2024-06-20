@@ -13,14 +13,13 @@
 // limitations under the License.
 
 use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
-use crate::components::NETWORK;
+use crate::components::{DOCKER, NETWORK};
 use std::time::Duration;
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
+use testcontainers::{Container, RunnableImage};
 use tracing::info;
 
 pub struct DockerPostgresRdb {
-    container: ContainerAsync<testcontainers_modules::postgres::Postgres>,
+    container: Container<'static, testcontainers_modules::postgres::Postgres>,
     host: String,
     port: u16,
     host_port: u16,
@@ -34,7 +33,8 @@ impl DockerPostgresRdb {
         info!("Starting Postgres container");
 
         let name = "golem_postgres";
-        let image = testcontainers_modules::postgres::Postgres::default().with_tag("12");
+        let image = RunnableImage::from(testcontainers_modules::postgres::Postgres::default())
+            .with_tag("12");
 
         let image = if local_env {
             image
@@ -42,22 +42,16 @@ impl DockerPostgresRdb {
             image.with_container_name(name).with_network(NETWORK)
         };
 
-        let container = image.start().await.expect("Failed to start container");
+        let container = DOCKER.run(image);
 
         let host = if local_env { "localhost" } else { name };
         let port = if local_env {
-            container
-                .get_host_port_ipv4(Self::DEFAULT_PORT)
-                .await
-                .expect("Failed to get host port")
+            container.get_host_port_ipv4(Self::DEFAULT_PORT)
         } else {
             Self::DEFAULT_PORT
         };
 
-        let host_port = container
-            .get_host_port_ipv4(Self::DEFAULT_PORT)
-            .await
-            .expect("Failed to get host port");
+        let host_port = container.get_host_port_ipv4(Self::DEFAULT_PORT);
 
         wait_for_startup("localhost", host_port, Duration::from_secs(30)).await;
 
@@ -84,16 +78,7 @@ impl Rdb for DockerPostgresRdb {
 
     fn kill(&self) {
         info!("Stopping Postgres container");
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async move {
-                self.container
-                    .stop()
-                    .await
-                    .expect("Failed to stop container");
-            });
+        self.container.stop();
     }
 }
 

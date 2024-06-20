@@ -13,21 +13,19 @@
 // limitations under the License.
 
 use crate::components::component_compilation_service::{env_vars, ComponentCompilationService};
-use crate::components::NETWORK;
+use crate::components::{DOCKER, NETWORK};
 use async_trait::async_trait;
-use std::borrow::Cow;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use testcontainers::core::{ContainerPort, WaitFor};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
+use testcontainers::core::WaitFor;
+use testcontainers::{Container, Image, RunnableImage};
 
 use crate::components::component_service::ComponentService;
 use tracing::{info, Level};
 
 pub struct DockerComponentCompilationService {
-    container: ContainerAsync<GolemComponentCompilationServiceImage>,
+    container: Container<'static, GolemComponentCompilationServiceImage>,
     public_http_port: u16,
     public_grpc_port: u16,
 }
@@ -50,20 +48,19 @@ impl DockerComponentCompilationService {
             verbosity,
         );
 
-        let image =
-            GolemComponentCompilationServiceImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
-                .with_container_name(Self::NAME)
-                .with_network(NETWORK);
-        let container = image.start().await.expect("Failed to start container");
+        let image = RunnableImage::from(GolemComponentCompilationServiceImage::new(
+            Self::GRPC_PORT,
+            Self::HTTP_PORT,
+            env_vars,
+        ))
+        .with_container_name(Self::NAME)
+        .with_network(NETWORK);
+        let container = DOCKER.run(image);
 
         let public_http_port = container
-            .get_host_port_ipv4(Self::HTTP_PORT)
-            .await
-            .expect("Failed to get HTTP port");
+            .get_host_port_ipv4(Self::HTTP_PORT);
         let public_grpc_port = container
-            .get_host_port_ipv4(Self::GRPC_PORT)
-            .await
-            .expect("Failed to get gRPC port");
+            .get_host_port_ipv4(Self::GRPC_PORT);
 
         Self {
             container,
@@ -100,16 +97,7 @@ impl ComponentCompilationService for DockerComponentCompilationService {
     }
 
     fn kill(&self) {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async move {
-                self.container
-                    .stop()
-                    .await
-                    .expect("Failed to stop container")
-            });
+        self.container.stop();
     }
 }
 
@@ -122,7 +110,7 @@ impl Drop for DockerComponentCompilationService {
 #[derive(Debug)]
 struct GolemComponentCompilationServiceImage {
     env_vars: HashMap<String, String>,
-    expose_ports: [ContainerPort; 2],
+    expose_ports: [u16; 2],
 }
 
 impl GolemComponentCompilationServiceImage {
@@ -133,31 +121,31 @@ impl GolemComponentCompilationServiceImage {
     ) -> GolemComponentCompilationServiceImage {
         GolemComponentCompilationServiceImage {
             env_vars,
-            expose_ports: [ContainerPort::Tcp(grpc_port), ContainerPort::Tcp(http_port)],
+            expose_ports: [grpc_port, http_port],
         }
     }
 }
 
 impl Image for GolemComponentCompilationServiceImage {
-    fn name(&self) -> &str {
-        "golemservices/golem-component-compilation-service"
+    type Args = ();
+
+    fn name(&self) -> String {
+        "golemservices/golem-component-compilation-service".to_string()
     }
 
-    fn tag(&self) -> &str {
-        "latest"
+    fn tag(&self) -> String {
+        "latest".to_string()
     }
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
         vec![WaitFor::message_on_stdout("server started")]
     }
 
-    fn env_vars(
-        &self,
-    ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
+    fn env_vars(&self) -> Box<dyn Iterator<Item = (&String, &String)> + '_> {
         Box::new(self.env_vars.iter())
     }
 
-    fn expose_ports(&self) -> &[ContainerPort] {
-        &self.expose_ports
+    fn expose_ports(&self) -> Vec<u16> {
+        self.expose_ports.to_vec()
     }
 }

@@ -14,20 +14,18 @@
 
 use crate::components::redis::Redis;
 use crate::components::shard_manager::{env_vars, ShardManager};
-use crate::components::NETWORK;
+use crate::components::{DOCKER, NETWORK};
 use async_trait::async_trait;
-use std::borrow::Cow;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use testcontainers::core::{ContainerPort, WaitFor};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
+use testcontainers::core::WaitFor;
+use testcontainers::{Container, Image, RunnableImage};
 
 use tracing::{info, Level};
 
 pub struct DockerShardManager {
-    container: ContainerAsync<ShardManagerImage>,
+    container: Container<'static, ShardManagerImage>,
     public_http_port: u16,
     public_grpc_port: u16,
 }
@@ -42,19 +40,17 @@ impl DockerShardManager {
 
         let env_vars = env_vars(Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity);
 
-        let image = ShardManagerImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
-            .with_container_name(Self::NAME)
-            .with_network(NETWORK);
-        let container = image.start().await.expect("Failed to start container");
+        let image = RunnableImage::from(ShardManagerImage::new(
+            Self::GRPC_PORT,
+            Self::HTTP_PORT,
+            env_vars,
+        ))
+        .with_container_name(Self::NAME)
+        .with_network(NETWORK);
+        let container = DOCKER.run(image);
 
-        let public_http_port = container
-            .get_host_port_ipv4(Self::HTTP_PORT)
-            .await
-            .expect("Failed to get public HTTP port");
-        let public_grpc_port = container
-            .get_host_port_ipv4(Self::GRPC_PORT)
-            .await
-            .expect("Failed to get public gRPC port");
+        let public_http_port = container.get_host_port_ipv4(Self::HTTP_PORT);
+        let public_grpc_port = container.get_host_port_ipv4(Self::GRPC_PORT);
 
         Self {
             container,
@@ -91,23 +87,11 @@ impl ShardManager for DockerShardManager {
     }
 
     fn kill(&self) {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async move {
-                self.container
-                    .stop()
-                    .await
-                    .expect("Failed to stop container")
-            });
+        self.container.stop();
     }
 
     async fn restart(&self) {
-        self.container
-            .start()
-            .await
-            .expect("Failed to start container");
+        self.container.start();
     }
 }
 
@@ -120,7 +104,7 @@ impl Drop for DockerShardManager {
 #[derive(Debug)]
 struct ShardManagerImage {
     env_vars: HashMap<String, String>,
-    expose_ports: [ContainerPort; 2],
+    expose_ports: [u16; 2],
 }
 
 impl ShardManagerImage {
@@ -131,18 +115,20 @@ impl ShardManagerImage {
     ) -> ShardManagerImage {
         ShardManagerImage {
             env_vars,
-            expose_ports: [ContainerPort::Tcp(grpc_port), ContainerPort::Tcp(http_port)],
+            expose_ports: [grpc_port, http_port],
         }
     }
 }
 
 impl Image for ShardManagerImage {
-    fn name(&self) -> &str {
-        "golemservices/golem-shard-manager"
+    type Args = ();
+
+    fn name(&self) -> String {
+        "golemservices/golem-shard-manager".to_string()
     }
 
-    fn tag(&self) -> &str {
-        "latest"
+    fn tag(&self) -> String {
+        "latest".to_string()
     }
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
@@ -151,13 +137,11 @@ impl Image for ShardManagerImage {
         )]
     }
 
-    fn env_vars(
-        &self,
-    ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
+    fn env_vars(&self) -> Box<dyn Iterator<Item = (&String, &String)> + '_> {
         Box::new(self.env_vars.iter())
     }
 
-    fn expose_ports(&self) -> &[ContainerPort] {
-        &self.expose_ports
+    fn expose_ports(&self) -> Vec<u16> {
+        self.expose_ports.to_vec()
     }
 }

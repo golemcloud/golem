@@ -13,16 +13,15 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
-use crate::components::NETWORK;
+use crate::components::{DOCKER, NETWORK};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
+use testcontainers::{Container, RunnableImage};
 use testcontainers_modules::redis::REDIS_PORT;
 use tracing::info;
 
 pub struct DockerRedis {
-    container: ContainerAsync<testcontainers_modules::redis::Redis>,
+    container: Container<'static, testcontainers_modules::redis::Redis>,
     prefix: String,
     valid: AtomicBool,
     public_port: u16,
@@ -34,16 +33,13 @@ impl DockerRedis {
     pub async fn new(prefix: String) -> Self {
         info!("Starting Redis container");
 
-        let image = testcontainers_modules::redis::Redis
+        let image = RunnableImage::from(testcontainers_modules::redis::Redis)
             .with_tag("7.2")
             .with_container_name(Self::NAME)
             .with_network(NETWORK);
-        let container = image.start().await.expect("Failed to start container");
+        let container = DOCKER.run(image);
 
-        let public_port = container
-            .get_host_port_ipv4(REDIS_PORT)
-            .await
-            .expect("Failed to get Redis port");
+        let public_port = container.get_host_port_ipv4(REDIS_PORT);
 
         super::wait_for_startup("localhost", public_port, Duration::from_secs(10));
 
@@ -85,16 +81,7 @@ impl Redis for DockerRedis {
 
     fn kill(&self) {
         info!("Stopping Redis container");
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async move {
-                self.container
-                    .stop()
-                    .await
-                    .expect("Failed to stop container")
-            });
+        self.container.stop()
     }
 }
 
