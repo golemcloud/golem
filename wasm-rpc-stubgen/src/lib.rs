@@ -82,7 +82,7 @@ pub struct GenerateArgs {
     /// Always inline all the data types defined in the source WIT instead of copying and depending on
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
-    #[clap(long)]
+    #[clap(long, default_value = "false")]
     pub always_inline_types: bool,
 }
 
@@ -117,7 +117,7 @@ pub struct BuildArgs {
     /// Always inline all the data types defined in the source WIT instead of copying and depending on
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
-    #[clap(long)]
+    #[clap(long, default_value = "false")]
     pub always_inline_types: bool,
 }
 
