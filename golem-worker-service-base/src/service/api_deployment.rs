@@ -12,9 +12,8 @@ use tracing::log::error;
 use crate::api_definition::http::{AllPathPatterns, HttpApiDefinition, Route};
 use crate::http::router::{Router, RouterPattern};
 use crate::repo::api_deployment::ApiDeploymentRecord;
+use crate::repo::RepoError;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
-use crate::service::api_deployment::internal::ApiDefinitionWithKey;
-use poem_openapi::types::Type;
 use std::fmt::Display;
 
 #[async_trait]
@@ -56,6 +55,14 @@ impl<Namespace> From<ApiDeploymentRepoError> for ApiDeploymentError<Namespace> {
     fn from(error: ApiDeploymentRepoError) -> Self {
         match error {
             ApiDeploymentRepoError::Internal(e) => ApiDeploymentError::InternalError(e.to_string()),
+        }
+    }
+}
+
+impl<Namespace> From<RepoError> for ApiDeploymentError<Namespace> {
+    fn from(error: RepoError) -> Self {
+        match error {
+            RepoError::Internal(e) => ApiDeploymentError::InternalError(e.clone()),
         }
     }
 }
@@ -231,12 +238,12 @@ impl ConflictChecker for HttpApiDefinition {
     }
 }
 
-pub struct ApiDeploymentServiceDefault2<Namespace> {
+pub struct ApiDeploymentServiceDefault2 {
     pub deployment_repo: Arc<dyn crate::repo::api_deployment::ApiDeploymentRepo + Sync + Send>,
     pub definition_repo: Arc<dyn crate::repo::api_definition::ApiDefinitionRepo + Sync + Send>,
 }
 
-impl<Namespace> ApiDeploymentServiceDefault2<Namespace> {
+impl ApiDeploymentServiceDefault2 {
     pub fn new(
         deployment_repo: Arc<dyn crate::repo::api_deployment::ApiDeploymentRepo + Sync + Send>,
         definition_repo: Arc<dyn crate::repo::api_definition::ApiDefinitionRepo + Sync + Send>,
@@ -249,8 +256,8 @@ impl<Namespace> ApiDeploymentServiceDefault2<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Display + TryFrom<String> + Eq + Clone> ApiDeploymentService<Namespace>
-    for ApiDeploymentServiceDefault2<Namespace>
+impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
+    ApiDeploymentService<Namespace> for ApiDeploymentServiceDefault2
 {
     async fn deploy(
         &self,
@@ -275,7 +282,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone> ApiDeploymentService<Nam
                         &deployment.site,
                     );
                 return Err(ApiDeploymentError::DeploymentConflict(ApiSiteString::from(
-                    ApiSite {
+                    &ApiSite {
                         host: deployment_record.host,
                         subdomain: deployment_record.subdomain,
                     },
@@ -290,18 +297,24 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone> ApiDeploymentService<Nam
 
         let mut new_deployment_records: Vec<ApiDeploymentRecord> = vec![];
 
-        for api_definition_key in deployment.api_definition_keys {
+        let mut set_not_draft: Vec<ApiDefinitionIdWithVersion> = vec![];
+
+        for api_definition_key in deployment.api_definition_keys.clone() {
             if !existing_api_definition_keys.contains(&api_definition_key) {
-                let exists = self
+                let draft = self
                     .definition_repo
-                    .exists(
+                    .get_draft(
                         deployment.namespace.to_string().as_str(),
                         api_definition_key.id.0.as_str(),
                         api_definition_key.version.0.as_str(),
                     )
                     .await?;
 
-                if !exists {
+                if let Some(draft) = draft {
+                    if draft {
+                        set_not_draft.push(api_definition_key.clone());
+                    }
+                } else {
                     return Err(ApiDeploymentError::ApiDefinitionNotFound(
                         deployment.namespace.clone(),
                         api_definition_key.id.clone(),
@@ -317,7 +330,18 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone> ApiDeploymentService<Nam
                 });
             }
         }
+
         if !new_deployment_records.is_empty() {
+            for api_definition_key in set_not_draft {
+                self.definition_repo
+                    .set_not_draft(
+                        deployment.namespace.to_string().as_str(),
+                        api_definition_key.id.0.as_str(),
+                        api_definition_key.version.0.as_str(),
+                    )
+                    .await?;
+            }
+
             self.deployment_repo.create(new_deployment_records).await?;
         }
 
@@ -355,7 +379,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone> ApiDeploymentService<Nam
                 .iter_mut()
                 .find(|val| val.site == site && val.namespace == namespace)
             {
-                Some(mut val) => {
+                Some(val) => {
                     val.api_definition_keys.push(api_definition_key);
                 }
                 None => {

@@ -111,6 +111,7 @@ mod conversion {
                 e @ ApiRegistrationError::ComponentNotFoundError(_) => {
                     ApiEndpointError::bad_request(e)
                 }
+                ApiRegistrationError::InternalError(error) => ApiEndpointError::internal(error),
             }
         }
     }
@@ -207,6 +208,11 @@ mod conversion {
                 }
                 ApiRegistrationError::ComponentNotFoundError(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
+                        error: error.to_string(),
+                    })),
+                },
+                ApiRegistrationError::InternalError(error) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_string(),
                     })),
                 },

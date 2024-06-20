@@ -14,6 +14,7 @@ use crate::api_definition::{
 use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::repo::api_definition_repo::{ApiDefinitionRepo, ApiRegistrationRepoError};
 use crate::repo::api_namespace::ApiNamespace;
+use crate::repo::RepoError;
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 use super::component::ComponentService;
@@ -120,6 +121,16 @@ pub enum ApiRegistrationError<E> {
     ValidationError(#[from] ValidationErrors<E>),
     #[error("Unable to fetch component: {0:?}")]
     ComponentNotFoundError(Vec<ComponentId>),
+    #[error("Internal error: {0}")]
+    InternalError(String),
+}
+
+impl<E> From<RepoError> for ApiRegistrationError<E> {
+    fn from(error: RepoError) -> Self {
+        match error {
+            RepoError::Internal(e) => ApiRegistrationError::InternalError(e.clone()),
+        }
+    }
 }
 
 pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace, ApiDefinition, ValidationError> {
@@ -422,16 +433,14 @@ pub trait ApiDefinitionService2<AuthCtx, Namespace, ValidationError> {
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError>;
 }
 
-pub struct ApiDefinitionServiceDefault2<AuthCtx, Namespace, ValidationError> {
+pub struct ApiDefinitionServiceDefault2<AuthCtx, ValidationError> {
     pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     pub definition_repo: Arc<dyn crate::repo::api_definition::ApiDefinitionRepo + Sync + Send>,
     pub api_definition_validator:
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send>,
 }
 
-impl<AuthCtx, Namespace, ValidationError>
-    ApiDefinitionServiceDefault2<AuthCtx, Namespace, ValidationError>
-{
+impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault2<AuthCtx, ValidationError> {
     pub fn new(
         component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
         definition_repo: Arc<dyn crate::repo::api_definition::ApiDefinitionRepo + Sync + Send>,
@@ -488,10 +497,10 @@ impl<AuthCtx, Namespace, ValidationError>
 
 #[async_trait]
 impl<AuthCtx, Namespace, ValidationError> ApiDefinitionService2<AuthCtx, Namespace, ValidationError>
-    for ApiDefinitionServiceDefault2<AuthCtx, Namespace, ValidationError>
+    for ApiDefinitionServiceDefault2<AuthCtx, ValidationError>
 where
     AuthCtx: Send + Sync,
-    Namespace: Display + Clone,
+    Namespace: Display + Clone + Send + Sync,
 {
     async fn create(
         &self,

@@ -59,7 +59,12 @@ pub trait ApiDefinitionRepo {
         version: &str,
     ) -> Result<Option<ApiDefinitionRecord>, RepoError>;
 
-    async fn exists(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError>;
+    async fn get_draft(
+        &self,
+        namespace: &str,
+        id: &str,
+        version: &str,
+    ) -> Result<Option<bool>, RepoError>;
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError>;
 
@@ -161,17 +166,23 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Sqlite> {
             .map_err(|e| e.into())
     }
 
-    async fn exists(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
+    async fn get_draft(
+        &self,
+        namespace: &str,
+        id: &str,
+        version: &str,
+    ) -> Result<Option<bool>, RepoError> {
         let result = sqlx::query(
-            "SELECT count(*) as count FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
-            .bind(namespace)
-            .bind(id)
-            .bind(version)
-            .fetch_one(self.db_pool.deref())
-            .await?;
+            "SELECT draft FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3",
+        )
+        .bind(namespace)
+        .bind(id)
+        .bind(version)
+        .fetch_optional(self.db_pool.deref())
+        .await?;
 
-        let count: i64 = result.get("count");
-        Ok(count > 0)
+        let draft: Option<bool> = result.map(|r| r.get("draft"));
+        Ok(draft)
     }
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
@@ -287,17 +298,23 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Postgres> {
             .map_err(|e| e.into())
     }
 
-    async fn exists(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
+    async fn get_draft(
+        &self,
+        namespace: &str,
+        id: &str,
+        version: &str,
+    ) -> Result<Option<bool>, RepoError> {
         let result = sqlx::query(
-            "SELECT count(*) as count FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
-            .bind(namespace)
-            .bind(id)
-            .bind(version)
-            .fetch_one(self.db_pool.deref())
-            .await?;
+            "SELECT draft FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3",
+        )
+        .bind(namespace)
+        .bind(id)
+        .bind(version)
+        .fetch_optional(self.db_pool.deref())
+        .await?;
 
-        let count: i64 = result.get("count");
-        Ok(count > 0)
+        let draft: Option<bool> = result.map(|r| r.get("draft"));
+        Ok(draft)
     }
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {

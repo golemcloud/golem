@@ -11,7 +11,6 @@ use golem_common::config::RedisConfig;
 
 use golem_common::redis::{RedisError, RedisPool};
 use tracing::{debug, info};
-use uuid::Uuid;
 
 use crate::repo::api_namespace::ApiNamespace;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
