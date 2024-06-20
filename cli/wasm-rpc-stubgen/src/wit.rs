@@ -28,8 +28,11 @@ use wit_parser::{
     UnresolvedPackage, Variant,
 };
 
-pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
-    let out = get_stub_wit(def, StubTypeGen::ImportRootTypes)?;
+pub fn generate_stub_wit(
+    def: &StubDefinition,
+    type_gen_strategy: StubTypeGen,
+) -> anyhow::Result<()> {
+    let out = get_stub_wit(def, type_gen_strategy)?;
     println!(
         "Generating stub WIT to {}",
         def.target_wit_path().to_string_lossy()
