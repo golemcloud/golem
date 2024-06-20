@@ -24,8 +24,8 @@ required-features = ["universal"]
 
 [dependencies]
 golem-cloud-client = { path = "../golem-cloud-client", version = "0.0.0"}
-golem-client = "0.0.108"
-golem-cli = "0.0.108"
+golem-client = "0.0.109"
+golem-cli = "0.0.109"
 
 async-trait = { workspace = true }
 chrono = { workspace = true }
@@ -37,12 +37,12 @@ futures-util = { workspace = true }
 golem-examples = "0.2.1"
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
-golem-wasm-rpc-stubgen = { version = "0.0.26", optional = true }
+golem-wasm-rpc-stubgen = { version = "0.0.29", optional = true }
 h2 = "0.3.24"
 http = { workspace = true }
 hyper = { workspace = true }
 indoc = "2.0.4"
-itertools = "0.12.1"
+itertools = "0.13.0"
 native-tls = "0.2.11"
 openapiv3 = "2.0.0"
 rand = "0.8.5"
