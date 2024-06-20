@@ -303,10 +303,7 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
             let parsed = UnresolvedPackage::parse_dir(&source_dir)?;
 
             if internal::is_invalid_dependency(&destination_wit_root, &parsed) {
-                println!(
-                    "Skipping the copy of cyclic dependencies {}",
-                    parsed.name
-                );
+                println!("Skipping the copy of cyclic dependencies {}", parsed.name);
             } else {
                 let entries = fs::read_dir(&source_dir)?;
                 for entry in entries {
