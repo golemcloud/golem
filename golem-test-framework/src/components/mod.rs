@@ -14,11 +14,11 @@
 
 use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatus;
 use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
+use once_cell::sync::Lazy;
 use std::io::{BufRead, BufReader};
 use std::process::Child;
 use std::thread::JoinHandle;
 use std::time::Duration;
-use once_cell::sync::Lazy;
 use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};

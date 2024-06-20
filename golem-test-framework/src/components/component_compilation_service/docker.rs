@@ -57,10 +57,8 @@ impl DockerComponentCompilationService {
         .with_network(NETWORK);
         let container = DOCKER.run(image);
 
-        let public_http_port = container
-            .get_host_port_ipv4(Self::HTTP_PORT);
-        let public_grpc_port = container
-            .get_host_port_ipv4(Self::GRPC_PORT);
+        let public_http_port = container.get_host_port_ipv4(Self::HTTP_PORT);
+        let public_grpc_port = container.get_host_port_ipv4(Self::GRPC_PORT);
 
         Self {
             container,
