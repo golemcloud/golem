@@ -304,8 +304,8 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
 
             if internal::is_invalid_dependency(&destination_wit_root, &parsed) {
                 println!(
-                    "Skipping the copy of cyclic dependencies {} to the the same as {}",
-                    parsed.name, destination_wit_root.name
+                    "Skipping the copy of cyclic dependencies {}",
+                    parsed.name
                 );
             } else {
                 let entries = fs::read_dir(&source_dir)?;
@@ -443,8 +443,8 @@ mod internal {
             Ok(true)
         } else {
             println!(
-                "Skipping the copy of cyclic dependencies {} to the the same as {}",
-                dep_package_name, dest_package
+                "Skipping the copy of cyclic dependencies {}",
+                dep_package_name
             );
             Ok(false)
         }
