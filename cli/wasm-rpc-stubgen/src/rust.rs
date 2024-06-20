@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::stub::{FunctionResultStub, FunctionStub, StubDefinition};
+use crate::stub::{FunctionResultStub, FunctionStub, StubDefinition, StubTypeOwner};
 use anyhow::anyhow;
 use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
@@ -552,8 +552,9 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                     let mut path = Vec::new();
                     path.push(quote! { crate });
                     path.push(quote! { bindings });
-                    match &typedef.owner {
-                        TypeOwner::World(world_id) => {
+                    let fixed_owner = def.fix_inlined_owner(typedef);
+                    match &fixed_owner {
+                        StubTypeOwner::Source(TypeOwner::World(world_id)) => {
                             let world = def
                                 .resolve
                                 .worlds
@@ -575,7 +576,7 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                             path.push(quote! { #ns_ident });
                             path.push(quote! { #name_ident });
                         }
-                        TypeOwner::Interface(interface_id) => {
+                        StubTypeOwner::Source(TypeOwner::Interface(interface_id)) => {
                             let interface = def
                                 .resolve
                                 .interfaces
@@ -606,7 +607,27 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                             path.push(quote! { #name_ident });
                             path.push(quote! { #interface_ident });
                         }
-                        TypeOwner::None => {}
+                        StubTypeOwner::Source(TypeOwner::None) => {}
+                        StubTypeOwner::StubInterface => {
+                            let root_ns = Ident::new(
+                                &def.root_package_name.namespace.to_snake_case(),
+                                Span::call_site(),
+                            );
+                            let root_name = Ident::new(
+                                &format!("{}_stub", def.root_package_name.name.to_snake_case()),
+                                Span::call_site(),
+                            );
+                            let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+                            let stub_interface_name = Ident::new(
+                                &to_rust_ident(&stub_interface_name).to_snake_case(),
+                                Span::call_site(),
+                            );
+
+                            path.push(quote! { exports });
+                            path.push(quote! { #root_ns });
+                            path.push(quote! { #root_name });
+                            path.push(quote! { #stub_interface_name });
+                        }
                     }
                     Ok(quote! { #(#path)::*::#typ })
                 }
