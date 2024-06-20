@@ -19,9 +19,9 @@ brew install protobuf
 Then install the **required version** of `cargo-component`:
 
 ```bash
-cargo install --force --locked cargo-component@0.7.0
+cargo install --force --locked cargo-component@0.13.2
 cargo component --version
-cargo-component-component 0.7.0 (wasi:ab5a448)
+cargo-component 0.13.2 (wasi:040ec92)
 ```
 
 <Callout>
@@ -113,6 +113,8 @@ impl Guest for Component {
   }
   // ...
 }
+
+bindings::export!(Component with_types_in bindings);
 ```
 
 The struct you implement the trait for **must be called** `Component`!
@@ -187,7 +189,7 @@ To use it, add the following dependency to your component's `Cargo.toml`:
 
 ```toml
 [dependencies]
-golem-rust = "0.2.2"
+golem-rust = "0.3.0"
 ```
 
 See the [Transaction API](/docs/transaction-api) page for more information about what this library provides.
@@ -202,7 +204,7 @@ To use it, just add the following dependency to your component's `Cargo.toml`:
 
 ```toml
 [dependencies]
-reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-apr-2024", features = ["json"] }
+reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-jun-2024", features = ["json"] }
 ```
 
 There is no need to manually add the WASI-HTTP interfaces to your `wit/deps` folder.
