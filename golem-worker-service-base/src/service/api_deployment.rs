@@ -1,8 +1,8 @@
-use std::collections::HashSet;
 use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, HasIsDraft};
 use crate::repo::api_definition_repo::ApiDefinitionRepo;
 use crate::repo::api_deployment_repo::{ApiDeploymentRepo, ApiDeploymentRepoError};
 use crate::repo::api_namespace::ApiNamespace;
+use std::collections::HashSet;
 
 use async_trait::async_trait;
 
@@ -11,11 +11,11 @@ use tracing::log::error;
 
 use crate::api_definition::http::{AllPathPatterns, HttpApiDefinition, Route};
 use crate::http::router::{Router, RouterPattern};
+use crate::repo::api_deployment::ApiDeploymentRecord;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use crate::service::api_deployment::internal::ApiDefinitionWithKey;
-use std::fmt::Display;
 use poem_openapi::types::Type;
-use crate::repo::api_deployment::ApiDeploymentRecord;
+use std::fmt::Display;
 
 #[async_trait]
 pub trait ApiDeploymentService<Namespace> {
@@ -79,9 +79,9 @@ impl<Namespace, ApiDefinition> ApiDeploymentServiceDefault<Namespace, ApiDefinit
 
 #[async_trait]
 impl<
-    Namespace: ApiNamespace,
-    ApiDefinition: Clone + HasIsDraft + ConflictChecker + Send + Sync,
-> ApiDeploymentService<Namespace> for ApiDeploymentServiceDefault<Namespace, ApiDefinition>
+        Namespace: ApiNamespace,
+        ApiDefinition: Clone + HasIsDraft + ConflictChecker + Send + Sync,
+    > ApiDeploymentService<Namespace> for ApiDeploymentServiceDefault<Namespace, ApiDefinition>
 {
     async fn deploy(
         &self,
@@ -115,7 +115,7 @@ impl<
                     &existing_deployment,
                     self.definition_repo.clone(),
                 )
-                    .await?;
+                .await?;
 
                 internal::deploy(
                     &existing_api_definitions,
@@ -124,7 +124,7 @@ impl<
                     self.definition_repo.clone(),
                     self.deployment_repo.clone(),
                 )
-                    .await
+                .await
             }
             None => {
                 internal::deploy(
@@ -134,7 +134,7 @@ impl<
                     self.definition_repo.clone(),
                     self.deployment_repo.clone(),
                 )
-                    .await
+                .await
             }
         }
     }
@@ -249,14 +249,13 @@ impl<Namespace> ApiDeploymentServiceDefault2<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Display> ApiDeploymentService<Namespace>
-for ApiDeploymentServiceDefault2<Namespace>
+impl<Namespace: Display + TryFrom<String>> ApiDeploymentService<Namespace>
+    for ApiDeploymentServiceDefault2<Namespace>
 {
     async fn deploy(
         &self,
         deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
-
         // Existing deployment
         let existing_deployment_records = self
             .deployment_repo
@@ -293,6 +292,22 @@ for ApiDeploymentServiceDefault2<Namespace>
 
         for api_definition_key in deployment.api_definition_keys {
             if !existing_api_definition_keys.contains(&api_definition_key) {
+                let exists = self
+                    .definition_repo
+                    .exists(
+                        deployment.namespace.to_string().as_str(),
+                        api_definition_key.id.as_str(),
+                        api_definition_key.version.as_str(),
+                    )
+                    .await?;
+
+                if !exists {
+                    return Err(ApiDeploymentError::ApiDefinitionNotFound(
+                        deployment.namespace.clone(),
+                        api_definition_key.id.clone(),
+                    ));
+                }
+
                 new_deployment_records.push(ApiDeploymentRecord {
                     namespace: deployment.namespace.to_string(),
                     subdomain: deployment.site.subdomain.clone(),
@@ -312,15 +327,48 @@ for ApiDeploymentServiceDefault2<Namespace>
     async fn get_by_id(
         &self,
         namespace: &Namespace,
-        api_definition_id: &ApiDefinitionId,
+        definition_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
-        let existing_deployment_records = self.deployment_repo
-            .get_by_id(namespace.to_string().as_str(), api_definition_id.0.as_str())
+        let existing_deployment_records = self
+            .deployment_repo
+            .get_by_id(namespace.to_string().as_str(), definition_id.0.as_str())
             .await?;
 
-        for deployment_record in existing_deployment_records {
+        let mut values: Vec<ApiDeployment<Namespace>> = vec![];
 
+        for deployment_record in existing_deployment_records {
+            let site = ApiSite {
+                host: deployment_record.host,
+                subdomain: deployment_record.subdomain,
+            };
+
+            let namespace: Namespace = deployment_record.namespace.try_into().map_err(|e| {
+                ApiDeploymentError::InternalError(format!("Failed to convert namespace: {}", e))
+            })?;
+
+            let api_definition_key = ApiDefinitionIdWithVersion {
+                id: deployment_record.definition_id.into(),
+                version: deployment_record.definition_version.into(),
+            };
+
+            match values
+                .iter_mut()
+                .find(|val| val.site == site && val.namespace == namespace)
+            {
+                Some(mut val) => {
+                    val.api_definition_keys.push(api_definition_key);
+                }
+                None => {
+                    values.push(ApiDeployment {
+                        site,
+                        namespace,
+                        api_definition_keys: vec![api_definition_key],
+                    });
+                }
+            }
         }
+
+        Ok(values)
     }
 
     async fn get_by_host(
@@ -347,9 +395,10 @@ for ApiDeploymentServiceDefault2<Namespace>
             }
 
             if namespace.is_empty() {
-                namespace = Some(deployment_record.namespace.into());
+                namespace = Some(deployment_record.namespace.try_into().map_err(|e| {
+                    ApiDeploymentError::InternalError(format!("Failed to convert namespace: {}", e))
+                })?);
             }
-
 
             api_definition_keys.push(ApiDefinitionIdWithVersion {
                 id: deployment_record.definition_id.into(),
@@ -370,30 +419,33 @@ for ApiDeploymentServiceDefault2<Namespace>
     async fn delete(
         &self,
         namespace: &Namespace,
-        host: &ApiSiteString,
+        site: &ApiSiteString,
     ) -> Result<bool, ApiDeploymentError<Namespace>> {
-        let existing_deployments = self.deployment_repo.get_by_site(host.0.as_str()).await?;
+        let existing_deployment_records = self
+            .deployment_repo
+            .get_by_site(site.to_string().as_str())
+            .await?;
 
-        match existing_deployments {
-            Some(deployment) if deployment.namespace != *namespace => {
-                error!(
-                        "Failed to delete api deployment of namespace {} with site: {} - site used by another API (under another namespace/API)",
-                        namespace,
-                        &host,
-                );
-                Err(ApiDeploymentError::DeploymentConflict(ApiSiteString::from(
-                    &deployment.site,
-                )))
-            }
-            Some(_) => self
-                .deployment_repo
-                .delete(host)
-                .await
-                .map_err(|err| err.into()),
-            None => Err(ApiDeploymentError::ApiDeploymentNotFound(
+        if existing_deployment_records.is_empty() {
+            Err(ApiDeploymentError::ApiDeploymentNotFound(
                 namespace.clone(),
-                host.clone(),
-            )),
+                site.clone(),
+            ))
+        } else if existing_deployment_records
+            .iter()
+            .any(|value| value.namespace != namespace.to_string())
+        {
+            error!(
+                         "Failed to delete api deployment of namespace {} with site: {} - site used by another API (under another namespace/API)",
+                        namespace,
+                        &site,
+                    );
+            Err(ApiDeploymentError::DeploymentConflict(site.clone()))
+        } else {
+            self.deployment_repo
+                .delete(existing_deployment_records)
+                .await
+                .map_err(|e| e.into())
         }
     }
 }

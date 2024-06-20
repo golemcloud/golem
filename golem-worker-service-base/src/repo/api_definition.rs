@@ -1,6 +1,6 @@
 use crate::api_definition::http::HttpApiDefinition;
 use async_trait::async_trait;
-use sqlx::{Database, Pool};
+use sqlx::{Database, Pool, Row};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -58,6 +58,8 @@ pub trait ApiDefinitionRepo {
         id: &str,
         version: &str,
     ) -> Result<Option<ApiDefinitionRecord>, RepoError>;
+
+    async fn exists(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError>;
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError>;
 
@@ -157,6 +159,19 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Sqlite> {
             .fetch_optional(self.db_pool.deref())
             .await
             .map_err(|e| e.into())
+    }
+
+    async fn exists(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
+        let result = sqlx::query(
+            "SELECT count(*) as count FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
+            .bind(namespace)
+            .bind(id)
+            .bind(version)
+            .fetch_one(self.db_pool.deref())
+            .await?;
+
+        let count: i64 = result.get("count");
+        Ok(count > 0)
     }
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
@@ -270,6 +285,19 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Postgres> {
             .fetch_optional(self.db_pool.deref())
             .await
             .map_err(|e| e.into())
+    }
+
+    async fn exists(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
+        let result = sqlx::query(
+            "SELECT count(*) as count FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
+            .bind(namespace)
+            .bind(id)
+            .bind(version)
+            .fetch_one(self.db_pool.deref())
+            .await?;
+
+        let count: i64 = result.get("count");
+        Ok(count > 0)
     }
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
