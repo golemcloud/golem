@@ -35,14 +35,8 @@ impl Display for CommonNamespace {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, Deserialize)]
 pub struct EmptyNamespace();
-
-impl Default for EmptyNamespace {
-    fn default() -> Self {
-        EmptyNamespace()
-    }
-}
 
 impl Display for EmptyNamespace {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
