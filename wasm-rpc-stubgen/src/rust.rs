@@ -91,7 +91,11 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                     pub struct #result_wrapper {
                         pub future_invoke_result: FutureInvokeResult
                     }
-                })
+                });
+
+                resource_type_aliases.push(quote! {
+                    type #result_wrapper = crate::#result_wrapper;
+                });
             }
         }
         for function in &interface.static_functions {
@@ -101,7 +105,11 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                     pub struct #result_wrapper {
                         pub future_invoke_result: FutureInvokeResult
                     }
-                })
+                });
+
+                resource_type_aliases.push(quote! {
+                    type #result_wrapper = crate::#result_wrapper;
+                });
             }
         }
     }
@@ -133,7 +141,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                         let pollable = self.future_invoke_result.subscribe();
                         let pollable = unsafe {
                             bindings::wasi::io::poll::Pollable::from_handle(
-                                pollable.into_handle()
+                                pollable.take_handle()
                             )
                         };
                         pollable
@@ -169,7 +177,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                         let pollable = self.future_invoke_result.subscribe();
                         let pollable = unsafe {
                             bindings::wasi::io::poll::Pollable::from_handle(
-                                pollable.into_handle()
+                                pollable.take_handle()
                             )
                         };
                         pollable
