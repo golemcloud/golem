@@ -1,10 +1,13 @@
-use crate::model::{Assignments, Pod, RoutingTable, Unassignments};
-use golem_common::model::ShardId;
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
+
+use serde::{Deserialize, Serialize};
 use tracing::trace;
+
+use golem_common::model::ShardId;
+
+use crate::model::{Assignments, Pod, RoutingTable, Unassignments};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Rebalance {
@@ -244,17 +247,20 @@ impl Display for Rebalance {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{Pod, RoutingTable};
-    use crate::rebalancing::Rebalance;
-    use golem_common::model::ShardId;
     use tracing_test::traced_test;
 
-    struct TestRoutingConf {
+    use golem_common::model::ShardId;
+
+    use crate::model::{Pod, RoutingTable};
+    use crate::rebalancing::Rebalance;
+
+    struct TestConfig {
         number_of_shards: usize,
         number_of_pods: usize,
+        initial_assignments: Vec<(usize, Vec<i64>)>,
     }
 
-    fn pod_id(idx: usize) -> Pod {
+    fn pod(idx: usize) -> Pod {
         Pod::new(format!("pod{}", idx), (9000 + idx) as u16)
     }
 
@@ -262,22 +268,47 @@ mod tests {
         ids.into_iter().map(|idx| ShardId::new(idx)).collect()
     }
 
-    fn new_test_routing_table(config: &TestRoutingConf) -> RoutingTable {
+    fn new_routing_table(config: TestConfig) -> RoutingTable {
         let mut routing_table = RoutingTable::new(config.number_of_shards);
         for i in 0..config.number_of_pods {
-            routing_table.add_pod(&pod_id(i));
+            routing_table.add_pod(&pod(i));
+        }
+        for (pod_idx, shards) in config.initial_assignments {
+            assign_shards(&mut routing_table, &pod(pod_idx), shards);
         }
         routing_table
     }
 
-    fn assert_rebalance_assignments_for_pod(rebalance: &Rebalance, pod: usize, shards: Vec<i64>) {
-        let pod = pod_id(pod);
+    fn assert_assignments_for_pod(rebalance: &Rebalance, pod: &Pod, shards: Vec<i64>) {
         assert_eq!(
             get_assigned_ids(rebalance, &pod),
             shard_ids(shards),
-            "assert_rebalance_assignments_for_pod: {}",
-            &pod
+            "assert_assignments_for_pod: {}\n{:#?}\n",
+            pod,
+            rebalance,
         );
+    }
+
+    fn assert_assignments(rebalance: &Rebalance, assignments: Vec<(usize, Vec<i64>)>) {
+        for (pod_idx, shards) in assignments {
+            assert_assignments_for_pod(&rebalance, &pod(pod_idx), shards)
+        }
+    }
+
+    fn assert_unassignments_for_pod(rebalance: &Rebalance, pod: &Pod, shards: Vec<i64>) {
+        assert_eq!(
+            get_unassigned_ids(rebalance, &pod),
+            shard_ids(shards),
+            "assert_unassignments_for_pod: {}\n{:#?}\n",
+            pod,
+            rebalance,
+        );
+    }
+
+    fn assert_unassignments(rebalance: &Rebalance, unassignments: Vec<(usize, Vec<i64>)>) {
+        for (pod_idx, shards) in unassignments {
+            assert_unassignments_for_pod(&rebalance, &pod(pod_idx), shards)
+        }
     }
 
     fn assign_shard(routing_table: &mut RoutingTable, pod: &Pod, shard_id: i64) {
@@ -286,6 +317,12 @@ mod tests {
             .entry(pod.clone())
             .or_default()
             .insert(ShardId::new(shard_id));
+    }
+
+    fn assign_shards(routing_table: &mut RoutingTable, pod: &Pod, shard_ids: Vec<i64>) {
+        for shar_id in shard_ids {
+            assign_shard(routing_table, pod, shar_id)
+        }
     }
 
     fn get_assigned_ids(rebalance: &Rebalance, pod: &Pod) -> Vec<ShardId> {
@@ -319,7 +356,12 @@ mod tests {
     #[test]
     #[traced_test]
     fn rebalance_empty_table() {
-        let routing_table = RoutingTable::new(1000);
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 1000,
+            number_of_pods: 0,
+            initial_assignments: vec![],
+        });
+
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
         assert!(rebalance.is_empty());
     }
@@ -327,14 +369,11 @@ mod tests {
     #[test]
     #[traced_test]
     fn rebalance_single_pod_no_unassigned() {
-        let pod1 = Pod::new("pod1".to_string(), 9000);
-        let mut routing_table = RoutingTable::new(4);
-        routing_table.add_pod(&pod1);
-
-        assign_shard(&mut routing_table, &pod1, 0);
-        assign_shard(&mut routing_table, &pod1, 1);
-        assign_shard(&mut routing_table, &pod1, 2);
-        assign_shard(&mut routing_table, &pod1, 3);
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 4,
+            number_of_pods: 1,
+            initial_assignments: vec![(0, vec![0, 1, 2, 3])],
+        });
 
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
         assert!(rebalance.is_empty());
@@ -343,50 +382,31 @@ mod tests {
     #[test]
     #[traced_test]
     fn rebalance_single_pod_unassigned() {
-        let pod1 = Pod::new("pod1".to_string(), 9000);
-        let mut routing_table = RoutingTable::new(6);
-        routing_table.add_pod(&pod1);
-
-        assign_shard(&mut routing_table, &pod1, 0);
-        assign_shard(&mut routing_table, &pod1, 3);
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 6,
+            number_of_pods: 1,
+            initial_assignments: vec![(0, vec![0, 3])],
+        });
 
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
 
         assert!(rebalance.get_unassignments().is_empty());
-
-        let assigned_ids = get_assigned_ids(&rebalance, &pod1);
-        assert_eq!(
-            assigned_ids,
-            vec![
-                ShardId::new(1),
-                ShardId::new(2),
-                ShardId::new(4),
-                ShardId::new(5),
-            ]
-        );
+        assert_assignments(&rebalance, vec![(0, vec![1, 2, 4, 5])]);
     }
 
     #[test]
     #[traced_test]
     fn rebalance_three_balanced_pods_no_unassigned() {
-        let pod1 = Pod::new("pod1".to_string(), 9000);
-        let pod2 = Pod::new("pod2".to_string(), 9001);
-        let pod3 = Pod::new("pod3".to_string(), 9002);
-
-        let mut routing_table = RoutingTable::new(9);
-        routing_table.add_pod(&pod1);
-        routing_table.add_pod(&pod2);
-        routing_table.add_pod(&pod3);
-
-        assign_shard(&mut routing_table, &pod1, 0);
-        assign_shard(&mut routing_table, &pod1, 1);
-        assign_shard(&mut routing_table, &pod1, 2);
-        assign_shard(&mut routing_table, &pod2, 3);
-        assign_shard(&mut routing_table, &pod2, 4);
-        assign_shard(&mut routing_table, &pod2, 5);
-        assign_shard(&mut routing_table, &pod3, 6);
-        assign_shard(&mut routing_table, &pod3, 7);
-        assign_shard(&mut routing_table, &pod3, 8);
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 9,
+            number_of_pods: 3,
+            initial_assignments: vec![
+                //
+                (0, vec![0, 1, 2]),
+                (1, vec![3, 4, 5]),
+                (2, vec![6, 7, 8]),
+            ],
+        });
 
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
         assert!(rebalance.is_empty());
@@ -395,349 +415,284 @@ mod tests {
     #[test]
     #[traced_test]
     fn rebalance_three_balanced_pods_unassigned() {
-        let pod1 = Pod::new("pod1".to_string(), 9000);
-        let pod2 = Pod::new("pod2".to_string(), 9001);
-        let pod3 = Pod::new("pod3".to_string(), 9002);
-
-        let mut routing_table = RoutingTable::new(9);
-        routing_table.add_pod(&pod1);
-        routing_table.add_pod(&pod2);
-        routing_table.add_pod(&pod3);
-
-        assign_shard(&mut routing_table, &pod1, 0);
-        assign_shard(&mut routing_table, &pod1, 1);
-        assign_shard(&mut routing_table, &pod2, 4);
-        assign_shard(&mut routing_table, &pod2, 5);
-        assign_shard(&mut routing_table, &pod3, 6);
-        assign_shard(&mut routing_table, &pod3, 7);
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 9,
+            number_of_pods: 3,
+            initial_assignments: vec![
+                //
+                (0, vec![0, 1]),
+                (1, vec![4, 5]),
+                (2, vec![6, 7]),
+            ],
+        });
 
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
         assert!(rebalance.get_unassignments().is_empty());
 
-        let assigned_ids_1 = get_assigned_ids(&rebalance, &pod1);
-        let assigned_ids_2 = get_assigned_ids(&rebalance, &pod2);
-        let assigned_ids_3 = get_assigned_ids(&rebalance, &pod3);
-        assert_eq!(assigned_ids_1, vec![ShardId::new(2)]);
-        assert_eq!(assigned_ids_2, vec![ShardId::new(3)]);
-        assert_eq!(assigned_ids_3, vec![ShardId::new(8)]);
+        assert_assignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![2]),
+                (1, vec![3]),
+                (2, vec![8]),
+            ],
+        );
     }
 
     #[test]
     #[traced_test]
     fn rebalance_one_new_pod() {
-        let pod1 = Pod::new("pod1".to_string(), 9000);
-        let pod2 = Pod::new("pod2".to_string(), 9001);
-        let pod3 = Pod::new("pod3".to_string(), 9002);
-
-        let mut routing_table = RoutingTable::new(9);
-        routing_table.add_pod(&pod1);
-        routing_table.add_pod(&pod2);
-        routing_table.add_pod(&pod3);
-
-        assign_shard(&mut routing_table, &pod1, 0);
-        assign_shard(&mut routing_table, &pod1, 1);
-        assign_shard(&mut routing_table, &pod1, 2);
-        assign_shard(&mut routing_table, &pod1, 3);
-        assign_shard(&mut routing_table, &pod2, 4);
-        assign_shard(&mut routing_table, &pod2, 5);
-        assign_shard(&mut routing_table, &pod2, 6);
-        assign_shard(&mut routing_table, &pod2, 7);
-        assign_shard(&mut routing_table, &pod2, 8);
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 9,
+            number_of_pods: 3,
+            initial_assignments: vec![
+                //
+                (0, vec![0, 1, 2, 3]),
+                (1, vec![4, 5, 6, 7, 8]),
+            ],
+        });
 
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
 
-        let assigned_ids_1 = get_assigned_ids(&rebalance, &pod1);
-        let assigned_ids_2 = get_assigned_ids(&rebalance, &pod2);
-        let assigned_ids_3 = get_assigned_ids(&rebalance, &pod3);
-
-        let unassigned_ids_1 = get_unassigned_ids(&rebalance, &pod1);
-        let unassigned_ids_2 = get_unassigned_ids(&rebalance, &pod2);
-        let unassigned_ids_3 = get_unassigned_ids(&rebalance, &pod3);
-
-        assert_eq!(assigned_ids_1, vec![]);
-        assert_eq!(assigned_ids_2, vec![]);
-        assert_eq!(
-            assigned_ids_3,
-            vec![ShardId::new(0), ShardId::new(4), ShardId::new(5)]
+        assert_assignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![]),
+                (1, vec![]),
+                (2, vec![0, 4, 5]),
+            ],
         );
 
-        assert_eq!(unassigned_ids_1, vec![ShardId::new(0)]);
-        assert_eq!(unassigned_ids_2, vec![ShardId::new(4), ShardId::new(5)]);
-        assert_eq!(unassigned_ids_3, vec![]);
+        assert_unassignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![0]),
+                (1, vec![4, 5]),
+                (2, vec![]),
+            ],
+        );
     }
 
     #[test]
     #[traced_test]
     fn rebalance_one_new_pod_with_threshold() {
-        let pod1 = Pod::new("pod1".to_string(), 9000);
-        let pod2 = Pod::new("pod2".to_string(), 9001);
-        let pod3 = Pod::new("pod3".to_string(), 9002);
-
-        let mut routing_table = RoutingTable::new(9);
-        routing_table.add_pod(&pod1);
-        routing_table.add_pod(&pod2);
-        routing_table.add_pod(&pod3);
-
-        assign_shard(&mut routing_table, &pod1, 0);
-        assign_shard(&mut routing_table, &pod1, 1);
-        assign_shard(&mut routing_table, &pod1, 2);
-        assign_shard(&mut routing_table, &pod1, 3);
-        assign_shard(&mut routing_table, &pod2, 4);
-        assign_shard(&mut routing_table, &pod2, 5);
-        assign_shard(&mut routing_table, &pod2, 6);
-        assign_shard(&mut routing_table, &pod2, 7);
-        assign_shard(&mut routing_table, &pod2, 8);
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 9,
+            number_of_pods: 3,
+            initial_assignments: vec![
+                //
+                (0, vec![0, 1, 2, 3]),
+                (1, vec![4, 5, 6, 7, 8]),
+            ],
+        });
 
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.33);
 
-        let assigned_ids_1 = get_assigned_ids(&rebalance, &pod1);
-        let assigned_ids_2 = get_assigned_ids(&rebalance, &pod2);
-        let assigned_ids_3 = get_assigned_ids(&rebalance, &pod3);
+        assert_assignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![]),
+                (1, vec![]),
+                (2, vec![4, 5]),
+            ],
+        );
 
-        let unassigned_ids_1 = get_unassigned_ids(&rebalance, &pod1);
-        let unassigned_ids_2 = get_unassigned_ids(&rebalance, &pod2);
-        let unassigned_ids_3 = get_unassigned_ids(&rebalance, &pod3);
-
-        assert_eq!(assigned_ids_1, vec![]);
-        assert_eq!(assigned_ids_2, vec![]);
-        assert_eq!(assigned_ids_3, vec![ShardId::new(4), ShardId::new(5)]);
-
-        assert_eq!(unassigned_ids_1, vec![]);
-        assert_eq!(unassigned_ids_2, vec![ShardId::new(4), ShardId::new(5)]);
-        assert_eq!(unassigned_ids_3, vec![]);
+        assert_unassignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![]),
+                (1, vec![4, 5]),
+                (2, vec![]),
+            ],
+        );
     }
 
     #[test]
     #[traced_test]
     fn rebalance_one_new_pod_after_removing_two() {
-        let pod1 = Pod::new("pod1".to_string(), 9000);
-        let pod2 = Pod::new("pod2".to_string(), 9001);
-        let pod3 = Pod::new("pod3".to_string(), 9002);
-
-        let mut routing_table = RoutingTable::new(12);
-        routing_table.add_pod(&pod1);
-        routing_table.add_pod(&pod2);
-        routing_table.add_pod(&pod3);
-
-        assign_shard(&mut routing_table, &pod1, 0);
-        assign_shard(&mut routing_table, &pod1, 1);
-        assign_shard(&mut routing_table, &pod1, 2);
-        assign_shard(&mut routing_table, &pod2, 6);
-        assign_shard(&mut routing_table, &pod2, 7);
-        assign_shard(&mut routing_table, &pod2, 8);
         // 3,4,5 and 9,10,11 are unassigned
         // pod3 is empty
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 12,
+            number_of_pods: 3,
+            initial_assignments: vec![
+                //
+                (0, vec![0, 1, 2]),
+                (1, vec![6, 7, 8]),
+            ],
+        });
 
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
 
-        let assigned_ids_1 = get_assigned_ids(&rebalance, &pod1);
-        let assigned_ids_2 = get_assigned_ids(&rebalance, &pod2);
-        let assigned_ids_3 = get_assigned_ids(&rebalance, &pod3);
-
-        let unassigned_ids_1 = get_unassigned_ids(&rebalance, &pod1);
-        let unassigned_ids_2 = get_unassigned_ids(&rebalance, &pod2);
-        let unassigned_ids_3 = get_unassigned_ids(&rebalance, &pod3);
-
-        assert_eq!(assigned_ids_1, vec![ShardId::new(10)]);
-        assert_eq!(assigned_ids_2, vec![ShardId::new(11)]);
-        assert_eq!(
-            assigned_ids_3,
+        assert_assignments(
+            &rebalance,
             vec![
-                ShardId::new(3),
-                ShardId::new(4),
-                ShardId::new(5),
-                ShardId::new(9)
-            ]
+                //
+                (0, vec![10]),
+                (1, vec![11]),
+                (2, vec![3, 4, 5, 9]),
+            ],
         );
 
-        assert_eq!(unassigned_ids_1, vec![]);
-        assert_eq!(unassigned_ids_2, vec![]);
-        assert_eq!(unassigned_ids_3, vec![]);
+        assert_unassignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![]),
+                (1, vec![]),
+                (2, vec![]),
+            ],
+        );
     }
 
     #[test]
     #[traced_test]
     fn rebalance_two_new_pods() {
-        let pod1 = Pod::new("pod1".to_string(), 9000);
-        let pod2 = Pod::new("pod2".to_string(), 9001);
-        let pod3 = Pod::new("pod3".to_string(), 9002);
-
-        let mut routing_table = RoutingTable::new(9);
-        routing_table.add_pod(&pod1);
-        routing_table.add_pod(&pod2);
-        routing_table.add_pod(&pod3);
-
-        assign_shard(&mut routing_table, &pod1, 0);
-        assign_shard(&mut routing_table, &pod1, 1);
-        assign_shard(&mut routing_table, &pod1, 2);
-        assign_shard(&mut routing_table, &pod1, 3);
-        assign_shard(&mut routing_table, &pod1, 4);
-        assign_shard(&mut routing_table, &pod1, 5);
-        assign_shard(&mut routing_table, &pod1, 6);
-        assign_shard(&mut routing_table, &pod1, 7);
-        assign_shard(&mut routing_table, &pod1, 8);
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 9,
+            number_of_pods: 3,
+            initial_assignments: vec![(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 8])],
+        });
 
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
 
-        let assigned_ids_1 = get_assigned_ids(&rebalance, &pod1);
-        let assigned_ids_2 = get_assigned_ids(&rebalance, &pod2);
-        let assigned_ids_3 = get_assigned_ids(&rebalance, &pod3);
-
-        let unassigned_ids_1 = get_unassigned_ids(&rebalance, &pod1);
-        let unassigned_ids_2 = get_unassigned_ids(&rebalance, &pod2);
-        let unassigned_ids_3 = get_unassigned_ids(&rebalance, &pod3);
-
-        assert_eq!(assigned_ids_1, vec![]);
-        assert_eq!(
-            assigned_ids_2,
-            vec![ShardId::new(0), ShardId::new(1), ShardId::new(2)]
-        );
-        assert_eq!(
-            assigned_ids_3,
-            vec![ShardId::new(3), ShardId::new(4), ShardId::new(5)]
-        );
-
-        assert_eq!(
-            unassigned_ids_1,
+        assert_assignments(
+            &rebalance,
             vec![
-                ShardId::new(0),
-                ShardId::new(1),
-                ShardId::new(2),
-                ShardId::new(3),
-                ShardId::new(4),
-                ShardId::new(5)
-            ]
+                //
+                (0, vec![]),
+                (1, vec![0, 1, 2]),
+                (2, vec![3, 4, 5]),
+            ],
         );
-        assert_eq!(unassigned_ids_2, vec![]);
-        assert_eq!(unassigned_ids_3, vec![]);
+
+        assert_unassignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![0, 1, 2, 3, 4, 5]),
+                (1, vec![]),
+                (2, vec![]),
+            ],
+        );
     }
 
     #[test]
     #[traced_test]
     fn rebalance_two_new_pods_after_removing_one() {
-        let pod1 = Pod::new("pod1".to_string(), 9000);
-        let pod2 = Pod::new("pod2".to_string(), 9001);
-        let pod3 = Pod::new("pod3".to_string(), 9002);
-        let pod4 = Pod::new("pod4".to_string(), 9003);
-
-        let mut routing_table = RoutingTable::new(12);
-        routing_table.add_pod(&pod1);
-        routing_table.add_pod(&pod2);
-        routing_table.add_pod(&pod3);
-        routing_table.add_pod(&pod4);
-
-        assign_shard(&mut routing_table, &pod1, 0);
-        assign_shard(&mut routing_table, &pod1, 1);
-        assign_shard(&mut routing_table, &pod1, 2);
-        assign_shard(&mut routing_table, &pod1, 3);
-        assign_shard(&mut routing_table, &pod2, 7);
-        assign_shard(&mut routing_table, &pod2, 8);
-        assign_shard(&mut routing_table, &pod2, 9);
-        assign_shard(&mut routing_table, &pod2, 10);
         // pod1 and pod2 has 4-4 shards because previously we had 3 pods for 12 shards
         // 4,5,6,11 are unassigned
         // pod3 and pod4 are empty
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 12,
+            number_of_pods: 4,
+            initial_assignments: vec![
+                //
+                (0, vec![0, 1, 2, 3]),
+                (1, vec![7, 8, 9, 10]),
+            ],
+        });
 
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
 
-        let assigned_ids_1 = get_assigned_ids(&rebalance, &pod1);
-        let assigned_ids_2 = get_assigned_ids(&rebalance, &pod2);
-        let assigned_ids_3 = get_assigned_ids(&rebalance, &pod3);
-        let assigned_ids_4 = get_assigned_ids(&rebalance, &pod4);
-
-        let unassigned_ids_1 = get_unassigned_ids(&rebalance, &pod1);
-        let unassigned_ids_2 = get_unassigned_ids(&rebalance, &pod2);
-        let unassigned_ids_3 = get_unassigned_ids(&rebalance, &pod3);
-        let unassigned_ids_4 = get_unassigned_ids(&rebalance, &pod4);
-
-        assert_eq!(assigned_ids_1, vec![]);
-        assert_eq!(assigned_ids_2, vec![]);
-        assert_eq!(
-            assigned_ids_3,
-            vec![ShardId::new(4), ShardId::new(6), ShardId::new(7)]
-        );
-        assert_eq!(
-            assigned_ids_4,
-            vec![ShardId::new(0), ShardId::new(5), ShardId::new(11)]
+        assert_assignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![]),
+                (1, vec![]),
+                (2, vec![4, 6, 7]),
+                (3, vec![0, 5, 11]),
+            ],
         );
 
-        assert_eq!(unassigned_ids_1, vec![ShardId::new(0)]);
-        assert_eq!(unassigned_ids_2, vec![ShardId::new(7)]);
-        assert_eq!(unassigned_ids_3, vec![]);
-        assert_eq!(unassigned_ids_4, vec![]);
+        assert_unassignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![0]),
+                (1, vec![7]),
+                (2, vec![]),
+                (3, vec![]),
+            ],
+        );
     }
 
     #[test]
     #[traced_test]
     fn two_empty_pods_one_filled() {
-        let pod1 = Pod::new("pod1".to_string(), 9000);
-        let pod2 = Pod::new("pod2".to_string(), 9001);
-        let pod3 = Pod::new("pod3".to_string(), 9002);
-
-        let mut routing_table = RoutingTable::new(9);
-        routing_table.add_pod(&pod1);
-        routing_table.add_pod(&pod2);
-        routing_table.add_pod(&pod3);
-
-        assign_shard(&mut routing_table, &pod1, 3);
-        assign_shard(&mut routing_table, &pod1, 4);
-        assign_shard(&mut routing_table, &pod1, 5);
-
         // pod2 is empty
         // pod3 is new and empty
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 9,
+            number_of_pods: 3,
+            initial_assignments: vec![(0, vec![3, 4, 5])],
+        });
 
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
 
-        println!("{rebalance:?}");
-
-        let assigned_ids_1 = get_assigned_ids(&rebalance, &pod1);
-        let assigned_ids_2 = get_assigned_ids(&rebalance, &pod2);
-        let assigned_ids_3 = get_assigned_ids(&rebalance, &pod3);
-        assert_eq!(assigned_ids_1, vec![]);
-        assert_eq!(
-            assigned_ids_2,
-            vec![ShardId::new(2), ShardId::new(7), ShardId::new(8)]
-        );
-        assert_eq!(
-            assigned_ids_3,
-            vec![ShardId::new(0), ShardId::new(1), ShardId::new(6)]
+        assert_assignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![]),
+                (1, vec![0, 2, 7]),
+                (2, vec![1, 6, 8]),
+            ],
         );
     }
 
     #[test]
     #[traced_test]
     fn initial_assign_is_ordered_and_no_rebalance_needed() {
-        let routing_table = new_test_routing_table(&TestRoutingConf {
+        let routing_table = new_routing_table(TestConfig {
             number_of_shards: 8,
             number_of_pods: 4,
+            initial_assignments: vec![],
         });
 
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
 
-        assert_eq!(rebalance.assignments.assignments.len(), 4);
-        assert_rebalance_assignments_for_pod(&rebalance, 0, vec![0, 4]);
-        assert_rebalance_assignments_for_pod(&rebalance, 1, vec![1, 5]);
-        assert_rebalance_assignments_for_pod(&rebalance, 2, vec![2, 6]);
-        assert_rebalance_assignments_for_pod(&rebalance, 3, vec![3, 7]);
+        assert_assignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![0, 4]),
+                (1, vec![1, 5]),
+                (2, vec![2, 6]),
+                (3, vec![3, 7]),
+            ],
+        );
+
         assert_eq!(rebalance.unassignments.unassignments.len(), 0);
     }
 
     #[test]
     #[traced_test]
     fn initial_assign_is_ordered_and_no_rebalance_with_some_saturated_pod() {
-        let mut routing_table = new_test_routing_table(&TestRoutingConf {
+        let routing_table = new_routing_table(TestConfig {
             number_of_shards: 8,
             number_of_pods: 4,
+            initial_assignments: vec![(0, vec![0, 1])],
         });
 
-        assign_shard(&mut routing_table, &pod_id(0), 0);
-        assign_shard(&mut routing_table, &pod_id(0), 1);
-
         let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
-        assert_eq!(rebalance.assignments.assignments.len(), 3);
-        assert_rebalance_assignments_for_pod(&rebalance, 1, vec![2, 5]);
-        assert_rebalance_assignments_for_pod(&rebalance, 2, vec![3, 6]);
-        assert_rebalance_assignments_for_pod(&rebalance, 3, vec![4, 7]);
+
+        assert_assignments(
+            &rebalance,
+            vec![
+                //
+                (1, vec![2, 5]),
+                (2, vec![3, 6]),
+                (3, vec![4, 7]),
+            ],
+        );
+
         assert_eq!(rebalance.unassignments.unassignments.len(), 0);
     }
 }
