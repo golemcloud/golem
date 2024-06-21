@@ -8,10 +8,7 @@ use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::api_definition::api_common::HasIsDraft;
-use crate::api_definition::{
-    ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion,
-};
+use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::parser::path_pattern_parser::PathPatternParser;
 use crate::parser::{GolemParser, ParseError};
 use crate::worker_binding::GolemWorkerBinding;
@@ -35,27 +32,27 @@ impl HasGolemWorkerBindings for HttpApiDefinition {
     }
 }
 
-impl HasApiDefinitionId for HttpApiDefinition {
-    fn get_api_definition_id(&self) -> ApiDefinitionId {
-        self.id.clone()
-    }
-}
-
-impl HasVersion for HttpApiDefinition {
-    fn get_version(&self) -> ApiVersion {
-        self.version.clone()
-    }
-}
-
-impl HasIsDraft for HttpApiDefinition {
-    fn is_draft(&self) -> bool {
-        self.draft
-    }
-
-    fn set_not_draft(&mut self) {
-        self.draft = false;
-    }
-}
+// impl HasApiDefinitionId for HttpApiDefinition {
+//     fn get_api_definition_id(&self) -> ApiDefinitionId {
+//         self.id.clone()
+//     }
+// }
+//
+// impl HasVersion for HttpApiDefinition {
+//     fn get_version(&self) -> ApiVersion {
+//         self.version.clone()
+//     }
+// }
+//
+// impl HasIsDraft for HttpApiDefinition {
+//     fn is_draft(&self) -> bool {
+//         self.draft
+//     }
+//
+//     fn set_not_draft(&mut self) {
+//         self.draft = false;
+//     }
+// }
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display, Encode, Decode, Enum,

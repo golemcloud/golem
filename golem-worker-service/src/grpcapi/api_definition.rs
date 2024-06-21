@@ -18,7 +18,6 @@ use golem_api_grpc::proto::golem::{
     common::{Empty, ErrorBody, ErrorsBody},
 };
 use golem_worker_service_base::auth::EmptyNamespace;
-use golem_worker_service_base::service::api_definition::ApiDefinitionService2;
 use golem_worker_service_base::{
     api_definition::{http::get_api_definition, ApiDefinitionId, ApiVersion},
     auth::EmptyAuthCtx,
@@ -28,15 +27,23 @@ use golem_worker_service_base::{
 #[derive(Clone)]
 pub struct GrpcApiDefinitionService {
     definition_service: Arc<
-        dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError> + Sync + Send,
+        dyn golem_worker_service_base::service::api_definition::ApiDefinitionService<
+                EmptyAuthCtx,
+                EmptyNamespace,
+                RouteValidationError,
+            > + Sync
+            + Send,
     >,
 }
 
 impl GrpcApiDefinitionService {
     pub fn new(
         definition_service: Arc<
-            dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
-                + Sync
+            dyn golem_worker_service_base::service::api_definition::ApiDefinitionService<
+                    EmptyAuthCtx,
+                    EmptyNamespace,
+                    RouteValidationError,
+                > + Sync
                 + Send,
         >,
     ) -> Self {

@@ -88,7 +88,6 @@ mod conversion {
     use poem_openapi::payload::Json;
     use std::fmt::Display;
 
-    use crate::repo::api_definition_repo::ApiRegistrationRepoError;
     use crate::service::api_definition::ApiRegistrationError;
     use crate::service::api_definition_validator::ValidationErrors;
     use crate::service::api_deployment::ApiDeploymentError;
@@ -99,14 +98,6 @@ mod conversion {
     impl From<ApiRegistrationError<RouteValidationError>> for ApiEndpointError {
         fn from(error: ApiRegistrationError<RouteValidationError>) -> Self {
             match error {
-                ApiRegistrationError::RepoError(error) => match error {
-                    ApiRegistrationRepoError::AlreadyExists(_) => {
-                        ApiEndpointError::already_exists(error)
-                    }
-                    ApiRegistrationRepoError::NotDraft(_) => ApiEndpointError::bad_request(error),
-                    ApiRegistrationRepoError::NotFound(_) => ApiEndpointError::not_found(error),
-                    ApiRegistrationRepoError::Internal(_) => ApiEndpointError::internal(error),
-                },
                 ApiRegistrationError::ValidationError(e) => e.into(),
                 e @ ApiRegistrationError::ComponentNotFoundError(_) => {
                     ApiEndpointError::bad_request(e)
@@ -167,28 +158,6 @@ mod conversion {
     impl From<ApiRegistrationError<RouteValidationError>> for ApiDefinitionError {
         fn from(error: ApiRegistrationError<RouteValidationError>) -> ApiDefinitionError {
             match error {
-                ApiRegistrationError::RepoError(error) => match error {
-                    ApiRegistrationRepoError::AlreadyExists(_) => ApiDefinitionError {
-                        error: Some(api_definition_error::Error::AlreadyExists(ErrorBody {
-                            error: error.to_string(),
-                        })),
-                    },
-                    ApiRegistrationRepoError::Internal(_) => ApiDefinitionError {
-                        error: Some(api_definition_error::Error::InternalError(ErrorBody {
-                            error: error.to_string(),
-                        })),
-                    },
-                    ApiRegistrationRepoError::NotFound(_) => ApiDefinitionError {
-                        error: Some(api_definition_error::Error::NotFound(ErrorBody {
-                            error: error.to_string(),
-                        })),
-                    },
-                    ApiRegistrationRepoError::NotDraft(_) => ApiDefinitionError {
-                        error: Some(api_definition_error::Error::NotDraft(ErrorBody {
-                            error: error.to_string(),
-                        })),
-                    },
-                },
                 ApiRegistrationError::ValidationError(e) => {
                     let errors = e
                         .errors

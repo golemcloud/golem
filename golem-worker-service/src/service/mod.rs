@@ -14,7 +14,7 @@ use golem_worker_service_base::http::InputHttpRequest;
 use golem_worker_service_base::repo::api_definition;
 use golem_worker_service_base::repo::api_deployment;
 use golem_worker_service_base::service::api_definition::{
-    ApiDefinitionService2, ApiDefinitionServiceDefault2, ApiDefinitionServiceNoop,
+    ApiDefinitionService, ApiDefinitionServiceDefault, ApiDefinitionServiceNoop,
 };
 use golem_worker_service_base::service::api_definition_lookup::ApiDefinitionsLookup;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
@@ -32,7 +32,7 @@ use crate::worker_component_metadata_fetcher::DefaultWorkerComponentMetadataFetc
 use golem_worker_service_base::evaluator::WorkerMetadataFetcher;
 
 use golem_worker_service_base::service::api_deployment::{
-    ApiDeploymentService, ApiDeploymentServiceDefault2, ApiDeploymentServiceNoop,
+    ApiDeploymentService, ApiDeploymentServiceDefault, ApiDeploymentServiceNoop,
 };
 use std::sync::Arc;
 
@@ -44,7 +44,7 @@ pub struct Services {
     pub worker_service: worker::WorkerService,
     pub component_service: component::ComponentService,
     pub definition_service: Arc<
-        dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError> + Sync + Send,
+        dyn ApiDefinitionService<EmptyAuthCtx, EmptyNamespace, RouteValidationError> + Sync + Send,
     >,
     pub deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send>,
     pub http_definition_lookup_service:
@@ -131,17 +131,17 @@ impl Services {
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let definition_service: Arc<
-            dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
+            dyn ApiDefinitionService<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
                 + Sync
                 + Send,
-        > = Arc::new(ApiDefinitionServiceDefault2::new(
+        > = Arc::new(ApiDefinitionServiceDefault::new(
             component_service.clone(),
             api_definition_repo.clone(),
             api_definition_validator_service.clone(),
         ));
 
         let deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send> =
-            Arc::new(ApiDeploymentServiceDefault2::new(
+            Arc::new(ApiDeploymentServiceDefault::new(
                 api_deployment_repo.clone(),
                 api_definition_repo.clone(),
             ));
@@ -188,7 +188,7 @@ impl Services {
         );
 
         let definition_service: Arc<
-            dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
+            dyn ApiDefinitionService<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
                 + Sync
                 + Send,
         > = Arc::new(ApiDefinitionServiceNoop {});

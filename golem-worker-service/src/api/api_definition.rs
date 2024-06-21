@@ -14,12 +14,12 @@ use golem_worker_service_base::api_definition::http::get_api_definition;
 use golem_worker_service_base::api_definition::http::HttpApiDefinition as CoreHttpApiDefinition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::auth::{EmptyAuthCtx, EmptyNamespace};
-use golem_worker_service_base::service::api_definition::ApiDefinitionService2;
+use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
 
 pub struct RegisterApiDefinitionApi {
     definition_service: Arc<
-        dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError> + Sync + Send,
+        dyn ApiDefinitionService<EmptyAuthCtx, EmptyNamespace, RouteValidationError> + Sync + Send,
     >,
 }
 
@@ -27,7 +27,7 @@ pub struct RegisterApiDefinitionApi {
 impl RegisterApiDefinitionApi {
     pub fn new(
         definition_service: Arc<
-            dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
+            dyn ApiDefinitionService<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
                 + Sync
                 + Send,
         >,
@@ -234,7 +234,7 @@ mod test {
     use poem::test::TestClient;
 
     use golem_worker_service_base::repo::api_definition::InMemoryApiDefinitionRepo;
-    use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault2;
+    use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
 
     use crate::service::component::ComponentService;
 
@@ -242,7 +242,7 @@ mod test {
 
     fn make_route() -> poem::Route {
         let component_service: ComponentService = Arc::new(ComponentServiceNoop {});
-        let definition_service = ApiDefinitionServiceDefault2::new(
+        let definition_service = ApiDefinitionServiceDefault::new(
             component_service,
             Arc::new(InMemoryApiDefinitionRepo::default()),
             Arc::new(ApiDefinitionValidatorNoop {}),
