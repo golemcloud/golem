@@ -11,19 +11,19 @@ interface stub-auction {
 
   resource future-bid-result {
     subscribe: func() -> pollable;
-    get: func() -> bid-result;
+    get: func() -> option<bid-result>;
   }
   resource future-close-auction-result {
     subscribe: func() -> pollable;
-    get: func() -> option<bidder-id>;
+    get: func() -> option<option<bidder-id>>;
   }
   resource future-running-auction-bid-result {
     subscribe: func() -> pollable;
-    get: func() -> bid-result;
+    get: func() -> option<bid-result>;
   }
   resource future-running-auction-close-result {
     subscribe: func() -> pollable;
-    get: func() -> option<bidder-id>;
+    get: func() -> option<option<bidder-id>>;
   }
   resource api {
     constructor(location: uri);

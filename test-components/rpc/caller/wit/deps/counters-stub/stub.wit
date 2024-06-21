@@ -6,23 +6,23 @@ interface stub-counters {
 
   resource future-get-global-value-result {
     subscribe: func() -> pollable;
-    get: func() -> u64;
+    get: func() -> option<u64>;
   }
   resource future-get-all-dropped-result {
     subscribe: func() -> pollable;
-    get: func() -> list<tuple<string, u64>>;
+    get: func() -> option<list<tuple<string, u64>>>;
   }
-  resource future-get-value-result {
+  resource future-counter-get-value-result {
     subscribe: func() -> pollable;
-    get: func() -> u64;
+    get: func() -> option<u64>;
   }
-  resource future-get-args-result {
+  resource future-counter-get-args-result {
     subscribe: func() -> pollable;
-    get: func() -> list<string>;
+    get: func() -> option<list<string>>;
   }
-  resource future-get-env-result {
+  resource future-counter-get-env-result {
     subscribe: func() -> pollable;
-    get: func() -> list<tuple<string, string>>;
+    get: func() -> option<list<tuple<string, string>>>;
   }
   resource api {
     constructor(location: uri);
@@ -39,11 +39,11 @@ interface stub-counters {
     blocking-inc-by: func(value: u64);
     inc-by: func(value: u64);
     blocking-get-value: func() -> u64;
-    get-value: func() -> future-get-value-result;
+    get-value: func() -> future-counter-get-value-result;
     blocking-get-args: func() -> list<string>;
-    get-args: func() -> future-get-args-result;
+    get-args: func() -> future-counter-get-args-result;
     blocking-get-env: func() -> list<tuple<string, string>>;
-    get-env: func() -> future-get-env-result;
+    get-env: func() -> future-counter-get-env-result;
   }
 
 }
