@@ -65,7 +65,7 @@ pub use bindings::wasi::io::poll::Pollable;
 use ::wasmtime::component::bindgen;
 
 #[cfg(feature = "host")]
-pub use wasmtime_wasi::preview2::Pollable;
+pub use wasmtime_wasi::Pollable;
 
 #[cfg(feature = "host")]
 bindgen!({
@@ -75,6 +75,7 @@ bindgen!({
     ",
     tracing: false,
     async: true,
+    trappable_imports: true,
     with: {
         "golem:rpc/types/wasm-rpc": WasmRpcEntry,
         "golem:rpc/types/future-invoke-result": FutureInvokeResultEntry,
@@ -105,7 +106,7 @@ pub struct FutureInvokeResultEntry {
 
 #[cfg(feature = "host")]
 #[async_trait::async_trait]
-impl wasmtime_wasi::preview2::Subscribe for FutureInvokeResultEntry {
+impl wasmtime_wasi::Subscribe for FutureInvokeResultEntry {
     async fn ready(&mut self) {
         self.payload.ready().await
     }

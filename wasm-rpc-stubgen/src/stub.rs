@@ -34,6 +34,7 @@ pub struct StubDefinition {
     pub unresolved_root: UnresolvedPackage,
     pub unresolved_deps: Vec<UnresolvedPackage>,
     pub wasm_rpc_path_override: Option<String>,
+    pub always_inline_types: bool,
 }
 
 impl StubDefinition {
@@ -43,6 +44,7 @@ impl StubDefinition {
         selected_world: &Option<String>,
         stub_crate_version: &str,
         wasm_rpc_path_override: &Option<String>,
+        always_inline_types: bool,
     ) -> anyhow::Result<Self> {
         let (root, deps) = get_unresolved_packages(source_wit_root)?;
         let root_package = root.name.clone();
@@ -71,6 +73,7 @@ impl StubDefinition {
             unresolved_root: root,
             unresolved_deps: deps,
             wasm_rpc_path_override: wasm_rpc_path_override.clone(),
+            always_inline_types,
         })
     }
 
@@ -118,6 +121,40 @@ impl StubDefinition {
         }
         final_resolve.push(final_root.clone())?;
         Ok(())
+    }
+
+    pub fn fix_inlined_owner(&self, typedef: &TypeDef) -> StubTypeOwner {
+        if self.is_inlined(typedef) {
+            StubTypeOwner::StubInterface
+        } else {
+            StubTypeOwner::Source(typedef.owner)
+        }
+    }
+
+    fn is_inlined(&self, typedef: &TypeDef) -> bool {
+        match &typedef.owner {
+            TypeOwner::Interface(interface_id) => {
+                if self.always_inline_types {
+                    if let Some(resolved_owner_interface) =
+                        self.resolve.interfaces.get(*interface_id)
+                    {
+                        if let Some(name) = resolved_owner_interface.name.as_ref() {
+                            self.interfaces
+                                .iter()
+                                .any(|interface| &interface.name == name)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            TypeOwner::World(_) => true,
+            TypeOwner::None => false,
+        }
     }
 }
 
@@ -258,6 +295,12 @@ impl FunctionResultStub {
             FunctionResultStub::SelfType => false,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum StubTypeOwner {
+    StubInterface,
+    Source(TypeOwner),
 }
 
 fn collect_stub_imports<'a>(

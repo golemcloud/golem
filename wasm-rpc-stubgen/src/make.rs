@@ -464,6 +464,7 @@ pub fn initialize_workspace(
                 world: None,
                 stub_crate_version: "0.0.1".to_string(),
                 wasm_rpc_path_override: wasm_rpc_path_override.clone(),
+                always_inline_types: false,
             })?;
 
             new_members.push(stub_name);

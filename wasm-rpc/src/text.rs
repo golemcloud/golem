@@ -1,12 +1,14 @@
 use crate::TypeAnnotatedValue;
 use golem_wasm_ast::analysis::AnalysedType;
 use std::borrow::Cow;
-use wasm_wave::wasm::{WasmType, WasmValue, WasmValueError};
+use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
 
 impl WasmValue for TypeAnnotatedValue {
     type Type = AnalysedType;
-    fn ty(&self) -> Self::Type {
-        AnalysedType::from(self)
+
+    fn kind(&self) -> WasmTypeKind {
+        let analysed_type = AnalysedType::from(self);
+        analysed_type.kind()
     }
 
     fn make_bool(val: bool) -> Self {

@@ -14,9 +14,7 @@
 
 use crate::{Uri, Value};
 use golem_wasm_ast::analysis::AnalysedType;
-use wasmtime::component::{
-    types, Enum, Flags, List, OptionVal, Record, ResourceAny, ResultVal, Tuple, Type, Val, Variant,
-};
+use wasmtime::component::{types, ResourceAny, Type, Val};
 
 pub enum EncodingError {
     ParamTypeMismatch,
@@ -101,9 +99,7 @@ pub fn decode_param(
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::String => match param {
-            Value::String(string) => Ok(DecodeParamResult::simple(Val::String(
-                string.clone().into_boxed_str(),
-            ))),
+            Value::String(string) => Ok(DecodeParamResult::simple(Val::String(string.clone()))),
             _ => Err(EncodingError::ParamTypeMismatch),
         },
         Type::List(ty) => match param {
@@ -115,10 +111,8 @@ pub fn decode_param(
                     decoded_values.push(decoded_param.val);
                     resource_ids_to_drop.extend(decoded_param.resources_to_drop);
                 }
-                let list = List::new(ty, decoded_values.into_boxed_slice())
-                    .expect("Type mismatch in decode_param");
                 Ok(DecodeParamResult {
-                    val: Val::List(list),
+                    val: Val::List(decoded_values),
                     resources_to_drop: resource_ids_to_drop,
                 })
             }
@@ -131,13 +125,12 @@ pub fn decode_param(
 
                 for (value, field) in values.iter().zip(ty.fields()) {
                     let decoded_param = decode_param(value, &field.ty, resource_store)?;
-                    record_values.push((field.name, decoded_param.val));
+                    record_values.push((field.name.to_string(), decoded_param.val));
                     resource_ids_to_drop.extend(decoded_param.resources_to_drop);
                 }
 
-                let record = Record::new(ty, record_values).expect("Type mismatch in decode_param");
                 Ok(DecodeParamResult {
-                    val: Val::Record(record),
+                    val: Val::Record(record_values),
                     resources_to_drop: resource_ids_to_drop,
                 })
             }
@@ -154,10 +147,8 @@ pub fn decode_param(
                     resource_ids_to_drop.extend(decoded_param.resources_to_drop);
                 }
 
-                let tuple = Tuple::new(ty, tuple_values.into_boxed_slice())
-                    .expect("Type mismatch in decode_param");
                 Ok(DecodeParamResult {
-                    val: Val::Tuple(tuple),
+                    val: Val::Tuple(tuple_values),
                     resources_to_drop: resource_ids_to_drop,
                 })
             }
@@ -186,19 +177,14 @@ pub fn decode_param(
                     .map(|v| decode_param(v, case_ty, resource_store))
                     .transpose()?;
                 match decoded_value {
-                    Some(decoded_value) => {
-                        let variant = Variant::new(ty, name, Some(decoded_value.val))
-                            .expect("Type mismatch in decode_param");
-                        Ok(DecodeParamResult {
-                            val: Val::Variant(variant),
-                            resources_to_drop: decoded_value.resources_to_drop,
-                        })
-                    }
-                    None => {
-                        let variant =
-                            Variant::new(ty, name, None).expect("Type mismatch in decode_param");
-                        Ok(DecodeParamResult::simple(Val::Variant(variant)))
-                    }
+                    Some(decoded_value) => Ok(DecodeParamResult {
+                        val: Val::Variant(name.to_string(), Some(Box::new(decoded_value.val))),
+                        resources_to_drop: decoded_value.resources_to_drop,
+                    }),
+                    None => Ok(DecodeParamResult::simple(Val::Variant(
+                        name.to_string(),
+                        None,
+                    ))),
                 }
             }
             _ => Err(EncodingError::ParamTypeMismatch),
@@ -215,8 +201,8 @@ pub fn decode_param(
                                 discriminant
                             ),
                         })?;
-                let enum0 = Enum::new(ty, name).expect("Type mismatch in decode_param");
-                Ok(DecodeParamResult::simple(Val::Enum(enum0)))
+
+                Ok(DecodeParamResult::simple(Val::Enum(name.to_string())))
             }
             _ => Err(EncodingError::ParamTypeMismatch),
         },
@@ -224,17 +210,12 @@ pub fn decode_param(
             Value::Option(value) => match value {
                 Some(value) => {
                     let decoded_value = decode_param(value, &ty.ty(), resource_store)?;
-                    let option = OptionVal::new(ty, Some(decoded_value.val))
-                        .expect("Type mismatch in decode_param");
                     Ok(DecodeParamResult {
-                        val: Val::Option(option),
+                        val: Val::Option(Some(Box::new(decoded_value.val))),
                         resources_to_drop: decoded_value.resources_to_drop,
                     })
                 }
-                None => {
-                    let option = OptionVal::new(ty, None).expect("Type mismatch in decode_param");
-                    Ok(DecodeParamResult::simple(Val::Option(option)))
-                }
+                None => Ok(DecodeParamResult::simple(Val::Option(None))),
             },
             _ => Err(EncodingError::ParamTypeMismatch),
         },
@@ -249,19 +230,11 @@ pub fn decode_param(
                         .map(|v| decode_param(v, &ok_ty, resource_store))
                         .transpose()?;
                     match decoded_value {
-                        Some(decoded_value) => {
-                            let result = ResultVal::new(ty, Ok(Some(decoded_value.val)))
-                                .expect("Type mismatch in decode_param");
-                            Ok(DecodeParamResult {
-                                val: Val::Result(result),
-                                resources_to_drop: decoded_value.resources_to_drop,
-                            })
-                        }
-                        None => {
-                            let result = ResultVal::new(ty, Ok(None))
-                                .expect("Type mismatch in decode_param");
-                            Ok(DecodeParamResult::simple(Val::Result(result)))
-                        }
+                        Some(decoded_value) => Ok(DecodeParamResult {
+                            val: Val::Result(Ok(Some(Box::new(decoded_value.val)))),
+                            resources_to_drop: decoded_value.resources_to_drop,
+                        }),
+                        None => Ok(DecodeParamResult::simple(Val::Result(Ok(None)))),
                     }
                 }
                 Err(value) => {
@@ -273,19 +246,11 @@ pub fn decode_param(
                         .map(|v| decode_param(v, &err_ty, resource_store))
                         .transpose()?;
                     match decoded_value {
-                        Some(decoded_value) => {
-                            let result = ResultVal::new(ty, Err(Some(decoded_value.val)))
-                                .expect("Type mismatch in decode_param");
-                            Ok(DecodeParamResult {
-                                val: Val::Result(result),
-                                resources_to_drop: decoded_value.resources_to_drop,
-                            })
-                        }
-                        None => {
-                            let result = ResultVal::new(ty, Err(None))
-                                .expect("Type mismatch in decode_param");
-                            Ok(DecodeParamResult::simple(Val::Result(result)))
-                        }
+                        Some(decoded_value) => Ok(DecodeParamResult {
+                            val: Val::Result(Err(Some(Box::new(decoded_value.val)))),
+                            resources_to_drop: decoded_value.resources_to_drop,
+                        }),
+                        None => Ok(DecodeParamResult::simple(Val::Result(Err(None)))),
                     }
                 }
             },
@@ -294,14 +259,19 @@ pub fn decode_param(
         Type::Flags(ty) => match param {
             Value::Flags(flags) => {
                 let flag_names = ty.names().collect::<Vec<&str>>();
-                let active_flags: Vec<&str> = flag_names
+                let active_flags: Vec<String> = flag_names
                     .iter()
                     .zip(flags)
-                    .filter_map(|(name, enabled)| if *enabled { Some(*name) } else { None })
+                    .filter_map(|(name, enabled)| {
+                        if *enabled {
+                            Some(name.to_string())
+                        } else {
+                            None
+                        }
+                    })
                     .collect();
-                let flags =
-                    Flags::new(ty, active_flags.as_slice()).expect("Type mismatch in decode_param");
-                Ok(DecodeParamResult::simple(Val::Flags(flags)))
+
+                Ok(DecodeParamResult::simple(Val::Flags(active_flags)))
             }
             _ => Err(EncodingError::ParamTypeMismatch),
         },
@@ -350,6 +320,7 @@ pub fn decode_param(
 /// Converts a wasmtime Val to a Golem protobuf Val
 pub fn encode_output(
     value: &Val,
+    typ: &Type,
     resource_store: &mut impl ResourceStore,
 ) -> Result<Value, EncodingError> {
     match value {
@@ -367,101 +338,161 @@ pub fn encode_output(
         Val::Char(char) => Ok(Value::Char(*char)),
         Val::String(string) => Ok(Value::String(string.to_string())),
         Val::List(list) => {
-            let mut encoded_values = Vec::new();
-            for value in (*list).iter() {
-                encoded_values.push(encode_output(value, resource_store)?);
+            if let Type::List(list_type) = typ {
+                let mut encoded_values = Vec::new();
+                for value in (*list).iter() {
+                    encoded_values.push(encode_output(value, &list_type.ty(), resource_store)?);
+                }
+                Ok(Value::List(encoded_values))
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a List value for non-list result type".to_string(),
+                })
             }
-            Ok(Value::List(encoded_values))
         }
         Val::Record(record) => {
-            let encoded_values = record
-                .fields()
-                .map(|(_, value)| encode_output(value, resource_store))
-                .collect::<Result<Vec<Value>, EncodingError>>()?;
-            Ok(Value::Record(encoded_values))
+            if let Type::Record(record_type) = typ {
+                let encoded_values = record
+                    .iter()
+                    .zip(record_type.fields())
+                    .map(|((_name, value), field)| encode_output(value, &field.ty, resource_store))
+                    .collect::<Result<Vec<Value>, EncodingError>>()?;
+                Ok(Value::Record(encoded_values))
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a Record value for non-record result type".to_string(),
+                })
+            }
         }
         Val::Tuple(tuple) => {
-            let encoded_values = tuple
-                .values()
-                .iter()
-                .map(|v| encode_output(v, resource_store))
-                .collect::<Result<Vec<Value>, EncodingError>>()?;
-            Ok(Value::Tuple(encoded_values))
+            if let Type::Tuple(tuple_type) = typ {
+                let encoded_values = tuple
+                    .iter()
+                    .zip(tuple_type.types())
+                    .map(|(v, t)| encode_output(v, &t, resource_store))
+                    .collect::<Result<Vec<Value>, EncodingError>>()?;
+                Ok(Value::Tuple(encoded_values))
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a Tuple value for non-tuple result type".to_string(),
+                })
+            }
         }
-        Val::Variant(variant) => {
-            let wasm_variant = unsafe {
-                std::mem::transmute::<wasmtime::component::Variant, crate::wasmtime::WasmVariant>(
-                    variant.clone(),
-                )
-            };
-            let WasmVariant {
-                ty: _,
-                discriminant,
-                value,
-            } = wasm_variant;
-            let encoded_output = value
-                .map(|v| encode_output(&v, resource_store))
-                .transpose()?;
-            Ok(Value::Variant {
-                case_idx: discriminant,
-                case_value: encoded_output.map(Box::new),
-            })
+        Val::Variant(name, value) => {
+            if let Type::Variant(variant_type) = typ {
+                let (discriminant, case) = variant_type
+                    .cases()
+                    .enumerate()
+                    .find(|(_idx, case)| case.name == *name)
+                    .ok_or(EncodingError::ValueMismatch {
+                        details: format!("Could not find case for variant {}", name),
+                    })?;
+
+                let encoded_output = value
+                    .as_ref()
+                    .map(|v| {
+                        encode_output(
+                            v,
+                            &case.ty.ok_or(EncodingError::ValueMismatch {
+                                details: "Could not get type information for case".to_string(),
+                            })?,
+                            resource_store,
+                        )
+                    })
+                    .transpose()?;
+                Ok(Value::Variant {
+                    case_idx: discriminant as u32,
+                    case_value: encoded_output.map(Box::new),
+                })
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a Variant value for non-variant result type".to_string(),
+                })
+            }
         }
-        Val::Enum(enum0) => {
-            let wasm_enum = unsafe {
-                std::mem::transmute::<wasmtime::component::Enum, crate::wasmtime::WasmEnum>(
-                    enum0.clone(),
-                )
-            };
-            let WasmEnum {
-                ty: _,
-                discriminant,
-            } = wasm_enum;
-            Ok(Value::Enum(discriminant))
+        Val::Enum(name) => {
+            if let Type::Enum(enum_type) = typ {
+                let (discriminant, _name) = enum_type
+                    .names()
+                    .enumerate()
+                    .find(|(_idx, n)| n == name)
+                    .ok_or(EncodingError::ValueMismatch {
+                        details: format!("Could not find discriminant for enum {}", name),
+                    })?;
+                Ok(Value::Enum(discriminant as u32))
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got an Enum value for non-enum result type".to_string(),
+                })
+            }
         }
-        Val::Option(option) => match option.value() {
+        Val::Option(option) => match option {
             Some(value) => {
-                let encoded_output = encode_output(value, resource_store)?;
-                Ok(Value::Option(Some(Box::new(encoded_output))))
+                if let Type::Option(option_type) = typ {
+                    let encoded_output = encode_output(value, &option_type.ty(), resource_store)?;
+                    Ok(Value::Option(Some(Box::new(encoded_output))))
+                } else {
+                    Err(EncodingError::ValueMismatch {
+                        details: "Got an Option value for non-option result type".to_string(),
+                    })
+                }
             }
             None => Ok(Value::Option(None)),
         },
-        Val::Result(result) => match result.value() {
-            Ok(value) => {
-                let encoded_output = value
-                    .map(|v| encode_output(v, resource_store))
-                    .transpose()?;
-                Ok(Value::Result(Ok(encoded_output.map(Box::new))))
-            }
-            Err(value) => {
-                let encoded_output = value
-                    .map(|v| encode_output(v, resource_store))
-                    .transpose()?;
-                Ok(Value::Result(Err(encoded_output.map(Box::new))))
-            }
-        },
-        Val::Flags(flags) => {
-            let wasm_flags = unsafe {
-                std::mem::transmute::<wasmtime::component::Flags, crate::wasmtime::WasmFlags>(
-                    flags.clone(),
-                )
-            };
-            let WasmFlags {
-                ty: _,
-                count,
-                value,
-            } = wasm_flags;
-            let mut encoded_value = vec![false; count as usize];
-
-            for v in value.iter() {
-                for n in 0..count {
-                    let flag = 1 << n;
-                    if flag & *v as i32 != 0 {
-                        encoded_value[n as usize] = true;
+        Val::Result(result) => {
+            if let Type::Result(result_type) = typ {
+                match result {
+                    Ok(value) => {
+                        let encoded_output = value
+                            .as_ref()
+                            .map(|v| {
+                                result_type
+                                    .ok()
+                                    .ok_or(EncodingError::ValueMismatch {
+                                        details: "Could not get ok type for result".to_string(),
+                                    })
+                                    .and_then(|t| encode_output(v, &t, resource_store))
+                            })
+                            .transpose()?;
+                        Ok(Value::Result(Ok(encoded_output.map(Box::new))))
+                    }
+                    Err(value) => {
+                        let encoded_output = value
+                            .as_ref()
+                            .map(|v| {
+                                result_type
+                                    .err()
+                                    .ok_or(EncodingError::ValueMismatch {
+                                        details: "Could not get error type for result".to_string(),
+                                    })
+                                    .and_then(|t| encode_output(v, &t, resource_store))
+                            })
+                            .transpose()?;
+                        Ok(Value::Result(Err(encoded_output.map(Box::new))))
                     }
                 }
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a Result value for non-result result type".to_string(),
+                })
             }
-            Ok(Value::Flags(encoded_value))
+        }
+        Val::Flags(flags) => {
+            if let Type::Flags(flags_type) = typ {
+                let mut encoded_value = vec![false; flags_type.names().count()];
+
+                for (idx, name) in flags_type.names().enumerate() {
+                    if flags.contains(&name.to_string()) {
+                        encoded_value[idx] = true;
+                    }
+                }
+
+                Ok(Value::Flags(encoded_value))
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a Flags value for non-flags result type".to_string(),
+                })
+            }
         }
         Val::Resource(resource) => {
             let id = resource_store.add(*resource);
@@ -471,26 +502,6 @@ pub fn encode_output(
             })
         }
     }
-}
-
-#[allow(unused)]
-pub struct WasmVariant {
-    ty: types::Variant,
-    discriminant: u32,
-    value: Option<Box<Val>>,
-}
-
-#[allow(unused)]
-pub struct WasmEnum {
-    ty: types::Variant,
-    discriminant: u32,
-}
-
-#[allow(unused)]
-pub struct WasmFlags {
-    ty: types::Flags,
-    count: u32,
-    value: Box<[u32]>,
 }
 
 pub fn type_to_analysed_type(typ: &Type) -> Result<AnalysedType, String> {
