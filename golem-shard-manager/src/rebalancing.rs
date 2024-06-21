@@ -80,10 +80,13 @@ impl Rebalance {
 
                 if routing_table_entry.shard_ids.len() == optimal_count {
                     // This pod reached the optimal count, removing it from the list targets
+                    // TODO: is this the right idx? we just incremented it
                     initial_target_pods.remove(idx);
                     if initial_target_pods.is_empty() {
                         idx = 0;
                     } else {
+                        // TODO: is this the right idx? we increased two times now, and also removed the entry, so we might
+                        //       jumped over the actual next one
                         idx = (idx + 1) % initial_target_pods.len();
                     }
                 }
@@ -244,7 +247,39 @@ mod tests {
     use crate::model::{Pod, RoutingTable};
     use crate::rebalancing::Rebalance;
     use golem_common::model::ShardId;
+    use tracing::trace;
     use tracing_test::traced_test;
+
+    struct TestRoutingConf {
+        number_of_shards: usize,
+        number_of_pods: usize,
+    }
+
+    fn pod_id(idx: usize) -> Pod {
+        Pod::new(format!("pod{}", idx), (9000 + idx) as u16)
+    }
+
+    fn shard_ids(ids: Vec<i64>) -> Vec<ShardId> {
+        ids.into_iter().map(|idx| ShardId::new(idx)).collect()
+    }
+
+    fn new_test_routing_table(config: &TestRoutingConf) -> RoutingTable {
+        let mut routing_table = RoutingTable::new(config.number_of_shards);
+        for i in 0..config.number_of_pods {
+            routing_table.add_pod(&pod_id(i));
+        }
+        routing_table
+    }
+
+    fn assert_rebalance_assignments_for_pod(rebalance: &Rebalance, pod: usize, shards: Vec<i64>) {
+        let pod = pod_id(pod);
+        assert_eq!(
+            get_assigned_ids(rebalance, &pod),
+            shard_ids(shards),
+            "assert_rebalance_assignments_for_pod: {}",
+            &pod
+        );
+    }
 
     fn assign_shard(routing_table: &mut RoutingTable, pod: &Pod, shard_id: i64) {
         routing_table
@@ -668,5 +703,24 @@ mod tests {
             assigned_ids_3,
             vec![ShardId::new(0), ShardId::new(1), ShardId::new(6)]
         );
+    }
+
+    #[test]
+    #[traced_test]
+    fn initial_assign_is_ordered_and_no_rebalance_needed() {
+        let routing_table = new_test_routing_table(&TestRoutingConf {
+            number_of_shards: 8,
+            number_of_pods: 4,
+        });
+
+        trace!("routing_table: {}", routing_table);
+        let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
+        trace!("rebalance: {}", rebalance);
+        assert_eq!(rebalance.assignments.assignments.len(), 4);
+        assert_rebalance_assignments_for_pod(&rebalance, 0, vec![0, 4]);
+        assert_rebalance_assignments_for_pod(&rebalance, 0, vec![1, 5]);
+        assert_rebalance_assignments_for_pod(&rebalance, 0, vec![2, 6]);
+        assert_rebalance_assignments_for_pod(&rebalance, 0, vec![4, 7]);
+        assert_eq!(rebalance.unassignments.unassignments.len(), 0);
     }
 }
