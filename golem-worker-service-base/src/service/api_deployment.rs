@@ -266,7 +266,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         // Existing deployment
         let existing_deployment_records = self
             .deployment_repo
-            .get_by_site(&deployment.site.to_string().as_str())
+            .get_by_site(deployment.site.to_string().as_str())
             .await?;
 
         let mut existing_api_definition_keys: HashSet<ApiDefinitionIdWithVersion> = HashSet::new();

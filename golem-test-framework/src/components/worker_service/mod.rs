@@ -214,6 +214,6 @@ fn env_vars(
 
     let mut vars: HashMap<String, String> =
         HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-    vars.extend(rdb.info().env().clone());
+    vars.extend(rdb.info().env("golem_worker").clone());
     vars
 }
