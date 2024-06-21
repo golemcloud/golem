@@ -14,3 +14,5 @@ impl Guest for Component {
         Ok(())
     }
 }
+
+bindings::export!(Component with_types_in bindings);

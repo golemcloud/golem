@@ -37,8 +37,8 @@ use std::str::FromStr;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::bindings::cli::environment::Host;
-use wasmtime_wasi::preview2::{subscribe, AbortOnDropJoinHandle};
+use wasmtime_wasi::bindings::cli::environment::Host;
+use wasmtime_wasi::{subscribe, AbortOnDropJoinHandle};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
@@ -50,7 +50,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 let remote_worker_id =
                     OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
                 let demand = self.rpc().create_demand(&remote_worker_id).await;
-                let entry = self.table.push(WasmRpcEntry {
+                let entry = self.table().push(WasmRpcEntry {
                     payload: Box::new(WasmRpcEntryPayload {
                         demand,
                         remote_worker_id,
@@ -73,7 +73,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<WitValue, golem_wasm_rpc::RpcError>> {
         record_host_function_call("golem::rpc::wasm-rpc", "invoke-and-await");
 
-        let entry = self.table.get(&self_)?;
+        let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id.clone();
 
@@ -139,7 +139,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), golem_wasm_rpc::RpcError>> {
         record_host_function_call("golem::rpc::wasm-rpc", "invoke");
 
-        let entry = self.table.get(&self_)?;
+        let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id.clone();
 
@@ -286,7 +286,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
         record_host_function_call("golem::rpc::wasm-rpc", "drop");
 
-        let _ = self.table.delete(rep)?;
+        let _ = self.table().delete(rep)?;
         Ok(())
     }
 }

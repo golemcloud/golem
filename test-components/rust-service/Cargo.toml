@@ -1,7 +1,4 @@
 [workspace]
+members = ["rust-http-service", "rust-component-service"]
+exclude = ["rpc"]
 resolver = "2"
-
-members = [
-    "rust-http-service",
-    "rust-component-service"
-]

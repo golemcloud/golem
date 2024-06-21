@@ -99,3 +99,5 @@ fn create_use_and_drop_counters(counters_uri: &Uri) {
     println!("Counter2 value: {}", value2);
     println!("Counter3 value: {}", value3);
 }
+
+bindings::export!(Component with_types_in bindings);

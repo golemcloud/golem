@@ -18,7 +18,7 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use bytes::Bytes;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::{
+use wasmtime_wasi::{
     HostInputStream, HostOutputStream, InputStream, StreamResult, Subscribe, WasiView,
 };
 
@@ -37,7 +37,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
         record_host_function_call("blobstore::types::outgoing_value", "new_outgoing_value");
         let outgoing_value = self
             .as_wasi_view()
-            .table_mut()
+            .table()
             .push(OutgoingValueEntry::new())?;
         Ok(outgoing_value)
     }
@@ -57,14 +57,14 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
             .body
             .clone();
         let body: Box<dyn HostOutputStream> = Box::new(OutgoingValueEntryStream::new(body));
-        let outgoing_value_async_body = self.as_wasi_view().table_mut().push(body)?;
+        let outgoing_value_async_body = self.as_wasi_view().table().push(body)?;
         Ok(Ok(outgoing_value_async_body))
     }
 
     fn drop(&mut self, rep: Resource<OutgoingValueEntry>) -> anyhow::Result<()> {
         record_host_function_call("blobstore::types::outgoing_value", "drop");
         self.as_wasi_view()
-            .table_mut()
+            .table()
             .delete::<OutgoingValueEntry>(rep)?;
         Ok(())
     }
@@ -105,7 +105,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
             .body
             .clone();
         let body: InputStream = InputStream::Host(Box::new(IncomingValueEntryStream::new(body)));
-        let incoming_value_async_body = self.as_wasi_view().table_mut().push(body)?;
+        let incoming_value_async_body = self.as_wasi_view().table().push(body)?;
         Ok(Ok(incoming_value_async_body))
     }
 
@@ -124,7 +124,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, rep: Resource<IncomingValue>) -> anyhow::Result<()> {
         record_host_function_call("blobstore::types::incoming_value", "drop");
         self.as_wasi_view()
-            .table_mut()
+            .table()
             .delete::<IncomingValueEntry>(rep)?;
         Ok(())
     }
@@ -132,6 +132,52 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostOutgoingValue for &mut DurableWorkerCtx<Ctx> {
+    async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueEntry>> {
+        (*self).new_outgoing_value().await
+    }
+
+    async fn outgoing_value_write_body(
+        &mut self,
+        self_: Resource<OutgoingValueEntry>,
+    ) -> anyhow::Result<Result<Resource<OutgoingValueBodyAsync>, ()>> {
+        (*self).outgoing_value_write_body(self_).await
+    }
+
+    fn drop(&mut self, rep: Resource<OutgoingValueEntry>) -> anyhow::Result<()> {
+        HostOutgoingValue::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostIncomingValue for &mut DurableWorkerCtx<Ctx> {
+    async fn incoming_value_consume_sync(
+        &mut self,
+        self_: Resource<IncomingValue>,
+    ) -> anyhow::Result<Result<IncomingValueSyncBody, Error>> {
+        (*self).incoming_value_consume_sync(self_).await
+    }
+
+    async fn incoming_value_consume_async(
+        &mut self,
+        self_: Resource<IncomingValue>,
+    ) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Error>> {
+        (*self).incoming_value_consume_async(self_).await
+    }
+
+    async fn size(&mut self, self_: Resource<IncomingValue>) -> anyhow::Result<u64> {
+        (*self).size(self_).await
+    }
+
+    fn drop(&mut self, rep: Resource<IncomingValue>) -> anyhow::Result<()> {
+        HostIncomingValue::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
 
 pub struct ContainerEntry {
     pub name: String,
@@ -170,6 +216,10 @@ impl OutgoingValueEntryStream {
     pub fn new(body: Arc<RwLock<Vec<u8>>>) -> Self {
         Self { body }
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 #[async_trait]
@@ -180,7 +230,7 @@ impl Subscribe for OutgoingValueEntryStream {
 #[async_trait]
 impl HostOutputStream for OutgoingValueEntryStream {
     fn as_any(&self) -> &dyn Any {
-        self
+        OutgoingValueEntryStream::as_any(self)
     }
 
     fn write(&mut self, bytes: Bytes) -> StreamResult<()> {

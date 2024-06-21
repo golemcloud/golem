@@ -14,7 +14,7 @@
 
 use async_trait::async_trait;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::WasiView;
+use wasmtime_wasi::WasiView;
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
@@ -36,13 +36,27 @@ impl<Ctx: WorkerCtx> HostError for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<Error>) -> anyhow::Result<()> {
         record_host_function_call("keyvalue::wasi_cloud_error", "drop_error");
-        self.as_wasi_view().table_mut().delete::<ErrorEntry>(rep)?;
+        self.as_wasi_view().table().delete::<ErrorEntry>(rep)?;
         Ok(())
     }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostError for &mut DurableWorkerCtx<Ctx> {
+    async fn trace(&mut self, self_: Resource<Error>) -> anyhow::Result<String> {
+        (*self).trace(self_).await
+    }
+
+    fn drop(&mut self, rep: Resource<Error>) -> anyhow::Result<()> {
+        (*self).drop(rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
 
 pub struct ErrorEntry {
     trace: String,

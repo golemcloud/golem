@@ -19,7 +19,7 @@ use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
-use wasmtime_wasi::preview2::bindings::wasi::cli::environment::Host;
+use wasmtime_wasi::bindings::cli::environment::Host;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -54,5 +54,20 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             |ctx| Box::pin(async { Host::initial_cwd(&mut ctx.as_wasi_view()).await }),
         )
         .await
+    }
+}
+
+#[async_trait]
+impl<'a, Ctx: WorkerCtx> Host for &'a mut DurableWorkerCtx<Ctx> {
+    async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
+        (*self).get_environment().await
+    }
+
+    async fn get_arguments(&mut self) -> anyhow::Result<Vec<String>> {
+        (*self).get_arguments().await
+    }
+
+    async fn initial_cwd(&mut self) -> anyhow::Result<Option<String>> {
+        (*self).initial_cwd().await
     }
 }

@@ -15,7 +15,7 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::{ResourceTable, StreamError};
+use wasmtime_wasi::{ResourceTable, StreamError};
 
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::serialized::SerializableStreamError;
@@ -25,7 +25,7 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
-use wasmtime_wasi::preview2::bindings::wasi::io::streams::{
+use wasmtime_wasi::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
 use wasmtime_wasi_http::body::{FailingStream, HostIncomingBodyStream};
@@ -38,7 +38,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         len: u64,
     ) -> Result<Vec<u8>, StreamError> {
         record_host_function_call("io::streams::input_stream", "read");
-        if is_incoming_http_body_stream(&self.table, &self_) {
+        if is_incoming_http_body_stream(self.table(), &self_) {
             Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
                 WrappedFunctionType::ReadRemote,
@@ -61,7 +61,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         len: u64,
     ) -> Result<Vec<u8>, StreamError> {
         record_host_function_call("io::streams::input_stream", "blocking_read");
-        if is_incoming_http_body_stream(&self.table, &self_) {
+        if is_incoming_http_body_stream(self.table(), &self_) {
             Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
                 WrappedFunctionType::ReadRemote,
@@ -80,7 +80,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
     async fn skip(&mut self, self_: Resource<InputStream>, len: u64) -> Result<u64, StreamError> {
         record_host_function_call("io::streams::input_stream", "skip");
-        if is_incoming_http_body_stream(&self.table, &self_) {
+        if is_incoming_http_body_stream(self.table(), &self_) {
             Durability::<Ctx, u64, SerializableStreamError>::wrap(
                 self,
                 WrappedFunctionType::ReadRemote,
@@ -103,7 +103,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         len: u64,
     ) -> Result<u64, StreamError> {
         record_host_function_call("io::streams::input_stream", "blocking_skip");
-        if is_incoming_http_body_stream(&self.table, &self_) {
+        if is_incoming_http_body_stream(self.table(), &self_) {
             Durability::<Ctx, u64, SerializableStreamError>::wrap(
                 self,
                 WrappedFunctionType::ReadRemote,
@@ -145,12 +145,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<(), StreamError> {
         record_host_function_call("io::streams::output_stream", "write");
 
-        let event_service = &self.public_state.event_service;
+        let event_service = self.public_state.event_service.clone();
 
         let mut is_std = false;
         let is_live = self.state.is_live()
             || self.state.persistence_level == PersistenceLevel::PersistNothing;
-        let output = self.table.get(&self_)?;
+        let output = self.table().get(&self_)?;
         if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
             if is_live {
                 event_service.emit_stdout(contents.clone());
@@ -177,12 +177,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<(), StreamError> {
         record_host_function_call("io::streams::output_stream", "blocking_write_and_flush");
 
-        let event_service = &self.public_state.event_service;
+        let event_service = self.public_state.event_service.clone();
 
         let mut is_std = false;
         let is_live = self.state.is_live()
             || self.state.persistence_level == PersistenceLevel::PersistNothing;
-        let output = self.table.get(&self_)?;
+        let output = self.table().get(&self_)?;
         if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
             if is_live {
                 event_service.emit_stdout(contents.clone());
@@ -267,8 +267,126 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn convert_stream_error(
         &mut self,
         err: StreamError,
-    ) -> anyhow::Result<wasmtime_wasi::preview2::bindings::wasi::io::streams::StreamError> {
+    ) -> anyhow::Result<wasmtime_wasi::bindings::io::streams::StreamError> {
         Host::convert_stream_error(&mut self.as_wasi_view(), err)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostInputStream for &mut DurableWorkerCtx<Ctx> {
+    async fn read(
+        &mut self,
+        self_: Resource<InputStream>,
+        len: u64,
+    ) -> Result<Vec<u8>, StreamError> {
+        (*self).read(self_, len).await
+    }
+
+    async fn blocking_read(
+        &mut self,
+        self_: Resource<InputStream>,
+        len: u64,
+    ) -> Result<Vec<u8>, StreamError> {
+        (*self).blocking_read(self_, len).await
+    }
+
+    async fn skip(&mut self, self_: Resource<InputStream>, len: u64) -> Result<u64, StreamError> {
+        (*self).skip(self_, len).await
+    }
+
+    async fn blocking_skip(
+        &mut self,
+        self_: Resource<InputStream>,
+        len: u64,
+    ) -> Result<u64, StreamError> {
+        (*self).blocking_skip(self_, len).await
+    }
+
+    fn subscribe(&mut self, self_: Resource<InputStream>) -> anyhow::Result<Resource<Pollable>> {
+        HostInputStream::subscribe(*self, self_)
+    }
+
+    fn drop(&mut self, rep: Resource<InputStream>) -> anyhow::Result<()> {
+        HostInputStream::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostOutputStream for &mut DurableWorkerCtx<Ctx> {
+    fn check_write(&mut self, self_: Resource<OutputStream>) -> Result<u64, StreamError> {
+        (*self).check_write(self_)
+    }
+
+    fn write(
+        &mut self,
+        self_: Resource<OutputStream>,
+        contents: Vec<u8>,
+    ) -> Result<(), StreamError> {
+        (*self).write(self_, contents)
+    }
+
+    async fn blocking_write_and_flush(
+        &mut self,
+        self_: Resource<OutputStream>,
+        contents: Vec<u8>,
+    ) -> Result<(), StreamError> {
+        (*self).blocking_write_and_flush(self_, contents).await
+    }
+
+    fn flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
+        (*self).flush(self_)
+    }
+
+    async fn blocking_flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
+        (*self).blocking_flush(self_).await
+    }
+
+    fn subscribe(&mut self, self_: Resource<OutputStream>) -> anyhow::Result<Resource<Pollable>> {
+        HostOutputStream::subscribe(*self, self_)
+    }
+
+    fn write_zeroes(&mut self, self_: Resource<OutputStream>, len: u64) -> Result<(), StreamError> {
+        (*self).write_zeroes(self_, len)
+    }
+
+    async fn blocking_write_zeroes_and_flush(
+        &mut self,
+        self_: Resource<OutputStream>,
+        len: u64,
+    ) -> Result<(), StreamError> {
+        (*self).blocking_write_zeroes_and_flush(self_, len).await
+    }
+
+    async fn splice(
+        &mut self,
+        self_: Resource<OutputStream>,
+        src: Resource<InputStream>,
+        len: u64,
+    ) -> Result<u64, StreamError> {
+        (*self).splice(self_, src, len).await
+    }
+
+    async fn blocking_splice(
+        &mut self,
+        self_: Resource<OutputStream>,
+        src: Resource<InputStream>,
+        len: u64,
+    ) -> Result<u64, StreamError> {
+        (*self).blocking_splice(self_, src, len).await
+    }
+
+    fn drop(&mut self, rep: Resource<OutputStream>) -> anyhow::Result<()> {
+        HostOutputStream::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    fn convert_stream_error(
+        &mut self,
+        err: StreamError,
+    ) -> anyhow::Result<wasmtime_wasi::bindings::io::streams::StreamError> {
+        (*self).convert_stream_error(err)
     }
 }
 

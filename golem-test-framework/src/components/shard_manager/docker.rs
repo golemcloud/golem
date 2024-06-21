@@ -26,6 +26,8 @@ use tracing::{info, Level};
 
 pub struct DockerShardManager {
     container: Container<'static, ShardManagerImage>,
+    public_http_port: u16,
+    public_grpc_port: u16,
 }
 
 impl DockerShardManager {
@@ -33,7 +35,7 @@ impl DockerShardManager {
     const HTTP_PORT: u16 = 9021;
     const GRPC_PORT: u16 = 9020;
 
-    pub fn new(redis: Arc<dyn Redis + Send + Sync + 'static>, verbosity: Level) -> Self {
+    pub async fn new(redis: Arc<dyn Redis + Send + Sync + 'static>, verbosity: Level) -> Self {
         info!("Starting golem-shard-manager container");
 
         let env_vars = env_vars(Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity);
@@ -47,7 +49,14 @@ impl DockerShardManager {
         .with_network(NETWORK);
         let container = DOCKER.run(image);
 
-        Self { container }
+        let public_http_port = container.get_host_port_ipv4(Self::HTTP_PORT);
+        let public_grpc_port = container.get_host_port_ipv4(Self::GRPC_PORT);
+
+        Self {
+            container,
+            public_http_port,
+            public_grpc_port,
+        }
     }
 }
 
@@ -70,15 +79,15 @@ impl ShardManager for DockerShardManager {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::HTTP_PORT)
+        self.public_http_port
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::GRPC_PORT)
+        self.public_grpc_port
     }
 
     fn kill(&self) {
-        self.container.stop()
+        self.container.stop();
     }
 
     async fn restart(&self) {
@@ -94,17 +103,19 @@ impl Drop for DockerShardManager {
 
 #[derive(Debug)]
 struct ShardManagerImage {
-    grpc_port: u16,
-    http_port: u16,
     env_vars: HashMap<String, String>,
+    expose_ports: [u16; 2],
 }
 
 impl ShardManagerImage {
-    pub fn new(port: u16, http_port: u16, env_vars: HashMap<String, String>) -> ShardManagerImage {
+    pub fn new(
+        grpc_port: u16,
+        http_port: u16,
+        env_vars: HashMap<String, String>,
+    ) -> ShardManagerImage {
         ShardManagerImage {
-            grpc_port: port,
-            http_port,
             env_vars,
+            expose_ports: [grpc_port, http_port],
         }
     }
 }
@@ -131,6 +142,6 @@ impl Image for ShardManagerImage {
     }
 
     fn expose_ports(&self) -> Vec<u16> {
-        vec![self.grpc_port, self.http_port]
+        self.expose_ports.to_vec()
     }
 }

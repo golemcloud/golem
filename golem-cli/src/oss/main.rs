@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::OssProfile;
+use crate::command::profile::UniversalProfileAdd;
+use crate::config::{OssProfile, ProfileName};
 use crate::examples;
 use crate::factory::ServiceFactory;
+use crate::init::{CliKind, DummyProfileAuth};
+use crate::model::GolemResult;
 use crate::oss::command::{GolemOssCommand, OssCommand};
 use crate::oss::factory::OssServiceFactory;
 use crate::oss::model::OssContext;
@@ -22,9 +25,10 @@ use crate::stubgen::handle_stubgen;
 use colored::Colorize;
 use std::path::PathBuf;
 
-pub async fn async_main(
-    cmd: GolemOssCommand,
+pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
+    cmd: GolemOssCommand<ProfileAdd>,
     profile: OssProfile,
+    cli_kind: CliKind,
     config_dir: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let OssProfile {
@@ -97,8 +101,16 @@ pub async fn async_main(
                 )
                 .await
         }
-        OssCommand::Profile { subcommand } => subcommand.handle(&config_dir).await,
-        OssCommand::Init {} => crate::init::init_profile(None, &config_dir).await,
+        OssCommand::Profile { subcommand } => {
+            subcommand
+                .handle(cli_kind, &config_dir, &DummyProfileAuth {})
+                .await
+        }
+        OssCommand::Init {} => {
+            crate::init::init_profile(cli_kind, ProfileName::default(cli_kind), &config_dir)
+                .await
+                .map(|_| GolemResult::Str("Profile created".to_string()))
+        }
     };
 
     match res {

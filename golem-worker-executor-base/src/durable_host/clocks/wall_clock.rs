@@ -19,7 +19,7 @@ use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
-use wasmtime_wasi::preview2::bindings::wasi::clocks::wall_clock::{Datetime, Host};
+use wasmtime_wasi::bindings::clocks::wall_clock::{Datetime, Host};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -43,5 +43,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             |ctx| Box::pin(async { Host::resolution(&mut ctx.as_wasi_view()).await }),
         )
         .await
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn now(&mut self) -> anyhow::Result<Datetime> {
+        (*self).now().await
+    }
+
+    async fn resolution(&mut self) -> anyhow::Result<Datetime> {
+        (*self).resolution().await
     }
 }

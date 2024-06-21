@@ -33,7 +33,6 @@ pub struct ServerConfig {
     pub blob_storage: BlobStorageConfig,
 
     // Workers.
-    pub upload_worker: UploadWorkerConfig,
     pub compile_worker: CompileWorkerConfig,
 
     // General.
@@ -47,21 +46,11 @@ pub struct ServerConfig {
     pub http_port: u16,
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize)]
-pub struct WorkerServiceGrpcConfig {
-    pub host: String,
-    pub port: u16,
-    pub access_token: String,
-}
-
-#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct ComponentServiceConfig {
     pub host: String,
     pub port: u16,
     pub access_token: Uuid,
-    pub retries: RetryConfig,
 }
 
 impl ComponentServiceConfig {
@@ -73,12 +62,6 @@ impl ComponentServiceConfig {
             .build()
             .expect("Failed to build ComponentService URI")
     }
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize)]
-pub struct UploadWorkerConfig {
-    pub num_workers: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]

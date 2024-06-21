@@ -11,3 +11,5 @@ impl Guest for Component {
         golem_await_promise(&promise_id)
     }
 }
+
+bindings::export!(Component with_types_in bindings);

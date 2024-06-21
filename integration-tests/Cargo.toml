@@ -21,7 +21,7 @@ console-subscriber = { workspace = true }
 ctor = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 plotters = "0.3.6"
-poem = { version = "2.0.0", features = ["prometheus", "opentelemetry", "test"] }
+poem = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
@@ -78,6 +78,10 @@ path = "src/benchmarks/durability_overhead.rs"
 [[bin]]
 name = "benchmark_throughput"
 path = "src/benchmarks/throughput.rs"
+
+[[bin]]
+name = "benchmark_rpc"
+path = "src/benchmarks/rpc.rs"
 
 [[bin]]
 name = "benchmark_report"

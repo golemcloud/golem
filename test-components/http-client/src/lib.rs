@@ -169,3 +169,5 @@ fn get_incoming_response(
     };
     incoming_response
 }
+
+bindings::export!(Component with_types_in bindings);

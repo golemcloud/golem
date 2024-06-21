@@ -26,6 +26,8 @@ use tracing::{info, Level};
 
 pub struct DockerComponentService {
     container: Container<'static, GolemComponentServiceImage>,
+    public_http_port: u16,
+    public_grpc_port: u16,
 }
 
 impl DockerComponentService {
@@ -33,7 +35,7 @@ impl DockerComponentService {
     const HTTP_PORT: u16 = 8081;
     const GRPC_PORT: u16 = 9091;
 
-    pub fn new(
+    pub async fn new(
         component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
@@ -55,9 +57,17 @@ impl DockerComponentService {
         ))
         .with_container_name(Self::NAME)
         .with_network(NETWORK);
+
         let container = DOCKER.run(image);
 
-        Self { container }
+        let public_http_port = container.get_host_port_ipv4(Self::HTTP_PORT);
+        let public_grpc_port = container.get_host_port_ipv4(Self::GRPC_PORT);
+
+        Self {
+            container,
+            public_http_port,
+            public_grpc_port,
+        }
     }
 }
 
@@ -80,15 +90,15 @@ impl ComponentService for DockerComponentService {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::HTTP_PORT)
+        self.public_http_port
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::GRPC_PORT)
+        self.public_grpc_port
     }
 
     fn kill(&self) {
-        self.container.stop()
+        self.container.stop();
     }
 }
 
@@ -100,9 +110,8 @@ impl Drop for DockerComponentService {
 
 #[derive(Debug)]
 struct GolemComponentServiceImage {
-    grpc_port: u16,
-    http_port: u16,
     env_vars: HashMap<String, String>,
+    expose_ports: [u16; 2],
 }
 
 impl GolemComponentServiceImage {
@@ -112,9 +121,8 @@ impl GolemComponentServiceImage {
         env_vars: HashMap<String, String>,
     ) -> GolemComponentServiceImage {
         GolemComponentServiceImage {
-            grpc_port,
-            http_port,
             env_vars,
+            expose_ports: [grpc_port, http_port],
         }
     }
 }
@@ -139,6 +147,6 @@ impl Image for GolemComponentServiceImage {
     }
 
     fn expose_ports(&self) -> Vec<u16> {
-        vec![self.grpc_port, self.http_port]
+        self.expose_ports.to_vec()
     }
 }

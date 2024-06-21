@@ -24,13 +24,10 @@ use golem_test_framework::config::{
 };
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
+use integration_tests::benchmarks::data::Data;
 use integration_tests::benchmarks::{run_benchmark, setup_with};
 use reqwest::Client;
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
-
-use rand::distributions::{Alphanumeric, DistString};
-use rand::thread_rng;
 
 struct Throughput {
     config: RunConfig,
@@ -52,48 +49,6 @@ pub struct IterationContext {
 pub struct RustServiceClient {
     client: Client,
     base_url: Url,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct Data {
-    pub id: String,
-    pub name: String,
-    pub desc: String,
-    pub timestamp: u64,
-}
-
-impl Data {
-    fn generate() -> Self {
-        fn generate_random_string(len: usize) -> String {
-            let mut rng = thread_rng();
-            Alphanumeric.sample_string(&mut rng, len)
-        }
-
-        Self {
-            id: generate_random_string(256),
-            name: generate_random_string(512),
-            desc: generate_random_string(1024),
-            timestamp: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        }
-    }
-
-    fn generate_list(count: usize) -> Vec<Self> {
-        (0..count).map(|_| Self::generate()).collect()
-    }
-}
-
-impl From<Data> for Value {
-    fn from(data: Data) -> Self {
-        Value::Record(vec![
-            Value::String(data.id),
-            Value::String(data.name),
-            Value::String(data.desc),
-            Value::U64(data.timestamp),
-        ])
-    }
 }
 
 impl RustServiceClient {
@@ -305,7 +260,7 @@ impl Benchmark for Throughput {
             let fiber = tokio::task::spawn(async move {
                 for _ in 0..length {
                     let start = SystemTime::now();
-                    let res = context_clone
+                    context_clone
                         .deps
                         .invoke_and_await(
                             &worker_id_clone,
@@ -314,7 +269,6 @@ impl Benchmark for Throughput {
                         )
                         .await
                         .expect("invoke_and_await failed");
-                    println!("worker-calculate-res: {:?}", res[0]);
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
                     recorder_clone.duration(&"worker-calculate-invocation".to_string(), elapsed);
                 }
