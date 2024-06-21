@@ -38,7 +38,8 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::bindings::cli::environment::Host;
-use wasmtime_wasi::{subscribe, AbortOnDropJoinHandle};
+use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
+use wasmtime_wasi::subscribe;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
@@ -206,7 +207,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .begin_function(&WrappedFunctionType::WriteRemote)
             .await?;
 
-        let entry = self.table.get(&this)?;
+        let entry = self.table().get(&this)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id.clone();
 
@@ -233,7 +234,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let result = if self.state.is_live() {
             let rpc = self.rpc();
 
-            let handle = wasmtime_wasi::preview2::spawn(async move {
+            let handle = wasmtime_wasi::runtime::spawn(async move {
                 Ok(rpc
                     .invoke_and_await(
                         &remote_worker_id,
@@ -247,12 +248,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     .await)
             });
 
-            let fut = self.table.push(FutureInvokeResultEntry {
+            let fut = self.table().push(FutureInvokeResultEntry {
                 payload: Box::new(FutureInvokeResultState::Pending { handle }),
             })?;
             Ok(fut)
         } else {
-            let fut = self.table.push(FutureInvokeResultEntry {
+            let fut = self.table().push(FutureInvokeResultEntry {
                 payload: Box::new(FutureInvokeResultState::Deferred {
                     remote_worker_id,
                     self_worker_id: worker_id,
@@ -350,10 +351,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<Pollable>> {
         record_host_function_call("golem::rpc::future-invoke-result", "subscribe");
         if self.state.is_replay() {
-            let ready = self.table.push(Ready {})?;
-            subscribe(&mut self.table, ready, None)
+            let ready = self.table().push(Ready {})?;
+            subscribe(self.table(), ready, None)
         } else {
-            subscribe(&mut self.table, this, None)
+            subscribe(self.table(), this, None)
         }
     }
 
@@ -367,7 +368,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let handle = this.rep();
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
-            let entry = self.table.get_mut(&this)?;
+            let entry = self.table().get_mut(&this)?;
             let entry = entry
                 .payload
                 .as_any_mut()
@@ -410,7 +411,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 }
                 FutureInvokeResultState::Deferred { .. } => {
                     let (tx, rx) = tokio::sync::oneshot::channel();
-                    let handle = wasmtime_wasi::preview2::spawn(async move {
+                    let handle = wasmtime_wasi::runtime::spawn(async move {
                         let request = rx.await.map_err(|err| anyhow!(err))?;
                         let FutureInvokeResultState::Deferred {
                             remote_worker_id,
@@ -525,7 +526,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         record_host_function_call("golem::rpc::future-invoke-result", "drop");
-        let _ = self.table.delete(this)?;
+        let _ = self.table().delete(this)?;
         Ok(())
     }
 }
