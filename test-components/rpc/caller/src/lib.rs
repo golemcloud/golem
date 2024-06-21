@@ -76,6 +76,15 @@ impl Guest for Component {
         let counter = Counter::new(&counters_uri, "counter-test4");
         (counter.blocking_get_args(), counter.blocking_get_env())
     }
+
+    fn test5() -> Vec<u64> {
+        println!("Creating, using and dropping counters in parallel");
+        let component_id =
+            env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
+
+        let results = create_use_and_drop_counters_non_blocking(&component_id);
+        results.to_vec()
+    }
 }
 
 fn create_use_and_drop_counters(counters_uri: &Uri) {
@@ -98,6 +107,73 @@ fn create_use_and_drop_counters(counters_uri: &Uri) {
     println!("Counter1 value: {}", value1);
     println!("Counter2 value: {}", value2);
     println!("Counter3 value: {}", value3);
+}
+
+fn create_use_and_drop_counters_non_blocking(component_id: &str) -> [u64; 3] {
+    let counter1 = Counter::new(
+        &Uri {
+            value: format!("worker://{component_id}/counters_test51"),
+        },
+        "counter",
+    );
+    let counter2 = Counter::new(
+        &Uri {
+            value: format!("worker://{component_id}/counters_test52"),
+        },
+        "counter2",
+    );
+    let counter3 = Counter::new(
+        &Uri {
+            value: format!("worker://{component_id}/counters_test53"),
+        },
+        "counter3",
+    );
+    counter1.inc_by(1);
+    counter1.inc_by(1);
+    counter1.inc_by(1);
+
+    counter2.inc_by(2);
+    counter2.inc_by(1);
+
+    counter3.inc_by(3);
+
+    let future_value1 = counter1.get_value();
+    let future_value2 = counter2.get_value();
+    let future_value3 = counter3.get_value();
+
+    let futures = &[&future_value1, &future_value2, &future_value3];
+
+    let poll_value1 = future_value1.subscribe();
+    let poll_value2 = future_value2.subscribe();
+    let poll_value3 = future_value3.subscribe();
+
+    let mut values = [0u64; 3];
+    let mut remaining = vec![&poll_value1, &poll_value2, &poll_value3];
+    let mut mapping = vec![0, 1, 2];
+
+    while !remaining.is_empty() {
+        let poll_result = bindings::wasi::io::poll::poll(&remaining);
+        for idx in &poll_result {
+            let counter_idx = mapping[*idx as usize];
+            println!("Got result for counter {}", counter_idx + 1);
+            let future = futures[counter_idx];
+            let value = future
+                .get()
+                .expect("future did not return a value because after marked as completed");
+            values[counter_idx] = value;
+            remaining.remove(*idx as usize);
+        }
+
+        for idx in poll_result {
+            mapping.remove(idx as usize);
+        }
+    }
+
+    println!("Counter1 value: {}", values[0]);
+    println!("Counter2 value: {}", values[1]);
+    println!("Counter3 value: {}", values[2]);
+
+    values
 }
 
 bindings::export!(Component with_types_in bindings);

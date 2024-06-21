@@ -396,3 +396,92 @@ async fn context_inheritance() {
         ]
     );
 }
+
+#[tokio::test]
+#[tracing::instrument]
+async fn counter_resource_test_5() {
+    let context = common::TestContext::new();
+    let executor = common::start(&context).await.unwrap();
+
+    let counters_component_id = executor.store_component("counters").await;
+    let caller_component_id = executor.store_component("caller_composed").await;
+
+    let mut env = HashMap::new();
+    env.insert(
+        "COUNTERS_COMPONENT_ID".to_string(),
+        counters_component_id.to_string(),
+    );
+    let caller_worker_id = executor
+        .start_worker_with(&caller_component_id, "rpc-counters-5", vec![], env)
+        .await;
+
+    executor.log_output(&caller_worker_id).await;
+
+    let result = executor
+        .invoke_and_await(&caller_worker_id, "test5", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(
+        result
+            == Ok(vec![Value::List(vec![
+                Value::U64(3),
+                Value::U64(3),
+                Value::U64(3),
+            ]),])
+    );
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn counter_resource_test_5_with_restart() {
+    let context = common::TestContext::new();
+    let executor = common::start(&context).await.unwrap();
+
+    // using store_unique_component to avoid collision with counter_resource_test_5
+    let counters_component_id = executor.store_unique_component("counters").await;
+    let caller_component_id = executor.store_unique_component("caller_composed").await;
+
+    let mut env = HashMap::new();
+    env.insert(
+        "COUNTERS_COMPONENT_ID".to_string(),
+        counters_component_id.to_string(),
+    );
+    let caller_worker_id = executor
+        .start_worker_with(&caller_component_id, "rpc-counters-5r", vec![], env)
+        .await;
+
+    executor.log_output(&caller_worker_id).await;
+
+    let result1 = executor
+        .invoke_and_await(&caller_worker_id, "test5", vec![])
+        .await;
+
+    drop(executor);
+
+    let executor = common::start(&context).await.unwrap();
+
+    let result2 = executor
+        .invoke_and_await(&caller_worker_id, "test5", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(
+        result1
+            == Ok(vec![Value::List(vec![
+                Value::U64(3),
+                Value::U64(3),
+                Value::U64(3),
+            ]),])
+    );
+    check!(
+        result2
+            == Ok(vec![Value::List(vec![
+                Value::U64(6),
+                Value::U64(6),
+                Value::U64(6),
+            ]),]),
+    );
+}

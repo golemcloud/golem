@@ -175,11 +175,36 @@ pub unsafe fn __post_return_test4<T: Guest>(arg0: *mut u8) {
     }
     _rt::cabi_dealloc(base11, len11 * 16, 4);
 }
+#[doc(hidden)]
+#[allow(non_snake_case)]
+pub unsafe fn _export_test5_cabi<T: Guest>() -> *mut u8 {
+    #[cfg(target_arch = "wasm32")]
+    _rt::run_ctors_once();
+    let result0 = T::test5();
+    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+    let vec2 = (result0).into_boxed_slice();
+    let ptr2 = vec2.as_ptr().cast::<u8>();
+    let len2 = vec2.len();
+    ::core::mem::forget(vec2);
+    *ptr1.add(4).cast::<usize>() = len2;
+    *ptr1.add(0).cast::<*mut u8>() = ptr2.cast_mut();
+    ptr1
+}
+#[doc(hidden)]
+#[allow(non_snake_case)]
+pub unsafe fn __post_return_test5<T: Guest>(arg0: *mut u8) {
+    let l0 = *arg0.add(0).cast::<*mut u8>();
+    let l1 = *arg0.add(4).cast::<usize>();
+    let base2 = l0;
+    let len2 = l1;
+    _rt::cabi_dealloc(base2, len2 * 8, 8);
+}
 pub trait Guest {
     fn test1() -> _rt::Vec<(_rt::String, u64)>;
     fn test2() -> u64;
     fn test3() -> u64;
     fn test4() -> (_rt::Vec<_rt::String>, _rt::Vec<(_rt::String, _rt::String)>);
+    fn test5() -> _rt::Vec<u64>;
 }
 #[doc(hidden)]
 
@@ -209,6 +234,14 @@ macro_rules! __export_world_caller_cabi{
     #[export_name = "cabi_post_test4"]
     unsafe extern "C" fn _post_return_test4(arg0: *mut u8,) {
       $($path_to_types)*::__post_return_test4::<$ty>(arg0)
+    }
+    #[export_name = "test5"]
+    unsafe extern "C" fn export_test5() -> *mut u8 {
+      $($path_to_types)*::_export_test5_cabi::<$ty>()
+    }
+    #[export_name = "cabi_post_test5"]
+    unsafe extern "C" fn _post_return_test5(arg0: *mut u8,) {
+      $($path_to_types)*::__post_return_test5::<$ty>(arg0)
     }
   };);
 }
@@ -3965,9 +3998,9 @@ pub(crate) use __export_caller_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:caller:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3045] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xe8\x16\x01A\x02\x01\
-A\x15\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3063] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xfa\x16\x01A\x02\x01\
+A\x18\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
 \x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
 ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
 \x03\x01\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B*\x02\x03\x02\x01\
@@ -4025,9 +4058,10 @@ self0\0!\x04\0\x20[method]counter.blocking-get-env\x018\x01i\x08\x01@\x01\x04sel
 f0\09\x04\0\x17[method]counter.get-env\x01:\x03\x01\x1frpc:counters-stub/stub-co\
 unters\x05\x04\x01o\x02sw\x01p\x05\x01@\0\0\x06\x04\0\x05test1\x01\x07\x01@\0\0w\
 \x04\0\x05test2\x01\x08\x04\0\x05test3\x01\x08\x01ps\x01o\x02ss\x01p\x0a\x01o\x02\
-\x09\x0b\x01@\0\0\x0c\x04\0\x05test4\x01\x0d\x04\x01\x11rpc:caller/caller\x04\0\x0b\
-\x0c\x01\0\x06caller\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-comp\
-onent\x070.208.1\x10wit-bindgen-rust\x060.25.0";
+\x09\x0b\x01@\0\0\x0c\x04\0\x05test4\x01\x0d\x01pw\x01@\0\0\x0e\x04\0\x05test5\x01\
+\x0f\x04\x01\x11rpc:caller/caller\x04\0\x0b\x0c\x01\0\x06caller\x03\0\0\0G\x09pr\
+oducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x06\
+0.25.0";
 
 #[inline(never)]
 #[doc(hidden)]
