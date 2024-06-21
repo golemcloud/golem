@@ -2,19 +2,19 @@ pub mod api_definition_lookup_impl;
 pub mod component;
 pub mod worker;
 
-use crate::service::api_definition_lookup_impl::CustomRequestDefinitionLookupDefault;
+use crate::service::api_definition_lookup_impl::CustomRequestDefinitionLookup;
 use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
 
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
 
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
+use golem_worker_service_base::auth::{EmptyAuthCtx, EmptyNamespace};
 use golem_worker_service_base::http::InputHttpRequest;
-use golem_worker_service_base::repo::api_definition_repo::{
-    ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
-};
+
+use golem_worker_service_base::repo::api_definition;
+use golem_worker_service_base::repo::api_deployment;
 use golem_worker_service_base::service::api_definition::{
-    ApiDefinitionService, ApiDefinitionServiceDefault,
+    ApiDefinitionService2, ApiDefinitionServiceDefault2, ApiDefinitionServiceNoop,
 };
 use golem_worker_service_base::service::api_definition_lookup::ApiDefinitionsLookup;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
@@ -30,29 +30,23 @@ use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 
 use crate::worker_component_metadata_fetcher::DefaultWorkerComponentMetadataFetcher;
 use golem_worker_service_base::evaluator::WorkerMetadataFetcher;
-use golem_worker_service_base::repo::api_deployment_repo::{
-    ApiDeploymentRepo, InMemoryDeployment, RedisApiDeploy,
-};
+
 use golem_worker_service_base::service::api_deployment::{
-    ApiDeploymentService, ApiDeploymentServiceDefault,
+    ApiDeploymentService, ApiDeploymentServiceDefault2, ApiDeploymentServiceNoop,
 };
 use std::sync::Arc;
-use tracing::error;
+
+use golem_service_base::config::DbConfig;
+use golem_service_base::db;
 
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: worker::WorkerService,
     pub component_service: component::ComponentService,
     pub definition_service: Arc<
-        dyn ApiDefinitionService<
-                EmptyAuthCtx,
-                CommonNamespace,
-                HttpApiDefinition,
-                RouteValidationError,
-            > + Sync
-            + Send,
+        dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError> + Sync + Send,
     >,
-    pub deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send>,
+    pub deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send>,
     pub http_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
@@ -103,51 +97,65 @@ impl Services {
             DefaultWorkerComponentMetadataFetcher::new(worker_service.clone()),
         );
 
-        let definition_repo: Arc<
-            dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
-        > = Arc::new(RedisApiRegistry::new(&config.redis).await.map_err(|e| {
-            error!("RedisApiRegistry - init error: {}", e);
-            format!("RedisApiRegistry - init error: {}", e)
-        })?);
-
-        let deployment_repo: Arc<dyn ApiDeploymentRepo<CommonNamespace> + Sync + Send> =
-            Arc::new(RedisApiDeploy::new(&config.redis).await.map_err(|e| {
-                error!("RedisApiDeploymentRepo - init error: {}", e);
-                format!("RedisApiDeploymentRepo - init error: {}", e)
-            })?);
-
-        let deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send> =
-            Arc::new(ApiDeploymentServiceDefault::new(
-                deployment_repo.clone(),
-                definition_repo.clone(),
-            ));
-
-        let definition_lookup_service = Arc::new(CustomRequestDefinitionLookupDefault::new(
-            definition_repo.clone(),
-            deployment_repo.clone(),
-        ));
+        let (api_definition_repo, api_deployment_repo) = match config.db.clone() {
+            DbConfig::Postgres(c) => {
+                let db_pool = db::create_postgres_pool(&c)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
+                    Arc::new(api_definition::DbApiDefinitionRepoRepo::new(
+                        db_pool.clone().into(),
+                    ));
+                let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
+                    Arc::new(api_deployment::DbApiDeploymentRepoRepo::new(
+                        db_pool.clone().into(),
+                    ));
+                (api_definition_repo, api_deployment_repo)
+            }
+            DbConfig::Sqlite(c) => {
+                let db_pool = db::create_sqlite_pool(&c)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
+                    Arc::new(api_definition::DbApiDefinitionRepoRepo::new(
+                        db_pool.clone().into(),
+                    ));
+                let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
+                    Arc::new(api_deployment::DbApiDeploymentRepoRepo::new(
+                        db_pool.clone().into(),
+                    ));
+                (api_definition_repo, api_deployment_repo)
+            }
+        };
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let definition_service: Arc<
-            dyn ApiDefinitionService<
-                    EmptyAuthCtx,
-                    CommonNamespace,
-                    HttpApiDefinition,
-                    RouteValidationError,
-                > + Sync
+            dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
+                + Sync
                 + Send,
-        > = Arc::new(ApiDefinitionServiceDefault::new(
+        > = Arc::new(ApiDefinitionServiceDefault2::new(
             component_service.clone(),
-            definition_repo.clone(),
+            api_definition_repo.clone(),
             api_definition_validator_service.clone(),
+        ));
+
+        let deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send> =
+            Arc::new(ApiDeploymentServiceDefault2::new(
+                api_deployment_repo.clone(),
+                api_definition_repo.clone(),
+            ));
+
+        let http_definition_lookup_service = Arc::new(CustomRequestDefinitionLookup::new(
+            definition_service.clone(),
+            deployment_service.clone(),
         ));
 
         Ok(Services {
             worker_service,
             definition_service,
             deployment_service,
-            http_definition_lookup_service: definition_lookup_service,
+            http_definition_lookup_service,
             worker_to_http_service,
             component_service,
             worker_metadata_fetcher,
@@ -165,37 +173,11 @@ impl Services {
             },
         });
 
-        let definition_repo: Arc<
-            dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
-        > = Arc::new(InMemoryRegistry::default());
-
-        let deployment_repo: Arc<dyn ApiDeploymentRepo<CommonNamespace> + Sync + Send> =
-            Arc::new(InMemoryDeployment::default());
-
-        let definition_lookup_service: Arc<
-            dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
-        > = Arc::new(CustomRequestDefinitionLookupDefault::new(
-            definition_repo.clone(),
-            deployment_repo.clone(),
-        ));
-
-        let deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send> =
-            Arc::new(ApiDeploymentServiceDefault::new(
-                deployment_repo.clone(),
-                definition_repo.clone(),
-            ));
-
         let api_definition_validator_service: Arc<
             dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
                 + Sync
                 + Send,
         > = Arc::new(ApiDefinitionValidatorNoop {});
-
-        let definition_service = Arc::new(ApiDefinitionServiceDefault::new(
-            component_service.clone(),
-            Arc::new(InMemoryRegistry::default()),
-            api_definition_validator_service.clone(),
-        ));
 
         let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
@@ -205,11 +187,25 @@ impl Services {
             DefaultWorkerComponentMetadataFetcher::new(worker_service.clone()),
         );
 
+        let definition_service: Arc<
+            dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
+                + Sync
+                + Send,
+        > = Arc::new(ApiDefinitionServiceNoop {});
+
+        let deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send> =
+            Arc::new(ApiDeploymentServiceNoop {});
+
+        let http_definition_lookup_service = Arc::new(CustomRequestDefinitionLookup::new(
+            definition_service.clone(),
+            deployment_service.clone(),
+        ));
+
         Services {
             worker_service,
             definition_service,
             deployment_service,
-            http_definition_lookup_service: definition_lookup_service,
+            http_definition_lookup_service,
             worker_to_http_service,
             component_service,
             worker_metadata_fetcher,

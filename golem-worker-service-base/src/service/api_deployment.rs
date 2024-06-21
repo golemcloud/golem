@@ -43,11 +43,17 @@ pub trait ApiDeploymentService<Namespace> {
     ) -> Result<bool, ApiDeploymentError<Namespace>>;
 }
 
+#[derive(Debug, thiserror::Error)]
 pub enum ApiDeploymentError<Namespace> {
+    #[error("Api definition not found: {1}")]
     ApiDefinitionNotFound(Namespace, ApiDefinitionId),
+    #[error("Api deployment not found: {1}")]
     ApiDeploymentNotFound(Namespace, ApiSiteString),
+    #[error("Internal error: {0}")]
     InternalError(String),
+    #[error("Api deployment conflict error: {0}")]
     DeploymentConflict(ApiSiteString),
+    #[error("Api definitions conflict: {0:?}")]
     ConflictingDefinitions(Vec<String>),
 }
 
@@ -471,6 +477,43 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                 .await
                 .map_err(|e| e.into())
         }
+    }
+}
+
+pub struct ApiDeploymentServiceNoop {}
+
+#[async_trait]
+impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
+    ApiDeploymentService<Namespace> for ApiDeploymentServiceNoop
+{
+    async fn deploy(
+        &self,
+        _deployment: &ApiDeployment<Namespace>,
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
+        todo!()
+    }
+
+    async fn get_by_id(
+        &self,
+        _namespace: &Namespace,
+        _api_definition_id: &ApiDefinitionId,
+    ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
+        todo!()
+    }
+
+    async fn get_by_host(
+        &self,
+        _host: &ApiSiteString,
+    ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
+        todo!()
+    }
+
+    async fn delete(
+        &self,
+        _namespace: &Namespace,
+        _host: &ApiSiteString,
+    ) -> Result<bool, ApiDeploymentError<Namespace>> {
+        todo!()
     }
 }
 

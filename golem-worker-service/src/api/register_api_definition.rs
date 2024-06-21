@@ -13,27 +13,25 @@ use golem_worker_service_base::api::HttpApiDefinition;
 use golem_worker_service_base::api_definition::http::get_api_definition;
 use golem_worker_service_base::api_definition::http::HttpApiDefinition as CoreHttpApiDefinition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
-use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
-use golem_worker_service_base::service::api_definition::ApiDefinitionService;
+use golem_worker_service_base::auth::{EmptyAuthCtx, EmptyNamespace};
+use golem_worker_service_base::service::api_definition::ApiDefinitionService2;
 use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
 
 pub struct RegisterApiDefinitionApi {
-    pub definition_service: DefinitionService,
+    definition_service: Arc<
+        dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError> + Sync + Send,
+    >,
 }
-
-type DefinitionService = Arc<
-    dyn ApiDefinitionService<
-            EmptyAuthCtx,
-            CommonNamespace,
-            CoreHttpApiDefinition,
-            RouteValidationError,
-        > + Sync
-        + Send,
->;
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
-    pub fn new(definition_service: DefinitionService) -> Self {
+    pub fn new(
+        definition_service: Arc<
+            dyn ApiDefinitionService2<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
+                + Sync
+                + Send,
+        >,
+    ) -> Self {
         Self { definition_service }
     }
 
@@ -103,7 +101,7 @@ impl RegisterApiDefinitionApi {
         }
 
         self.definition_service
-            .update(&definition, CommonNamespace::default(), &EmptyAuthCtx {})
+            .update(&definition, &EmptyNamespace::default(), &EmptyAuthCtx {})
             .await
             .map_err(|e| {
                 error!("API Definition ID: {} - update error: {e:?}", definition.id);
@@ -140,7 +138,7 @@ impl RegisterApiDefinitionApi {
             .get(
                 &api_definition_id,
                 &api_version,
-                CommonNamespace::default(),
+                &EmptyNamespace::default(),
                 &EmptyAuthCtx {},
             )
             .await?;
@@ -174,7 +172,7 @@ impl RegisterApiDefinitionApi {
             .delete(
                 &api_definition_id,
                 &api_definition_version,
-                CommonNamespace::default(),
+                &EmptyNamespace::default(),
                 &EmptyAuthCtx {},
             )
             .await?;
@@ -193,11 +191,11 @@ impl RegisterApiDefinitionApi {
     ) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
         let data = if let Some(id) = api_definition_id_query.0 {
             self.definition_service
-                .get_all_versions(&id, CommonNamespace::default(), &EmptyAuthCtx {})
+                .get_all_versions(&id, &EmptyNamespace::default(), &EmptyAuthCtx {})
                 .await?
         } else {
             self.definition_service
-                .get_all(CommonNamespace::default(), &EmptyAuthCtx {})
+                .get_all(&EmptyNamespace::default(), &EmptyAuthCtx {})
                 .await?
         };
 
@@ -214,7 +212,7 @@ impl RegisterApiDefinitionApi {
 impl RegisterApiDefinitionApi {
     async fn create_api(&self, definition: &CoreHttpApiDefinition) -> Result<(), ApiEndpointError> {
         self.definition_service
-            .create(definition, CommonNamespace::default(), &EmptyAuthCtx {})
+            .create(definition, &EmptyNamespace::default(), &EmptyAuthCtx {})
             .await
             .map_err(|e| {
                 error!(

@@ -8,6 +8,7 @@ use url::Url;
 use uuid::Uuid;
 
 use golem_common::config::{RedisConfig, RetryConfig};
+use golem_service_base::config::DbConfig;
 use golem_service_base::routing_table::RoutingTableConfig;
 
 // The base configuration for the worker service
@@ -17,6 +18,7 @@ use golem_service_base::routing_table::RoutingTableConfig;
 pub struct WorkerServiceBaseConfig {
     pub environment: String,
     pub redis: RedisConfig,
+    pub db: DbConfig,
     pub component_service: ComponentServiceConfig,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
@@ -62,6 +64,7 @@ impl Default for WorkerServiceBaseConfig {
         Self {
             environment: "local".to_string(),
             redis: RedisConfig::default(),
+            db: DbConfig::default(),
             component_service: ComponentServiceConfig::default(),
             enable_tracing_console: false,
             enable_json_log: false,

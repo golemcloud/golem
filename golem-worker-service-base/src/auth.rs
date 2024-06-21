@@ -34,3 +34,29 @@ impl Display for CommonNamespace {
         write!(f, "{}", self.0)
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, Deserialize)]
+pub struct EmptyNamespace();
+
+impl Default for EmptyNamespace {
+    fn default() -> Self {
+        EmptyNamespace()
+    }
+}
+
+impl Display for EmptyNamespace {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "")
+    }
+}
+
+impl TryFrom<String> for EmptyNamespace {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.is_empty() {
+            Ok(EmptyNamespace::default())
+        } else {
+            Err("Failed to parse empty namespace".to_string())
+        }
+    }
+}

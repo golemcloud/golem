@@ -427,7 +427,7 @@ pub trait ApiDefinitionService2<AuthCtx, Namespace, ValidationError> {
 
     async fn get_all_versions(
         &self,
-        api_id: &ApiDefinitionId,
+        id: &ApiDefinitionId,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError>;
@@ -595,5 +595,70 @@ where
             .await?;
 
         Ok(values.into_iter().map(|v| v.into()).collect())
+    }
+}
+
+pub struct ApiDefinitionServiceNoop {}
+
+#[async_trait]
+impl<AuthCtx, Namespace, ValidationError> ApiDefinitionService2<AuthCtx, Namespace, ValidationError>
+    for ApiDefinitionServiceNoop
+where
+    AuthCtx: Send + Sync,
+    Namespace: Display + Clone + Send + Sync,
+{
+    async fn create(
+        &self,
+        _definition: &HttpApiDefinition,
+        _namespace: &Namespace,
+        _auth_ctx: &AuthCtx,
+    ) -> ApiResult<ApiDefinitionId, ValidationError> {
+        todo!()
+    }
+
+    async fn update(
+        &self,
+        _definition: &HttpApiDefinition,
+        _namespace: &Namespace,
+        _auth_ctx: &AuthCtx,
+    ) -> ApiResult<ApiDefinitionId, ValidationError> {
+        todo!()
+    }
+
+    async fn get(
+        &self,
+        _id: &ApiDefinitionId,
+        _version: &ApiVersion,
+        _namespace: &Namespace,
+        _auth_ctx: &AuthCtx,
+    ) -> ApiResult<Option<HttpApiDefinition>, ValidationError> {
+        todo!()
+    }
+
+    async fn delete(
+        &self,
+        _id: &ApiDefinitionId,
+        _version: &ApiVersion,
+        _namespace: &Namespace,
+        _auth_ctx: &AuthCtx,
+    ) -> ApiResult<Option<ApiDefinitionId>, ValidationError> {
+        todo!()
+    }
+
+    async fn get_all(
+        &self,
+        _namespace: &Namespace,
+        _auth_ctx: &AuthCtx,
+    ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
+        todo!()
+    }
+
+    async fn get_all_versions(
+        &self,
+        _id: &ApiDefinitionId,
+        _namespace: &Namespace,
+        _auth_ctx: &AuthCtx,
+    ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
+        todo!()
     }
 }
