@@ -194,9 +194,9 @@ fn write_async_return_type(
 ) -> anyhow::Result<()> {
     writeln!(out, "  resource {} {{", function.async_result_type(owner))?;
     writeln!(out, "    subscribe: func() -> pollable;")?;
-    write!(out, "    get: func() -> ")?;
+    write!(out, "    get: func() -> option<")?;
     write_function_result_type(out, function, def)?;
-    writeln!(out, ";")?;
+    writeln!(out, ">;")?;
     writeln!(out, "  }}")?;
     Ok(())
 }

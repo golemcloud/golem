@@ -324,9 +324,11 @@ fn generate_result_wrapper_get_source(
     );
 
     Ok(quote! {
-        fn get(&self) -> #result_type {
-            let result = self.future_invoke_result.get().expect(&format!("Failed to invoke remote {}", #remote_function_name));;
-            (#(#output_values),*)
+        fn get(&self) -> Option<#result_type> {
+            self.future_invoke_result.get().map(|result| {
+                let result = result.expect(&format!("Failed to invoke remote {}", #remote_function_name));
+                (#(#output_values),*)
+            })
         }
     })
 }
@@ -464,9 +466,22 @@ fn generate_function_stub_source(
                 }
             }
         } else {
+            let root_ns = Ident::new(
+                &def.root_package_name.namespace.to_snake_case(),
+                Span::call_site(),
+            );
+            let root_name = Ident::new(
+                &format!("{}_stub", def.root_package_name.name.to_snake_case()),
+                Span::call_site(),
+            );
+            let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+            let stub_interface_name = Ident::new(
+                &to_rust_ident(&stub_interface_name).to_snake_case(),
+                Span::call_site(),
+            );
             let result_wrapper = result_wrapper_ident(function, owner);
             quote! {
-                fn #function_name(#(#params),*) -> wit_bindgen::rt::Resource<#result_wrapper> {
+                fn #function_name(#(#params),*) -> crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#result_wrapper {
                     #init
                     let result = #rpc.async_invoke_and_await(
                         #remote_function_name,
@@ -474,7 +489,7 @@ fn generate_function_stub_source(
                             #(#input_values),*
                         ],
                     );
-                    wit_bindgen::rt::Resource::new(#result_wrapper { future_invoke_result: result})
+                    crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#result_wrapper::new(#result_wrapper { future_invoke_result: result})
                 }
             }
         }
