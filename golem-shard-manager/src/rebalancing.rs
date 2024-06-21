@@ -674,6 +674,31 @@ mod tests {
 
     #[test]
     #[traced_test]
+    fn initial_assign_is_ordered_and_no_rebalance_needed_with_less_then_opt() {
+        let routing_table = new_routing_table(TestConfig {
+            number_of_shards: 14,
+            number_of_pods: 4,
+            initial_assignments: vec![],
+        });
+
+        let rebalance = Rebalance::from_routing_table(&routing_table, 0.0);
+
+        assert_assignments(
+            &rebalance,
+            vec![
+                //
+                (0, vec![0, 4, 8, 12]),
+                (1, vec![1, 5, 9, 13]),
+                (2, vec![2, 6, 10]),
+                (3, vec![3, 7, 11]),
+            ],
+        );
+
+        assert_eq!(rebalance.unassignments.unassignments.len(), 0);
+    }
+
+    #[test]
+    #[traced_test]
     fn initial_assign_is_ordered_and_no_rebalance_with_some_saturated_pod() {
         let routing_table = new_routing_table(TestConfig {
             number_of_shards: 8,
