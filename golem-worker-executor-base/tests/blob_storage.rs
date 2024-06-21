@@ -16,13 +16,13 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::Client;
-use golem_common::model::{AccountId, ComponentId};
 use once_cell::sync::Lazy;
 use tempfile::{tempdir, TempDir};
 use testcontainers::Container;
 use testcontainers_modules::minio::MinIO;
 use uuid::Uuid;
 
+use golem_common::model::{AccountId, ComponentId};
 use golem_worker_executor_base::services::golem_config::S3BlobStorageConfig;
 use golem_worker_executor_base::storage::blob::{
     fs, memory, s3, BlobStorage, BlobStorageNamespace,
@@ -325,12 +325,12 @@ impl GetBlobStorage for FsTest {
     }
 }
 
-struct S3Test<'a> {
-    _container: Container<'a, MinIO>,
+struct S3Test {
+    _container: Container<'static, MinIO>,
     storage: s3::S3BlobStorage,
 }
 
-impl<'a> GetBlobStorage for S3Test<'a> {
+impl GetBlobStorage for S3Test {
     fn get_blob_storage(&self) -> &dyn BlobStorage {
         &self.storage
     }

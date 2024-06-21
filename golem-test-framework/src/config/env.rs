@@ -77,7 +77,7 @@ impl EnvBasedTestDependencies {
     async fn make_redis() -> Arc<dyn Redis + Send + Sync + 'static> {
         let prefix = Self::redis_prefix().unwrap_or("".to_string());
         if Self::use_docker() {
-            Arc::new(DockerRedis::new(prefix))
+            Arc::new(DockerRedis::new(prefix).await)
         } else {
             let host = Self::redis_host().unwrap_or("localhost".to_string());
             let port = Self::redis_port().unwrap_or(6379);
@@ -109,7 +109,7 @@ impl EnvBasedTestDependencies {
         redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn ShardManager + Send + Sync + 'static> {
         if Self::use_docker() {
-            Arc::new(DockerShardManager::new(redis, Self::default_verbosity()))
+            Arc::new(DockerShardManager::new(redis, Self::default_verbosity()).await)
         } else {
             Arc::new(
                 SpawnedShardManager::new(
@@ -131,14 +131,17 @@ impl EnvBasedTestDependencies {
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     ) -> Arc<dyn ComponentService + Send + Sync + 'static> {
         if Self::use_docker() {
-            Arc::new(DockerComponentService::new(
-                Some((
-                    DockerComponentCompilationService::NAME,
-                    DockerComponentCompilationService::GRPC_PORT,
-                )),
-                rdb,
-                Self::default_verbosity(),
-            ))
+            Arc::new(
+                DockerComponentService::new(
+                    Some((
+                        DockerComponentCompilationService::NAME,
+                        DockerComponentCompilationService::GRPC_PORT,
+                    )),
+                    rdb,
+                    Self::default_verbosity(),
+                )
+                .await,
+            )
         } else {
             Arc::new(
                 SpawnedComponentService::new(
@@ -161,10 +164,13 @@ impl EnvBasedTestDependencies {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
         if Self::use_docker() {
-            Arc::new(DockerComponentCompilationService::new(
-                component_service,
-                Self::default_verbosity(),
-            ))
+            Arc::new(
+                DockerComponentCompilationService::new(
+                    component_service,
+                    Self::default_verbosity(),
+                )
+                .await,
+            )
         } else {
             Arc::new(
                 SpawnedComponentCompilationService::new(
@@ -189,13 +195,16 @@ impl EnvBasedTestDependencies {
         redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn WorkerService + Send + Sync + 'static> {
         if Self::use_docker() {
-            Arc::new(DockerWorkerService::new(
-                component_service,
-                shard_manager,
-                rdb,
-                redis,
-                Self::default_verbosity(),
-            ))
+            Arc::new(
+                DockerWorkerService::new(
+                    component_service,
+                    shard_manager,
+                    rdb,
+                    redis,
+                    Self::default_verbosity(),
+                )
+                .await,
+            )
         } else {
             Arc::new(
                 SpawnedWorkerService::new(

@@ -49,7 +49,7 @@ impl Display for ProfileName {
 impl ProfileName {
     pub fn default(cli_kind: CliKind) -> ProfileName {
         match cli_kind {
-            CliKind::Universal => ProfileName("default".to_string()),
+            CliKind::Universal | CliKind::Golem => ProfileName("default".to_string()),
             CliKind::Cloud => ProfileName("cloud_default".to_string()),
         }
     }
@@ -187,7 +187,11 @@ impl Config {
                         return Err(GolemError(format!("Profile {profile_name} is not a Cloud profile. Use `golem-cli` instead of `golem-cloud-cli` for this profile.")));
                     }
                 }
-                Profile::GolemCloud(_) => {}
+                Profile::GolemCloud(_) => {
+                    if cli_kind == CliKind::Golem {
+                        return Err(GolemError(format!("Profile {profile_name} is a Cloud profile. Use `golem-cloud-cli` instead of `golem-cli` for this profile. You can also install universal version of `golem-cli` using `cargo install golem-cloud-cli --features universal`")));
+                    }
+                }
             }
         } else {
             return Err(GolemError(format!(
@@ -197,7 +201,7 @@ impl Config {
         }
 
         match cli_kind {
-            CliKind::Universal => config.active_profile = Some(profile_name),
+            CliKind::Universal | CliKind::Golem => config.active_profile = Some(profile_name),
             CliKind::Cloud => config.active_cloud_profile = Some(profile_name),
         }
 
@@ -210,7 +214,7 @@ impl Config {
         let mut config = Self::read_from_file(config_dir);
 
         let name = match cli_kind {
-            CliKind::Universal => config
+            CliKind::Universal | CliKind::Golem => config
                 .active_profile
                 .unwrap_or_else(|| ProfileName::default(cli_kind)),
             CliKind::Cloud => config

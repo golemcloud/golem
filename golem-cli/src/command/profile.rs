@@ -340,13 +340,14 @@ impl<ProfileAdd: Into<UniversalProfileAdd> + clap::Args> ProfileSubCommand<Profi
                     active_profile,
                     active_cloud_profile,
                 } = Config::read_from_file(config_dir);
-                let active_profile =
-                    match cli_kind {
-                        CliKind::Universal => active_profile
-                            .unwrap_or_else(|| ProfileName::default(CliKind::Universal)),
-                        CliKind::Cloud => active_cloud_profile
-                            .unwrap_or_else(|| ProfileName::default(CliKind::Cloud)),
-                    };
+                let active_profile = match cli_kind {
+                    CliKind::Universal | CliKind::Golem => {
+                        active_profile.unwrap_or_else(|| ProfileName::default(cli_kind))
+                    }
+                    CliKind::Cloud => {
+                        active_cloud_profile.unwrap_or_else(|| ProfileName::default(cli_kind))
+                    }
+                };
 
                 let res = profiles
                     .into_iter()

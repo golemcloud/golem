@@ -9,3 +9,5 @@ impl Guest for Component {
         println!("Sample text written to the output");
     }
 }
+
+bindings::export!(Component with_types_in bindings);

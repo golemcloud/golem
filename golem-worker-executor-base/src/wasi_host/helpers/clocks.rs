@@ -15,7 +15,7 @@
 use cap_std::time::SystemClock;
 use cap_std::{ambient_authority, AmbientAuthority};
 use cap_time_ext::SystemClockExt;
-use wasmtime_wasi::preview2::HostMonotonicClock;
+use wasmtime_wasi::HostMonotonicClock;
 
 /// Using a SystemClock as a monotonic clock so instants are reusable between persisted executions
 pub struct MonotonicClock {

@@ -20,6 +20,11 @@ impl Counter {
         }
     }
 }
+struct Component;
+impl crate::bindings::exports::rpc::counters_stub::stub_counters::Guest for Component {
+    type Api = crate::Api;
+    type Counter = crate::Counter;
+}
 impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestApi for Api {
     fn new(location: crate::bindings::golem::rpc::types::Uri) -> Self {
         let location = golem_wasm_rpc::Uri {
@@ -244,3 +249,4 @@ impl Drop for Counter {
             .expect("Failed to invoke remote drop");
     }
 }
+bindings::export!(Component with_types_in bindings);

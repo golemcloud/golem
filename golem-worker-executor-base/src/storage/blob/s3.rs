@@ -39,7 +39,7 @@ impl S3BlobStorage {
         let region = config.region.clone();
 
         let mut config_builder =
-            aws_config::defaults(BehaviorVersion::v2023_11_09()).region(Region::new(region));
+            aws_config::defaults(BehaviorVersion::v2024_03_28()).region(Region::new(region));
 
         if let Some(endpoint_url) = &config.aws_endpoint_url {
             info!(

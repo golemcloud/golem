@@ -9,3 +9,5 @@ impl load_snapshot::Guest for Component {
         Err("Invalid snapshot - simulating failure".to_string())
     }
 }
+
+bindings::export!(Component with_types_in bindings);

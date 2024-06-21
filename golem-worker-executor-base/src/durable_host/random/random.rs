@@ -19,7 +19,7 @@ use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
-use wasmtime_wasi::preview2::bindings::wasi::random::random::Host;
+use wasmtime_wasi::bindings::random::random::Host;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -45,5 +45,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             |ctx| Box::pin(async { Host::get_random_u64(&mut ctx.as_wasi_view()).await }),
         )
         .await
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn get_random_bytes(&mut self, len: u64) -> anyhow::Result<Vec<u8>> {
+        (*self).get_random_bytes(len).await
+    }
+
+    async fn get_random_u64(&mut self) -> anyhow::Result<u64> {
+        (*self).get_random_u64().await
     }
 }

@@ -3,16 +3,16 @@ mod model;
 
 mod bindings;
 
-use std::cell::RefCell;
 use bindings::*;
 use exports::auction::auction::api::{
-    Guest, Auction as WitAuction, BidResult as WitBidResult, BidderId as WitBidderId,
+    Auction as WitAuction, BidResult as WitBidResult, BidderId as WitBidderId, Guest,
 };
 use once_cell::sync::Lazy;
+use std::cell::RefCell;
 
-use model::*;
 use crate::auction_logic::now;
 use crate::bindings::exports::auction::auction::api::GuestRunningAuction;
+use model::*;
 
 struct Component;
 
@@ -43,6 +43,8 @@ impl Guest for Component {
     fn close_auction() -> Option<WitBidderId> {
         with_state(|state| auction_logic::close_auction(state).map(|bidder_id| bidder_id.into()))
     }
+
+    type RunningAuction = crate::RunningAuction;
 }
 
 pub struct RunningAuction {
@@ -79,9 +81,14 @@ impl GuestRunningAuction for RunningAuction {
 
     fn close(&self) -> Option<WitBidderId> {
         if now() >= self.auction.expiration.deadline {
-            self.winning_bid.borrow().clone().map(|(bidder_id, _)| bidder_id.into())
+            self.winning_bid
+                .borrow()
+                .clone()
+                .map(|(bidder_id, _)| bidder_id.into())
         } else {
             None
         }
     }
 }
+
+bindings::export!(Component with_types_in bindings);

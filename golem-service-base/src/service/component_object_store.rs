@@ -63,7 +63,7 @@ impl AwsS3ComponentObjectStore {
             "S3 Component Object Store bucket: {}, prefix: {}",
             config.bucket_name, config.object_prefix
         );
-        let sdk_config = aws_config::load_defaults(BehaviorVersion::v2023_11_09()).await;
+        let sdk_config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
         let client = aws_sdk_s3::Client::new(&sdk_config);
         Self {
             client,

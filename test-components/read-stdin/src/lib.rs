@@ -15,3 +15,5 @@ impl Guest for Component {
             .map(|_| line)
     }
 }
+
+bindings::export!(Component with_types_in bindings);
