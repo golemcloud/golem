@@ -233,8 +233,8 @@ mod test {
     use http::StatusCode;
     use poem::test::TestClient;
 
-    use golem_worker_service_base::repo::api_definition_repo::InMemoryRegistry;
-    use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
+    use golem_worker_service_base::repo::api_definition::InMemoryApiDefinitionRepo;
+    use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault2;
 
     use crate::service::component::ComponentService;
 
@@ -242,9 +242,9 @@ mod test {
 
     fn make_route() -> poem::Route {
         let component_service: ComponentService = Arc::new(ComponentServiceNoop {});
-        let definition_service = ApiDefinitionServiceDefault::new(
+        let definition_service = ApiDefinitionServiceDefault2::new(
             component_service,
-            Arc::new(InMemoryRegistry::default()),
+            Arc::new(InMemoryApiDefinitionRepo::default()),
             Arc::new(ApiDefinitionValidatorNoop {}),
         );
 

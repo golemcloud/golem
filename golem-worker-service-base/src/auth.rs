@@ -35,7 +35,9 @@ impl Display for CommonNamespace {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, Deserialize)]
+#[derive(
+    Default, Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, Deserialize,
+)]
 pub struct EmptyNamespace();
 
 impl Display for EmptyNamespace {
