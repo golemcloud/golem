@@ -28,8 +28,11 @@ use wit_parser::{
     UnresolvedPackage, Variant,
 };
 
-pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
-    let out = get_stub_wit(def, StubTypeGen::ImportRootTypes)?;
+pub fn generate_stub_wit(
+    def: &StubDefinition,
+    type_gen_strategy: StubTypeGen,
+) -> anyhow::Result<()> {
+    let out = get_stub_wit(def, type_gen_strategy)?;
     println!(
         "Generating stub WIT to {}",
         def.target_wit_path().to_string_lossy()
@@ -594,8 +597,8 @@ impl TypeExtensions for Type {
             Type::S16 => Ok("s16".to_string()),
             Type::S32 => Ok("s32".to_string()),
             Type::S64 => Ok("s64".to_string()),
-            Type::Float32 => Ok("f32".to_string()),
-            Type::Float64 => Ok("f64".to_string()),
+            Type::F32 => Ok("f32".to_string()),
+            Type::F64 => Ok("f64".to_string()),
             Type::Char => Ok("char".to_string()),
             Type::String => Ok("string".to_string()),
             Type::Id(type_id) => {
