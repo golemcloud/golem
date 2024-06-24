@@ -10,7 +10,7 @@ mod optional;
 mod pattern_match;
 mod record;
 mod result;
-mod rib_expr;
+pub(crate) mod rib_expr;
 mod sequence;
 mod tuple;
 mod select_field;
