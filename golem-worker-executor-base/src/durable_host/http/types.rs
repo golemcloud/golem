@@ -22,9 +22,8 @@ use std::str::FromStr;
 use tracing::warn;
 
 use wasmtime::component::Resource;
-use wasmtime_wasi::subscribe;
 
-use crate::durable_host::{Durability, DurableWorkerCtx, Ready};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 
 use crate::durable_host::http::serialized::{
@@ -384,12 +383,7 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
     fn subscribe(&mut self, self_: Resource<FutureTrailers>) -> anyhow::Result<Resource<Pollable>> {
         record_host_function_call("http::types::future_trailers", "subscribe");
-        if self.state.is_replay() {
-            let ready = self.table().push(Ready {})?;
-            subscribe(self.table(), ready, None)
-        } else {
-            HostFutureTrailers::subscribe(&mut self.as_wasi_http_view(), self_)
-        }
+        HostFutureTrailers::subscribe(&mut self.as_wasi_http_view(), self_)
     }
 
     async fn get(

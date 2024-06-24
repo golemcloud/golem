@@ -476,12 +476,13 @@ async fn counter_resource_test_5_with_restart() {
                 Value::U64(3),
             ]),])
     );
+    // The second call has the same result because new resources are created within test5()
     check!(
         result2
             == Ok(vec![Value::List(vec![
-                Value::U64(6),
-                Value::U64(6),
-                Value::U64(6),
+                Value::U64(3),
+                Value::U64(3),
+                Value::U64(3),
             ]),]),
     );
 }

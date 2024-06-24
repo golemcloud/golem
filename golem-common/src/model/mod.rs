@@ -993,6 +993,15 @@ impl WorkerInvocation {
             _ => false,
         }
     }
+
+    pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
+        match self {
+            Self::ExportedFunction {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use ringbuf::*;
+use std::fmt::{Display, Formatter};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::*;
 
@@ -38,6 +39,37 @@ pub enum WorkerEvent {
         message: String,
     },
     Close,
+}
+
+impl Display for WorkerEvent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerEvent::StdOut(bytes) => {
+                write!(
+                    f,
+                    "<stdout> {}",
+                    String::from_utf8(bytes.clone()).unwrap_or_default()
+                )
+            }
+            WorkerEvent::StdErr(bytes) => {
+                write!(
+                    f,
+                    "<stderr> {}",
+                    String::from_utf8(bytes.clone()).unwrap_or_default()
+                )
+            }
+            WorkerEvent::Log {
+                level,
+                context,
+                message,
+            } => {
+                write!(f, "<log> {:?} {} {}", level, context, message)
+            }
+            WorkerEvent::Close => {
+                write!(f, "<close>")
+            }
+        }
+    }
 }
 
 /// Per-worker event stream

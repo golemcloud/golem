@@ -15,10 +15,12 @@
 use crate::model::InterruptKind;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
+use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime::component::Resource;
 use wasmtime_wasi::bindings::io::poll::{Host, HostPollable, Pollable};
 
-use crate::durable_host::{DurableWorkerCtx, SuspendForSleep};
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurableWorkerCtx, SuspendForSleep};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 
@@ -46,7 +48,14 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
         record_host_function_call("io::poll", "poll");
-        let result = Host::poll(&mut self.as_wasi_view(), in_).await;
+
+        let result = Durability::<Ctx, Vec<u32>, SerializableError>::wrap(
+            self,
+            WrappedFunctionType::ReadLocal,
+            "golem io::poll::poll",
+            |ctx| Box::pin(async move { Host::poll(&mut ctx.as_wasi_view(), in_).await }),
+        )
+        .await;
 
         match is_suspend_for_sleep(&result) {
             Some(duration) => {

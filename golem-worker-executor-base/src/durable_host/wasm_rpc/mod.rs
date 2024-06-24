@@ -16,7 +16,7 @@ mod serialized;
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::serialized::SerializableInvokeResult;
-use crate::durable_host::{Durability, DurableWorkerCtx, Ready};
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
@@ -305,6 +305,7 @@ impl From<RpcError> for golem_wasm_rpc::RpcError {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum FutureInvokeResultState {
     Pending {
         handle: AbortOnDropJoinHandle<Result<Result<WitValue, RpcError>, anyhow::Error>>,
@@ -350,12 +351,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Resource<Pollable>> {
         record_host_function_call("golem::rpc::future-invoke-result", "subscribe");
-        if self.state.is_replay() {
-            let ready = self.table().push(Ready {})?;
-            subscribe(self.table(), ready, None)
-        } else {
-            subscribe(self.table(), this, None)
-        }
+        subscribe(self.table(), this, None)
     }
 
     async fn get(

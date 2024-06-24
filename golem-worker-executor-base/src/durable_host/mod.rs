@@ -58,7 +58,7 @@ use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::AsContextMut;
-use wasmtime_wasi::{I32Exit, ResourceTable, Stderr, Subscribe, WasiCtx, WasiView};
+use wasmtime_wasi::{I32Exit, ResourceTable, Stderr, WasiCtx, WasiView};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
@@ -689,25 +689,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision {
-        let oplog_idx = if self.state.is_live() {
-            let needs_commit = match trap_type {
-                TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
-                TrapType::Interrupt(InterruptKind::Interrupt) => {
-                    Some((OplogEntry::interrupted(), true))
-                }
-                TrapType::Interrupt(InterruptKind::Suspend) => Some((OplogEntry::suspend(), false)),
-                TrapType::Exit => Some((OplogEntry::exited(), true)),
-                _ => None,
-            };
+        let needs_commit = match trap_type {
+            TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
+            TrapType::Interrupt(InterruptKind::Interrupt) => {
+                Some((OplogEntry::interrupted(), true))
+            }
+            TrapType::Interrupt(InterruptKind::Suspend) => Some((OplogEntry::suspend(), false)),
+            TrapType::Exit => Some((OplogEntry::exited(), true)),
+            _ => None,
+        };
 
-            if let Some((entry, store)) = needs_commit {
-                let oplog_idx = self.state.oplog.add_and_commit(entry).await;
+        let oplog_idx = if let Some((entry, store)) = needs_commit {
+            let oplog_idx = self.state.oplog.add_and_commit(entry).await;
 
-                if store {
-                    Some(oplog_idx)
-                } else {
-                    None
-                }
+            if store {
+                Some(oplog_idx)
             } else {
                 None
             }
@@ -740,6 +736,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         if updated_worker_status != WorkerStatus::Retrying
             && updated_worker_status != WorkerStatus::Running
         {
+            // Giving up, associating the stored result with the current and upcoming invocations
             if let Some(oplog_idx) = oplog_idx {
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
@@ -1750,13 +1747,6 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
             Ok(default_send_request(request, config))
         }
     }
-}
-
-struct Ready {}
-
-#[async_trait]
-impl Subscribe for Ready {
-    async fn ready(&mut self) {}
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

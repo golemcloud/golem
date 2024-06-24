@@ -153,6 +153,7 @@ fn create_use_and_drop_counters_non_blocking(component_id: &str) -> [u64; 3] {
 
     while !remaining.is_empty() {
         let poll_result = bindings::wasi::io::poll::poll(&remaining);
+        println!("Got poll result: {:?}", poll_result);
         for idx in &poll_result {
             let counter_idx = mapping[*idx as usize];
             println!("Got result for counter {}", counter_idx + 1);
@@ -161,12 +162,20 @@ fn create_use_and_drop_counters_non_blocking(component_id: &str) -> [u64; 3] {
                 .get()
                 .expect("future did not return a value because after marked as completed");
             values[counter_idx] = value;
-            remaining.remove(*idx as usize);
         }
 
-        for idx in poll_result {
-            mapping.remove(idx as usize);
-        }
+        remaining = remaining
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, item)| if poll_result.contains(&(idx as u32)) { None } else { Some(item) })
+            .collect();
+        mapping = mapping
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, item)| if poll_result.contains(&(idx as u32)) { None } else { Some(item) })
+            .collect();
+
+        println!("mapping at the end of the loop: {:?}", mapping);
     }
 
     println!("Counter1 value: {}", values[0]);
