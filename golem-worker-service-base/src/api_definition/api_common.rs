@@ -40,21 +40,6 @@ impl Display for ApiVersion {
     }
 }
 
-// // Constraints applicable to any type of API Definition
-// pub trait HasApiDefinitionId {
-//     fn get_api_definition_id(&self) -> ApiDefinitionId;
-// }
-//
-// pub trait HasVersion {
-//     fn get_version(&self) -> ApiVersion;
-// }
-//
-// pub trait HasIsDraft {
-//     // Editable. Can't be published.
-//     fn is_draft(&self) -> bool;
-//     fn set_not_draft(&mut self);
-// }
-
 pub trait HasGolemWorkerBindings {
     fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding>;
 }
