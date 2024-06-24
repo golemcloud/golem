@@ -128,7 +128,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Sqlite> {
                 SELECT namespace, host, subdomain, definition_id, definition_version
                 FROM api_deployments
                 WHERE
-                 (submdomain IS NULL AND host = $1) OR (subdomain IS NOT NULL AND CONCAT(subdomain, '.', host) = $1)
+                 (subdomain IS NULL AND host = $1) OR (subdomain IS NOT NULL AND CONCAT(subdomain, '.', host) = $1)
                 "#
         )
             .bind(site)
@@ -208,7 +208,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Postgres> {
                 SELECT namespace, host, subdomain, definition_id, definition_version
                 FROM api_deployments
                 WHERE
-                 (submdomain IS NULL AND host = $1) OR (subdomain IS NOT NULL AND CONCAT(subdomain, '.', host) = $1)
+                 (subdomain IS NULL AND host = $1) OR (subdomain IS NOT NULL AND CONCAT(subdomain, '.', host) = $1)
                 "#
         )
             .bind(site)

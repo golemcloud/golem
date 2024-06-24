@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use crate::api_definition::http::HttpApiDefinition;
 use golem_common::model::ComponentId;
 use golem_service_base::model::Component;
+use tracing::{error, info};
 
 use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::repo::api_definition::ApiDefinitionRecord;
@@ -31,10 +32,12 @@ pub enum ApiDefinitionError<E> {
     ValidationError(#[from] ValidationErrors<E>),
     #[error("Unable to fetch component: {0:?}")]
     ComponentNotFoundError(Vec<ComponentId>),
-    #[error("Api definition not found: {0}")]
+    #[error("API definition not found: {0}")]
     ApiDefinitionNotFound(ApiDefinitionId),
-    #[error("Api definition is not draft: {0}")]
+    #[error("API definition is not draft: {0}")]
     ApiDefinitionNotDraft(ApiDefinitionId),
+    #[error("API definition already exists: {0}")]
+    ApiDefinitionAlreadyExists(ApiDefinitionId),
     #[error("Internal error: {0}")]
     InternalError(String),
 }
@@ -133,7 +136,7 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
                     .get_latest(id, auth_ctx)
                     .await
                     .map_err(|e| {
-                        tracing::error!("Error getting latest component: {:?}", e);
+                        error!("Error getting latest component: {:?}", e);
                         id.clone()
                     })
             })
@@ -171,6 +174,28 @@ where
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
+        info!(
+            "Creating API definition - namespace: {}, id: {}, version: {}",
+            namespace,
+            definition.id.clone(),
+            definition.version.clone()
+        );
+
+        let exists = self
+            .definition_repo
+            .get_draft(
+                namespace.to_string().as_str(),
+                definition.id.0.as_str(),
+                definition.version.0.as_str(),
+            )
+            .await?;
+
+        if exists.is_some() {
+            return Err(ApiDefinitionError::ApiDefinitionAlreadyExists(
+                definition.id.clone(),
+            ));
+        }
+
         let components = self.get_all_components(definition, auth_ctx).await?;
 
         self.api_definition_validator
@@ -189,6 +214,12 @@ where
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
+        info!(
+            "Updating API definition - namespace: {}, id: {}, version: {}",
+            namespace,
+            definition.id.clone(),
+            definition.version.clone()
+        );
         let draft = self
             .definition_repo
             .get_draft(
@@ -234,6 +265,10 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<HttpApiDefinition>, ValidationError> {
+        info!(
+            "Get API definition - namespace: {}, id: {}, version: {}",
+            namespace, id, version
+        );
         let value = self
             .definition_repo
             .get(&namespace.to_string(), id.0.as_str(), version.0.as_str())
@@ -249,6 +284,10 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinitionId>, ValidationError> {
+        info!(
+            "Delete API definition - namespace: {}, id: {}, version: {}",
+            namespace, id, version
+        );
         let deleted = self
             .definition_repo
             .delete(&namespace.to_string(), id.0.as_str(), version.0.as_str())
@@ -264,6 +303,7 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
+        info!("Get all API definitions - namespace: {}", namespace);
         let values = self.definition_repo.get_all(&namespace.to_string()).await?;
 
         Ok(values.into_iter().map(|v| v.into()).collect())
@@ -275,6 +315,10 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
+        info!(
+            "Get all API definitions versions - namespace: {}, id: {}",
+            namespace, id
+        );
         let values = self
             .definition_repo
             .get_all_versions(&namespace.to_string(), id.0.as_str())

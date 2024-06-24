@@ -138,14 +138,13 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Sqlite> {
         sqlx::query(
             r#"
               UPDATE api_definitions
-              SET draft = $4
+              SET draft = false
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
         )
         .bind(namespace)
         .bind(id)
         .bind(version)
-        .bind(false)
         .execute(self.db_pool.deref())
         .await?;
 
@@ -270,14 +269,13 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Postgres> {
         sqlx::query(
             r#"
               UPDATE api_definitions
-              SET draft = $4
+              SET draft = false
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
         )
         .bind(namespace)
         .bind(id)
         .bind(version)
-        .bind(false)
         .execute(self.db_pool.deref())
         .await?;
 

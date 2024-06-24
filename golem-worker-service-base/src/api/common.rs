@@ -111,6 +111,9 @@ mod conversion {
                 ApiDefinitionServiceError::ApiDefinitionNotFound(_) => {
                     ApiEndpointError::not_found(error)
                 }
+                ApiDefinitionServiceError::ApiDefinitionAlreadyExists(_) => {
+                    ApiEndpointError::already_exists(error)
+                }
             }
         }
     }
@@ -118,27 +121,15 @@ mod conversion {
     impl<Namespace: Display> From<ApiDeploymentError<Namespace>> for ApiEndpointError {
         fn from(error: ApiDeploymentError<Namespace>) -> Self {
             match error {
-                ApiDeploymentError::InternalError(e) => ApiEndpointError::internal(e),
-                ApiDeploymentError::ApiDefinitionNotFound(namespace, id) => {
-                    ApiEndpointError::not_found(format!(
-                        "Api definition not found: {}/{}",
-                        namespace, id
-                    ))
+                ApiDeploymentError::InternalError(error) => ApiEndpointError::internal(error),
+                e @ ApiDeploymentError::ApiDefinitionNotFound(_, _) => {
+                    ApiEndpointError::not_found(e)
                 }
-                ApiDeploymentError::ApiDeploymentNotFound(namespace, host) => {
-                    ApiEndpointError::not_found(format!(
-                        "Api deployment not found: {}/{}",
-                        namespace, host
-                    ))
+                e @ ApiDeploymentError::ApiDeploymentNotFound(_, _) => {
+                    ApiEndpointError::not_found(e)
                 }
-                ApiDeploymentError::DeploymentConflict(conflict) => {
-                    ApiEndpointError::already_exists(format!("Deployment conflict: {}", conflict))
-                }
-                ApiDeploymentError::ConflictingDefinitions(conflicts) => {
-                    ApiEndpointError::already_exists(format!(
-                        "Conflicting API definitions during deployment: {}",
-                        conflicts.join(", ")
-                    ))
+                e @ ApiDeploymentError::ApiDeploymentConflict(_) => {
+                    ApiEndpointError::already_exists(e)
                 }
             }
         }
@@ -195,6 +186,11 @@ mod conversion {
                 },
                 ApiDefinitionServiceError::ApiDefinitionNotDraft(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotDraft(ErrorBody {
+                        error: error.to_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::ApiDefinitionAlreadyExists(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::AlreadyExists(ErrorBody {
                         error: error.to_string(),
                     })),
                 },
