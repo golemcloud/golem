@@ -37,6 +37,11 @@ pub trait ApiDeploymentService<Namespace> {
         site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
+    async fn get_definitions_by_site(
+        &self,
+        site: &ApiSiteString,
+    ) -> Result<Vec<HttpApiDefinition>, ApiDeploymentError<Namespace>>;
+
     async fn delete(
         &self,
         namespace: &Namespace,
@@ -324,6 +329,25 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         }
     }
 
+    async fn get_definitions_by_site(
+        &self,
+        site: &ApiSiteString,
+    ) -> Result<Vec<HttpApiDefinition>, ApiDeploymentError<Namespace>> {
+        info!("Get API definitions - site: {}", site);
+        let records = self
+            .deployment_repo
+            .get_definitions_by_site(site.to_string().as_str())
+            .await?;
+
+        let mut values: Vec<HttpApiDefinition> = vec![];
+
+        for record in records {
+            values.push(record.into());
+        }
+
+        Ok(values)
+    }
+
     async fn delete(
         &self,
         namespace: &Namespace,
@@ -388,6 +412,13 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         _site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
         Ok(None)
+    }
+
+    async fn get_definitions_by_site(
+        &self,
+        _site: &ApiSiteString,
+    ) -> Result<Vec<HttpApiDefinition>, ApiDeploymentError<Namespace>> {
+        Ok(vec![])
     }
 
     async fn delete(

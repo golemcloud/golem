@@ -1,8 +1,6 @@
-pub mod api_definition_lookup_impl;
 pub mod component;
 pub mod worker;
 
-use crate::service::api_definition_lookup_impl::CustomRequestDefinitionLookup;
 use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
 
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
@@ -16,7 +14,9 @@ use golem_worker_service_base::repo::api_deployment;
 use golem_worker_service_base::service::api_definition::{
     ApiDefinitionService, ApiDefinitionServiceDefault, ApiDefinitionServiceNoop,
 };
-use golem_worker_service_base::service::api_definition_lookup::ApiDefinitionsLookup;
+use golem_worker_service_base::service::api_definition_lookup::{
+    ApiDefinitionsLookup, HttpApiDefinitionLookup,
+};
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::component::{ComponentServiceNoop, RemoteComponentService};
@@ -146,10 +146,8 @@ impl Services {
                 api_definition_repo.clone(),
             ));
 
-        let http_definition_lookup_service = Arc::new(CustomRequestDefinitionLookup::new(
-            definition_service.clone(),
-            deployment_service.clone(),
-        ));
+        let http_definition_lookup_service =
+            Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));
 
         Ok(Services {
             worker_service,
@@ -196,10 +194,8 @@ impl Services {
         let deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send> =
             Arc::new(ApiDeploymentServiceNoop {});
 
-        let http_definition_lookup_service = Arc::new(CustomRequestDefinitionLookup::new(
-            definition_service.clone(),
-            deployment_service.clone(),
-        ));
+        let http_definition_lookup_service =
+            Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));
 
         Services {
             worker_service,
