@@ -32,28 +32,6 @@ impl HasGolemWorkerBindings for HttpApiDefinition {
     }
 }
 
-// impl HasApiDefinitionId for HttpApiDefinition {
-//     fn get_api_definition_id(&self) -> ApiDefinitionId {
-//         self.id.clone()
-//     }
-// }
-//
-// impl HasVersion for HttpApiDefinition {
-//     fn get_version(&self) -> ApiVersion {
-//         self.version.clone()
-//     }
-// }
-//
-// impl HasIsDraft for HttpApiDefinition {
-//     fn is_draft(&self) -> bool {
-//         self.draft
-//     }
-//
-//     fn set_not_draft(&mut self) {
-//         self.draft = false;
-//     }
-// }
-
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display, Encode, Decode, Enum,
 )]

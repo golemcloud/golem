@@ -51,16 +51,6 @@ workerService:
     grpc: 9007
   service:
     type: LoadBalancer
-  redis:
-    port: 6379
-    host: golem-redis-master
-    username: golem_user
-    database: 0
-    password:
-      plain: ""
-      fromSecret:
-        name: "" #golem-redis
-        key: password
   postgres:
     port: 5432
     host: golem-postgres-postgresql

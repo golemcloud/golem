@@ -11,6 +11,7 @@ use tracing::{error, info};
 
 use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::repo::api_definition::ApiDefinitionRecord;
+use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::RepoError;
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
@@ -101,7 +102,7 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
 
 pub struct ApiDefinitionServiceDefault<AuthCtx, ValidationError> {
     pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
-    pub definition_repo: Arc<dyn crate::repo::api_definition::ApiDefinitionRepo + Sync + Send>,
+    pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
     pub api_definition_validator:
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send>,
 }
@@ -109,7 +110,7 @@ pub struct ApiDefinitionServiceDefault<AuthCtx, ValidationError> {
 impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationError> {
     pub fn new(
         component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
-        definition_repo: Arc<dyn crate::repo::api_definition::ApiDefinitionRepo + Sync + Send>,
+        definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
         api_definition_validator: Arc<
             dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send,
         >,
@@ -339,20 +340,20 @@ where
 {
     async fn create(
         &self,
-        _definition: &HttpApiDefinition,
+        definition: &HttpApiDefinition,
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        todo!()
+        Ok(definition.id.clone())
     }
 
     async fn update(
         &self,
-        _definition: &HttpApiDefinition,
+        definition: &HttpApiDefinition,
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        todo!()
+        Ok(definition.id.clone())
     }
 
     async fn get(
@@ -362,7 +363,7 @@ where
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<HttpApiDefinition>, ValidationError> {
-        todo!()
+        Ok(None)
     }
 
     async fn delete(
@@ -372,7 +373,7 @@ where
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinitionId>, ValidationError> {
-        todo!()
+        Ok(None)
     }
 
     async fn get_all(
@@ -380,7 +381,7 @@ where
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
-        todo!()
+        Ok(vec![])
     }
 
     async fn get_all_versions(
@@ -389,6 +390,6 @@ where
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
-        todo!()
+        Ok(vec![])
     }
 }

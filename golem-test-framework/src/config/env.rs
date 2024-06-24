@@ -192,7 +192,6 @@ impl EnvBasedTestDependencies {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn WorkerService + Send + Sync + 'static> {
         if Self::use_docker() {
             Arc::new(
@@ -200,7 +199,6 @@ impl EnvBasedTestDependencies {
                     component_service,
                     shard_manager,
                     rdb,
-                    redis,
                     Self::default_verbosity(),
                 )
                 .await,
@@ -216,7 +214,6 @@ impl EnvBasedTestDependencies {
                     component_service,
                     shard_manager,
                     rdb,
-                    redis,
                     Self::default_verbosity(),
                     Self::default_stdout_level(),
                     Self::default_stderr_level(),
@@ -292,7 +289,6 @@ impl EnvBasedTestDependencies {
             component_service.clone(),
             shard_manager.clone(),
             rdb.clone(),
-            redis.clone(),
         )
         .await;
         let worker_executor_cluster = Self::make_worker_executor_cluster(

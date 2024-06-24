@@ -265,8 +265,6 @@ spec:
               value: {{.Values.env}}
             - name: GOLEM__ENVIRONMENT
               value: {{.Values.env}}
-            - name: REDIS_HOST
-              value: {{ .Values.workerService.redis.host }}
             - name: GOLEM__ROUTING_TABLE__HOST
               value: service-shard-manager-{{.Values.env}}
             - name: GOLEM__ROUTING_TABLE__PORT
@@ -291,27 +289,6 @@ spec:
               value: "{{ .Values.workerService.postgres.port }}"
             - name: GOLEM__DB__CONFIG__USERNAME
               value: {{ .Values.workerService.postgres.username }}
-            - name: GOLEM__REDIS__KEY_PREFIX
-              value: {{.Values.env}}
-            - name: GOLEM__REDIS__HOST
-              value: {{ .Values.workerService.redis.host }}
-            - name: GOLEM__REDIS__PORT
-              value: "{{ .Values.workerService.redis.port }}"
-            - name: GOLEM__REDIS__DATABASE
-              value: "{{ .Values.workerService.redis.database }}"
-            - name: GOLEM__REDIS__USERNAME
-              value: "{{ .Values.workerService.redis.username }}"
-{{- if .Values.workerService.redis.password.plain }}
-            - name: GOLEM__REDIS__PASSWORD
-              value: "{{ .Values.workerService.redis.password.plain }}"
-{{- end }}
-{{- if .Values.workerService.redis.password.fromSecret.name }}
-            - name: GOLEM__REDIS__PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.workerService.redis.password.fromSecret.name }}
-                  key: {{ .Values.workerService.redis.password.fromSecret.key }}
-{{- end }}
             - name: WASMTIME_BACKTRACE_DETAILS
               value: "1"
             - name: RUST_BACKTRACE

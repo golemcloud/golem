@@ -97,9 +97,6 @@ services:
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
-      - GOLEM__REDIS__HOST=redis
-      - GOLEM__REDIS__PORT=${REDIS_PORT}
-      - GOLEM__REDIS__DATABASE=1
       - GOLEM__DB__TYPE=Postgres
       - GOLEM__DB__CONFIG__DATABASE=golem_db
       - GOLEM__DB__CONFIG__SCHEMA=golem_worker
@@ -123,7 +120,6 @@ services:
       - "${WORKER_SERVICE_GRPC_PORT}:${WORKER_SERVICE_GRPC_PORT}"
     depends_on:
       - postgres
-      - redis
 
   golem-component-compilation-service:
     build:

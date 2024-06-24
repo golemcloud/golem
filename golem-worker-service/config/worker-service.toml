@@ -14,20 +14,6 @@ type = "Sqlite"
 max_connections = 10
 database = "../data/golem_worker.sqlite"
 
-[redis]
-host = "localhost"
-port = 6380
-database = 1
-tracing = false
-pool_size = 8
-key_prefix = ""
-
-[redis.retries]
-max_attempts = 5
-min_delay = "100ms"
-max_delay = "2s"
-multiplier = 2
-
 [component_service]
 host = "localhost"
 port = 9090

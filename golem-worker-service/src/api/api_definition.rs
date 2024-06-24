@@ -101,7 +101,11 @@ impl RegisterApiDefinitionApi {
         }
 
         self.definition_service
-            .update(&definition, &EmptyNamespace::default(), &EmptyAuthCtx {})
+            .update(
+                &definition,
+                &EmptyNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .map_err(|e| {
                 error!("API Definition ID: {} - update error: {e:?}", definition.id);
@@ -139,7 +143,7 @@ impl RegisterApiDefinitionApi {
                 &api_definition_id,
                 &api_version,
                 &EmptyNamespace::default(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -173,7 +177,7 @@ impl RegisterApiDefinitionApi {
                 &api_definition_id,
                 &api_definition_version,
                 &EmptyNamespace::default(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -191,11 +195,11 @@ impl RegisterApiDefinitionApi {
     ) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
         let data = if let Some(id) = api_definition_id_query.0 {
             self.definition_service
-                .get_all_versions(&id, &EmptyNamespace::default(), &EmptyAuthCtx {})
+                .get_all_versions(&id, &EmptyNamespace::default(), &EmptyAuthCtx::default())
                 .await?
         } else {
             self.definition_service
-                .get_all(&EmptyNamespace::default(), &EmptyAuthCtx {})
+                .get_all(&EmptyNamespace::default(), &EmptyAuthCtx::default())
                 .await?
         };
 
@@ -212,7 +216,11 @@ impl RegisterApiDefinitionApi {
 impl RegisterApiDefinitionApi {
     async fn create_api(&self, definition: &CoreHttpApiDefinition) -> Result<(), ApiEndpointError> {
         self.definition_service
-            .create(definition, &EmptyNamespace::default(), &EmptyAuthCtx {})
+            .create(
+                definition,
+                &EmptyNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .map_err(|e| {
                 error!(

@@ -73,7 +73,7 @@ impl ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> for CustomRequest
                     &api_def.id,
                     &api_def.version,
                     &api_deployment.namespace,
-                    &EmptyAuthCtx {},
+                    &EmptyAuthCtx::default(),
                 )
                 .await
                 .map_err(|err| {

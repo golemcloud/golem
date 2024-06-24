@@ -5,11 +5,14 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::api_definition::http::{AllPathPatterns, HttpApiDefinition, Route};
+
 use crate::http::router::{Router, RouterPattern};
+use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRecord;
+use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::repo::RepoError;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use std::fmt::Display;
@@ -102,14 +105,14 @@ impl ConflictChecker for HttpApiDefinition {
 }
 
 pub struct ApiDeploymentServiceDefault {
-    pub deployment_repo: Arc<dyn crate::repo::api_deployment::ApiDeploymentRepo + Sync + Send>,
-    pub definition_repo: Arc<dyn crate::repo::api_definition::ApiDefinitionRepo + Sync + Send>,
+    pub deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
+    pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
 }
 
 impl ApiDeploymentServiceDefault {
     pub fn new(
-        deployment_repo: Arc<dyn crate::repo::api_deployment::ApiDeploymentRepo + Sync + Send>,
-        definition_repo: Arc<dyn crate::repo::api_definition::ApiDefinitionRepo + Sync + Send>,
+        deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
+        definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
     ) -> Self {
         Self {
             deployment_repo,
@@ -127,7 +130,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(
-            "Deploying api definitions - namespace: {}, site: {}",
+            "Deploying API definitions - namespace: {}, site: {}",
             deployment.namespace, deployment.site
         );
 
@@ -145,10 +148,10 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                 || deployment_record.host != deployment.site.host
             {
                 error!(
-                         "Failed to deploy API definition of namespace: {}, site: {} - site used by another API (under another namespace/API)",
-                        &deployment.namespace,
-                        &deployment.site,
-                    );
+                    "Failed to deploy API definition of namespace: {}, site: {} - site used by another API (under another namespace/API)",
+                    &deployment.namespace,
+                    &deployment.site,
+                );
                 return Err(ApiDeploymentError::ApiDeploymentConflict(
                     ApiSiteString::from(&ApiSite {
                         host: deployment_record.host,
@@ -203,7 +206,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
 
         if !new_deployment_records.is_empty() {
             for api_definition_key in set_not_draft {
-                info!(
+                debug!(
                     "Set API definition as not draft - namespace: {}, definition id: {}, definition version: {}",
                     deployment.namespace, api_definition_key.id, api_definition_key.version
                 );
@@ -345,10 +348,10 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
             .any(|value| value.namespace != namespace.to_string())
         {
             error!(
-                         "Failed to delete API deployment - namespace: {}, site: {} - site used by another API (under another namespace/API)",
-                        namespace,
-                        &site,
-                    );
+                "Failed to delete API deployment - namespace: {}, site: {} - site used by another API (under another namespace/API)",
+                namespace,
+                &site
+            );
             Err(ApiDeploymentError::ApiDeploymentConflict(site.clone()))
         } else {
             self.deployment_repo
@@ -369,7 +372,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         &self,
         _deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
-        todo!()
+        Ok(())
     }
 
     async fn get_by_id(
@@ -377,14 +380,14 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         _namespace: &Namespace,
         _api_definition_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
-        todo!()
+        Ok(vec![])
     }
 
     async fn get_by_site(
         &self,
         _site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
-        todo!()
+        Ok(None)
     }
 
     async fn delete(
@@ -392,6 +395,6 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         _namespace: &Namespace,
         _site: &ApiSiteString,
     ) -> Result<bool, ApiDeploymentError<Namespace>> {
-        todo!()
+        Ok(false)
     }
 }

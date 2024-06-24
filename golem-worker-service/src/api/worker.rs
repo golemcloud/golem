@@ -37,7 +37,7 @@ impl WorkerApi {
         let component_id = component_id.0;
         let latest_component = self
             .component_service
-            .get_latest(&component_id, &EmptyAuthCtx {})
+            .get_latest(&component_id, &EmptyAuthCtx::default())
             .await
             .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
             .map_err(|error| {
@@ -60,7 +60,7 @@ impl WorkerApi {
                 args,
                 env,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -83,7 +83,11 @@ impl WorkerApi {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service
-            .delete(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
+            .delete(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
             .await?;
 
         Ok(Json(DeleteWorkerResponse {}))
@@ -117,7 +121,7 @@ impl WorkerApi {
                 &calling_convention,
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -147,7 +151,7 @@ impl WorkerApi {
                 params.0.params,
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -175,7 +179,7 @@ impl WorkerApi {
                 oplog_idx,
                 data,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -200,7 +204,7 @@ impl WorkerApi {
                 &worker_id,
                 recover_immediately.0.unwrap_or(false),
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -220,7 +224,11 @@ impl WorkerApi {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
         let result = self
             .worker_service
-            .get_metadata(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
+            .get_metadata(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
             .await?;
 
         Ok(Json(result))
@@ -264,7 +272,7 @@ impl WorkerApi {
                 count.0.unwrap_or(50),
                 precise.0.unwrap_or(false),
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -290,7 +298,7 @@ impl WorkerApi {
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -310,7 +318,11 @@ impl WorkerApi {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
         self.worker_service
-            .resume(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
+            .resume(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
             .await?;
 
         Ok(Json(ResumeResponse {}))
@@ -335,7 +347,7 @@ impl WorkerApi {
                 params.mode.clone().into(),
                 params.target_version,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 

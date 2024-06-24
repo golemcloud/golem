@@ -1,6 +1,5 @@
 pub mod api_definition;
 pub mod api_deployment;
-pub mod api_namespace;
 
 use std::fmt::Display;
 

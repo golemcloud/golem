@@ -172,7 +172,7 @@ impl GrpcApiDefinitionService {
             .create(
                 &internal_definition,
                 &EmptyNamespace::default(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -205,7 +205,7 @@ impl GrpcApiDefinitionService {
             .update(
                 &internal_definition,
                 &EmptyNamespace::default(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -230,7 +230,7 @@ impl GrpcApiDefinitionService {
                 &api_definition_id,
                 &version,
                 &EmptyNamespace::default(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?
             .ok_or_else(|| {
@@ -256,7 +256,7 @@ impl GrpcApiDefinitionService {
             .get_all_versions(
                 &api_definition_id,
                 &EmptyNamespace::default(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -275,7 +275,7 @@ impl GrpcApiDefinitionService {
     ) -> Result<Vec<GrpcApiDefinition>, ApiDefinitionError> {
         let definitions = self
             .definition_service
-            .get_all(&EmptyNamespace::default(), &EmptyAuthCtx {})
+            .get_all(&EmptyNamespace::default(), &EmptyAuthCtx::default())
             .await?;
 
         let definitions = definitions
@@ -300,7 +300,7 @@ impl GrpcApiDefinitionService {
                 &api_definition_id,
                 &version,
                 &EmptyNamespace::default(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
