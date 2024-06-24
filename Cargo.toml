@@ -10,6 +10,7 @@ members = [
     "golem-component-compilation-service",
     "golem-component-service-base",
     "golem-component-service",
+    "golem-rib",
     "golem-test-framework",
     "golem-shard-manager",
     "golem-worker-executor-base",

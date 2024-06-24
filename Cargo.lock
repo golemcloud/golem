@@ -3430,6 +3430,7 @@ dependencies = [
  "fred",
  "futures-core",
  "golem-api-grpc",
+ "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "humantime-serde",
@@ -3572,6 +3573,20 @@ dependencies = [
  "openapiv3",
  "serde 1.0.203",
  "serde_yaml",
+]
+
+[[package]]
+name = "golem-rib"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "combine",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "semver",
+ "serde 1.0.203",
+ "serde_json",
+ "wasm-wave",
 ]
 
 [[package]]
