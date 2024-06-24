@@ -69,8 +69,8 @@ pub async fn create_postgres_pool(
 pub async fn postgres_migrate(config: &DbPostgresConfig, path: &str) -> Result<(), Box<dyn Error>> {
     let schema = config.schema.clone().unwrap_or("public".to_string());
     info!(
-        "DB migration: postgresql://{}:{}/{}?currentSchema={}",
-        config.host, config.port, config.database, schema
+        "DB migration: postgresql://{}:{}/{}?currentSchema={}, path: {}",
+        config.host, config.port, config.database, schema, path
     );
     let conn_options = PgConnectOptions::from(config);
     let mut conn = PgConnection::connect_with(&conn_options).await?;
@@ -108,7 +108,7 @@ pub async fn create_sqlite_pool(config: &DbSqliteConfig) -> Result<Pool<Sqlite>,
 }
 
 pub async fn sqlite_migrate(config: &DbSqliteConfig, path: &str) -> Result<(), Box<dyn Error>> {
-    info!("DB migration: sqlite://{}", config.database);
+    info!("DB migration: sqlite://{}, path: {}", config.database, path);
     let conn_options = SqliteConnectOptions::from(config);
     let mut conn = SqliteConnection::connect_with(&conn_options).await?;
     let migrator = sqlx::migrate::Migrator::new(Path::new(path)).await?;

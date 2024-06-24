@@ -88,21 +88,29 @@ mod conversion {
     use poem_openapi::payload::Json;
     use std::fmt::Display;
 
-    use crate::service::api_definition::ApiRegistrationError;
+    use crate::service::api_definition::ApiDefinitionError as ApiDefinitionServiceError;
     use crate::service::api_definition_validator::ValidationErrors;
     use crate::service::api_deployment::ApiDeploymentError;
     use crate::service::http::http_api_definition_validator::RouteValidationError;
 
     use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
 
-    impl From<ApiRegistrationError<RouteValidationError>> for ApiEndpointError {
-        fn from(error: ApiRegistrationError<RouteValidationError>) -> Self {
+    impl From<ApiDefinitionServiceError<RouteValidationError>> for ApiEndpointError {
+        fn from(error: ApiDefinitionServiceError<RouteValidationError>) -> Self {
             match error {
-                ApiRegistrationError::ValidationError(e) => e.into(),
-                e @ ApiRegistrationError::ComponentNotFoundError(_) => {
+                ApiDefinitionServiceError::ValidationError(e) => e.into(),
+                e @ ApiDefinitionServiceError::ComponentNotFoundError(_) => {
                     ApiEndpointError::bad_request(e)
                 }
-                ApiRegistrationError::InternalError(error) => ApiEndpointError::internal(error),
+                ApiDefinitionServiceError::InternalError(error) => {
+                    ApiEndpointError::internal(error)
+                }
+                ApiDefinitionServiceError::ApiDefinitionNotDraft(_) => {
+                    ApiEndpointError::bad_request(error)
+                }
+                ApiDefinitionServiceError::ApiDefinitionNotFound(_) => {
+                    ApiEndpointError::not_found(error)
+                }
             }
         }
     }
@@ -155,10 +163,10 @@ mod conversion {
         }
     }
 
-    impl From<ApiRegistrationError<RouteValidationError>> for ApiDefinitionError {
-        fn from(error: ApiRegistrationError<RouteValidationError>) -> ApiDefinitionError {
+    impl From<ApiDefinitionServiceError<RouteValidationError>> for ApiDefinitionError {
+        fn from(error: ApiDefinitionServiceError<RouteValidationError>) -> ApiDefinitionError {
             match error {
-                ApiRegistrationError::ValidationError(e) => {
+                ApiDefinitionServiceError::ValidationError(e) => {
                     let errors = e
                         .errors
                         .into_iter()
@@ -175,12 +183,22 @@ mod conversion {
                         )),
                     }
                 }
-                ApiRegistrationError::ComponentNotFoundError(_) => ApiDefinitionError {
+                ApiDefinitionServiceError::ComponentNotFoundError(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
                         error: error.to_string(),
                     })),
                 },
-                ApiRegistrationError::InternalError(error) => ApiDefinitionError {
+                ApiDefinitionServiceError::ApiDefinitionNotFound(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::NotFound(ErrorBody {
+                        error: error.to_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::ApiDefinitionNotDraft(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::NotDraft(ErrorBody {
+                        error: error.to_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::InternalError(error) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_string(),
                     })),

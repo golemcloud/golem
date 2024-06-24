@@ -367,13 +367,12 @@ impl Default for InMemoryApiDefinitionRepo {
 #[async_trait]
 impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
     async fn create(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        let mut registry = self.registry.lock().unwrap();
-
         let key = (
             definition.namespace.clone(),
             definition.id.clone(),
             definition.version.clone(),
         );
+        let mut registry = self.registry.lock().unwrap();
         if let std::collections::hash_map::Entry::Vacant(e) = registry.entry(key.clone()) {
             e.insert(definition.clone());
             Ok(())
@@ -385,29 +384,14 @@ impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
     }
 
     async fn update(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        match self
-            .get(
-                definition.namespace.as_str(),
-                definition.id.as_str(),
-                definition.version.as_str(),
-            )
-            .await?
-        {
-            None => Err(RepoError::Internal("ApiDefinition not found".to_string())),
-            Some(old) if !old.draft => {
-                Err(RepoError::Internal("ApiDefinition not draft".to_string()))
-            }
-            Some(_) => {
-                let mut registry = self.registry.lock().unwrap();
-                let key = (
-                    definition.namespace.clone(),
-                    definition.id.clone(),
-                    definition.version.clone(),
-                );
-                registry.insert(key.clone(), definition.clone());
-                Ok(())
-            }
-        }
+        let key = (
+            definition.namespace.clone(),
+            definition.id.clone(),
+            definition.version.clone(),
+        );
+        let mut registry = self.registry.lock().unwrap();
+        registry.insert(key.clone(), definition.clone());
+        Ok(())
     }
 
     async fn set_not_draft(
@@ -417,14 +401,13 @@ impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
         version: &str,
     ) -> Result<(), RepoError> {
         match self.get(namespace, id, version).await? {
-            None => Err(RepoError::Internal("ApiDefinition not found".to_string())),
-            Some(old) if !old.draft => Ok(()),
-            Some(_) => {
+            Some(v) if v.draft => {
                 let mut registry = self.registry.lock().unwrap();
                 let key = (namespace.to_string(), id.to_string(), version.to_string());
                 registry.entry(key.clone()).and_modify(|v| v.draft = false);
                 Ok(())
             }
+            _ => Ok(()),
         }
     }
 
@@ -475,6 +458,7 @@ impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
         id: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
         let registry = self.registry.lock().unwrap();
+
         let result = registry
             .iter()
             .filter(|(k, _)| k.0 == *namespace && k.1 == *id)

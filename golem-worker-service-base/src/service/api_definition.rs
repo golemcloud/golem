@@ -15,7 +15,7 @@ use crate::repo::RepoError;
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 use super::component::ComponentService;
 
-pub type ApiResult<T, E> = Result<T, ApiRegistrationError<E>>;
+pub type ApiResult<T, E> = Result<T, ApiDefinitionError<E>>;
 
 #[derive(
     Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
@@ -26,19 +26,23 @@ pub struct ApiDefinitionIdWithVersion {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ApiRegistrationError<E> {
+pub enum ApiDefinitionError<E> {
     #[error(transparent)]
     ValidationError(#[from] ValidationErrors<E>),
     #[error("Unable to fetch component: {0:?}")]
     ComponentNotFoundError(Vec<ComponentId>),
+    #[error("Api definition not found: {0}")]
+    ApiDefinitionNotFound(ApiDefinitionId),
+    #[error("Api definition is not draft: {0}")]
+    ApiDefinitionNotDraft(ApiDefinitionId),
     #[error("Internal error: {0}")]
     InternalError(String),
 }
 
-impl<E> From<RepoError> for ApiRegistrationError<E> {
+impl<E> From<RepoError> for ApiDefinitionError<E> {
     fn from(error: RepoError) -> Self {
         match error {
-            RepoError::Internal(e) => ApiRegistrationError::InternalError(e.clone()),
+            RepoError::Internal(e) => ApiDefinitionError::InternalError(e.clone()),
         }
     }
 }
@@ -118,7 +122,7 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
         &self,
         definition: &HttpApiDefinition,
         auth_ctx: &AuthCtx,
-    ) -> Result<Vec<Component>, ApiRegistrationError<ValidationError>> {
+    ) -> Result<Vec<Component>, ApiDefinitionError<ValidationError>> {
         let get_components = definition
             .get_golem_worker_bindings()
             .iter()
@@ -144,7 +148,7 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
             // Ensure that all components were retrieved.
             if !errors.is_empty() {
                 let errors: Vec<ComponentId> = errors.into_iter().map(|r| r.unwrap_err()).collect();
-                return Err(ApiRegistrationError::ComponentNotFoundError(errors));
+                return Err(ApiDefinitionError::ComponentNotFoundError(errors));
             }
 
             successes.into_iter().map(|r| r.unwrap()).collect()
@@ -185,6 +189,29 @@ where
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
+        let draft = self
+            .definition_repo
+            .get_draft(
+                namespace.to_string().as_str(),
+                definition.id.0.as_str(),
+                definition.version.0.as_str(),
+            )
+            .await?;
+
+        match draft {
+            Some(draft) if !draft => {
+                return Err(ApiDefinitionError::ApiDefinitionNotDraft(
+                    definition.id.clone(),
+                ))
+            }
+            None => {
+                return Err(ApiDefinitionError::ApiDefinitionNotFound(
+                    definition.id.clone(),
+                ))
+            }
+            _ => (),
+        }
+
         let components = self.get_all_components(definition, auth_ctx).await?;
 
         self.api_definition_validator

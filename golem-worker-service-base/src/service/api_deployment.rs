@@ -175,15 +175,17 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                     )
                     .await?;
 
-                if let Some(draft) = draft {
-                    if draft {
+                match draft {
+                    None => {
+                        return Err(ApiDeploymentError::ApiDefinitionNotFound(
+                            deployment.namespace.clone(),
+                            api_definition_key.id.clone(),
+                        ));
+                    }
+                    Some(draft) if !draft => {
                         set_not_draft.push(api_definition_key.clone());
                     }
-                } else {
-                    return Err(ApiDeploymentError::ApiDefinitionNotFound(
-                        deployment.namespace.clone(),
-                        api_definition_key.id.clone(),
-                    ));
+                    _ => (),
                 }
 
                 new_deployment_records.push(ApiDeploymentRecord {
