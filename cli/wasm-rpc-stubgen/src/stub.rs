@@ -264,6 +264,14 @@ impl FunctionStub {
             }
         })
     }
+
+    pub fn async_result_type(&self, owner: &InterfaceStub) -> String {
+        if owner.is_resource() {
+            format!("future-{}-{}-result", owner.name, self.name)
+        } else {
+            format!("future-{}-result", self.name)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

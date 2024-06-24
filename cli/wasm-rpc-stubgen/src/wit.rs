@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::stub::{
-    FunctionParamStub, FunctionResultStub, InterfaceStubImport, InterfaceStubTypeDef,
-    StubDefinition,
+    FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubImport,
+    InterfaceStubTypeDef, StubDefinition,
 };
 use anyhow::{anyhow, bail, Context};
 use indexmap::IndexMap;
@@ -66,6 +66,7 @@ pub fn get_stub_wit(
         .collect::<IndexMap<_, _>>();
 
     writeln!(out, "  use golem:rpc/types@0.1.0.{{uri}};")?;
+    writeln!(out, "  use wasi:io/poll@0.2.0.{{pollable}};")?;
 
     match type_gen_strategy {
         StubTypeGen::ImportRootTypes => {
@@ -94,6 +95,21 @@ pub fn get_stub_wit(
         }
     }
 
+    // Generating async return types
+    for interface in &def.interfaces {
+        for function in &interface.functions {
+            if !function.results.is_empty() {
+                write_async_return_type(&mut out, function, interface, def)?;
+            }
+        }
+        for function in &interface.static_functions {
+            if !function.results.is_empty() {
+                write_async_return_type(&mut out, function, interface, def)?;
+            }
+        }
+    }
+
+    // Generating function definitions
     for interface in &def.interfaces {
         writeln!(out, "  resource {} {{", &interface.name)?;
         match &interface.constructor_params {
@@ -110,59 +126,10 @@ pub fn get_stub_wit(
             }
         }
         for function in &interface.functions {
-            if !function.results.is_empty() {
-                write!(out, "    {}: func(", function.name)?;
-                write_param_list(&mut out, def, &function.params)?;
-                write!(out, ")")?;
-                write!(out, " -> ")?;
-                match &function.results {
-                    FunctionResultStub::Single(typ) => {
-                        write!(out, "{}", typ.wit_type_string(&def.resolve)?)?;
-                    }
-                    FunctionResultStub::Multi(params) => {
-                        write!(out, "(")?;
-                        write_param_list(&mut out, def, params)?;
-                        write!(out, ")")?;
-                    }
-                    FunctionResultStub::SelfType => {
-                        return Err(anyhow!("Unexpected return type in wit generator"));
-                    }
-                }
-            } else {
-                // Write the blocking function
-                write!(out, "    blocking-{}: func(", function.name)?;
-                write_param_list(&mut out, def, &function.params)?;
-                write!(out, ")")?;
-                writeln!(out, ";")?;
-
-                // Write the non blocking function
-                write!(out, "    {}: func(", function.name)?;
-                write_param_list(&mut out, def, &function.params)?;
-                write!(out, ")")?;
-            }
-            writeln!(out, ";")?;
+            write_function_definition(&mut out, function, false, interface, def)?;
         }
         for function in &interface.static_functions {
-            write!(out, "    {}: static func(", function.name)?;
-            write_param_list(&mut out, def, &function.params)?;
-            write!(out, ")")?;
-            if !function.results.is_empty() {
-                write!(out, " -> ")?;
-                match &function.results {
-                    FunctionResultStub::Single(typ) => {
-                        write!(out, "{}", typ.wit_type_string(&def.resolve)?)?;
-                    }
-                    FunctionResultStub::Multi(params) => {
-                        write!(out, "(")?;
-                        write_param_list(&mut out, def, params)?;
-                        write!(out, ")")?;
-                    }
-                    FunctionResultStub::SelfType => {
-                        return Err(anyhow!("Unexpected return type in wit generator"));
-                    }
-                }
-            }
-            writeln!(out, ";")?;
+            write_function_definition(&mut out, function, true, interface, def)?;
         }
         writeln!(out, "  }}")?;
         writeln!(out)?;
@@ -180,6 +147,79 @@ pub fn get_stub_wit(
     writeln!(out, "}}")?;
 
     Ok(out)
+}
+
+fn write_function_definition(
+    out: &mut String,
+    function: &FunctionStub,
+    is_static: bool,
+    owner: &InterfaceStub,
+    def: &StubDefinition,
+) -> anyhow::Result<()> {
+    let func = if is_static { "static_func" } else { "func" };
+    if !function.results.is_empty() {
+        // Write the blocking function
+        write!(out, "    blocking-{}: {func}(", function.name)?;
+        write_param_list(out, def, &function.params)?;
+        write!(out, ")")?;
+        write!(out, " -> ")?;
+        write_function_result_type(out, function, def)?;
+        writeln!(out, ";")?;
+        // Write the non-blocking function
+        write!(out, "    {}: {func}(", function.name)?;
+        write_param_list(out, def, &function.params)?;
+        write!(out, ")")?;
+        write!(out, " -> {}", function.async_result_type(owner))?;
+    } else {
+        // Write the blocking function
+        write!(out, "    blocking-{}: {func}(", function.name)?;
+        write_param_list(out, def, &function.params)?;
+        write!(out, ")")?;
+        writeln!(out, ";")?;
+
+        // Write the non-blocking function
+        write!(out, "    {}: {func}(", function.name)?;
+        write_param_list(out, def, &function.params)?;
+        write!(out, ")")?;
+    }
+    writeln!(out, ";")?;
+    Ok(())
+}
+
+fn write_async_return_type(
+    out: &mut String,
+    function: &FunctionStub,
+    owner: &InterfaceStub,
+    def: &StubDefinition,
+) -> anyhow::Result<()> {
+    writeln!(out, "  resource {} {{", function.async_result_type(owner))?;
+    writeln!(out, "    subscribe: func() -> pollable;")?;
+    write!(out, "    get: func() -> option<")?;
+    write_function_result_type(out, function, def)?;
+    writeln!(out, ">;")?;
+    writeln!(out, "  }}")?;
+    Ok(())
+}
+
+fn write_function_result_type(
+    out: &mut String,
+    function: &FunctionStub,
+    def: &StubDefinition,
+) -> anyhow::Result<()> {
+    match &function.results {
+        FunctionResultStub::Single(typ) => {
+            write!(out, "{}", typ.wit_type_string(&def.resolve)?)?;
+        }
+        FunctionResultStub::Multi(params) => {
+            write!(out, "(")?;
+            write_param_list(out, def, params)?;
+            write!(out, ")")?;
+        }
+        FunctionResultStub::SelfType => {
+            return Err(anyhow!("Unexpected return type in wit generator"));
+        }
+    }
+    Ok(())
 }
 
 fn write_type_def(
@@ -529,6 +569,15 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
         wasm_rpc_root.join(Path::new("wasm-rpc.wit")),
         golem_wasm_rpc::WASM_RPC_WIT,
     )?;
+
+    let wasi_poll_root = dest_wit_root.join(Path::new("deps/io"));
+    fs::create_dir_all(&wasi_poll_root).unwrap();
+    println!("Writing poll.wit to {}", wasi_poll_root.to_string_lossy());
+    fs::write(
+        wasi_poll_root.join(Path::new("poll.wit")),
+        golem_wasm_rpc::WASI_POLL_WIT,
+    )?;
+
     Ok(())
 }
 

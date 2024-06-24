@@ -88,6 +88,14 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
             path: "wit/deps/wasm-rpc".to_string(),
         },
     );
+
+    wit_dependencies.insert(
+        "wasi:io".to_string(),
+        WitDependency {
+            path: "wit/deps/io".to_string(),
+        },
+    );
+
     for dep in &def.unresolved_deps {
         let dep_package = &dep.name;
         let stub_package_name = format!("{}-stub", def.root_package_name);
