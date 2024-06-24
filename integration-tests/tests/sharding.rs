@@ -61,7 +61,6 @@ pub static TRACING: Tracing = Tracing::init();
 
 #[tokio::test]
 #[tracing::instrument]
-#[ignore] // TODO: Re-enable when sharding manager is fixed
 async fn service_is_responsive_to_shard_changes() {
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
     let chaos = std::thread::spawn(|| {
@@ -100,7 +99,6 @@ async fn service_is_responsive_to_shard_changes() {
 
 #[tokio::test]
 #[tracing::instrument]
-#[ignore] // TODO: Re-enable when sharding manager is fixed
 async fn coordinated_scenario1() {
     coordinated_scenario(
         1,
@@ -283,7 +281,7 @@ async fn invoke_and_await_workers(workers: &[WorkerId]) -> Result<(), worker::wo
             DEPS.invoke_and_await_with_key(
                 &worker_id_clone,
                 &idempotency_key,
-                "golem:it/api/echo",
+                "golem:it/api.{echo}",
                 vec![Value::Option(Some(Box::new(Value::String(
                     "Hello".to_string(),
                 ))))],
