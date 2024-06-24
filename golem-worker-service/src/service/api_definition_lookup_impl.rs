@@ -50,7 +50,7 @@ impl ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> for CustomRequest
 
         let api_deployment = self
             .deployment_service
-            .get_by_host(&host)
+            .get_by_site(&host)
             .await
             .map_err(|err| {
                 error!("Error getting api deployment from the repo: {:?}", err);

@@ -113,7 +113,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Sqlite> {
     async fn update(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
         sqlx::query(
             r#"
-              UPATE api_definitions
+              UPDATE api_definitions
               SET draft = $4, data = $5::jsonb
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
@@ -137,7 +137,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Sqlite> {
     ) -> Result<(), RepoError> {
         sqlx::query(
             r#"
-              UPATE api_definitions
+              UPDATE api_definitions
               SET draft = $4
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
@@ -245,7 +245,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Postgres> {
     async fn update(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
         sqlx::query(
             r#"
-              UPATE api_definitions
+              UPDATE api_definitions
               SET draft = $4, data = $5::jsonb
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
@@ -269,7 +269,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Postgres> {
     ) -> Result<(), RepoError> {
         sqlx::query(
             r#"
-              UPATE api_definitions
+              UPDATE api_definitions
               SET draft = $4
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
@@ -429,7 +429,6 @@ impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
         version: &str,
     ) -> Result<Option<bool>, RepoError> {
         let value = self.get(namespace, id, version).await?;
-
         Ok(value.map(|v| v.draft))
     }
 
@@ -442,13 +441,11 @@ impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
         let registry = self.registry.lock().unwrap();
-
         let result: Vec<ApiDefinitionRecord> = registry
             .iter()
             .filter(|(k, _)| k.0 == *namespace)
             .map(|(_, v)| v.clone())
             .collect();
-
         Ok(result)
     }
 
@@ -458,13 +455,11 @@ impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
         id: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
         let registry = self.registry.lock().unwrap();
-
         let result = registry
             .iter()
             .filter(|(k, _)| k.0 == *namespace && k.1 == *id)
             .map(|(_, v)| v.clone())
             .collect();
-
         Ok(result)
     }
 }

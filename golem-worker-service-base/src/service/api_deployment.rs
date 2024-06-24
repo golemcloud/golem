@@ -29,15 +29,15 @@ pub trait ApiDeploymentService<Namespace> {
         api_definition_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
-    async fn get_by_host(
+    async fn get_by_site(
         &self,
-        host: &ApiSiteString,
+        site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
     async fn delete(
         &self,
         namespace: &Namespace,
-        host: &ApiSiteString,
+        site: &ApiSiteString,
     ) -> Result<bool, ApiDeploymentError<Namespace>>;
 }
 
@@ -262,7 +262,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         Ok(values)
     }
 
-    async fn get_by_host(
+    async fn get_by_site(
         &self,
         site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
@@ -362,9 +362,9 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         todo!()
     }
 
-    async fn get_by_host(
+    async fn get_by_site(
         &self,
-        _host: &ApiSiteString,
+        _site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
         todo!()
     }
@@ -372,7 +372,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
     async fn delete(
         &self,
         _namespace: &Namespace,
-        _host: &ApiSiteString,
+        _site: &ApiSiteString,
     ) -> Result<bool, ApiDeploymentError<Namespace>> {
         todo!()
     }
