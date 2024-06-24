@@ -47,7 +47,8 @@ impl Rebalance {
         let initial_target_pods: Vec<usize> = routing_table_entries
             .iter()
             .enumerate()
-            .filter_map(|(idx, entry)| entry.shard_ids.is_empty().then(|| idx))
+            .filter(|&(_idx, entry)| entry.shard_ids.is_empty())
+            .map(|(idx, _entry)| idx)
             .collect();
         let optimal_count = routing_table.number_of_shards / pod_count;
         let upper_threshold = (optimal_count as f64 * (1.0 + threshold)).ceil() as usize;
@@ -72,8 +73,8 @@ impl Rebalance {
                     shard,
                     target_idx
                 );
-                assignments.assign(routing_table_entry.pod.clone(), shard.clone());
-                routing_table_entry.shard_ids.insert(shard.clone());
+                assignments.assign(routing_table_entry.pod.clone(), shard);
+                routing_table_entry.shard_ids.insert(shard);
 
                 // If the last pod is at optimal count, then all pods are at optimal count
                 if idx == last_pod_idx && routing_table_entry.shard_ids.len() == optimal_count {
@@ -90,8 +91,8 @@ impl Rebalance {
             for shard in unassigned_shards_iter {
                 trace!("Assigning shard: {} to {}", shard, idx);
                 let routing_table_entry = &mut routing_table_entries[idx];
-                assignments.assign(routing_table_entry.pod.clone(), shard.clone());
-                routing_table_entry.shard_ids.insert(shard.clone());
+                assignments.assign(routing_table_entry.pod.clone(), shard);
+                routing_table_entry.shard_ids.insert(shard);
                 idx = (idx + 1) % pod_count;
             }
         }
@@ -265,7 +266,7 @@ mod tests {
     }
 
     fn shard_ids(ids: Vec<i64>) -> Vec<ShardId> {
-        ids.into_iter().map(|idx| ShardId::new(idx)).collect()
+        ids.into_iter().map(ShardId::new).collect()
     }
 
     fn new_routing_table(config: TestConfig) -> RoutingTable {
@@ -281,7 +282,7 @@ mod tests {
 
     fn assert_assignments_for_pod(rebalance: &Rebalance, pod: &Pod, shards: Vec<i64>) {
         assert_eq!(
-            get_assigned_ids(rebalance, &pod),
+            get_assigned_ids(rebalance, pod),
             shard_ids(shards),
             "assert_assignments_for_pod: {}\n{:#?}\n",
             pod,
@@ -291,13 +292,13 @@ mod tests {
 
     fn assert_assignments(rebalance: &Rebalance, assignments: Vec<(usize, Vec<i64>)>) {
         for (pod_idx, shards) in assignments {
-            assert_assignments_for_pod(&rebalance, &pod(pod_idx), shards)
+            assert_assignments_for_pod(rebalance, &pod(pod_idx), shards)
         }
     }
 
     fn assert_unassignments_for_pod(rebalance: &Rebalance, pod: &Pod, shards: Vec<i64>) {
         assert_eq!(
-            get_unassigned_ids(rebalance, &pod),
+            get_unassigned_ids(rebalance, pod),
             shard_ids(shards),
             "assert_unassignments_for_pod: {}\n{:#?}\n",
             pod,
@@ -307,7 +308,7 @@ mod tests {
 
     fn assert_unassignments(rebalance: &Rebalance, unassignments: Vec<(usize, Vec<i64>)>) {
         for (pod_idx, shards) in unassignments {
-            assert_unassignments_for_pod(&rebalance, &pod(pod_idx), shards)
+            assert_unassignments_for_pod(rebalance, &pod(pod_idx), shards)
         }
     }
 
