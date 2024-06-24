@@ -12,6 +12,7 @@ pub mod golem {
             static __FORCE_SECTION_REF: fn() =
                 super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
+            pub type Pollable = super::super::super::wasi::io::poll::Pollable;
             pub type NodeIndex = i32;
             #[derive(Clone)]
             pub struct Uri {
@@ -180,6 +181,50 @@ pub mod golem {
                         #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
                         extern "C" {
                             #[link_name = "[resource-drop]wasm-rpc"]
+                            fn drop(_: u32);
+                        }
+
+                        drop(_handle);
+                    }
+                }
+            }
+
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct FutureInvokeResult {
+                handle: _rt::Resource<FutureInvokeResult>,
+            }
+
+            impl FutureInvokeResult {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+
+            unsafe impl _rt::WasmResource for FutureInvokeResult {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]future-invoke-result"]
                             fn drop(_: u32);
                         }
 
@@ -1320,12 +1365,1005 @@ pub mod golem {
                     }
                 }
             }
+            impl WasmRpc {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn async_invoke_and_await(
+                    &self,
+                    function_name: &str,
+                    function_params: &[WitValue],
+                ) -> FutureInvokeResult {
+                    unsafe {
+                        let mut cleanup_list = _rt::Vec::new();
+                        let vec0 = function_name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let vec12 = function_params;
+                        let len12 = vec12.len();
+                        let layout12 =
+                            _rt::alloc::Layout::from_size_align_unchecked(vec12.len() * 8, 4);
+                        let result12 = if layout12.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout12).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout12);
+                            }
+                            ptr
+                        } else {
+                            {
+                                ::core::ptr::null_mut()
+                            }
+                        };
+                        for (i, e) in vec12.into_iter().enumerate() {
+                            let base = result12.add(i * 8);
+                            {
+                                let WitValue { nodes: nodes1 } = e;
+                                let vec11 = nodes1;
+                                let len11 = vec11.len();
+                                let layout11 = _rt::alloc::Layout::from_size_align_unchecked(
+                                    vec11.len() * 24,
+                                    8,
+                                );
+                                let result11 = if layout11.size() != 0 {
+                                    let ptr = _rt::alloc::alloc(layout11).cast::<u8>();
+                                    if ptr.is_null() {
+                                        _rt::alloc::handle_alloc_error(layout11);
+                                    }
+                                    ptr
+                                } else {
+                                    {
+                                        ::core::ptr::null_mut()
+                                    }
+                                };
+                                for (i, e) in vec11.into_iter().enumerate() {
+                                    let base = result11.add(i * 24);
+                                    {
+                                        match e {
+                                            WitNode::RecordValue(e) => {
+                                                *base.add(0).cast::<u8>() = (0i32) as u8;
+                                                let vec2 = e;
+                                                let ptr2 = vec2.as_ptr().cast::<u8>();
+                                                let len2 = vec2.len();
+                                                *base.add(12).cast::<usize>() = len2;
+                                                *base.add(8).cast::<*mut u8>() = ptr2.cast_mut();
+                                            }
+                                            WitNode::VariantValue(e) => {
+                                                *base.add(0).cast::<u8>() = (1i32) as u8;
+                                                let (t3_0, t3_1) = e;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(t3_0);
+                                                match t3_1 {
+                                                    Some(e) => {
+                                                        *base.add(12).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(16).cast::<i32>() =
+                                                            _rt::as_i32(e);
+                                                    }
+                                                    None => {
+                                                        *base.add(12).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            WitNode::EnumValue(e) => {
+                                                *base.add(0).cast::<u8>() = (2i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::FlagsValue(e) => {
+                                                *base.add(0).cast::<u8>() = (3i32) as u8;
+                                                let vec4 = e;
+                                                let len4 = vec4.len();
+                                                let layout4 =
+                                                    _rt::alloc::Layout::from_size_align_unchecked(
+                                                        vec4.len() * 1,
+                                                        1,
+                                                    );
+                                                let result4 = if layout4.size() != 0 {
+                                                    let ptr =
+                                                        _rt::alloc::alloc(layout4).cast::<u8>();
+                                                    if ptr.is_null() {
+                                                        _rt::alloc::handle_alloc_error(layout4);
+                                                    }
+                                                    ptr
+                                                } else {
+                                                    {
+                                                        ::core::ptr::null_mut()
+                                                    }
+                                                };
+                                                for (i, e) in vec4.into_iter().enumerate() {
+                                                    let base = result4.add(i * 1);
+                                                    {
+                                                        *base.add(0).cast::<u8>() = (match e {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                }
+                                                *base.add(12).cast::<usize>() = len4;
+                                                *base.add(8).cast::<*mut u8>() = result4;
+                                                cleanup_list
+                                                    .extend_from_slice(&[(result4, layout4)]);
+                                            }
+                                            WitNode::TupleValue(e) => {
+                                                *base.add(0).cast::<u8>() = (4i32) as u8;
+                                                let vec5 = e;
+                                                let ptr5 = vec5.as_ptr().cast::<u8>();
+                                                let len5 = vec5.len();
+                                                *base.add(12).cast::<usize>() = len5;
+                                                *base.add(8).cast::<*mut u8>() = ptr5.cast_mut();
+                                            }
+                                            WitNode::ListValue(e) => {
+                                                *base.add(0).cast::<u8>() = (5i32) as u8;
+                                                let vec6 = e;
+                                                let ptr6 = vec6.as_ptr().cast::<u8>();
+                                                let len6 = vec6.len();
+                                                *base.add(12).cast::<usize>() = len6;
+                                                *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
+                                            }
+                                            WitNode::OptionValue(e) => {
+                                                *base.add(0).cast::<u8>() = (6i32) as u8;
+                                                match e {
+                                                    Some(e) => {
+                                                        *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(12).cast::<i32>() =
+                                                            _rt::as_i32(e);
+                                                    }
+                                                    None => {
+                                                        *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                    }
+                                                };
+                                            }
+                                            WitNode::ResultValue(e) => {
+                                                *base.add(0).cast::<u8>() = (7i32) as u8;
+                                                match e {
+                                                    Ok(e) => {
+                                                        *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                        match e {
+                                                            Some(e) => {
+                                                                *base.add(12).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                *base.add(16).cast::<i32>() =
+                                                                    _rt::as_i32(e);
+                                                            }
+                                                            None => {
+                                                                *base.add(12).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                    Err(e) => {
+                                                        *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                        match e {
+                                                            Some(e) => {
+                                                                *base.add(12).cast::<u8>() =
+                                                                    (1i32) as u8;
+                                                                *base.add(16).cast::<i32>() =
+                                                                    _rt::as_i32(e);
+                                                            }
+                                                            None => {
+                                                                *base.add(12).cast::<u8>() =
+                                                                    (0i32) as u8;
+                                                            }
+                                                        };
+                                                    }
+                                                };
+                                            }
+                                            WitNode::PrimU8(e) => {
+                                                *base.add(0).cast::<u8>() = (8i32) as u8;
+                                                *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            WitNode::PrimU16(e) => {
+                                                *base.add(0).cast::<u8>() = (9i32) as u8;
+                                                *base.add(8).cast::<u16>() =
+                                                    (_rt::as_i32(e)) as u16;
+                                            }
+                                            WitNode::PrimU32(e) => {
+                                                *base.add(0).cast::<u8>() = (10i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimU64(e) => {
+                                                *base.add(0).cast::<u8>() = (11i32) as u8;
+                                                *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            WitNode::PrimS8(e) => {
+                                                *base.add(0).cast::<u8>() = (12i32) as u8;
+                                                *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            WitNode::PrimS16(e) => {
+                                                *base.add(0).cast::<u8>() = (13i32) as u8;
+                                                *base.add(8).cast::<u16>() =
+                                                    (_rt::as_i32(e)) as u16;
+                                            }
+                                            WitNode::PrimS32(e) => {
+                                                *base.add(0).cast::<u8>() = (14i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimS64(e) => {
+                                                *base.add(0).cast::<u8>() = (15i32) as u8;
+                                                *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            WitNode::PrimFloat32(e) => {
+                                                *base.add(0).cast::<u8>() = (16i32) as u8;
+                                                *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                            }
+                                            WitNode::PrimFloat64(e) => {
+                                                *base.add(0).cast::<u8>() = (17i32) as u8;
+                                                *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                            }
+                                            WitNode::PrimChar(e) => {
+                                                *base.add(0).cast::<u8>() = (18i32) as u8;
+                                                *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            WitNode::PrimBool(e) => {
+                                                *base.add(0).cast::<u8>() = (19i32) as u8;
+                                                *base.add(8).cast::<u8>() = (match e {
+                                                    true => 1,
+                                                    false => 0,
+                                                })
+                                                    as u8;
+                                            }
+                                            WitNode::PrimString(e) => {
+                                                *base.add(0).cast::<u8>() = (20i32) as u8;
+                                                let vec7 = e;
+                                                let ptr7 = vec7.as_ptr().cast::<u8>();
+                                                let len7 = vec7.len();
+                                                *base.add(12).cast::<usize>() = len7;
+                                                *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
+                                            }
+                                            WitNode::Handle(e) => {
+                                                *base.add(0).cast::<u8>() = (21i32) as u8;
+                                                let (t8_0, t8_1) = e;
+                                                let Uri { value: value9 } = t8_0;
+                                                let vec10 = value9;
+                                                let ptr10 = vec10.as_ptr().cast::<u8>();
+                                                let len10 = vec10.len();
+                                                *base.add(12).cast::<usize>() = len10;
+                                                *base.add(8).cast::<*mut u8>() = ptr10.cast_mut();
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(t8_1);
+                                            }
+                                        }
+                                    }
+                                }
+                                *base.add(4).cast::<usize>() = len11;
+                                *base.add(0).cast::<*mut u8>() = result11;
+                                cleanup_list.extend_from_slice(&[(result11, layout11)]);
+                            }
+                        }
+
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]wasm-rpc.async-invoke-and-await"]
+                            fn wit_import(
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                                _: usize,
+                            ) -> i32;
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8, _: usize, _: *mut u8, _: usize) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(
+                            (self).handle() as i32,
+                            ptr0.cast_mut(),
+                            len0,
+                            result12,
+                            len12,
+                        );
+                        if layout12.size() != 0 {
+                            _rt::alloc::dealloc(result12.cast(), layout12);
+                        }
+                        for (ptr, layout) in cleanup_list {
+                            if layout.size() != 0 {
+                                _rt::alloc::dealloc(ptr.cast(), layout);
+                            }
+                        }
+                        FutureInvokeResult::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl FutureInvokeResult {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn subscribe(&self) -> Pollable {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-invoke-result.subscribe"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        super::super::super::wasi::io::poll::Pollable::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl FutureInvokeResult {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn get(&self) -> Option<Result<WitValue, RpcError>> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 20]);
+                        let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 20]);
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:rpc/types@0.1.0")]
+                        extern "C" {
+                            #[link_name = "[method]future-invoke-result.get"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                        match l1 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l2 = i32::from(*ptr0.add(4).cast::<u8>());
+
+                                    match l2 {
+                                        0 => {
+                                            let e = {
+                                                let l3 = *ptr0.add(8).cast::<*mut u8>();
+                                                let l4 = *ptr0.add(12).cast::<usize>();
+                                                let base50 = l3;
+                                                let len50 = l4;
+                                                let mut result50 = _rt::Vec::with_capacity(len50);
+                                                for i in 0..len50 {
+                                                    let base = base50.add(i * 24);
+                                                    let e50 = {
+                                                        let l5 =
+                                                            i32::from(*base.add(0).cast::<u8>());
+                                                        let v49 = match l5 {
+                                                            0 => {
+                                                                let e49 = {
+                                                                    let l6 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l7 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    let len8 = l7;
+
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l6.cast(),
+                                                                        len8,
+                                                                        len8,
+                                                                    )
+                                                                };
+                                                                WitNode::RecordValue(e49)
+                                                            }
+                                                            1 => {
+                                                                let e49 = {
+                                                                    let l9 =
+                                                                        *base.add(8).cast::<i32>();
+                                                                    let l10 = i32::from(
+                                                                        *base.add(12).cast::<u8>(),
+                                                                    );
+
+                                                                    (l9 as u32, match l10 {
+                                                                  0 => None,
+                                                                  1 => {
+                                                                    let e = {
+                                                                      let l11 = *base.add(16).cast::<i32>();
+
+                                                                      l11
+                                                                    };
+                                                                    Some(e)
+                                                                  }
+                                                                  _ => _rt::invalid_enum_discriminant(),
+                                                                })
+                                                                };
+                                                                WitNode::VariantValue(e49)
+                                                            }
+                                                            2 => {
+                                                                let e49 = {
+                                                                    let l12 =
+                                                                        *base.add(8).cast::<i32>();
+
+                                                                    l12 as u32
+                                                                };
+                                                                WitNode::EnumValue(e49)
+                                                            }
+                                                            3 => {
+                                                                let e49 = {
+                                                                    let l13 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l14 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    let base16 = l13;
+                                                                    let len16 = l14;
+                                                                    let mut result16 =
+                                                                        _rt::Vec::with_capacity(
+                                                                            len16,
+                                                                        );
+                                                                    for i in 0..len16 {
+                                                                        let base =
+                                                                            base16.add(i * 1);
+                                                                        let e16 = {
+                                                                            let l15 = i32::from(
+                                                                                *base
+                                                                                    .add(0)
+                                                                                    .cast::<u8>(),
+                                                                            );
+
+                                                                            _rt::bool_lift(
+                                                                                l15 as u8,
+                                                                            )
+                                                                        };
+                                                                        result16.push(e16);
+                                                                    }
+                                                                    _rt::cabi_dealloc(
+                                                                        base16,
+                                                                        len16 * 1,
+                                                                        1,
+                                                                    );
+
+                                                                    result16
+                                                                };
+                                                                WitNode::FlagsValue(e49)
+                                                            }
+                                                            4 => {
+                                                                let e49 = {
+                                                                    let l17 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l18 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    let len19 = l18;
+
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l17.cast(),
+                                                                        len19,
+                                                                        len19,
+                                                                    )
+                                                                };
+                                                                WitNode::TupleValue(e49)
+                                                            }
+                                                            5 => {
+                                                                let e49 = {
+                                                                    let l20 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l21 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    let len22 = l21;
+
+                                                                    _rt::Vec::from_raw_parts(
+                                                                        l20.cast(),
+                                                                        len22,
+                                                                        len22,
+                                                                    )
+                                                                };
+                                                                WitNode::ListValue(e49)
+                                                            }
+                                                            6 => {
+                                                                let e49 = {
+                                                                    let l23 = i32::from(
+                                                                        *base.add(8).cast::<u8>(),
+                                                                    );
+
+                                                                    match l23 {
+                                                                  0 => None,
+                                                                  1 => {
+                                                                    let e = {
+                                                                      let l24 = *base.add(12).cast::<i32>();
+
+                                                                      l24
+                                                                    };
+                                                                    Some(e)
+                                                                  }
+                                                                  _ => _rt::invalid_enum_discriminant(),
+                                                                }
+                                                                };
+                                                                WitNode::OptionValue(e49)
+                                                            }
+                                                            7 => {
+                                                                let e49 = {
+                                                                    let l25 = i32::from(
+                                                                        *base.add(8).cast::<u8>(),
+                                                                    );
+
+                                                                    match l25 {
+                                                                  0 => {
+                                                                    let e = {
+                                                                      let l26 = i32::from(*base.add(12).cast::<u8>());
+
+                                                                      match l26 {
+                                                                        0 => None,
+                                                                        1 => {
+                                                                          let e = {
+                                                                            let l27 = *base.add(16).cast::<i32>();
+
+                                                                            l27
+                                                                          };
+                                                                          Some(e)
+                                                                        }
+                                                                        _ => _rt::invalid_enum_discriminant(),
+                                                                      }
+                                                                    };
+                                                                    Ok(e)
+                                                                  }
+                                                                  1 => {
+                                                                    let e = {
+                                                                      let l28 = i32::from(*base.add(12).cast::<u8>());
+
+                                                                      match l28 {
+                                                                        0 => None,
+                                                                        1 => {
+                                                                          let e = {
+                                                                            let l29 = *base.add(16).cast::<i32>();
+
+                                                                            l29
+                                                                          };
+                                                                          Some(e)
+                                                                        }
+                                                                        _ => _rt::invalid_enum_discriminant(),
+                                                                      }
+                                                                    };
+                                                                    Err(e)
+                                                                  }
+                                                                  _ => _rt::invalid_enum_discriminant(),
+                                                                }
+                                                                };
+                                                                WitNode::ResultValue(e49)
+                                                            }
+                                                            8 => {
+                                                                let e49 = {
+                                                                    let l30 = i32::from(
+                                                                        *base.add(8).cast::<u8>(),
+                                                                    );
+
+                                                                    l30 as u8
+                                                                };
+                                                                WitNode::PrimU8(e49)
+                                                            }
+                                                            9 => {
+                                                                let e49 = {
+                                                                    let l31 = i32::from(
+                                                                        *base.add(8).cast::<u16>(),
+                                                                    );
+
+                                                                    l31 as u16
+                                                                };
+                                                                WitNode::PrimU16(e49)
+                                                            }
+                                                            10 => {
+                                                                let e49 = {
+                                                                    let l32 =
+                                                                        *base.add(8).cast::<i32>();
+
+                                                                    l32 as u32
+                                                                };
+                                                                WitNode::PrimU32(e49)
+                                                            }
+                                                            11 => {
+                                                                let e49 = {
+                                                                    let l33 =
+                                                                        *base.add(8).cast::<i64>();
+
+                                                                    l33 as u64
+                                                                };
+                                                                WitNode::PrimU64(e49)
+                                                            }
+                                                            12 => {
+                                                                let e49 = {
+                                                                    let l34 = i32::from(
+                                                                        *base.add(8).cast::<i8>(),
+                                                                    );
+
+                                                                    l34 as i8
+                                                                };
+                                                                WitNode::PrimS8(e49)
+                                                            }
+                                                            13 => {
+                                                                let e49 = {
+                                                                    let l35 = i32::from(
+                                                                        *base.add(8).cast::<i16>(),
+                                                                    );
+
+                                                                    l35 as i16
+                                                                };
+                                                                WitNode::PrimS16(e49)
+                                                            }
+                                                            14 => {
+                                                                let e49 = {
+                                                                    let l36 =
+                                                                        *base.add(8).cast::<i32>();
+
+                                                                    l36
+                                                                };
+                                                                WitNode::PrimS32(e49)
+                                                            }
+                                                            15 => {
+                                                                let e49 = {
+                                                                    let l37 =
+                                                                        *base.add(8).cast::<i64>();
+
+                                                                    l37
+                                                                };
+                                                                WitNode::PrimS64(e49)
+                                                            }
+                                                            16 => {
+                                                                let e49 = {
+                                                                    let l38 =
+                                                                        *base.add(8).cast::<f32>();
+
+                                                                    l38
+                                                                };
+                                                                WitNode::PrimFloat32(e49)
+                                                            }
+                                                            17 => {
+                                                                let e49 = {
+                                                                    let l39 =
+                                                                        *base.add(8).cast::<f64>();
+
+                                                                    l39
+                                                                };
+                                                                WitNode::PrimFloat64(e49)
+                                                            }
+                                                            18 => {
+                                                                let e49 = {
+                                                                    let l40 =
+                                                                        *base.add(8).cast::<i32>();
+
+                                                                    _rt::char_lift(l40 as u32)
+                                                                };
+                                                                WitNode::PrimChar(e49)
+                                                            }
+                                                            19 => {
+                                                                let e49 = {
+                                                                    let l41 = i32::from(
+                                                                        *base.add(8).cast::<u8>(),
+                                                                    );
+
+                                                                    _rt::bool_lift(l41 as u8)
+                                                                };
+                                                                WitNode::PrimBool(e49)
+                                                            }
+                                                            20 => {
+                                                                let e49 = {
+                                                                    let l42 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l43 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    let len44 = l43;
+                                                                    let bytes44 =
+                                                                        _rt::Vec::from_raw_parts(
+                                                                            l42.cast(),
+                                                                            len44,
+                                                                            len44,
+                                                                        );
+
+                                                                    _rt::string_lift(bytes44)
+                                                                };
+                                                                WitNode::PrimString(e49)
+                                                            }
+                                                            n => {
+                                                                debug_assert_eq!(
+                                                                    n, 21,
+                                                                    "invalid enum discriminant"
+                                                                );
+                                                                let e49 = {
+                                                                    let l45 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l46 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    let len47 = l46;
+                                                                    let bytes47 =
+                                                                        _rt::Vec::from_raw_parts(
+                                                                            l45.cast(),
+                                                                            len47,
+                                                                            len47,
+                                                                        );
+                                                                    let l48 =
+                                                                        *base.add(16).cast::<i64>();
+
+                                                                    (
+                                                                        Uri {
+                                                                            value: _rt::string_lift(
+                                                                                bytes47,
+                                                                            ),
+                                                                        },
+                                                                        l48 as u64,
+                                                                    )
+                                                                };
+                                                                WitNode::Handle(e49)
+                                                            }
+                                                        };
+
+                                                        v49
+                                                    };
+                                                    result50.push(e50);
+                                                }
+                                                _rt::cabi_dealloc(base50, len50 * 24, 8);
+
+                                                WitValue { nodes: result50 }
+                                            };
+                                            Ok(e)
+                                        }
+                                        1 => {
+                                            let e = {
+                                                let l51 = i32::from(*ptr0.add(8).cast::<u8>());
+                                                let v64 = match l51 {
+                                                    0 => {
+                                                        let e64 = {
+                                                            let l52 =
+                                                                *ptr0.add(12).cast::<*mut u8>();
+                                                            let l53 = *ptr0.add(16).cast::<usize>();
+                                                            let len54 = l53;
+                                                            let bytes54 = _rt::Vec::from_raw_parts(
+                                                                l52.cast(),
+                                                                len54,
+                                                                len54,
+                                                            );
+
+                                                            _rt::string_lift(bytes54)
+                                                        };
+                                                        RpcError::ProtocolError(e64)
+                                                    }
+                                                    1 => {
+                                                        let e64 = {
+                                                            let l55 =
+                                                                *ptr0.add(12).cast::<*mut u8>();
+                                                            let l56 = *ptr0.add(16).cast::<usize>();
+                                                            let len57 = l56;
+                                                            let bytes57 = _rt::Vec::from_raw_parts(
+                                                                l55.cast(),
+                                                                len57,
+                                                                len57,
+                                                            );
+
+                                                            _rt::string_lift(bytes57)
+                                                        };
+                                                        RpcError::Denied(e64)
+                                                    }
+                                                    2 => {
+                                                        let e64 = {
+                                                            let l58 =
+                                                                *ptr0.add(12).cast::<*mut u8>();
+                                                            let l59 = *ptr0.add(16).cast::<usize>();
+                                                            let len60 = l59;
+                                                            let bytes60 = _rt::Vec::from_raw_parts(
+                                                                l58.cast(),
+                                                                len60,
+                                                                len60,
+                                                            );
+
+                                                            _rt::string_lift(bytes60)
+                                                        };
+                                                        RpcError::NotFound(e64)
+                                                    }
+                                                    n => {
+                                                        debug_assert_eq!(
+                                                            n, 3,
+                                                            "invalid enum discriminant"
+                                                        );
+                                                        let e64 = {
+                                                            let l61 =
+                                                                *ptr0.add(12).cast::<*mut u8>();
+                                                            let l62 = *ptr0.add(16).cast::<usize>();
+                                                            let len63 = l62;
+                                                            let bytes63 = _rt::Vec::from_raw_parts(
+                                                                l61.cast(),
+                                                                len63,
+                                                                len63,
+                                                            );
+
+                                                            _rt::string_lift(bytes63)
+                                                        };
+                                                        RpcError::RemoteInternalError(e64)
+                                                    }
+                                                };
+
+                                                v64
+                                            };
+                                            Err(e)
+                                        }
+                                        _ => _rt::invalid_enum_discriminant(),
+                                    }
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+#[allow(dead_code)]
+pub mod wasi {
+    #[allow(dead_code)]
+    pub mod io {
+        #[allow(dead_code, clippy::all)]
+        pub mod poll {
+            #[used]
+            #[doc(hidden)]
+            #[cfg(target_arch = "wasm32")]
+            static __FORCE_SECTION_REF: fn() =
+                super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// `pollable` epresents a single I/O event which may be ready, or not.
+
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct Pollable {
+                handle: _rt::Resource<Pollable>,
+            }
+
+            impl Pollable {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+
+            unsafe impl _rt::WasmResource for Pollable {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:io/poll@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]pollable"]
+                            fn drop(_: u32);
+                        }
+
+                        drop(_handle);
+                    }
+                }
+            }
+
+            impl Pollable {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Return the readiness of a pollable. This function never blocks.
+                ///
+                /// Returns `true` when the pollable is ready, and `false` otherwise.
+                pub fn ready(&self) -> bool {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/poll@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]pollable.ready"]
+                            fn wit_import(_: i32) -> i32;
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        _rt::bool_lift(ret as u8)
+                    }
+                }
+            }
+            impl Pollable {
+                #[allow(unused_unsafe, clippy::all)]
+                /// `block` returns immediately if the pollable is ready, and otherwise
+                /// blocks until ready.
+                ///
+                /// This function is equivalent to calling `poll.poll` on a list
+                /// containing only this pollable.
+                pub fn block(&self) {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/poll@0.2.0")]
+                        extern "C" {
+                            #[link_name = "[method]pollable.block"]
+                            fn wit_import(_: i32);
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32);
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Poll for completion on a set of pollables.
+            ///
+            /// This function takes a list of pollables, which identify I/O sources of
+            /// interest, and waits until one or more of the events is ready for I/O.
+            ///
+            /// The result `list<u32>` contains one or more indices of handles in the
+            /// argument list that is ready for I/O.
+            ///
+            /// If the list contains more elements than can be indexed with a `u32`
+            /// value, this function traps.
+            ///
+            /// A timeout can be implemented by adding a pollable from the
+            /// wasi-clocks API to the list.
+            ///
+            /// This function does not return a `result`; polling in itself does not
+            /// do any I/O so it doesn't fail. If any of the I/O sources identified by
+            /// the pollables has an error, it is indicated by marking the source as
+            /// being reaedy for I/O.
+            pub fn poll(in_: &[&Pollable]) -> _rt::Vec<u32> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let vec0 = in_;
+                    let len0 = vec0.len();
+                    let layout0 = _rt::alloc::Layout::from_size_align_unchecked(vec0.len() * 4, 4);
+                    let result0 = if layout0.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout0).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout0);
+                        }
+                        ptr
+                    } else {
+                        {
+                            ::core::ptr::null_mut()
+                        }
+                    };
+                    for (i, e) in vec0.into_iter().enumerate() {
+                        let base = result0.add(i * 4);
+                        {
+                            *base.add(0).cast::<i32>() = (e).handle() as i32;
+                        }
+                    }
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:io/poll@0.2.0")]
+                    extern "C" {
+                        #[link_name = "poll"]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(result0, len0, ptr1);
+                    let l2 = *ptr1.add(0).cast::<*mut u8>();
+                    let l3 = *ptr1.add(4).cast::<usize>();
+                    let len4 = l3;
+                    if layout0.size() != 0 {
+                        _rt::alloc::dealloc(result0.cast(), layout0);
+                    }
+                    _rt::Vec::from_raw_parts(l2.cast(), len4, len4)
+                }
+            }
         }
     }
 }
 mod _rt {
-    pub use alloc_crate::string::String;
-    pub use alloc_crate::vec::Vec;
 
     use core::fmt;
     use core::marker;
@@ -1421,6 +2459,20 @@ mod _rt {
             }
         }
     }
+    pub unsafe fn bool_lift(val: u8) -> bool {
+        if cfg!(debug_assertions) {
+            match val {
+                0 => false,
+                1 => true,
+                _ => panic!("invalid bool discriminant"),
+            }
+        } else {
+            val != 0
+        }
+    }
+    pub use alloc_crate::alloc;
+    pub use alloc_crate::string::String;
+    pub use alloc_crate::vec::Vec;
 
     pub fn as_i32<T: AsI32>(t: T) -> i32 {
         t.as_i32()
@@ -1491,7 +2543,6 @@ mod _rt {
             self as i32
         }
     }
-    pub use alloc_crate::alloc;
 
     pub fn as_i64<T: AsI64>(t: T) -> i64 {
         t.as_i64()
@@ -1569,17 +2620,6 @@ mod _rt {
             core::hint::unreachable_unchecked()
         }
     }
-    pub unsafe fn bool_lift(val: u8) -> bool {
-        if cfg!(debug_assertions) {
-            match val {
-                0 => false,
-                1 => true,
-                _ => panic!("invalid bool discriminant"),
-            }
-        } else {
-            val != 0
-        }
-    }
     pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
         if size == 0 {
             return;
@@ -1607,27 +2647,35 @@ mod _rt {
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:wit-value:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 910] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x8e\x06\x01A\x02\x01\
-A\x02\x01B\x1d\x01z\x04\0\x0anode-index\x03\0\0\x01r\x01\x05values\x04\0\x03uri\x03\
-\0\x02\x01p\x01\x01k\x01\x01o\x02y\x05\x01p\x7f\x01j\x01\x05\x01\x05\x01o\x02\x03\
-w\x01q\x16\x0crecord-value\x01\x04\0\x0dvariant-value\x01\x06\0\x0aenum-value\x01\
-y\0\x0bflags-value\x01\x07\0\x0btuple-value\x01\x04\0\x0alist-value\x01\x04\0\x0c\
-option-value\x01\x05\0\x0cresult-value\x01\x08\0\x07prim-u8\x01}\0\x08prim-u16\x01\
-{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08prim-s16\x01|\0\x08\
-prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cprim-float64\x01u\0\
-\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01\x09\
-\0\x04\0\x08wit-node\x03\0\x0a\x01p\x0b\x01r\x01\x05nodes\x0c\x04\0\x09wit-value\
-\x03\0\x0d\x01q\x04\x0eprotocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\
-\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\x03\0\x0f\x04\0\x08wasm-rpc\x03\
-\x01\x01i\x11\x01@\x01\x08location\x03\0\x12\x04\0\x15[constructor]wasm-rpc\x01\x13\
-\x01h\x11\x01p\x0e\x01j\x01\x0e\x01\x10\x01@\x03\x04self\x14\x0dfunction-names\x0f\
-function-params\x15\0\x16\x04\0![method]wasm-rpc.invoke-and-await\x01\x17\x01j\0\
-\x01\x10\x01@\x03\x04self\x14\x0dfunction-names\x0ffunction-params\x15\0\x18\x04\
-\0\x17[method]wasm-rpc.invoke\x01\x19\x03\x01\x15golem:rpc/types@0.1.0\x05\0\x04\
-\x01\x19golem:rpc/wit-value@0.1.0\x04\0\x0b\x0f\x01\0\x09wit-value\x03\0\0\0G\x09\
-producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rus\
-t\x060.25.0";
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1310] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x9e\x09\x01A\x02\x01\
+A\x05\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
+\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
+ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
+\x03\x01\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B*\x02\x03\x02\x01\
+\x01\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01r\x01\x05va\
+lues\x04\0\x03uri\x03\0\x04\x01p\x03\x01k\x03\x01o\x02y\x07\x01p\x7f\x01j\x01\x07\
+\x01\x07\x01o\x02\x05w\x01q\x16\x0crecord-value\x01\x06\0\x0dvariant-value\x01\x08\
+\0\x0aenum-value\x01y\0\x0bflags-value\x01\x09\0\x0btuple-value\x01\x06\0\x0alis\
+t-value\x01\x06\0\x0coption-value\x01\x07\0\x0cresult-value\x01\x0a\0\x07prim-u8\
+\x01}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\
+\0\x08prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\
+\0\x0cprim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-str\
+ing\x01s\0\x06handle\x01\x0b\0\x04\0\x08wit-node\x03\0\x0c\x01p\x0d\x01r\x01\x05\
+nodes\x0e\x04\0\x09wit-value\x03\0\x0f\x01q\x04\x0eprotocol-error\x01s\0\x06deni\
+ed\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\
+\x03\0\x11\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\x01i\x13\
+\x01@\x01\x08location\x05\0\x15\x04\0\x15[constructor]wasm-rpc\x01\x16\x01h\x13\x01\
+p\x10\x01j\x01\x10\x01\x12\x01@\x03\x04self\x17\x0dfunction-names\x0ffunction-pa\
+rams\x18\0\x19\x04\0![method]wasm-rpc.invoke-and-await\x01\x1a\x01j\0\x01\x12\x01\
+@\x03\x04self\x17\x0dfunction-names\x0ffunction-params\x18\0\x1b\x04\0\x17[metho\
+d]wasm-rpc.invoke\x01\x1c\x01i\x14\x01@\x03\x04self\x17\x0dfunction-names\x0ffun\
+ction-params\x18\0\x1d\x04\0'[method]wasm-rpc.async-invoke-and-await\x01\x1e\x01\
+h\x14\x01i\x01\x01@\x01\x04self\x1f\0\x20\x04\0&[method]future-invoke-result.sub\
+scribe\x01!\x01k\x19\x01@\x01\x04self\x1f\0\"\x04\0\x20[method]future-invoke-res\
+ult.get\x01#\x03\x01\x15golem:rpc/types@0.1.0\x05\x02\x04\x01\x19golem:rpc/wit-v\
+alue@0.1.0\x04\0\x0b\x0f\x01\0\x09wit-value\x03\0\0\0G\x09producers\x01\x0cproce\
+ssed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]
