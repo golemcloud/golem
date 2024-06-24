@@ -94,6 +94,26 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
             + Debug
             + Send
             + Sync;
+
+    async fn wrap_conditionally<Success, Err, AsyncFn, ConditionFn>(
+        &mut self,
+        wrapped_function_type: WrappedFunctionType,
+        function_name: &str,
+        function: AsyncFn,
+        persist: ConditionFn,
+    ) -> Result<Success, Err>
+    where
+        Success: Clone + Send,
+        Err: From<GolemError> + Send,
+        AsyncFn: for<'b> FnOnce(
+                &'b mut DurableWorkerCtx<Ctx>,
+            )
+                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
+            + Send,
+        ConditionFn: FnOnce(&Result<Success, Err>) -> bool + Send,
+        SerializedSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send,
+        SerializedErr:
+            Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send;
 }
 
 #[async_trait]
@@ -194,6 +214,31 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         SerializedErr:
             Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send,
     {
+        <DurableWorkerCtx<Ctx> as Durability<Ctx, SerializedSuccess, SerializedErr>>::wrap_conditionally::<Success, Err, AsyncFn, _>(self, wrapped_function_type, function_name, function, |_: &Result<Success, Err>| {
+            true
+        }).await
+    }
+
+    async fn wrap_conditionally<Success, Err, AsyncFn, ConditionFn>(
+        &mut self,
+        wrapped_function_type: WrappedFunctionType,
+        function_name: &str,
+        function: AsyncFn,
+        persist: ConditionFn,
+    ) -> Result<Success, Err>
+    where
+        Success: Clone + Send,
+        Err: From<GolemError> + Send,
+        AsyncFn: for<'b> FnOnce(
+                &'b mut DurableWorkerCtx<Ctx>,
+            )
+                -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
+            + Send,
+        ConditionFn: FnOnce(&Result<Success, Err>) -> bool + Send,
+        SerializedSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send,
+        SerializedErr:
+            Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send,
+    {
         let begin_index = self
             .state
             .begin_function(&wrapped_function_type.clone())
@@ -201,18 +246,20 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
             let result = function(self).await;
-            let serializable_result: Result<SerializedSuccess, SerializedErr> = result
-                .as_ref()
-                .map(|result| result.clone().into())
-                .map_err(|err| err.into());
+            if persist(&result) {
+                let serializable_result: Result<SerializedSuccess, SerializedErr> = result
+                    .as_ref()
+                    .map(|result| result.clone().into())
+                    .map_err(|err| err.into());
 
-            self.write_to_oplog(
-                &wrapped_function_type,
-                function_name,
-                begin_index,
-                &serializable_result,
-            )
-            .await?;
+                self.write_to_oplog(
+                    &wrapped_function_type,
+                    function_name,
+                    begin_index,
+                    &serializable_result,
+                )
+                .await?;
+            }
             result
         } else {
             let (_, oplog_entry) =
