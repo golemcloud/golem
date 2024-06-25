@@ -969,6 +969,8 @@ pub fn to_worker_metadata(
             invocation_results: HashMap::new(),
             current_idempotency_key: None,
             component_version: metadata.component_version,
+            component_size: metadata.component_size,
+            total_linear_memory_size: metadata.total_linear_memory_size,
         },
         parent: None,
     }
@@ -980,7 +982,9 @@ fn dump_component_info(path: &Path) {
 
     let state = AnalysisContext::new(component);
     let exports = state.get_top_level_exports();
+    let mems = state.get_all_memories();
 
     info!("Exports of {path:?}: {exports:?}");
+    info!("Linear memories of {path:?}: {mems:?}");
     let _ = exports.unwrap();
 }

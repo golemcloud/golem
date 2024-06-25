@@ -15,15 +15,17 @@
 use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock, Weak};
 
-use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::{Uri, Value};
+use wasmtime::component::{Instance, ResourceAny};
+use wasmtime::{AsContextMut, ResourceLimiterAsync};
+
 use golem_common::model::{
     AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
-use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{Uri, Value};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -33,7 +35,7 @@ use golem_worker_executor_base::model::{
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::events::Events;
+use golem_worker_executor_base::services::component::ComponentMetadata;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
@@ -49,8 +51,8 @@ use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
     InvocationManagement, IoCapturing, StatusManagement, UpdateManagement, WorkerCtx,
 };
-use wasmtime::component::{Instance, ResourceAny};
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
+
+use crate::services::AdditionalDeps;
 
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
@@ -240,9 +242,13 @@ impl UpdateManagement for Context {
             .await
     }
 
-    async fn on_worker_update_succeeded(&self, target_version: ComponentVersion) {
+    async fn on_worker_update_succeeded(
+        &self,
+        target_version: ComponentVersion,
+        new_component_size: u64,
+    ) {
         self.durable_ctx
-            .on_worker_update_succeeded(target_version)
+            .on_worker_update_succeeded(target_version, new_component_size)
             .await
     }
 }
@@ -275,8 +281,8 @@ impl WorkerCtx for Context {
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
+        component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -298,8 +304,8 @@ impl WorkerCtx for Context {
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
+            component_metadata,
             promise_service,
-            events,
             worker_service,
             worker_enumeration_service,
             key_value_service,
@@ -331,6 +337,10 @@ impl WorkerCtx for Context {
 
     fn worker_id(&self) -> &WorkerId {
         self.durable_ctx.worker_id()
+    }
+
+    fn component_metadata(&self) -> &ComponentMetadata {
+        self.durable_ctx.component_metadata()
     }
 
     fn is_exit(error: &Error) -> Option<i32> {

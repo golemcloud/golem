@@ -258,15 +258,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         target_version
                     },
                 );
-            let component = this
+            let (component, component_metadata) = this
                 .component_service()
                 .get(&this.engine(), &component_id, component_version)
                 .await?;
 
             let context = Ctx::create(
                 OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
+                component_metadata,
                 this.promise_service(),
-                this.events(),
                 this.worker_service(),
                 this.worker_enumeration_service(),
                 this.key_value_service(),
@@ -816,14 +816,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<WorkerMetadata, GolemError> {
         let component_id = owned_worker_id.component_id();
 
-        let component_version = match component_version {
-            Some(component_version) => component_version,
-            None => {
-                this.component_service()
-                    .get_latest_version(&component_id)
-                    .await?
-            }
-        };
+        let component_metadata = this
+            .component_service()
+            .get_metadata(&component_id, component_version)
+            .await?;
 
         match this.worker_service().get(owned_worker_id).await {
             None => {
@@ -837,7 +833,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     created_at: Timestamp::now_utc(),
                     parent,
                     last_known_status: WorkerStatusRecord {
-                        component_version,
+                        component_version: component_metadata.version,
+                        component_size: component_metadata.size,
+                        total_linear_memory_size: component_metadata
+                            .memories
+                            .iter()
+                            .map(|m| m.initial)
+                            .sum(),
                         ..initial_status
                     },
                 };
@@ -1374,14 +1376,20 @@ where
         let mut deleted_regions = calculate_deleted_regions(initial_deleted_regions, &new_entries);
         let pending_invocations =
             calculate_pending_invocations(last_known.pending_invocations, &new_entries);
-        let (pending_updates, failed_updates, successful_updates, component_version) =
-            calculate_update_fields(
-                last_known.pending_updates,
-                last_known.failed_updates,
-                last_known.successful_updates,
-                last_known.component_version,
-                &new_entries,
-            );
+        let (
+            pending_updates,
+            failed_updates,
+            successful_updates,
+            component_version,
+            component_size,
+        ) = calculate_update_fields(
+            last_known.pending_updates,
+            last_known.failed_updates,
+            last_known.successful_updates,
+            last_known.component_version,
+            last_known.component_size,
+            &new_entries,
+        );
 
         if let Some(TimestampedUpdateDescription {
             oplog_index,
@@ -1400,6 +1408,8 @@ where
             &new_entries,
         );
 
+        let total_linear_memory_size = last_known.total_linear_memory_size; // TODO: recalculate this once we record memory grow events in oplog
+
         let result = WorkerStatusRecord {
             oplog_idx: last_oplog_index,
             status,
@@ -1412,6 +1422,8 @@ where
             invocation_results,
             current_idempotency_key,
             component_version,
+            component_size,
+            total_linear_memory_size,
         };
         Ok(result)
     }
@@ -1586,17 +1598,20 @@ fn calculate_update_fields(
     initial_failed_updates: Vec<FailedUpdateRecord>,
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
     initial_version: u64,
+    initial_component_size: u64,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
     VecDeque<TimestampedUpdateDescription>,
     Vec<FailedUpdateRecord>,
     Vec<SuccessfulUpdateRecord>,
     u64,
+    u64,
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
     let mut successful_updates = initial_successful_updates;
     let mut version = initial_version;
+    let mut component_size = initial_component_size;
     for (oplog_idx, entry) in entries {
         match entry {
             OplogEntry::Create {
@@ -1630,18 +1645,26 @@ fn calculate_update_fields(
             OplogEntry::SuccessfulUpdate {
                 timestamp,
                 target_version,
+                new_component_size,
             } => {
                 successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
                     target_version: *target_version,
                 });
                 version = *target_version;
+                component_size = *new_component_size;
                 pending_updates.pop_front();
             }
             _ => {}
         }
     }
-    (pending_updates, failed_updates, successful_updates, version)
+    (
+        pending_updates,
+        failed_updates,
+        successful_updates,
+        version,
+        component_size,
+    )
 }
 
 fn calculate_invocation_results(
@@ -1687,10 +1710,6 @@ pub fn is_worker_error_retriable(
     error: &WorkerError,
     retry_count: u64,
 ) -> bool {
-    debug!(
-        "IS WORKER ERROR RETRIABLE? {retry_count} {}",
-        retry_config.max_attempts
-    );
     match error {
         WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
         WorkerError::StackOverflow => false,

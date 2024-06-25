@@ -19,16 +19,18 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::ComponentError;
 use golem_api_grpc::proto::golem::component::{
     download_component_response, get_component_metadata_response, DownloadComponentRequest,
-    GetLatestComponentRequest,
+    GetLatestComponentRequest, GetVersionedComponentRequest,
 };
+use golem_api_grpc::proto::golem::component::{ComponentError, LinearMemory};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ComponentVersion};
 use golem_common::retries::with_retries;
+use golem_wasm_ast::analysis::{AnalysisContext, AnalysisFailure};
+use golem_wasm_ast::IgnoreAll;
 use http::Uri;
 use prost::Message;
 use tokio::task::spawn_blocking;
@@ -47,6 +49,13 @@ use crate::services::golem_config::{
 };
 use crate::storage::blob::BlobStorage;
 
+#[derive(Debug, Clone)]
+pub struct ComponentMetadata {
+    pub version: ComponentVersion,
+    pub size: u64,
+    pub memories: Vec<LinearMemory>,
+}
+
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
 pub trait ComponentService {
@@ -54,16 +63,20 @@ pub trait ComponentService {
         &self,
         engine: &Engine,
         component_id: &ComponentId,
-        component_version: u64,
-    ) -> Result<Component, GolemError>;
+        component_version: ComponentVersion,
+    ) -> Result<(Component, ComponentMetadata), GolemError>;
 
     async fn get_latest(
         &self,
         engine: &Engine,
         component_id: &ComponentId,
-    ) -> Result<(u64, Component), GolemError>;
+    ) -> Result<(Component, ComponentMetadata), GolemError>;
 
-    async fn get_latest_version(&self, component_id: &ComponentId) -> Result<u64, GolemError>;
+    async fn get_metadata(
+        &self,
+        component_id: &ComponentId,
+        forced_version: Option<ComponentVersion>,
+    ) -> Result<ComponentMetadata, GolemError>;
 }
 
 pub async fn configured(
@@ -101,7 +114,7 @@ pub async fn configured(
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ComponentKey {
     component_id: ComponentId,
-    component_version: u64,
+    component_version: ComponentVersion,
 }
 
 pub struct ComponentServiceGrpc {
@@ -140,24 +153,25 @@ impl ComponentService for ComponentServiceGrpc {
         &self,
         engine: &Engine,
         component_id: &ComponentId,
-        component_version: u64,
-    ) -> Result<Component, GolemError> {
+        component_version: ComponentVersion,
+    ) -> Result<(Component, ComponentMetadata), GolemError> {
         let key = ComponentKey {
             component_id: component_id.clone(),
             component_version,
         };
-        let component_id = component_id.clone();
+        let component_id_clone = component_id.clone();
         let engine = engine.clone();
-        let endpoint = self.endpoint.clone();
+        let endpoint_clone = self.endpoint.clone();
         let access_token = self.access_token;
-        let retry_config = self.retry_config.clone();
+        let retry_config_clone = self.retry_config.clone();
         let max_component_size = self.max_component_size;
         let compiled_component_service = self.compiled_component_service.clone();
-        self.component_cache
+        let component = self
+            .component_cache
             .get_or_insert_simple(&key.clone(), || {
                 Box::pin(async move {
                     let result = compiled_component_service
-                        .get(&component_id, component_version, &engine)
+                        .get(&component_id_clone, component_version, &engine)
                         .await;
 
                     let component = match result {
@@ -172,21 +186,21 @@ impl ComponentService for ComponentServiceGrpc {
                         Some(component) => Ok(component),
                         None => {
                             let bytes = download_via_grpc(
-                                &endpoint,
+                                &endpoint_clone,
                                 &access_token,
-                                &retry_config,
-                                &component_id,
+                                &retry_config_clone,
+                                &component_id_clone,
                                 component_version,
                                 max_component_size,
                             )
                             .await?;
 
                             let start = Instant::now();
-                            let component_id_clone = component_id.clone();
+                            let component_id_clone2 = component_id_clone.clone();
                             let component = spawn_blocking(move || {
                                 Component::from_binary(&engine, &bytes).map_err(|e| {
                                     GolemError::ComponentParseFailed {
-                                        component_id: component_id_clone,
+                                        component_id: component_id_clone2,
                                         component_version,
                                         reason: format!("{}", e),
                                     }
@@ -200,12 +214,12 @@ impl ComponentService for ComponentServiceGrpc {
                             record_compilation_time(compilation_time);
                             debug!(
                                 "Compiled {} in {}ms",
-                                component_id,
+                                component_id_clone,
                                 compilation_time.as_millis(),
                             );
 
                             let result = compiled_component_service
-                                .put(&component_id, component_version, &component)
+                                .put(&component_id_clone, component_version, &component)
                                 .await;
 
                             match result {
@@ -219,31 +233,46 @@ impl ComponentService for ComponentServiceGrpc {
                     }
                 })
             })
-            .await
+            .await?;
+        let metadata = get_metadata_via_grpc(
+            &self.endpoint,
+            &access_token,
+            &self.retry_config,
+            component_id,
+            Some(component_version),
+        )
+        .await?;
+
+        Ok((component, metadata))
     }
 
     async fn get_latest(
         &self,
         engine: &Engine,
         component_id: &ComponentId,
-    ) -> Result<(u64, Component), GolemError> {
-        let latest_version = get_latest_version_via_grpc(
+    ) -> Result<(Component, ComponentMetadata), GolemError> {
+        let metadata = get_metadata_via_grpc(
             &self.endpoint,
             &self.access_token,
             &self.retry_config,
             component_id,
+            None,
         )
         .await?;
-        let component = self.get(engine, component_id, latest_version).await?;
-        Ok((latest_version, component))
+        self.get(engine, component_id, metadata.version).await
     }
 
-    async fn get_latest_version(&self, component_id: &ComponentId) -> Result<u64, GolemError> {
-        get_latest_version_via_grpc(
+    async fn get_metadata(
+        &self,
+        component_id: &ComponentId,
+        forced_version: Option<ComponentVersion>,
+    ) -> Result<ComponentMetadata, GolemError> {
+        get_metadata_via_grpc(
             &self.endpoint,
             &self.access_token,
             &self.retry_config,
             component_id,
+            forced_version,
         )
         .await
     }
@@ -254,7 +283,7 @@ async fn download_via_grpc(
     access_token: &Uuid,
     retry_config: &RetryConfig,
     component_id: &ComponentId,
-    component_version: u64,
+    component_version: ComponentVersion,
     max_component_size: usize,
 ) -> Result<Vec<u8>, GolemError> {
     let desc = format!("Downloading component {component_id}");
@@ -310,18 +339,19 @@ async fn download_via_grpc(
     .map_err(|error| grpc_component_download_error(error, component_id, component_version))
 }
 
-async fn get_latest_version_via_grpc(
+async fn get_metadata_via_grpc(
     endpoint: &Uri,
     access_token: &Uuid,
     retry_config: &RetryConfig,
     component_id: &ComponentId,
-) -> Result<u64, GolemError> {
-    let desc = format!("Getting latest version of {component_id}");
+    component_version: Option<ComponentVersion>,
+) -> Result<ComponentMetadata, GolemError> {
+    let desc = format!("Getting component metadata of {component_id}");
     debug!("{}", &desc);
     with_retries(
         &desc,
         "components",
-        "download",
+        "get_metadata",
         retry_config,
         &(
             endpoint.clone(),
@@ -332,39 +362,61 @@ async fn get_latest_version_via_grpc(
             Box::pin(async move {
                 let mut client = ComponentServiceClient::connect(endpoint.as_http_02()).await?;
 
-                let request = authorised_grpc_request(
-                    GetLatestComponentRequest {
-                        component_id: Some(component_id.clone().into()),
-                    },
-                    access_token,
-                );
-
-                let response = client
-                    .get_latest_component_metadata(request)
-                    .await?
-                    .into_inner();
-
+                let response = match component_version {
+                    Some(component_version) => {
+                        let request = authorised_grpc_request(
+                            GetVersionedComponentRequest {
+                                component_id: Some(component_id.clone().into()),
+                                version: component_version,
+                            },
+                            access_token,
+                        );
+                        client.get_component_metadata(request).await?.into_inner()
+                    }
+                    None => {
+                        let request = authorised_grpc_request(
+                            GetLatestComponentRequest {
+                                component_id: Some(component_id.clone().into()),
+                            },
+                            access_token,
+                        );
+                        client
+                            .get_latest_component_metadata(request)
+                            .await?
+                            .into_inner()
+                    }
+                };
                 let len = response.encoded_len();
-                let version = match response.result {
+                let component = match response.result {
                     None => Err("Empty response".to_string().into()),
                     Some(get_component_metadata_response::Result::Success(response)) => {
-                        let version = response
-                            .component
-                            .and_then(|component| component.versioned_component_id)
-                            .map(|id| id.version)
-                            .ok_or(GrpcError::Unexpected(
-                                "Undefined component version".to_string(),
-                            ))?;
-                        Ok(version)
+                        Ok(response.component.ok_or(GrpcError::Unexpected(
+                            "No component information in response".to_string(),
+                        ))?)
                     }
                     Some(get_component_metadata_response::Result::Error(error)) => {
                         Err(GrpcError::Domain(error))
                     }
                 }?;
+                let result = ComponentMetadata {
+                    version: component
+                        .versioned_component_id
+                        .as_ref()
+                        .map(|id| id.version)
+                        .ok_or(GrpcError::Unexpected(
+                            "Undefined component version".to_string(),
+                        ))?,
+                    size: component.component_size,
+                    memories: component
+                        .metadata
+                        .as_ref()
+                        .map(|metadata| metadata.memories.clone())
+                        .unwrap_or_default(),
+                };
 
-                record_external_call_response_size_bytes("components", "get_latest_version", len);
+                record_external_call_response_size_bytes("components", "get_metadata", len);
 
-                Ok(version)
+                Ok(result)
             })
         },
         is_grpc_retriable::<ComponentError>,
@@ -376,7 +428,7 @@ async fn get_latest_version_via_grpc(
 fn grpc_component_download_error(
     error: GrpcError<ComponentError>,
     component_id: &ComponentId,
-    component_version: u64,
+    component_version: ComponentVersion,
 ) -> GolemError {
     GolemError::ComponentDownloadFailed {
         component_id: component_id.clone(),
@@ -446,7 +498,7 @@ impl ComponentServiceLocalFileSystem {
         path: &Path,
         engine: &Engine,
         component_id: &ComponentId,
-        component_version: u64,
+        component_version: ComponentVersion,
     ) -> Result<Component, GolemError> {
         let key = ComponentKey {
             component_id: component_id.clone(),
@@ -521,21 +573,27 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         &self,
         engine: &Engine,
         component_id: &ComponentId,
-        component_version: u64,
-    ) -> Result<Component, GolemError> {
+        component_version: ComponentVersion,
+    ) -> Result<(Component, ComponentMetadata), GolemError> {
         let path = self
             .root
             .join(format!("{}-{}.wasm", component_id, component_version));
 
-        self.get_from_path(&path, engine, component_id, component_version)
-            .await
+        let metadata = self
+            .get_metadata(component_id, Some(component_version))
+            .await?;
+        Ok((
+            self.get_from_path(&path, engine, component_id, component_version)
+                .await?,
+            metadata,
+        ))
     }
 
     async fn get_latest(
         &self,
         engine: &Engine,
         component_id: &ComponentId,
-    ) -> Result<(u64, Component), GolemError> {
+    ) -> Result<(Component, ComponentMetadata), GolemError> {
         let prefix = format!("{}-", component_id);
         let mut reader = tokio::fs::read_dir(&self.root).await?;
         let mut matching_files = Vec::new();
@@ -560,7 +618,8 @@ impl ComponentService for ComponentServiceLocalFileSystem {
                 let component = self
                     .get_from_path(&path, engine, component_id, version)
                     .await?;
-                Ok((version, component))
+                let metadata = self.get_metadata(component_id, Some(version)).await?;
+                Ok((component, metadata))
             }
             None => Err(GolemError::GetLatestVersionOfComponentFailed {
                 component_id: component_id.clone(),
@@ -569,7 +628,11 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         }
     }
 
-    async fn get_latest_version(&self, component_id: &ComponentId) -> Result<u64, GolemError> {
+    async fn get_metadata(
+        &self,
+        component_id: &ComponentId,
+        forced_version: Option<ComponentVersion>,
+    ) -> Result<ComponentMetadata, GolemError> {
         let prefix = format!("{}-", component_id);
         let mut reader = tokio::fs::read_dir(&self.root).await?;
         let mut matching_files = Vec::new();
@@ -584,18 +647,57 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             }
         }
 
-        let latest = matching_files
+        let matching_files: Vec<_> = matching_files
             .into_iter()
-            .filter_map(|(_path, s)| s.parse::<u64>().ok())
-            .max();
+            .filter_map(|(path, s)| s.parse::<u64>().ok().map(|version| (path, version)))
+            .collect();
 
-        match latest {
-            Some(version) => Ok(version),
-            None => Err(GolemError::GetLatestVersionOfComponentFailed {
+        let (path, version) = match forced_version {
+            Some(forced_version) => matching_files
+                .iter()
+                .find(|(_path, version)| *version == forced_version)
+                .ok_or(GolemError::GetLatestVersionOfComponentFailed {
+                    component_id: component_id.clone(),
+                    reason: "Could not find any component with the given id and version"
+                        .to_string(),
+                })?,
+            None => matching_files
+                .iter()
+                .max_by_key(|(_path, version)| *version)
+                .ok_or(GolemError::GetLatestVersionOfComponentFailed {
+                    component_id: component_id.clone(),
+                    reason: "Could not find any component with the given id".to_string(),
+                })?,
+        };
+
+        let size = tokio::fs::metadata(&path).await?.len();
+        let analysis: AnalysisContext<IgnoreAll> = golem_wasm_ast::analysis::AnalysisContext::new(
+            golem_wasm_ast::component::Component::from_bytes(&tokio::fs::read(&path).await?)
+                .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
+                    component_id: component_id.clone(),
+                    reason,
+                })?,
+        );
+        let memories = analysis
+            .get_all_memories()
+            .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
                 component_id: component_id.clone(),
-                reason: "Could not find any component with the given id".to_string(),
-            }),
-        }
+                reason: match reason {
+                    AnalysisFailure::Failed(reason) => reason,
+                },
+            })?
+            .into_iter()
+            .map(|mem| LinearMemory {
+                initial: mem.mem_type.limits.min * 65536,
+                maximum: mem.mem_type.limits.max.map(|m| m * 65536),
+            })
+            .collect();
+
+        Ok(ComponentMetadata {
+            version: *version,
+            size,
+            memories,
+        })
     }
 }
 
@@ -624,7 +726,7 @@ impl ComponentService for ComponentServiceMock {
         _engine: &Engine,
         _component_id: &ComponentId,
         _component_version: u64,
-    ) -> Result<Component, GolemError> {
+    ) -> Result<(Component, ComponentMetadata), GolemError> {
         unimplemented!()
     }
 
@@ -632,11 +734,15 @@ impl ComponentService for ComponentServiceMock {
         &self,
         _engine: &Engine,
         _component_id: &ComponentId,
-    ) -> Result<(u64, Component), GolemError> {
+    ) -> Result<(Component, ComponentMetadata), GolemError> {
         unimplemented!()
     }
 
-    async fn get_latest_version(&self, _component_id: &ComponentId) -> Result<u64, GolemError> {
+    async fn get_metadata(
+        &self,
+        _component_id: &ComponentId,
+        _forced_version: Option<ComponentVersion>,
+    ) -> Result<ComponentMetadata, GolemError> {
         unimplemented!()
     }
 }
