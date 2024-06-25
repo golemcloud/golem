@@ -37,7 +37,13 @@ parser! {
         easy::Stream<&'t str>: Stream<Token = char>,
     ]
     {
-        rib_expr_()
+        sep_by(rib_expr_().skip(spaces()), char(';').skip(spaces()))
+        .map(|expressions: Vec<Expr>| {
+        if expressions.len() == 1 {
+            expressions[0].clone()
+        } else {
+            Expr::Multiple(expressions)
+        }})
     }
 }
 
@@ -100,11 +106,6 @@ parser! {
     }
 }
 
-fn rib_program<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    sep_by(rib_expr().skip(spaces()), char(';').skip(spaces()))
-        .map(|expressions: Vec<Expr>| Expr::Multiple(expressions))
-}
-
 #[cfg(test)]
 mod tests {
     use crate::expr::ArmPattern;
@@ -134,7 +135,7 @@ mod tests {
     #[test]
     fn test_rib_program() {
         let input = "let x = 1; let y = 2";
-        let result = rib_program().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -150,7 +151,7 @@ mod tests {
     #[test]
     fn test_rib_program_multiline() {
         let input = "let x = 1;\nlet y = 2";
-        let result = rib_program().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -187,7 +188,7 @@ mod tests {
          result
        "#;
 
-        let result = rib_program().easy_parse(program);
+        let result = rib_expr().easy_parse(program);
         assert_eq!(
             result,
             Ok((
