@@ -6,6 +6,12 @@ pub struct Api {
     rpc: WasmRpc,
 }
 impl Api {}
+pub struct FutureBidResult {
+    pub future_invoke_result: FutureInvokeResult,
+}
+pub struct FutureCloseAuctionResult {
+    pub future_invoke_result: FutureInvokeResult,
+}
 pub struct RunningAuction {
     rpc: WasmRpc,
     id: u64,
@@ -18,6 +24,101 @@ impl RunningAuction {
             id,
             uri,
         }
+    }
+}
+pub struct FutureRunningAuctionBidResult {
+    pub future_invoke_result: FutureInvokeResult,
+}
+pub struct FutureRunningAuctionCloseResult {
+    pub future_invoke_result: FutureInvokeResult,
+}
+struct Component;
+impl crate::bindings::exports::auction::auction_stub::stub_auction::Guest for Component {
+    type Api = crate::Api;
+    type FutureBidResult = crate::FutureBidResult;
+    type FutureCloseAuctionResult = crate::FutureCloseAuctionResult;
+    type RunningAuction = crate::RunningAuction;
+    type FutureRunningAuctionBidResult = crate::FutureRunningAuctionBidResult;
+    type FutureRunningAuctionCloseResult = crate::FutureRunningAuctionCloseResult;
+}
+impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestFutureBidResult
+for FutureBidResult {
+    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+        let pollable = self.future_invoke_result.subscribe();
+        let pollable = unsafe {
+            bindings::wasi::io::poll::Pollable::from_handle(pollable.take_handle())
+        };
+        pollable
+    }
+    fn get(&self) -> Option<crate::bindings::auction::auction::api::BidResult> {
+        self.future_invoke_result
+            .get()
+            .map(|result| {
+                let result = result
+                    .expect(
+                        &format!(
+                            "Failed to invoke remote {}", "auction:auction/api.{bid}"
+                        ),
+                    );
+                ({
+                    let (case_idx, inner) = result
+                        .tuple_element(0)
+                        .expect("tuple not found")
+                        .variant()
+                        .expect("variant not found");
+                    match case_idx {
+                        0u32 => {
+                            crate::bindings::auction::auction::api::BidResult::AuctionExpired
+                        }
+                        1u32 => {
+                            crate::bindings::auction::auction::api::BidResult::PriceTooLow
+                        }
+                        2u32 => {
+                            crate::bindings::auction::auction::api::BidResult::Success
+                        }
+                        _ => unreachable!("invalid variant case index"),
+                    }
+                })
+            })
+    }
+}
+impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestFutureCloseAuctionResult
+for FutureCloseAuctionResult {
+    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+        let pollable = self.future_invoke_result.subscribe();
+        let pollable = unsafe {
+            bindings::wasi::io::poll::Pollable::from_handle(pollable.take_handle())
+        };
+        pollable
+    }
+    fn get(&self) -> Option<Option<crate::bindings::auction::auction::api::BidderId>> {
+        self.future_invoke_result
+            .get()
+            .map(|result| {
+                let result = result
+                    .expect(
+                        &format!(
+                            "Failed to invoke remote {}",
+                            "auction:auction/api.{close-auction}"
+                        ),
+                    );
+                (result
+                    .tuple_element(0)
+                    .expect("tuple not found")
+                    .option()
+                    .expect("option not found")
+                    .map(|inner| {
+                        let record = inner;
+                        crate::bindings::auction::auction::api::BidderId {
+                            bidder_id: record
+                                .field(0usize)
+                                .expect("record field not found")
+                                .string()
+                                .expect("string not found")
+                                .to_string(),
+                        }
+                    }))
+            })
     }
 }
 impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestApi for Api {
@@ -98,7 +199,7 @@ impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestApi for
             );
         ()
     }
-    fn bid(
+    fn blocking_bid(
         &self,
         bidder_id: crate::bindings::auction::auction::api::BidderId,
         price: f32,
@@ -135,7 +236,31 @@ impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestApi for
             }
         })
     }
-    fn close_auction(&self) -> Option<crate::bindings::auction::auction::api::BidderId> {
+    fn bid(
+        &self,
+        bidder_id: crate::bindings::auction::auction::api::BidderId,
+        price: f32,
+    ) -> crate::bindings::exports::auction::auction_stub::stub_auction::FutureBidResult {
+        let result = self
+            .rpc
+            .async_invoke_and_await(
+                "auction:auction/api.{bid}",
+                &[
+                    WitValue::builder()
+                        .record()
+                        .item()
+                        .string(&bidder_id.bidder_id)
+                        .finish(),
+                    WitValue::builder().f32(price),
+                ],
+            );
+        crate::bindings::exports::auction::auction_stub::stub_auction::FutureBidResult::new(FutureBidResult {
+            future_invoke_result: result,
+        })
+    }
+    fn blocking_close_auction(
+        &self,
+    ) -> Option<crate::bindings::auction::auction::api::BidderId> {
         let result = self
             .rpc
             .invoke_and_await("auction:auction/api.{close-auction}", &[])
@@ -161,6 +286,97 @@ impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestApi for
                         .to_string(),
                 }
             }))
+    }
+    fn close_auction(
+        &self,
+    ) -> crate::bindings::exports::auction::auction_stub::stub_auction::FutureCloseAuctionResult {
+        let result = self
+            .rpc
+            .async_invoke_and_await("auction:auction/api.{close-auction}", &[]);
+        crate::bindings::exports::auction::auction_stub::stub_auction::FutureCloseAuctionResult::new(FutureCloseAuctionResult {
+            future_invoke_result: result,
+        })
+    }
+}
+impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestFutureRunningAuctionBidResult
+for FutureRunningAuctionBidResult {
+    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+        let pollable = self.future_invoke_result.subscribe();
+        let pollable = unsafe {
+            bindings::wasi::io::poll::Pollable::from_handle(pollable.take_handle())
+        };
+        pollable
+    }
+    fn get(&self) -> Option<crate::bindings::auction::auction::api::BidResult> {
+        self.future_invoke_result
+            .get()
+            .map(|result| {
+                let result = result
+                    .expect(
+                        &format!(
+                            "Failed to invoke remote {}",
+                            "auction:auction/api.{running-auction.bid}"
+                        ),
+                    );
+                ({
+                    let (case_idx, inner) = result
+                        .tuple_element(0)
+                        .expect("tuple not found")
+                        .variant()
+                        .expect("variant not found");
+                    match case_idx {
+                        0u32 => {
+                            crate::bindings::auction::auction::api::BidResult::AuctionExpired
+                        }
+                        1u32 => {
+                            crate::bindings::auction::auction::api::BidResult::PriceTooLow
+                        }
+                        2u32 => {
+                            crate::bindings::auction::auction::api::BidResult::Success
+                        }
+                        _ => unreachable!("invalid variant case index"),
+                    }
+                })
+            })
+    }
+}
+impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestFutureRunningAuctionCloseResult
+for FutureRunningAuctionCloseResult {
+    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+        let pollable = self.future_invoke_result.subscribe();
+        let pollable = unsafe {
+            bindings::wasi::io::poll::Pollable::from_handle(pollable.take_handle())
+        };
+        pollable
+    }
+    fn get(&self) -> Option<Option<crate::bindings::auction::auction::api::BidderId>> {
+        self.future_invoke_result
+            .get()
+            .map(|result| {
+                let result = result
+                    .expect(
+                        &format!(
+                            "Failed to invoke remote {}",
+                            "auction:auction/api.{running-auction.close}"
+                        ),
+                    );
+                (result
+                    .tuple_element(0)
+                    .expect("tuple not found")
+                    .option()
+                    .expect("option not found")
+                    .map(|inner| {
+                        let record = inner;
+                        crate::bindings::auction::auction::api::BidderId {
+                            bidder_id: record
+                                .field(0usize)
+                                .expect("record field not found")
+                                .string()
+                                .expect("string not found")
+                                .to_string(),
+                        }
+                    }))
+            })
     }
 }
 impl crate::bindings::exports::auction::auction_stub::stub_auction::GuestRunningAuction
@@ -210,7 +426,7 @@ for RunningAuction {
             Self { rpc, id, uri }
         })
     }
-    fn bid(
+    fn blocking_bid(
         &self,
         bidder_id: crate::bindings::auction::auction::api::BidderId,
         price: f32,
@@ -249,7 +465,32 @@ for RunningAuction {
             }
         })
     }
-    fn close(&self) -> Option<crate::bindings::auction::auction::api::BidderId> {
+    fn bid(
+        &self,
+        bidder_id: crate::bindings::auction::auction::api::BidderId,
+        price: f32,
+    ) -> crate::bindings::exports::auction::auction_stub::stub_auction::FutureRunningAuctionBidResult {
+        let result = self
+            .rpc
+            .async_invoke_and_await(
+                "auction:auction/api.{running-auction.bid}",
+                &[
+                    WitValue::builder().handle(self.uri.clone(), self.id),
+                    WitValue::builder()
+                        .record()
+                        .item()
+                        .string(&bidder_id.bidder_id)
+                        .finish(),
+                    WitValue::builder().f32(price),
+                ],
+            );
+        crate::bindings::exports::auction::auction_stub::stub_auction::FutureRunningAuctionBidResult::new(FutureRunningAuctionBidResult {
+            future_invoke_result: result,
+        })
+    }
+    fn blocking_close(
+        &self,
+    ) -> Option<crate::bindings::auction::auction::api::BidderId> {
         let result = self
             .rpc
             .invoke_and_await(
@@ -279,6 +520,19 @@ for RunningAuction {
                 }
             }))
     }
+    fn close(
+        &self,
+    ) -> crate::bindings::exports::auction::auction_stub::stub_auction::FutureRunningAuctionCloseResult {
+        let result = self
+            .rpc
+            .async_invoke_and_await(
+                "auction:auction/api.{running-auction.close}",
+                &[WitValue::builder().handle(self.uri.clone(), self.id)],
+            );
+        crate::bindings::exports::auction::auction_stub::stub_auction::FutureRunningAuctionCloseResult::new(FutureRunningAuctionCloseResult {
+            future_invoke_result: result,
+        })
+    }
 }
 impl Drop for RunningAuction {
     fn drop(&mut self) {
@@ -290,3 +544,4 @@ impl Drop for RunningAuction {
             .expect("Failed to invoke remote drop");
     }
 }
+bindings::export!(Component with_types_in bindings);

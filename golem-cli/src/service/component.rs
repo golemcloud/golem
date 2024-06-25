@@ -144,7 +144,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                     .await?;
                 let components: Vec<Component> = components
                     .into_iter()
-                    .group_by(|c| c.versioned_component_id.component_id)
+                    .chunk_by(|c| c.versioned_component_id.component_id)
                     .into_iter()
                     .map(|(_, group)| {
                         group

@@ -39,15 +39,18 @@ impl DockerWorkerExecutorCluster {
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
     ) -> Arc<dyn WorkerExecutor + Send + Sync + 'static> {
-        Arc::new(DockerWorkerExecutor::new(
-            http_port,
-            grpc_port,
-            redis,
-            component_service,
-            shard_manager,
-            worker_service,
-            verbosity,
-        ))
+        Arc::new(
+            DockerWorkerExecutor::new(
+                http_port,
+                grpc_port,
+                redis,
+                component_service,
+                shard_manager,
+                worker_service,
+                verbosity,
+            )
+            .await,
+        )
     }
 
     pub async fn new(

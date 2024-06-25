@@ -20,7 +20,7 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Add;
 use std::string::FromUtf8Error;
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use crate::error::GolemError;
@@ -43,7 +43,6 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use cap_std::ambient_authority;
 use chrono::{DateTime, Utc};
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription, WrappedFunctionType};
@@ -57,13 +56,14 @@ use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
-use wasmtime::component::{Instance, Resource, ResourceAny};
+use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::AsContextMut;
-use wasmtime_wasi::preview2::{I32Exit, ResourceTable, Stderr, Subscribe, WasiCtx, WasiView};
+use wasmtime_wasi::{I32Exit, ResourceTable, Stderr, WasiCtx, WasiView};
+use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
-    default_send_request, HostFutureIncomingResponse, OutgoingRequest,
+    default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
-use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
+use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpView};
 
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::wasm_rpc::UriExtensions;
@@ -98,8 +98,8 @@ use golem_common::retries::get_delay;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
-    table: ResourceTable,
-    wasi: WasiCtx,
+    table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
+    wasi: Arc<Mutex<WasiCtx>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
     wasi_http: WasiHttpCtx,
     pub owned_worker_id: OwnedWorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
@@ -138,8 +138,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             "Created temporary file system root at {:?}",
             temp_dir.path()
         );
-        let root_dir = cap_std::fs::Dir::open_ambient_dir(temp_dir.path(), ambient_authority())
-            .map_err(|e| GolemError::runtime(format!("Failed to open temporary directory: {e}")))?;
 
         debug!(
             "Worker {} initialized with deleted regions {}",
@@ -156,7 +154,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         wasi_host::create_context(
             &worker_config.args,
             &worker_config.env,
-            root_dir,
             temp_dir.path().to_path_buf(),
             stdin,
             stdout,
@@ -164,10 +161,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             |duration| anyhow!(SuspendForSleep(duration)),
             config.suspend.suspend_after,
             |wasi, table| {
-                let wasi_http = WasiHttpCtx;
+                let wasi_http = WasiHttpCtx::new();
                 DurableWorkerCtx {
-                    table,
-                    wasi,
+                    table: Arc::new(Mutex::new(table)),
+                    wasi: Arc::new(Mutex::new(wasi)),
                     wasi_http,
                     owned_worker_id: owned_worker_id.clone(),
                     public_state: PublicDurableWorkerState {
@@ -201,8 +198,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .map_err(|e| GolemError::runtime(format!("Could not create WASI context: {e}")))
     }
 
-    pub fn get_public_state(&self) -> &PublicDurableWorkerState<Ctx> {
-        &self.public_state
+    fn table(&mut self) -> &mut ResourceTable {
+        Arc::get_mut(&mut self.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail")
+    }
+
+    fn ctx(&mut self) -> &mut WasiCtx {
+        Arc::get_mut(&mut self.wasi)
+            .expect("WasiCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("WasiCtx mutex must never fail")
     }
 
     pub fn worker_id(&self) -> &WorkerId {
@@ -682,25 +689,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision {
-        let oplog_idx = if self.state.is_live() {
-            let needs_commit = match trap_type {
-                TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
-                TrapType::Interrupt(InterruptKind::Interrupt) => {
-                    Some((OplogEntry::interrupted(), true))
-                }
-                TrapType::Interrupt(InterruptKind::Suspend) => Some((OplogEntry::suspend(), false)),
-                TrapType::Exit => Some((OplogEntry::exited(), true)),
-                _ => None,
-            };
+        let needs_commit = match trap_type {
+            TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
+            TrapType::Interrupt(InterruptKind::Interrupt) => {
+                Some((OplogEntry::interrupted(), true))
+            }
+            TrapType::Interrupt(InterruptKind::Suspend) => Some((OplogEntry::suspend(), false)),
+            TrapType::Exit => Some((OplogEntry::exited(), true)),
+            _ => None,
+        };
 
-            if let Some((entry, store)) = needs_commit {
-                let oplog_idx = self.state.oplog.add_and_commit(entry).await;
+        let oplog_idx = if let Some((entry, store)) = needs_commit {
+            let oplog_idx = self.state.oplog.add_and_commit(entry).await;
 
-                if store {
-                    Some(oplog_idx)
-                } else {
-                    None
-                }
+            if store {
+                Some(oplog_idx)
             } else {
                 None
             }
@@ -733,6 +736,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         if updated_worker_status != WorkerStatus::Retrying
             && updated_worker_status != WorkerStatus::Running
         {
+            // Giving up, associating the stored result with the current and upcoming invocations
             if let Some(oplog_idx) = oplog_idx {
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
@@ -1704,20 +1708,12 @@ impl Error for SuspendForSleep {}
 
 // This wrapper forces the compiler to choose the wasmtime_wasi implementations for T: WasiView
 impl<'a, Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'a, Ctx> {
-    fn table(&self) -> &ResourceTable {
-        &self.0.table
+    fn table(&mut self) -> &mut ResourceTable {
+        self.0.table()
     }
 
-    fn table_mut(&mut self) -> &mut ResourceTable {
-        &mut self.0.table
-    }
-
-    fn ctx(&self) -> &WasiCtx {
-        &self.0.wasi
-    }
-
-    fn ctx_mut(&mut self) -> &mut WasiCtx {
-        &mut self.0.wasi
+    fn ctx(&mut self) -> &mut WasiCtx {
+        self.0.ctx()
     }
 }
 
@@ -1727,13 +1723,17 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
     }
 
     fn table(&mut self) -> &mut ResourceTable {
-        &mut self.0.table
+        Arc::get_mut(&mut self.0.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail")
     }
 
     fn send_request(
         &mut self,
-        request: OutgoingRequest,
-    ) -> anyhow::Result<Resource<HostFutureIncomingResponse>>
+        request: hyper::Request<HyperOutgoingBody>,
+        config: OutgoingRequestConfig,
+    ) -> HttpResult<HostFutureIncomingResponse>
     where
         Self: Sized,
     {
@@ -1742,21 +1742,11 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
             // FutureIncomingResponse because it is possible that there wasn't any response recorded in the oplog.
             // If that is the case, the request has to be sent as soon as we get into live mode and trying to await
             // or poll the response future.
-            let fut = self
-                .table()
-                .push(HostFutureIncomingResponse::deferred(request))?;
-            Ok(fut)
+            Ok(HostFutureIncomingResponse::deferred(request, config))
         } else {
-            default_send_request(self, request)
+            Ok(default_send_request(request, config))
         }
     }
-}
-
-struct Ready {}
-
-#[async_trait]
-impl Subscribe for Ready {
-    async fn ready(&mut self) {}
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

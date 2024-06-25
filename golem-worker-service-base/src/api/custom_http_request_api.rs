@@ -1,8 +1,9 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use crate::api_definition::http::HttpApiDefinition;
 use crate::evaluator::{DefaultEvaluator, Evaluator, WorkerMetadataFetcher};
-use async_trait::async_trait;
+use futures_util::FutureExt;
 use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
@@ -115,12 +116,10 @@ impl CustomHttpRequestApi {
     }
 }
 
-#[async_trait]
 impl Endpoint for CustomHttpRequestApi {
     type Output = Response;
 
-    async fn call(&self, req: Request) -> poem::Result<Self::Output> {
-        let result = self.execute(req).await;
-        Ok(result)
+    fn call(&self, req: Request) -> impl Future<Output = poem::Result<Self::Output>> + Send {
+        self.execute(req).map(Ok)
     }
 }

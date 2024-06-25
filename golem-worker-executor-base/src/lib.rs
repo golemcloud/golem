@@ -31,6 +31,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutorServer;
 use golem_common::redis::RedisPool;
+use humansize::{ISizeFormatter, BINARY};
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use std::sync::Arc;
@@ -135,6 +136,16 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         runtime: Handle,
     ) -> anyhow::Result<()> {
         info!("Golem Worker Executor starting up...");
+
+        let total_system_memory = golem_config.memory.total_system_memory();
+        let system_memory = golem_config.memory.system_memory();
+        let worker_memory = golem_config.memory.worker_memory();
+        info!(
+            "Total system memory: {}, Available system memory: {}, Total memory available for workers: {}",
+            ISizeFormatter::new(total_system_memory, BINARY),
+            ISizeFormatter::new(system_memory, BINARY),
+            ISizeFormatter::new(worker_memory, BINARY)
+        );
 
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
         health_reporter

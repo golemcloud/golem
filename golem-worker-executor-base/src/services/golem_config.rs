@@ -42,6 +42,7 @@ pub struct GolemConfig {
     pub active_workers: ActiveWorkersConfig,
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
+    pub memory: MemoryConfig,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
     pub grpc_address: String,
@@ -267,6 +268,33 @@ pub struct LocalFileSystemBlobStorageConfig {
     pub root: PathBuf,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct MemoryConfig {
+    pub system_memory_override: Option<u64>,
+    pub worker_memory_ratio: f64,
+    pub worker_estimate_coefficient: f64,
+}
+
+impl MemoryConfig {
+    pub fn total_system_memory(&self) -> u64 {
+        let mut sysinfo = sysinfo::System::new();
+        sysinfo.refresh_memory();
+        sysinfo.total_memory()
+    }
+
+    pub fn system_memory(&self) -> u64 {
+        self.system_memory_override.unwrap_or_else(|| {
+            let mut sysinfo = sysinfo::System::new();
+            sysinfo.refresh_memory();
+            sysinfo.available_memory()
+        })
+    }
+
+    pub fn worker_memory(&self) -> u64 {
+        (self.system_memory() as f64 * self.worker_memory_ratio) as u64
+    }
+}
+
 impl Default for GolemConfig {
     fn default() -> Self {
         Self {
@@ -284,6 +312,7 @@ impl Default for GolemConfig {
             scheduler: SchedulerConfig::default(),
             active_workers: ActiveWorkersConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
+            memory: MemoryConfig::default(),
             enable_tracing_console: false,
             enable_json_log: false,
             grpc_address: "0.0.0.0".to_string(),
@@ -437,5 +466,15 @@ impl Default for IndexedStorageConfig {
 impl Default for BlobStorageConfig {
     fn default() -> Self {
         Self::S3(S3BlobStorageConfig::default())
+    }
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            system_memory_override: None,
+            worker_memory_ratio: 0.8,
+            worker_estimate_coefficient: 1.1,
+        }
     }
 }

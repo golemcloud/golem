@@ -45,3 +45,5 @@ impl From<common::CommonData> for Data {
         }
     }
 }
+
+bindings::export!(Component with_types_in bindings);

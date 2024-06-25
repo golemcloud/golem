@@ -45,7 +45,7 @@ use tokio::time::sleep;
 use tonic::transport::Body;
 use tracing::debug;
 use warp::Filter;
-use wasmtime_wasi::preview2::spawn;
+use wasmtime_wasi::runtime::spawn;
 
 #[tokio::test]
 #[tracing::instrument]

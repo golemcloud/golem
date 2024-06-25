@@ -43,3 +43,5 @@ impl Guest for Component {
             std::env::vars().collect::<Vec<_>>().len() as u64
     }
 }
+
+bindings::export!(Component with_types_in bindings);

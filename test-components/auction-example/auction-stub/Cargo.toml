@@ -1,7 +1,7 @@
 [package]
 name = "auction-stub"
-edition = "2021"
 version = "0.0.1"
+edition = "2021"
 
 [package.metadata.component]
 package = "auction:auction"
@@ -16,15 +16,17 @@ path = "wit/deps/auction_auction"
 [package.metadata.component.target.dependencies."golem:rpc"]
 path = "wit/deps/wasm-rpc"
 
+[package.metadata.component.target.dependencies."wasi:io"]
+path = "wit/deps/io"
+
 [dependencies.golem-wasm-rpc]
-version = "0.0.25"
+path = "/Users/vigoo/projects/ziverge/wasm-rpc/wasm-rpc"
 features = ["stub"]
 default-features = false
 
-[dependencies.wit-bindgen]
-version = "0.17.0"
-features = ["realloc"]
-default-features = false
+[dependencies.wit-bindgen-rt]
+version = "0.26.0"
+features = ["bitflags"]
 
 [lib]
 path = "src/lib.rs"

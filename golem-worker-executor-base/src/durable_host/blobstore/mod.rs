@@ -18,7 +18,7 @@ pub mod types;
 use async_trait::async_trait;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::WasiView;
+use wasmtime_wasi::WasiView;
 
 use crate::durable_host::blobstore::types::ContainerEntry;
 use crate::durable_host::serialized::SerializableError;
@@ -63,7 +63,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Ok(created_at) => {
                 let container = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(ContainerEntry::new(name, created_at))?;
                 Ok(Ok(container))
             }
@@ -92,7 +92,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Ok(Some(created_at)) => {
                 let container = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(ContainerEntry::new(name, created_at))?;
                 Ok(Ok(container))
             }
@@ -198,5 +198,49 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Ok(_) => Ok(Ok(())),
             Err(e) => Ok(Err(format!("{:?}", e))),
         }
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn create_container(
+        &mut self,
+        name: ContainerName,
+    ) -> anyhow::Result<Result<Resource<Container>, Error>> {
+        (*self).create_container(name).await
+    }
+
+    async fn get_container(
+        &mut self,
+        name: ContainerName,
+    ) -> anyhow::Result<Result<Resource<Container>, Error>> {
+        (*self).get_container(name).await
+    }
+
+    async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
+        (*self).delete_container(name).await
+    }
+
+    async fn container_exists(
+        &mut self,
+        name: ContainerName,
+    ) -> anyhow::Result<Result<bool, Error>> {
+        (*self).container_exists(name).await
+    }
+
+    async fn copy_object(
+        &mut self,
+        src: ObjectId,
+        dest: ObjectId,
+    ) -> anyhow::Result<Result<(), Error>> {
+        (*self).copy_object(src, dest).await
+    }
+
+    async fn move_object(
+        &mut self,
+        src: ObjectId,
+        dest: ObjectId,
+    ) -> anyhow::Result<Result<(), Error>> {
+        (*self).move_object(src, dest).await
     }
 }

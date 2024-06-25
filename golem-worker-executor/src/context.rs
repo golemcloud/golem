@@ -322,7 +322,7 @@ impl WorkerCtx for Context {
     }
 
     fn get_public_state(&self) -> &Self::PublicState {
-        self.durable_ctx.get_public_state()
+        &self.durable_ctx.public_state
     }
 
     fn resource_limiter(&mut self) -> &mut dyn ResourceLimiterAsync {

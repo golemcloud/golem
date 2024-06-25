@@ -5,7 +5,7 @@ use golem_worker_service::{config, grpcapi};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use golem_worker_service_base::metrics;
 use opentelemetry::global;
-use opentelemetry_sdk::metrics::MeterProvider;
+use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::EndpointExt;
@@ -94,7 +94,11 @@ fn init_tracing_metrics() {
         .build()
         .unwrap();
 
-    global::set_meter_provider(MeterProvider::builder().with_reader(exporter).build());
+    global::set_meter_provider(
+        MeterProviderBuilder::default()
+            .with_reader(exporter)
+            .build(),
+    );
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
