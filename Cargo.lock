@@ -3579,6 +3579,7 @@ dependencies = [
 name = "golem-rib"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bincode",
  "combine",
  "golem-wasm-ast",

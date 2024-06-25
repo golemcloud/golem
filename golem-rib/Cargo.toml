@@ -4,17 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+async-trait = { workspace = true }
+bincode = { worksapace = true }
 combine = "4.6.7"
-bincode = { version = "2.0.0-rc.3" }
-golem-wasm-ast = "0.3.0"
-golem-wasm-rpc = { version = "0.0.29", default-features = false, features = [
-    "host",
-]}
-wasm-wave = "=0.6.0"
+golem-wasm-ast = { workspace = true }
+golem-wasm-rpc = { workspace = true }
 semver = "1.0.23"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
-
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasm-wave = { workspace = true }
 
 [lib]
 name = "rib"

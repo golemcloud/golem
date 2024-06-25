@@ -5,6 +5,9 @@ use bincode::{Decode, Encode};
 use combine::easy;
 use combine::EasyParser;
 use std::fmt::Display;
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json::Value;
+use crate::text;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
@@ -135,4 +138,43 @@ pub enum ArmPattern {
     As(String, Box<ArmPattern>),
     Constructor(String, Vec<ArmPattern>),
     Literal(Box<Expr>),
+}
+
+
+impl Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", text::to_string(self).unwrap())
+    }
+}
+
+impl<'de> Deserialize<'de> for Expr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            Value::String(expr_string) => match text::from_string(expr_string) {
+                Ok(expr) => Ok(expr),
+                Err(message) => Err(serde::de::Error::custom(message.to_string())),
+            },
+
+            e => Err(serde::de::Error::custom(format!(
+                "Failed to deserialise expression {}",
+                e
+            ))),
+        }
+    }
+}
+
+impl Serialize for Expr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+    {
+        match text::to_string(self) {
+            Ok(value) => serde_json::Value::serialize(&Value::String(value), serializer),
+            Err(error) => Err(serde::ser::Error::custom(error.to_string())),
+        }
+    }
 }
