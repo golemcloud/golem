@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::component::*;
+use crate::core::Mem;
 use crate::AstCustomization;
 use mappable_rc::Mrc;
 use std::cell::RefCell;
@@ -230,6 +231,24 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
             }
         }
 
+        Ok(result)
+    }
+
+    /// Gets all the memories (not just the exported ones) from all modules within the WASM component
+    pub fn get_all_memories(&self) -> AnalysisResult<Vec<Mem>> {
+        let mut result = Vec::new();
+
+        let mut component_stack = vec![self.get_component()];
+        while let Some(component) = component_stack.pop() {
+            for module in component.modules() {
+                for mem in module.mems() {
+                    result.push((*mem).clone());
+                }
+            }
+            for inner_component in component.components() {
+                component_stack.push(inner_component.clone());
+            }
+        }
         Ok(result)
     }
 
