@@ -23,7 +23,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
 };
 
-use rib::function_name::ParsedFunctionName;
+use rib::ParsedFunctionName;
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,

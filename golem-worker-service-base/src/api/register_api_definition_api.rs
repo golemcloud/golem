@@ -339,20 +339,18 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
         let response: crate::worker_binding::ResponseMapping = {
             let r: Expr = value
                 .response
-                .parse()
-                .map_err(|e: ParseError| e.to_string())?;
+                .parse()?;
             crate::worker_binding::ResponseMapping(r)
         };
 
         let worker_name = value
             .worker_id
-            .parse()
-            .map_err(|e: ParseError| e.to_string())?;
+            .parse()?;
 
         let component_id = value.component.ok_or("component is missing")?.try_into()?;
 
         let idempotency_key = if let Some(key) = &value.idempotency_key {
-            Some(key.parse().map_err(|e: ParseError| e.to_string())?)
+            Some(key.parse()?)
         } else {
             None
         };
