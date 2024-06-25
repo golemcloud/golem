@@ -1,7 +1,7 @@
 use crate::evaluator::evaluator_context::EvaluationContext;
 use crate::evaluator::{DefaultEvaluator, Evaluator};
 use crate::evaluator::{EvaluationError, ExprEvaluationResult};
-use crate::expression::{ArmPattern, ConstructorTypeName, Expr, InBuiltConstructorInner, MatchArm};
+use rib::expr::{ArmPattern, Expr, MatchArm};
 use crate::worker_bridge_execution::WorkerRequestExecutor;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
@@ -102,53 +102,20 @@ fn evaluate_arm_pattern(
             )
         }
 
-        ArmPattern::Constructor(name, variables) => match name {
-            ConstructorTypeName::InBuiltConstructor(in_built) => match in_built {
-                InBuiltConstructorInner::Ok => handle_ok(
+        ArmPattern::Constructor(name, variables) => {
+            if variables.is_empty() {
+                Ok(ArmPatternOutput::Matched(MatchResult {
+                    binding_variable: Some(BindingVariable(name.clone())),
+                    result: match_expr_result.clone(),
+                }))
+            } else {
+                handle_variant(
+                    name.as_str(),
                     match_expr_result,
-                    variables.first().ok_or(EvaluationError::Message(
-                        "Ok constructor should have a variable".to_string(),
-                    ))?,
+                    variables,
                     binding_variable,
                     input,
-                ),
-                InBuiltConstructorInner::Err => handle_err(
-                    match_expr_result,
-                    variables.first().ok_or(EvaluationError::Message(
-                        "Err constructor should have a value".to_string(),
-                    ))?,
-                    binding_variable,
-                    input,
-                ),
-                InBuiltConstructorInner::None => handle_none(match_expr_result),
-                InBuiltConstructorInner::Some => handle_some(
-                    match_expr_result,
-                    variables.first().ok_or(EvaluationError::Message(
-                        "Some constructor should have a variable".to_string(),
-                    ))?,
-                    binding_variable,
-                    input,
-                ),
-            },
-            ConstructorTypeName::Identifier(name) => {
-                if variables.is_empty() {
-                    // TODO; Populate evaluation-context with type informations.
-                    // The fact that if name is actually a variant (custom constructor)
-                    // with zero parameters or enum value or a simple variable can now be available as a symbol
-                    // table in evaluation context.
-                    Ok(ArmPatternOutput::Matched(MatchResult {
-                        binding_variable: Some(BindingVariable(name.clone())),
-                        result: match_expr_result.clone(),
-                    }))
-                } else {
-                    handle_variant(
-                        name.as_str(),
-                        match_expr_result,
-                        variables,
-                        binding_variable,
-                        input,
-                    )
-                }
+                )
             }
         },
         ArmPattern::Literal(expr) => match expr.deref() {
@@ -156,6 +123,25 @@ fn evaluate_arm_pattern(
                 binding_variable: Some(BindingVariable(variable.clone())),
                 result: match_expr_result.clone(),
             })),
+            Expr::Result(result) =>
+                match result {
+                    Ok(ok_expr) => {
+                        handle_ok(match_expr_result, &ArmPattern::Literal(ok_expr.clone()), binding_variable, input)
+                    }
+                    Err(err_expr) => {
+                        handle_err(match_expr_result, &ArmPattern::Literal(err_expr.clone()), binding_variable, input)
+                    }
+                },
+            Expr::Option(option) => {
+                match option {
+                    Some(some_expr) => {
+                        handle_some(match_expr_result, &ArmPattern::Literal(some_expr.clone()), binding_variable, input)
+                    }
+                    None => {
+                        handle_none(match_expr_result)
+                    }
+                }
+            }
 
             expr => {
                 let arm_pattern = ArmPattern::from_expr(expr.clone());

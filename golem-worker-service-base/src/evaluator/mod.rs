@@ -11,13 +11,14 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::TypeAnnotatedValue;
 
-use crate::expression;
 use crate::primitive::{GetPrimitive, Primitive};
 use getter::GetError;
 use getter::Getter;
 use path::Path;
+use rib::expr::Expr;
+use rib::expr::Number;
+use rib::text;
 
-use crate::expression::{Expr, InnerNumber};
 use crate::worker_bridge_execution::{
     NoopWorkerRequestExecutor, RefinedWorkerResponse, WorkerRequestExecutor,
 };
@@ -119,7 +120,7 @@ impl Evaluator for DefaultEvaluator {
         input: &EvaluationContext,
     ) -> Result<ExprEvaluationResult, EvaluationError> {
         let executor = self.worker_request_executor.clone();
-        // An expression evaluation needs to be careful with string values
+        // An text evaluation needs to be careful with string values
         // and therefore returns ValueTyped
         async fn go(
             expr: &Expr,
@@ -159,7 +160,7 @@ impl Evaluator for DefaultEvaluator {
                     evaluation_result
                         .get_value()
                         .ok_or(EvaluationError::Message(format!(
-                            "The expression is evaluated to unit and doesn't have an index {}",
+                            "The text is evaluated to unit and doesn't have an index {}",
                             index
                         )))?
                         .get(&Path::from_index(*index))
@@ -172,7 +173,7 @@ impl Evaluator for DefaultEvaluator {
                         .await?
                         .get_value()
                         .ok_or(EvaluationError::Message(format!(
-                            "The expression is evaluated to unit and doesn't have an field {}",
+                            "The text is evaluated to unit and doesn't have an field {}",
                             field_name
                         )))?;
 
@@ -229,7 +230,7 @@ impl Evaluator for DefaultEvaluator {
                     match evaluated_expr {
                         ExprEvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Bool(!value))),
                         _ => Err(EvaluationError::Message(format!(
-                            "The expression is evaluated to {} but it is not a boolean value to apply not (!) operator on",
+                            "The text is evaluated to {} but it is not a boolean value to apply not (!) operator on",
                            &evaluated_expr.get_value().map_or("unit".to_string(), |eval_result| get_json_from_typed_value(&eval_result).to_string())
                         ))),
                     }
@@ -249,7 +250,7 @@ impl Evaluator for DefaultEvaluator {
                             }
                         }
                         _ => Err(EvaluationError::Message(format!(
-                            "The predicate expression is evaluated to {} but it is not a boolean value",
+                            "The predicate text is evaluated to {} but it is not a boolean value",
                             &pred.get_value().map_or("unit".to_string(), |eval_result| get_json_from_typed_value(&eval_result).to_string())
                         ))),
                     }
@@ -303,7 +304,7 @@ impl Evaluator for DefaultEvaluator {
                                 if let Some(value) = eval_result.get_value() {
                                     result.push(value);
                                 } else {
-                                    return Err(format!("The expression {} is evaluated to unit and cannot be part of a record", expression::to_string(expr).unwrap()).into());
+                                    return Err(format!("The text {} is evaluated to unit and cannot be part of a record", text::to_string(expr).unwrap()).into());
                                 }
                             }
                             Err(result) => return Err(result),
@@ -333,7 +334,7 @@ impl Evaluator for DefaultEvaluator {
                                 if let Some(value) = expr_result.get_value() {
                                     values.push((key.to_string(), value));
                                 } else {
-                                    return Err(format!("The expression for key {} is evaluated to unit and cannot be part of a record", key).into());
+                                    return Err(format!("The text for key {} is evaluated to unit and cannot be part of a record", key).into());
                                 }
                             }
 
@@ -362,7 +363,7 @@ impl Evaluator for DefaultEvaluator {
                                 if let Some(primitive) = value.get_primitive() {
                                     result.push_str(primitive.to_string().as_str())
                                 } else {
-                                    return Err(EvaluationError::Message(format!("Cannot append a complex expression {} or unit to form text", &value.get_value().map_or("unit".to_string(),  |v|  get_json_from_typed_value(&v).to_string()))));
+                                    return Err(EvaluationError::Message(format!("Cannot append a complex text {} or unit to form text", &value.get_value().map_or("unit".to_string(),  |v|  get_json_from_typed_value(&v).to_string()))));
                                 }
                             }
 
@@ -376,16 +377,16 @@ impl Evaluator for DefaultEvaluator {
                 Expr::Literal(literal) => Ok(TypeAnnotatedValue::Str(literal.clone()).into()),
 
                 Expr::Number(number) => match number {
-                    InnerNumber::UnsignedInteger(u64) => Ok(TypeAnnotatedValue::U64(*u64).into()),
-                    InnerNumber::Integer(i64) => Ok(TypeAnnotatedValue::S64(*i64).into()),
-                    InnerNumber::Float(f64) => Ok(TypeAnnotatedValue::F64(*f64).into()),
+                    Number::Unsigned(u64) => Ok(TypeAnnotatedValue::U64(*u64).into()),
+                    Number::Signed(i64) => Ok(TypeAnnotatedValue::S64(*i64).into()),
+                    Number::Float(f64) => Ok(TypeAnnotatedValue::F64(*f64).into()),
                 },
 
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(*bool).into()),
-                Expr::PatternMatch(match_expression, arms) => {
+                Expr::PatternMatch(match_text, arms) => {
                     pattern_match_evaluator::evaluate_pattern_match(
                         executor,
-                        match_expression,
+                        match_text,
                         arms,
                         input,
                     )
@@ -404,7 +405,7 @@ impl Evaluator for DefaultEvaluator {
                             }
                             .into())
                         } else {
-                            Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a option", expression::to_string(expr).unwrap())))
+                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a option", text::to_string(expr).unwrap())))
                         }
                     }
                     None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option {
@@ -427,7 +428,7 @@ impl Evaluator for DefaultEvaluator {
                             }
                             .into())
                         } else {
-                            Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a result", expression::to_string(expr).unwrap())))
+                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", text::to_string(expr).unwrap())))
                         }
                     }
                     Err(expr) => {
@@ -443,7 +444,7 @@ impl Evaluator for DefaultEvaluator {
                             }
                             .into())
                         } else {
-                            Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a result", expression::to_string(expr).unwrap())))
+                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", text::to_string(expr).unwrap())))
                         }
                     }
                 },
@@ -457,7 +458,7 @@ impl Evaluator for DefaultEvaluator {
                         if let Some(value) = eval_result.get_value() {
                             result.push(value);
                         } else {
-                            return Err(EvaluationError::Message(format!("The expression {} is evaluated to unit and cannot be part of a tuple", expression::to_string(expr).unwrap())));
+                            return Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a tuple", text::to_string(expr).unwrap())));
                         }
                     }
 
@@ -495,10 +496,11 @@ mod internal {
     use golem_wasm_rpc::TypeAnnotatedValue;
     use std::str::FromStr;
     use std::sync::Arc;
+    use rib::function_name::ParsedFunctionName;
 
     pub(crate) async fn call_worker_function(
         runtime: &EvaluationContext,
-        function_name: &str,
+        function_name: &ParsedFunctionName,
         json_params: Vec<TypeAnnotatedValue>,
         executor: &Arc<dyn WorkerRequestExecutor + Sync + Send>,
     ) -> Result<RefinedWorkerResponse, EvaluationError> {
@@ -507,7 +509,7 @@ mod internal {
         ))?;
 
         let analysed_function = runtime
-            .find_function(function_name)
+            .find_function(function_name.clone())
             .map_err(|err| EvaluationError::Message(err.to_string()))?
             .ok_or(EvaluationError::Message(format!(
                 "The function {} is not found at Runtime",
@@ -583,13 +585,13 @@ mod tests {
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, Uri};
     use serde_json::{json, Value};
+    use rib::expr::Expr;
+    use rib::text;
 
     use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::evaluator_context::EvaluationContext;
     use crate::evaluator::getter::GetError;
     use crate::evaluator::{DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult};
-    use crate::expression;
-    use crate::expression::Expr;
     use crate::worker_binding::RequestDetails;
     use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerResponse};
     use test_utils::*;
@@ -627,7 +629,7 @@ mod tests {
                 .await?;
             Ok(eval_result
                 .get_value()
-                .ok_or("The expression is evaluated to unit and doesn't have a value")?)
+                .ok_or("The text is evaluated to unit and doesn't have a value")?)
         }
 
         async fn evaluate_with_worker_response(
@@ -644,7 +646,7 @@ mod tests {
 
             Ok(eval_result
                 .get_value()
-                .ok_or("The expression is evaluated to unit and doesn't have a value")?)
+                .ok_or("The text is evaluated to unit and doesn't have a value")?)
         }
 
         async fn evaluate_with(
@@ -688,7 +690,7 @@ mod tests {
 
         let resolved_variables = request_details_from_request_path_variables(uri, path_pattern);
 
-        let expr = expression::from_string("${request.path.id}").unwrap();
+        let expr = text::from_string("${request.path.id}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("pId".to_string());
         let result = noop_executor
             .evaluate_with_request_details(&expr, &resolved_variables)
@@ -718,7 +720,7 @@ mod tests {
             &HeaderMap::new(),
         );
 
-        let expr = expression::from_string("${request.body.id}").unwrap();
+        let expr = text::from_string("${request.body.id}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("bId".to_string());
         let result = noop_executor
             .evaluate_with_request_details(&expr, &resolved_variables)
@@ -743,7 +745,7 @@ mod tests {
             &HeaderMap::new(),
         );
 
-        let expr = expression::from_string("${request.body.titles[0]}").unwrap();
+        let expr = text::from_string("${request.body.titles[0]}").unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("bTitle1".to_string());
         let result = noop_executor
             .evaluate_with_request_details(&expr, &resolved_variables)
@@ -769,7 +771,7 @@ mod tests {
         );
 
         let expr =
-            expression::from_string("${request.body.address.street} ${request.body.address.city}")
+            text::from_string("${request.body.address.street} ${request.body.address.city}")
                 .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet bCity".to_string());
         let result = noop_executor
@@ -793,7 +795,7 @@ mod tests {
             &header_map,
         );
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${if request.headers.authorisation == "admin" then 200 else 401}"#,
         )
         .unwrap();
@@ -826,7 +828,7 @@ mod tests {
             &HeaderMap::new(),
         );
 
-        let expr = expression::from_string("${request.body.address.street2}").unwrap();
+        let expr = text::from_string("${request.body.address.street2}").unwrap();
         let expected_evaluated_result =
             EvaluationError::InvalidReference(GetError::KeyNotFound("street2".to_string()));
 
@@ -855,7 +857,7 @@ mod tests {
             &HeaderMap::new(),
         );
 
-        let expr = expression::from_string("${request.body.titles[4]}").unwrap();
+        let expr = text::from_string("${request.body.titles[4]}").unwrap();
         let expected_evaluated_result =
             EvaluationError::InvalidReference(GetError::IndexNotFound(4));
 
@@ -881,7 +883,7 @@ mod tests {
             &HeaderMap::new(),
         );
 
-        let expr = expression::from_string("${request.body.address[4]}").unwrap();
+        let expr = text::from_string("${request.body.address[4]}").unwrap();
         let expected_evaluated_result = EvaluationError::InvalidReference(GetError::NotArray {
             index: 4,
             found: json!(
@@ -920,11 +922,11 @@ mod tests {
             &header_map,
         );
 
-        let expr = expression::from_string("${if request.headers.authorisation then 200 else 401}")
+        let expr = text::from_string("${if request.headers.authorisation then 200 else 401}")
             .unwrap();
 
         let expected_evaluated_result = EvaluationError::Message(format!(
-            "The predicate expression is evaluated to {} but it is not a boolean value",
+            "The predicate text is evaluated to {} but it is not a boolean value",
             json!("admin")
         ));
         let result = noop_executor
@@ -956,7 +958,7 @@ mod tests {
             &HeaderMap::new(),
         );
 
-        let expr = expression::from_string("${request.body.address.street.name}").unwrap();
+        let expr = text::from_string("${request.body.address.street.name}").unwrap();
         let expected_evaluated_result = EvaluationError::InvalidReference(GetError::NotRecord {
             key_name: "name".to_string(),
             found: json!("bStreet").to_string(),
@@ -982,7 +984,7 @@ mod tests {
             &HeaderMap::new(),
         );
 
-        let expr = expression::from_string("${worker.response.address.street}").unwrap();
+        let expr = text::from_string("${worker.response.address.street}").unwrap();
         let result = noop_executor
             .evaluate_with_request_details(&expr, &resolved_variables)
             .await;
@@ -1019,7 +1021,7 @@ mod tests {
         ))
         .unwrap();
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { some(value) => "personal-id", none => "not found" }}"#,
         )
         .unwrap();
@@ -1039,7 +1041,7 @@ mod tests {
         let worker_response =
             get_worker_response(Value::Null.to_string().as_str()).to_test_worker_bridge_response();
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { some(value) => "personal-id", none => "not found" }}"#,
         )
         .unwrap();
@@ -1074,7 +1076,7 @@ mod tests {
         )
         .to_test_worker_bridge_response();
 
-        let expr1 = expression::from_string(
+        let expr1 = text::from_string(
             r#"${if request.path.id == "foo" then "bar" else match worker.response { ok(value) => value.id, err(msg) => "empty" }}"#,
         )
             .unwrap();
@@ -1083,7 +1085,7 @@ mod tests {
             .evaluate_with(&expr1, &resolved_variables_path, worker_bridge_response)
             .await;
 
-        let expr2 = expression::from_string(
+        let expr2 = text::from_string(
             r#"${if request.path.id == "bar" then "foo" else match worker.response { ok(foo) => foo.id, err(msg) => "empty" }}"#,
 
         ).unwrap();
@@ -1107,7 +1109,7 @@ mod tests {
         let error_response_with_request_variables = new_resolved_variables_from_request_path;
         let error_worker_response = error_worker_response.to_test_worker_bridge_response();
 
-        let expr3 = expression::from_string(
+        let expr3 = text::from_string(
             r#"${if request.path.id == "bar" then "foo" else match worker.response { ok(foo) => foo.id, err(msg) => "empty" }}"#,
 
         ).unwrap();
@@ -1150,7 +1152,7 @@ mod tests {
         )
         .to_test_worker_bridge_response();
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { ok(value) => "personal-id", err(msg) => "not found" }}"#,
         )
         .unwrap();
@@ -1178,7 +1180,7 @@ mod tests {
         )
         .to_test_worker_bridge_response();
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { ok(value) => value, err(msg) => "not found" }}"#,
         )
         .unwrap();
@@ -1207,7 +1209,7 @@ mod tests {
                     }"#,
         );
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { ok(value) => value.id, err(msg) => "not found" }}"#,
         )
         .unwrap();
@@ -1230,7 +1232,7 @@ mod tests {
                     }"#,
         );
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { ok(value) => value.ids[0], err(msg) => "not found" }}"#,
         )
         .unwrap();
@@ -1253,7 +1255,7 @@ mod tests {
                     }"#,
         );
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { ok(value) => some(value.ids[0]), err(msg) => "not found" }}"#,
         )
         .unwrap();
@@ -1279,7 +1281,7 @@ mod tests {
                     }"#,
         );
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { ok(value) => none, none => "not found" }}"#,
         )
         .unwrap();
@@ -1305,7 +1307,7 @@ mod tests {
                     }"#,
         );
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             "${match worker.response { ok(value) => some(none), none => none }}",
         )
         .unwrap();
@@ -1335,7 +1337,7 @@ mod tests {
                     }"#,
         );
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             "${match worker.response { ok(value) => ok(1), none => err(2) }}",
         )
         .unwrap();
@@ -1363,7 +1365,7 @@ mod tests {
                     }"#,
         );
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             "${match worker.response { ok(value) => ok(1), err(msg) => err(2) }}",
         )
         .unwrap();
@@ -1392,7 +1394,7 @@ mod tests {
                     }"#,
         );
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             "${match worker.response { ok(_) => ok(1), err(_) => err(2) }}",
         )
         .unwrap();
@@ -1423,7 +1425,7 @@ mod tests {
                     }"#,
         );
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             "${match worker.response { a @ ok(b @ _) => ok(1), c @ err(d @ ok(e)) => {p : c, q: d, r: e.id} }}",
         )
             .unwrap();
@@ -1475,7 +1477,7 @@ mod tests {
         );
 
         let expr =
-            expression::from_string("${match worker.response { Foo(value) => ok(value.id) }}")
+            text::from_string("${match worker.response { Foo(value) => ok(value.id) }}")
                 .unwrap();
         let result = noop_executor
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
@@ -1521,7 +1523,7 @@ mod tests {
         let worker_bridge_response =
             WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { Foo(some(value)) => value.id, err(msg) => "not found" }}"#,
         )
         .unwrap();
@@ -1544,7 +1546,7 @@ mod tests {
         let worker_bridge_response =
             WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => "not found" }}"#,
         )
             .unwrap();
@@ -1566,7 +1568,7 @@ mod tests {
         let worker_bridge_response =
             WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { Foo(ok(some(value))) => value.id, err(msg) => "not found" }}"#,
         )
             .unwrap();
@@ -1609,7 +1611,7 @@ mod tests {
 
         let worker_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
 
-        let expr = expression::from_string(
+        let expr = text::from_string(
             r#"${match worker.response { Foo(none) => "not found",  Foo(some(value)) => value.id }}"#,
         )
         .unwrap();
@@ -1626,7 +1628,7 @@ mod tests {
     async fn test_evaluation_with_wave_like_syntax_ok_record() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = expression::from_string("${{a : ok(1)}}").unwrap();
+        let expr = text::from_string("${{a : ok(1)}}").unwrap();
 
         let result = noop_executor
             .evaluate(&expr, &EvaluationContext::empty())
@@ -1657,7 +1659,7 @@ mod tests {
     async fn test_evaluation_with_wave_like_syntax_err_record() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = expression::from_string("${{a : err(1)}}").unwrap();
+        let expr = text::from_string("${{a : err(1)}}").unwrap();
 
         let result = noop_executor
             .evaluate(&expr, &EvaluationContext::empty())
@@ -1688,7 +1690,7 @@ mod tests {
     async fn test_evaluation_with_wave_like_syntax_simple_list() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = expression::from_string("${[1,2,3]}").unwrap();
+        let expr = text::from_string("${[1,2,3]}").unwrap();
 
         let result = noop_executor
             .evaluate(&expr, &EvaluationContext::empty())
@@ -1710,7 +1712,7 @@ mod tests {
     async fn test_evaluation_with_wave_like_syntax_simple_tuple() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = expression::from_string("${(some(1),2,3)}").unwrap();
+        let expr = text::from_string("${(some(1),2,3)}").unwrap();
 
         let result = noop_executor
             .evaluate(&expr, &EvaluationContext::empty())
@@ -1739,7 +1741,7 @@ mod tests {
     async fn test_evaluation_wave_like_syntax_flag() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = expression::from_string("${{A, B, C}}").unwrap();
+        let expr = text::from_string("${{A, B, C}}").unwrap();
 
         let result = noop_executor
             .evaluate(&expr, &EvaluationContext::empty())
@@ -1757,7 +1759,7 @@ mod tests {
     async fn test_evaluation_with_wave_like_syntax_result_list() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = expression::from_string("${[ok(1),ok(2)]}").unwrap();
+        let expr = text::from_string("${[ok(1),ok(2)]}").unwrap();
 
         let result = noop_executor
             .evaluate(&expr, &EvaluationContext::empty())
@@ -1796,7 +1798,7 @@ mod tests {
             z
           ";
 
-        let expr = expression::from_string(format!("${{{}}}", program)).unwrap();
+        let expr = text::from_string(format!("${{{}}}", program)).unwrap();
 
         let result = noop_executor
             .evaluate(&expr, &EvaluationContext::empty())
@@ -1811,7 +1813,6 @@ mod tests {
         use crate::api_definition::http::{AllPathPatterns, PathPattern, VarInfo};
         use crate::evaluator::tests::{EvaluatorTestExt, WorkerBridgeExt};
         use crate::evaluator::DefaultEvaluator;
-        use crate::expression;
         use crate::http::router::RouterPattern;
         use crate::worker_binding::RequestDetails;
         use crate::worker_bridge_execution::WorkerResponse;
@@ -1822,6 +1823,7 @@ mod tests {
         use http::{HeaderMap, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;
+        use rib::text;
 
         pub(crate) fn get_complex_variant_typed_value() -> TypeAnnotatedValue {
             TypeAnnotatedValue::Variant {
@@ -1948,7 +1950,7 @@ mod tests {
 
             let expr1_string =
                 r#"${match worker.response { ok(x) => "foo", err(msg) => "error" }}"#;
-            let expr1 = expression::from_string(expr1_string).unwrap();
+            let expr1 = text::from_string(expr1_string).unwrap();
             let value1 = noop_executor
                 .evaluate_with_worker_response(
                     &expr1,
@@ -1958,7 +1960,7 @@ mod tests {
                 .unwrap();
 
             let expr2_string = expr1.to_string();
-            let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
+            let expr2 = text::from_string(expr2_string.as_str()).unwrap();
             let value2 = noop_executor
                 .evaluate_with_worker_response(
                     &expr2,
@@ -1979,14 +1981,14 @@ mod tests {
 
             let expr1_string =
                 r#"append-${match worker.response { ok(x) => "foo", err(msg) => "error" }}"#;
-            let expr1 = expression::from_string(expr1_string).unwrap();
+            let expr1 = text::from_string(expr1_string).unwrap();
             let value1 = noop_executor
                 .evaluate_with_worker_response(&expr1, &worker_response)
                 .await
                 .unwrap();
 
             let expr2_string = expr1.to_string();
-            let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
+            let expr2 = text::from_string(expr2_string.as_str()).unwrap();
             let value2 = noop_executor
                 .evaluate_with_worker_response(&expr2, &worker_response)
                 .await
@@ -2005,7 +2007,7 @@ mod tests {
             let expr1_string =
                 r#"prefix-${match worker.response { ok(x) => "foo", err(msg) => "error" }}-suffix"#;
 
-            let expr1 = expression::from_string(expr1_string).unwrap();
+            let expr1 = text::from_string(expr1_string).unwrap();
             let value1 = noop_executor
                 .evaluate_with_worker_response(
                     &expr1,
@@ -2015,7 +2017,7 @@ mod tests {
                 .unwrap();
 
             let expr2_string = expr1.to_string();
-            let expr2 = expression::from_string(expr2_string.as_str()).unwrap();
+            let expr2 = text::from_string(expr2_string.as_str()).unwrap();
             let value2 = noop_executor
                 .evaluate_with_worker_response(
                     &expr2,

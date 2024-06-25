@@ -1,5 +1,6 @@
 use std::io::Write;
 use crate::expr::Expr;
+use std::fmt::Display;
 
 pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
     let mut buf = vec![];
