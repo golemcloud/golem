@@ -4,13 +4,13 @@ use combine::{
     sep_by1, Parser,
 };
 
-use crate::rib::expr::Expr;
+use crate::expr::Expr;
 
 use super::rib_expr::rib_expr;
 use combine::stream::easy;
 
 pub fn record<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    between(
+    spaces().with(between(
         char_('{'),
         char_('}'),
         sep_by1(field(), char_(',').skip(spaces())),
@@ -22,7 +22,7 @@ pub fn record<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
                 .map(|f| (f.key.clone(), Box::new(f.value.clone())))
                 .collect::<Vec<_>>(),
         )
-    })
+    }))
 }
 
 fn field_key<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {

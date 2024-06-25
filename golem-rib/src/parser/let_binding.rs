@@ -4,19 +4,18 @@ use combine::{
     Parser,
 };
 
-use crate::rib::expr::Expr;
-use crate::rib::parser::rib_expr::rib_expr;
+use crate::expr::Expr;
+use crate::parser::rib_expr::rib_expr;
 use combine::stream::easy;
 
 pub fn let_binding<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    (
+    spaces().with((
         string("let").skip(spaces()),
         let_variable().skip(spaces()),
         char_('=').skip(spaces()),
-        rib_expr(),
-        char_(';'),
+        rib_expr()
     )
-        .map(|(_, var, _, expr, _)| Expr::Let(var, Box::new(expr)))
+        .map(|(_, var, _, expr)| Expr::Let(var, Box::new(expr))))
 }
 
 fn let_variable<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
@@ -32,7 +31,7 @@ mod tests {
 
     #[test]
     fn test_let_binding() {
-        let input = "let foo = bar;";
+        let input = "let foo = bar";
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
@@ -48,7 +47,7 @@ mod tests {
 
     #[test]
     fn test_let_binding_with_sequence() {
-        let input = "let foo = [bar, baz];";
+        let input = "let foo = [bar, baz]";
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
@@ -67,7 +66,7 @@ mod tests {
 
     #[test]
     fn test_let_binding_with_binary_comparisons() {
-        let input = "let foo = bar == baz;";
+        let input = "let foo = bar == baz";
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
@@ -86,7 +85,7 @@ mod tests {
 
     #[test]
     fn test_let_binding_with_option() {
-        let input = "let foo = some(bar);";
+        let input = "let foo = some(bar)";
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
@@ -104,7 +103,7 @@ mod tests {
 
     #[test]
     fn test_let_binding_with_result() {
-        let input = "let foo = ok(bar);";
+        let input = "let foo = ok(bar)";
         let result = let_binding().easy_parse(input);
         assert_eq!(
             result,
@@ -122,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_let_binding_with_literal() {
-        let input = "let foo = \"bar\";";
+        let input = "let foo = \"bar\"";
         let result = let_binding().easy_parse(input);
         assert_eq!(
             result,

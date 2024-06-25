@@ -1,5 +1,5 @@
-use crate::rib::expr::Expr;
-use crate::rib::parser::rib_expr::rib_expr;
+use crate::expr::Expr;
+use crate::parser::rib_expr::rib_expr;
 use combine::parser::char::{spaces, string};
 use combine::stream::easy;
 use combine::Parser;
@@ -12,7 +12,7 @@ pub fn conditional<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             string("then").skip(spaces()),
             rib_expr().skip(spaces()),
             string("else").skip(spaces()),
-            rib_expr(),
+            rib_expr().skip(spaces()),
         )
             .map(|(_, cond, _, then_expr, _, else_expr)| {
                 Expr::Cond(Box::new(cond), Box::new(then_expr), Box::new(else_expr))

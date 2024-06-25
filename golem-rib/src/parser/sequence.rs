@@ -1,19 +1,19 @@
-use crate::rib::expr::Expr;
+use crate::expr::Expr;
 use combine::parser::char::{char, spaces};
 use combine::sep_by;
 use combine::{between, Parser};
 
-use crate::rib::parser::rib_expr::rib_expr;
+use crate::parser::rib_expr::rib_expr;
 use combine::stream::easy;
 
 pub fn sequence<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    between(
+    spaces().with(between(
         char('['),
         char(']'),
         sep_by(rib_expr(), char(',').skip(spaces())),
     )
     .map(Expr::Sequence)
-    .message("Unable to parse sequece")
+    .message("Unable to parse sequece"))
 }
 
 #[cfg(test)]

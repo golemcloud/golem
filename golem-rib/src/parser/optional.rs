@@ -1,19 +1,19 @@
 use combine::{
     between, choice,
-    parser::char::{char, string},
+    parser::char::{char, spaces, string},
     Parser,
 };
 
-use crate::rib::expr::Expr;
+use crate::expr::Expr;
 
 use super::rib_expr::rib_expr;
 use combine::stream::easy;
 
 pub fn option<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     choice((
-        between(string("some("), char(')'), rib_expr())
-            .map(|expr| Expr::Option(Some(Box::new(expr)))),
-        string("none").map(|_| Expr::Option(None)),
+        spaces().with(between(string("some("), char(')'), rib_expr())
+            .map(|expr| Expr::Option(Some(Box::new(expr))))),
+        spaces().with(string("none").map(|_| Expr::Option(None))),
     ))
 }
 

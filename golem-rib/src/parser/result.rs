@@ -4,7 +4,9 @@ use combine::{
     Parser,
 };
 
-use crate::rib::expr::Expr;
+use combine::parser::char::spaces;
+
+use crate::expr::Expr;
 
 use super::rib_expr::rib_expr;
 
@@ -12,9 +14,9 @@ use combine::stream::easy;
 
 pub fn result<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     choice((
-        between(string("ok("), char(')'), rib_expr()).map(|expr| Expr::Result(Ok(Box::new(expr)))),
-        between(string("err("), char(')'), rib_expr())
-            .map(|expr| Expr::Result(Err(Box::new(expr)))),
+        spaces().with(between(string("ok("), char(')'), rib_expr()).map(|expr| Expr::Result(Ok(Box::new(expr))))),
+        spaces().with(between(string("err("), char(')'), rib_expr())
+            .map(|expr| Expr::Result(Err(Box::new(expr))))),
     ))
 }
 

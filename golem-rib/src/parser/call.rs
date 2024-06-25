@@ -9,16 +9,16 @@ use combine::{
 
 use combine::{any, attempt, between, choice, many1, optional, parser, token, Parser};
 
-use crate::rib::expr::Expr;
-use crate::rib::function_name::{
+use crate::expr::Expr;
+use crate::function_name::{
     ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
 };
-use crate::rib::parser::rib_expr::rib_expr;
+use crate::parser::rib_expr::rib_expr;
 use combine::sep_by;
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
 pub fn call<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    (
+    spaces().with((
         function_name().skip(spaces()),
         between(
             char('(').skip(spaces()),
@@ -27,7 +27,7 @@ pub fn call<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
         ),
     )
         .map(|(name, args)| Expr::Call(name, args))
-        .message("Unable to parse call")
+        .message("Unable to parse call"))
 }
 
 // TODO;  Reusing function_name between Rib and internals of GOLEM may be a surface level requirement
@@ -183,11 +183,11 @@ mod function_call_tests {
 
     use combine::EasyParser;
 
-    use crate::rib::expr::Expr;
-    use crate::rib::function_name::{
+    use crate::expr::Expr;
+    use crate::function_name::{
         ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
     };
-    use crate::rib::parser::rib_expr::rib_expr;
+    use crate::parser::rib_expr::rib_expr;
 
     #[test]
     fn test_call() {

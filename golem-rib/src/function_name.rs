@@ -297,7 +297,7 @@ impl ParsedFunctionName {
     pub fn parse(name: impl AsRef<str>) -> Result<Self, String> {
         let name = name.as_ref();
 
-        let mut parser = crate::rib::parser::call::function_name();
+        let mut parser = crate::parser::call::function_name();
 
         let result: Result<(ParsedFunctionName, &str), easy::ParseError<&str>> =
             parser.easy_parse(name);

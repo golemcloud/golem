@@ -1,13 +1,14 @@
 use combine::{EasyParser, ParseError};
-use crate::rib::expr::Expr;
+use crate::expr::Expr;
 
 mod writer;
 
-use crate::rib::parser::rib_expr::rib_expr;
-use crate::rib::text::writer::WriterError;
+use crate::parser::rib_expr::rib_expr;
+use crate::text::writer::WriterError;
+use combine::stream::easy;
 
-pub fn from_string(input: impl AsRef<str>) -> Result<Expr, ParseError<_>> {
-    rib_expr().easy_parse(input.as_ref())
+pub fn from_string<'t>(input: impl AsRef<str>) -> Result<Expr, easy::ParseError<&'t str>> {
+   Expr::from_str(input.as_ref())
 }
 
 pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
@@ -16,8 +17,8 @@ pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
 
 #[cfg(test)]
 mod record_tests {
-    use crate::rib::text::{from_string, to_string, Expr};
-    use crate::rib::expr::*;
+    use crate::text::{from_string, to_string, Expr};
+    use crate::expr::*;
 
     #[test]
     fn test_round_trip_simple_record_empty() {
@@ -299,15 +300,15 @@ mod record_tests {
             (
                 "a".to_string(),
                 Box::new(Expr::GreaterThan(
-                    Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
-                    Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+                    Box::new(Expr::unsigned_integer(1)),
+                    Box::new(Expr::unsigned_integer(2)),
                 )),
             ),
             (
                 "b".to_string(),
                 Box::new(Expr::LessThan(
-                    Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
-                    Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+                    Box::new(Expr::unsigned_integer(1)),
+                    Box::new(Expr::unsigned_integer(2)),
                 )),
             ),
         ]);
@@ -444,9 +445,9 @@ mod record_tests {
 
 #[cfg(test)]
 mod sequence_tests {
-    use crate::expression::{from_string, to_string, ArmPattern, Expr, InnerNumber, MatchArm};
-    use crate::rib::expr::Expr;
-    use crate::rib::text::{from_string, to_string};
+    use crate::text::{from_string, to_string};
+    use crate::expr::Expr;
+    use crate::text::{from_string, to_string};
 
     #[test]
     fn test_round_trip_read_write_sequence_empty() {
@@ -740,9 +741,9 @@ mod sequence_tests {
 
 #[cfg(test)]
 mod tuple_tests {
-    use crate::expression::{from_string, to_string, Expr, InnerNumber};
-    use crate::rib::expr::Expr;
-    use crate::rib::text::{from_string, to_string};
+    use crate::text::{from_string, to_string};
+    use crate::expr::Expr;
+    use crate::text::{from_string, to_string};
 
     #[test]
     fn test_round_trip_read_write_tuple_empty() {
@@ -901,12 +902,12 @@ mod tuple_tests {
     fn test_round_trip_read_write_tuple_of_math_op() {
         let input_expr = Expr::Tuple(vec![
             Expr::GreaterThan(
-                Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
-                Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+                Box::new(Expr::unsigned_integer((1))),
+                Box::new(Expr::unsigned_integer(2)),
             ),
             Expr::LessThan(
-                Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
-                Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+                Box::new(Expr::unsigned_integer((1))),
+                Box::new(Expr::unsigned_integer(2)),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -930,7 +931,8 @@ mod tuple_tests {
 
 #[cfg(test)]
 mod simple_values_test {
-    use crate::expression::{from_string, to_string, Expr, InnerNumber};
+    use crate::text::{from_string, to_string};
+    use crate::expr::Expr;
 
     #[test]
     fn test_round_trip_read_write_literal() {
@@ -952,7 +954,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_float() {
-        let input_expr = Expr::Number(InnerNumber::Float(1.1));
+        let input_expr = Expr::float(1.1);
         let expr_str = to_string(&input_expr).unwrap();
         let output_expr = from_string(expr_str).unwrap();
         assert_eq!(input_expr, output_expr);
@@ -960,7 +962,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_u64() {
-        let input_expr = Expr::Number(InnerNumber::UnsignedInteger(1));
+        let input_expr = Expr::unsigned_integer(1);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${1}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -969,7 +971,7 @@ mod simple_values_test {
 
     #[test]
     fn test_round_trip_read_write_number_i64() {
-        let input_expr = Expr::Number(InnerNumber::Integer(-1));
+        let input_expr = Expr::signed_integer(-1);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${-1}".to_string();
         let output_expr = from_string(expr_str.clone()).unwrap();
@@ -1006,7 +1008,8 @@ mod simple_values_test {
 
 #[cfg(test)]
 mod let_tests {
-    use crate::expression::{from_string, to_string, Expr};
+    use crate::text::{from_string, to_string};
+    use crate::expr::Expr;
 
     #[test]
     fn test_round_trip_read_write_let() {
@@ -1023,7 +1026,8 @@ mod let_tests {
 
 #[cfg(test)]
 mod selection_tests {
-    use crate::expression::{from_string, to_string, Expr};
+    use crate::text::{from_string, to_string};
+    use crate::expr::Expr;
 
     #[test]
     fn test_round_trip_read_write_select_field_from_request() {
@@ -1124,7 +1128,8 @@ mod selection_tests {
 
 #[cfg(test)]
 mod flag_tests {
-    use crate::expression::{from_string, to_string, Expr};
+    use crate::text::{from_string, to_string};
+    use crate::expr::Expr;
 
     #[test]
     fn test_round_trip_read_write_flags_single() {
@@ -1151,9 +1156,10 @@ mod flag_tests {
 
 #[cfg(test)]
 mod match_tests {
-    use crate::expression::{from_string, to_string, ArmPattern, Expr, InnerNumber, MatchArm};
-    use crate::rib::expr::{ArmPattern, Expr, MatchArm};
-    use crate::rib::text::to_string;
+    use crate::text::{from_string, to_string};
+    use crate::expr::Expr;
+    use crate::expr::ArmPattern;
+    use crate::expr::MatchArm;
 
     #[test]
     fn test_round_trip_match_expr() {
@@ -1573,7 +1579,8 @@ mod match_tests {
 
 #[cfg(test)]
 mod if_cond_tests {
-    use crate::expression::{from_string, to_string, Expr};
+    use crate::text::{from_string, to_string};
+    use crate::expr::Expr;
 
     #[test]
     fn test_round_trip_if_condition_literals() {

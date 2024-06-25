@@ -1,7 +1,7 @@
 use match_arm::*;
 
-use crate::rib::expr::Expr;
-use crate::rib::parser::rib_expr::rib_expr;
+use crate::expr::Expr;
+use crate::parser::rib_expr::rib_expr;
 use combine::parser::char::{char, spaces, string};
 use combine::stream::easy;
 use combine::{sep_by1, Parser};
@@ -9,14 +9,14 @@ use combine::{sep_by1, Parser};
 pub fn pattern_match<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     let arms = sep_by1(match_arm().skip(spaces()), char(',').skip(spaces()));
 
-    (
+    spaces().with((
         string("match").skip(spaces()),
         rib_expr().skip(spaces()),
         char('{').skip(spaces()),
         arms.skip(spaces()),
         char('}').skip(spaces()),
     )
-        .map(|(_, expr, _, arms, _)| Expr::PatternMatch(Box::new(expr), arms))
+        .map(|(_, expr, _, arms, _)| Expr::PatternMatch(Box::new(expr), arms)))
 }
 
 mod match_arm {
@@ -26,8 +26,8 @@ mod match_arm {
 
     use super::arm_pattern::*;
 
-    use crate::rib::expr::MatchArm;
-    use crate::rib::parser::rib_expr::rib_expr;
+    use crate::expr::MatchArm;
+    use crate::parser::rib_expr::rib_expr;
 
     // RHS of a match arm
     pub(crate) fn match_arm<'t>() -> impl Parser<easy::Stream<&'t str>, Output = MatchArm> {
@@ -46,9 +46,9 @@ mod match_arm {
 mod arm_pattern {
     use combine::{choice, parser, parser::char::char, Parser, Stream};
 
-    use crate::rib::parser::pattern_match::internal::*;
+    use crate::parser::pattern_match::internal::*;
 
-    use crate::rib::expr::ArmPattern;
+    use crate::expr::ArmPattern;
 
     use combine::attempt;
 
@@ -75,14 +75,12 @@ mod internal {
     use combine::{choice, easy};
     use combine::{parser::char::char as char_, Parser};
 
-    use crate::rib::expr::ConstructorTypeName;
+    use crate::expr::ArmPattern;
+    use crate::parser::optional::option;
+    use crate::parser::result::result;
+    use crate::parser::rib_expr::rib_expr;
 
-    use crate::rib::expr::ArmPattern;
-    use crate::rib::parser::optional::option;
-    use crate::rib::parser::result::result;
-    use crate::rib::parser::rib_expr::rib_expr;
-
-    use crate::rib::parser::pattern_match::arm_pattern::*;
+    use crate::parser::pattern_match::arm_pattern::*;
     use combine::attempt;
     use combine::many1;
     use combine::parser::char::letter;
@@ -114,22 +112,19 @@ mod internal {
             .map(|(name, _, patterns, _)| ArmPattern::Constructor(name, patterns))
     }
 
-    fn constructor_type_name<'t>(
-    ) -> impl Parser<easy::Stream<&'t str>, Output = ConstructorTypeName> {
+    fn constructor_type_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
         many1(letter().or(char_('_')))
             .map(|s: Vec<char>| s.into_iter().collect())
             .message("Unable to parse custom constructor name")
-            .map(ConstructorTypeName::Identifier)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rib::expr::ArmPattern;
-    use crate::rib::expr::ConstructorTypeName;
-    use crate::rib::expr::Expr;
-    use crate::rib::expr::MatchArm;
+    use crate::expr::ArmPattern;
+    use crate::expr::Expr;
+    use crate::expr::MatchArm;
     use combine::EasyParser;
 
     #[test]
@@ -162,7 +157,7 @@ mod tests {
                     Box::new(Expr::Identifier("foo".to_string())),
                     vec![MatchArm((
                         ArmPattern::Constructor(
-                            ConstructorTypeName::Identifier("Foo".to_string()),
+                            "Foo".to_string(),
                             vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                                 "x".to_string()
                             )))]

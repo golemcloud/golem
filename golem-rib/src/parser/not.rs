@@ -1,13 +1,13 @@
-use crate::rib::expr::Expr;
-use crate::rib::parser::rib_expr::rib_expr;
+use crate::expr::Expr;
+use crate::parser::rib_expr::rib_expr;
 use combine::parser::char::{spaces, string};
 use combine::stream::easy;
 use combine::Parser;
 
 pub fn not<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    (string("!").skip(spaces()), rib_expr())
+    spaces().with((string("!").skip(spaces()), rib_expr())
         .map(|(_, expr)| Expr::Not(Box::new(expr)))
-        .message("Unable to parse not")
+        .message("Unable to parse not"))
 }
 
 #[cfg(test)]
