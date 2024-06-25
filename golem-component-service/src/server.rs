@@ -89,7 +89,7 @@ async fn async_main(
 
     match config.db.clone() {
         DbConfig::Postgres(c) => {
-            db::postgres_migrate(&c, "db/migration/postgres")
+            db::postgres_migrate(&c, "./db/migration/postgres")
                 .await
                 .map_err(|e| {
                     dbg!("DB - init error: {}", e);
@@ -97,7 +97,7 @@ async fn async_main(
                 })?;
         }
         DbConfig::Sqlite(c) => {
-            db::sqlite_migrate(&c, "db/migration/sqlite")
+            db::sqlite_migrate(&c, "./db/migration/sqlite")
                 .await
                 .map_err(|e| {
                     error!("DB - init error: {}", e);
