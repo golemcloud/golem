@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::function_name::ParsedFunctionName;
+use rib::function_name::ParsedFunctionName;
 use golem_common::model::{
     ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
