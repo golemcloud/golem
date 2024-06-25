@@ -16,8 +16,11 @@ path = "wit/deps/auction_auction"
 [package.metadata.component.target.dependencies."golem:rpc"]
 path = "wit/deps/wasm-rpc"
 
+[package.metadata.component.target.dependencies."wasi:io"]
+path = "wit/deps/io"
+
 [dependencies.golem-wasm-rpc]
-version = "0.0.29"
+path = "/Users/vigoo/projects/ziverge/wasm-rpc/wasm-rpc"
 features = ["stub"]
 default-features = false
 

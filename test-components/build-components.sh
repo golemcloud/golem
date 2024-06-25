@@ -259,7 +259,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "c" ]; then
     if [ "$rebuild" = true ]; then
       rm *.wasm
     fi
-    wit-bindgen c ./wit
+    wit-bindgen c --autodrop-borrows yes ./wit
     ~/wasi-sdk-20.0/bin/clang --sysroot ~/wasi-sdk-20.0/share/wasi-sysroot main.c c_api1.c c_api1_component_type.o -o main.wasm
 
     echo "Turning the module into a WebAssembly Component..."
