@@ -435,6 +435,7 @@ impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
             updates,
             created_at,
             last_error,
+            ..
         } = value;
 
         WorkerMetadata {
