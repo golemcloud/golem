@@ -7,7 +7,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 
 use golem_service_base::api_tags::ApiTags;
-use golem_worker_service_base::auth::EmptyNamespace;
+use golem_worker_service_base::auth::DefaultNamespace;
 use tracing::log::info;
 
 use golem_worker_service_base::api::ApiDeployment;
@@ -16,13 +16,13 @@ use golem_worker_service_base::service::api_definition::ApiDefinitionIdWithVersi
 use golem_worker_service_base::service::api_deployment::ApiDeploymentService;
 
 pub struct ApiDeploymentApi {
-    deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send>,
+    deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/deployments", tag = ApiTags::ApiDeployment)]
 impl ApiDeploymentApi {
     pub fn new(
-        deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send>,
+        deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
     ) -> Self {
         Self { deployment_service }
     }
@@ -44,7 +44,7 @@ impl ApiDeploymentApi {
         info!("Deploy API definitions at site: {}", payload.site);
 
         let api_deployment = api_definition::ApiDeployment {
-            namespace: EmptyNamespace::default(),
+            namespace: DefaultNamespace::default(),
             api_definition_keys: api_definition_infos,
             site: payload.site.clone(),
         };
@@ -74,7 +74,7 @@ impl ApiDeploymentApi {
 
         let values = self
             .deployment_service
-            .get_by_id(&EmptyNamespace::default(), &api_definition_id)
+            .get_by_id(&DefaultNamespace::default(), &api_definition_id)
             .await?;
 
         Ok(Json(values.iter().map(|v| v.clone().into()).collect()))
@@ -100,7 +100,7 @@ impl ApiDeploymentApi {
         let site = site.0;
 
         self.deployment_service
-            .delete(&EmptyNamespace::default(), &ApiSiteString(site))
+            .delete(&DefaultNamespace::default(), &ApiSiteString(site))
             .await?;
 
         Ok(Json("API deployment deleted".to_string()))

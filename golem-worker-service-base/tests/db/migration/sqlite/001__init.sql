@@ -1,6 +1,6 @@
 CREATE TABLE api_definitions
 (
-    namespace  text    NOT NULL default '',
+    namespace  text    NOT NULL,
     id         text    NOT NULL,
     version    text    NOT NULL,
     draft      boolean NOT NULL default true,
@@ -12,7 +12,7 @@ CREATE TABLE api_definitions
 
 CREATE TABLE api_deployments
 (
-    namespace          text NOT NULL default '',
+    namespace          text NOT NULL,
     host               text NOT NULL,
     subdomain          text,
     definition_id      text NOT NULL,

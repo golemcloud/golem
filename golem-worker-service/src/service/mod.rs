@@ -6,7 +6,7 @@ use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
 
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::auth::{EmptyAuthCtx, EmptyNamespace};
+use golem_worker_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::http::InputHttpRequest;
 
 use golem_worker_service_base::repo::api_definition;
@@ -44,9 +44,11 @@ pub struct Services {
     pub worker_service: worker::WorkerService,
     pub component_service: component::ComponentService,
     pub definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, EmptyNamespace, RouteValidationError> + Sync + Send,
+        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+            + Sync
+            + Send,
     >,
-    pub deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send>,
+    pub deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
     pub http_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
@@ -131,7 +133,7 @@ impl Services {
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
                 + Sync
                 + Send,
         > = Arc::new(ApiDefinitionServiceDefault::new(
@@ -140,7 +142,7 @@ impl Services {
             api_definition_validator_service.clone(),
         ));
 
-        let deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send> =
+        let deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send> =
             Arc::new(ApiDeploymentServiceDefault::new(
                 api_deployment_repo.clone(),
                 api_definition_repo.clone(),
@@ -186,12 +188,12 @@ impl Services {
         );
 
         let definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
                 + Sync
                 + Send,
         > = Arc::new(ApiDefinitionServiceNoop {});
 
-        let deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send> =
+        let deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send> =
             Arc::new(ApiDeploymentServiceNoop {});
 
         let http_definition_lookup_service =

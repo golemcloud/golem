@@ -23,19 +23,19 @@ impl IntoIterator for EmptyAuthCtx {
 #[derive(
     Default, Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, Deserialize,
 )]
-pub struct EmptyNamespace();
+pub struct DefaultNamespace();
 
-impl Display for EmptyNamespace {
+impl Display for DefaultNamespace {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "")
+        write!(f, "default")
     }
 }
 
-impl TryFrom<String> for EmptyNamespace {
+impl TryFrom<String> for DefaultNamespace {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.is_empty() {
-            Ok(EmptyNamespace::default())
+        if value.as_str() == "default" {
+            Ok(DefaultNamespace::default())
         } else {
             Err("Failed to parse empty namespace".to_string())
         }

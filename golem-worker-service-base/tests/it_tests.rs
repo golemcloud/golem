@@ -6,7 +6,7 @@ mod tests {
     use golem_worker_service_base::api_definition::{
         ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion,
     };
-    use golem_worker_service_base::auth::{EmptyAuthCtx, EmptyNamespace};
+    use golem_worker_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
     use golem_worker_service_base::repo::{api_definition, api_deployment};
     use golem_worker_service_base::service::api_definition::{
         ApiDefinitionIdWithVersion, ApiDefinitionService, ApiDefinitionServiceDefault,
@@ -66,7 +66,7 @@ mod tests {
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, EmptyNamespace, RouteValidationError>
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
                 + Sync
                 + Send,
         > = Arc::new(ApiDefinitionServiceDefault::new(
@@ -75,7 +75,7 @@ mod tests {
             api_definition_validator_service.clone(),
         ));
 
-        let deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send> =
+        let deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send> =
             Arc::new(ApiDeploymentServiceDefault::new(
                 api_deployment_repo.clone(),
                 api_definition_repo.clone(),
@@ -88,23 +88,43 @@ mod tests {
         let def5 = get_api_definition("def5", "/api/get5", "worker5", "[]", "[]");
 
         definition_service
-            .create(&def1, &EmptyNamespace::default(), &EmptyAuthCtx::default())
+            .create(
+                &def1,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .unwrap();
         definition_service
-            .create(&def2, &EmptyNamespace::default(), &EmptyAuthCtx::default())
+            .create(
+                &def2,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .unwrap();
         definition_service
-            .create(&def3, &EmptyNamespace::default(), &EmptyAuthCtx::default())
+            .create(
+                &def3,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .unwrap();
         definition_service
-            .create(&def4, &EmptyNamespace::default(), &EmptyAuthCtx::default())
+            .create(
+                &def4,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .unwrap();
         definition_service
-            .create(&def5, &EmptyNamespace::default(), &EmptyAuthCtx::default())
+            .create(
+                &def5,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .unwrap();
 
@@ -151,7 +171,7 @@ mod tests {
         host: &str,
         subdomain: Option<&str>,
         definitions: Vec<&str>,
-    ) -> ApiDeployment<EmptyNamespace> {
+    ) -> ApiDeployment<DefaultNamespace> {
         let api_definition_keys: Vec<ApiDefinitionIdWithVersion> = definitions
             .into_iter()
             .map(|id| ApiDefinitionIdWithVersion {
@@ -161,7 +181,7 @@ mod tests {
             .collect();
 
         ApiDeployment {
-            namespace: EmptyNamespace::default(),
+            namespace: DefaultNamespace::default(),
             api_definition_keys,
             site: ApiSite {
                 host: host.to_string(),

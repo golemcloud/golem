@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use crate::api_definition::http::HttpApiDefinition;
-use crate::auth::EmptyNamespace;
+use crate::auth::DefaultNamespace;
 use crate::http::InputHttpRequest;
 use crate::service::api_deployment::ApiDeploymentService;
 use async_trait::async_trait;
@@ -27,12 +27,12 @@ impl Display for ApiDefinitionLookupError {
 }
 
 pub struct HttpApiDefinitionLookup {
-    deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send>,
+    deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
 }
 
 impl HttpApiDefinitionLookup {
     pub fn new(
-        deployment_service: Arc<dyn ApiDeploymentService<EmptyNamespace> + Sync + Send>,
+        deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
     ) -> Self {
         Self { deployment_service }
     }
