@@ -7,7 +7,7 @@ use crate::parser::rib_expr::rib_expr;
 use crate::text::writer::WriterError;
 use combine::stream::easy;
 
-pub fn from_string<'t>(input: impl AsRef<str>) -> Result<Expr, easy::ParseError<&'t str>> {
+pub fn from_string(input: &str) -> Result<Expr, easy::ParseError<&str>> {
    Expr::from_str(input.as_ref())
 }
 
@@ -25,7 +25,7 @@ mod record_tests {
         let input_expr = Expr::Record(vec![]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{}}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -37,7 +37,7 @@ mod record_tests {
         )]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: request}}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -55,7 +55,7 @@ mod record_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: request, field: request}}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -73,7 +73,7 @@ mod record_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"${{field: "hello", field: "world"}}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -91,7 +91,7 @@ mod record_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: 1, field: 2}}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -115,7 +115,7 @@ mod record_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: request.foo, field: request.bar}}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -139,7 +139,7 @@ mod record_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: request[1], field: request[2]}}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -163,7 +163,7 @@ mod record_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: [request, request], field: [request, request]}}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -201,7 +201,7 @@ mod record_tests {
         let record_string =
             "{a: {ab: request, ac: request}, b: [{bc: request, bd: request}]}".to_string();
         let expected_record_str = format!("${{{}}}", record_string); // Just wrapping it with interpolation
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
 
@@ -226,7 +226,7 @@ mod record_tests {
         let expr_str = to_string(&input_expr).unwrap();
         let record_string = "{a: (request, worker), b: (request, worker)}".to_string();
         let expected_record_str = format!("${{{}}}", record_string); // Just wrapping it with interpolation
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
 
@@ -245,7 +245,7 @@ mod record_tests {
         let expr_str = to_string(&input_expr).unwrap();
         let record_string = "{a: {flag1, flag2}, b: {flag3, flag4}}".to_string();
         let expected_record_str = format!("${{{}}}", record_string); // Just wrapping it with interpolation
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
 
@@ -258,7 +258,7 @@ mod record_tests {
         let expr_str = to_string(&input_expr).unwrap();
         let record_string = "{a: true, b: false}".to_string();
         let expected_record_str = format!("${{{}}}", record_string); // Just wrapping it with interpolation
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
 
@@ -290,7 +290,7 @@ mod record_tests {
         let expected_record_str =
             r#"${{a: "user-id-1-${request.user-id-1}", b: "user-id-2-${request.user-id-2}"}}"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
 
@@ -314,7 +314,7 @@ mod record_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_record_str = "${{a: 1 > 2, b: 1 < 2}}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
 
@@ -352,7 +352,7 @@ mod record_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_record_str = r#"${{a: if request.foo == "bar" then "success" else "failed", b: if request.foo == "bar" then "success" else "failed"}}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
 
@@ -418,7 +418,7 @@ mod record_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_record_str = r#"${{a: match request {  ok(foo) => "success", err(msg) => "failure" } , b: match request {  ok(foo) => "success", err(msg) => match request {  ok(foo) => "success", err(msg) => "failure" }  } }}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
 
@@ -438,7 +438,7 @@ mod record_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_record_str = r#"${{a: ok("foo"), b: err("msg")}}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
 }
@@ -454,7 +454,7 @@ mod sequence_tests {
         let input_expr = Expr::Sequence(vec![]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -478,7 +478,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[request, request]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -490,7 +490,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"${["hello", "world"]}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -508,7 +508,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[request.field, request.field]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -520,7 +520,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[request[1], request[2]]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -538,7 +538,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[[request, request], [request, request]]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -556,7 +556,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[(request, request), (request, request)]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -574,7 +574,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[{field: request}, {field: request}]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -586,7 +586,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[{flag1, flag2}, {flag3, flag4}]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -612,7 +612,7 @@ mod sequence_tests {
         let expected_str =
             r#"${["user-id-1-${request.user-id-1}", "user-id-2-${request.user-id-2}"]}"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -630,7 +630,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[1 > 2, 1 < 2]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -662,7 +662,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"${[if request.foo == "bar" then "success" else "failed", if request.foo == "bar" then "success" else "failed"]}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -722,7 +722,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"${[match request {  ok(foo) => "success", err(msg) => "failure" } , match request {  ok(foo) => "success", err(msg) => match request {  ok(foo) => "success", err(msg) => "failure" }  } ]}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -734,7 +734,7 @@ mod sequence_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[ok(\"foo\"), err(\"msg\")]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 }
@@ -750,7 +750,7 @@ mod tuple_tests {
         let input_expr = Expr::Tuple(vec![]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${()}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -762,7 +762,7 @@ mod tuple_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${(request, request)}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -774,7 +774,7 @@ mod tuple_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"${("hello", "world")}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -802,7 +802,7 @@ mod tuple_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${(request[1], request[2])}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -820,7 +820,7 @@ mod tuple_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${((request, request), (request, request))}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -838,7 +838,7 @@ mod tuple_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${([request, request], [request, request])}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -856,7 +856,7 @@ mod tuple_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${({field: request}, {field: request})}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -868,7 +868,7 @@ mod tuple_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${({flag1, flag2}, {flag3, flag4})}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -894,7 +894,7 @@ mod tuple_tests {
         let expected_str =
             r#"${("user-id-1-${request.user-id-1}", "user-id-2-${request.user-id-2}")}"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -912,7 +912,7 @@ mod tuple_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${(1 > 2, 1 < 2)}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -924,7 +924,7 @@ mod tuple_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"${(ok("foo"), err("msg"))}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 }
@@ -939,7 +939,7 @@ mod simple_values_test {
         let input_expr = Expr::Literal("hello".to_string());
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "hello".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -948,7 +948,7 @@ mod simple_values_test {
         let input_expr = Expr::Identifier("request".to_string());
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${request}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -965,7 +965,7 @@ mod simple_values_test {
         let input_expr = Expr::unsigned_integer(1);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${1}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -974,7 +974,7 @@ mod simple_values_test {
         let input_expr = Expr::signed_integer(-1);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${-1}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -983,7 +983,7 @@ mod simple_values_test {
         let input_expr = Expr::Identifier("worker".to_string());
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${worker}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -992,7 +992,7 @@ mod simple_values_test {
         let input_expr = Expr::Identifier("variable".to_string());
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${variable}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1001,7 +1001,7 @@ mod simple_values_test {
         let input_expr = Expr::Boolean(true);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${true}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 }
@@ -1019,7 +1019,7 @@ mod let_tests {
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"${let x = "hello";}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 }
@@ -1037,7 +1037,7 @@ mod selection_tests {
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${request.field}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1046,7 +1046,7 @@ mod selection_tests {
         let input_expr = Expr::SelectIndex(Box::new(Expr::Identifier("request".to_string())), 1);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${request[1]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1061,7 +1061,7 @@ mod selection_tests {
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: request}.field}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1076,7 +1076,7 @@ mod selection_tests {
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: request}[1]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1091,7 +1091,7 @@ mod selection_tests {
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[request, request].field}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1106,7 +1106,7 @@ mod selection_tests {
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[request, request][1]}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1121,7 +1121,7 @@ mod selection_tests {
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${(request, request).field}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 }
@@ -1136,7 +1136,7 @@ mod flag_tests {
         let input_expr = Expr::Flags(vec!["flag1".to_string()]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{flag1}}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1149,7 +1149,7 @@ mod flag_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{flag1, flag2, flag3}}".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 }
@@ -1181,7 +1181,7 @@ mod match_tests {
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
             r#"${match request {  ok(foo) => "success", err(msg) => "failure" } }"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1206,7 +1206,7 @@ mod match_tests {
         let expected_str =
             r#"${match request {  ok(foo) => {flag1, flag2}, err(msg) => "failure" } }"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1234,7 +1234,7 @@ mod match_tests {
         let expected_str =
             r#"${match request {  ok(foo) => (request, request), err(msg) => "failure" } }"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1262,7 +1262,7 @@ mod match_tests {
         let expected_str =
             r#"${match request {  ok(foo) => [request, request], err(msg) => "failure" } }"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1290,7 +1290,7 @@ mod match_tests {
         let expected_str =
             r#"${match request {  ok(foo) => {field: request}, err(msg) => "failure" } }"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1319,7 +1319,7 @@ mod match_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${match request {  ok(foo) => 1 > 2, err(msg) => 1 < 2 } }".to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1353,7 +1353,7 @@ mod match_tests {
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
             r#"${match request {  ok(foo) => if request.foo == "bar" then "success" else "failed", err(msg) => "failure" } }"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1383,7 +1383,7 @@ mod match_tests {
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
             r#"${match request {  foo(a,b) => "success", bar(c) => "failure" } }"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1406,7 +1406,7 @@ mod match_tests {
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
             r#"${match request {  foo => "success", bar(c) => "failure" } }"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1437,7 +1437,7 @@ mod match_tests {
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
             r#"${match request {  foo(bar(v1)) => "success", bar(c) => "failure" } }"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1462,7 +1462,7 @@ mod match_tests {
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
             r#"${match request {  foo1 => ok("foo"), bar(c) => err("bar") } }"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1487,7 +1487,7 @@ mod match_tests {
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
             r#"${match request {  foo1(_) => ok("foo"), bar(c) => err("bar") } }"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1516,7 +1516,7 @@ mod match_tests {
         let expected_str =
             r#"${match request {  name @ foo1(_) => ok("foo"), bar(c) => err("bar") } }"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1572,7 +1572,7 @@ mod match_tests {
         let expected_str =
             r#"${match request {  a @ foo(b @ _) => ok("foo"), c @ bar(d @ baz(x)) => err("bar") } }"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 }
@@ -1615,7 +1615,7 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"${if request.foo == "bar" then "success" else "failed"}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1645,7 +1645,7 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = r#"${if request.foo == "bar" then "success" else if request.foo == "baz" then "success" else "failed"}"#.to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1673,7 +1673,7 @@ mod if_cond_tests {
         let expected_str =
             r#"${if (request, request).foo == (request, request) then "success" else "failed"}"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1701,7 +1701,7 @@ mod if_cond_tests {
         let expected_str =
             r#"${if [request, request].foo == [request, request] then "success" else "failed"}"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1729,7 +1729,7 @@ mod if_cond_tests {
         let expected_str =
             r#"${if {field: request}.field == {field: request} then "success" else "failed"}"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
@@ -1751,7 +1751,7 @@ mod if_cond_tests {
         let expected_str =
             r#"${if worker.response == {flag1, flag2} then {flag1, flag2} else "failed"}"#
                 .to_string();
-        let output_expr = from_string(expr_str.clone()).unwrap();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 }

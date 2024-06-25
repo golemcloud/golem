@@ -42,7 +42,6 @@ use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
 
-pub mod function_name;
 pub mod oplog;
 pub mod regions;
 
