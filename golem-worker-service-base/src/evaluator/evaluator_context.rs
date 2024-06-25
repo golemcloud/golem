@@ -2,14 +2,11 @@ use std::fmt::{Debug, Display, Formatter};
 
 use async_trait::async_trait;
 use golem_wasm_rpc::TypeAnnotatedValue;
-
 use golem_service_base::model::{ComponentMetadata, FunctionParameter, FunctionResult, WorkerId};
-
 use crate::evaluator::evaluator_context::internal::create_record;
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
 use crate::evaluator::Getter;
-use crate::function_name::ParsedFunctionName;
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::RefinedWorkerResponse;

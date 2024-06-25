@@ -5,7 +5,7 @@ use golem_client::model::{
     NameTypePair, ProtectedComponentId, ResourceMode, Type, TypeEnum, TypeFlags, TypeRecord,
     TypeTuple, TypeVariant, UserComponentId, VersionedComponentId,
 };
-use golem_common::model::function_name::{ParsedFunctionName, ParsedFunctionSite};
+use golem_rib::model::function_name::{ParsedFunctionName, ParsedFunctionSite};
 use golem_wasm_ast::wave::DisplayNamedFunc;
 use serde::{Deserialize, Serialize};
 use tracing::info;

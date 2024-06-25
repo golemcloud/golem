@@ -13,6 +13,7 @@ description = "Base functionalities of Golem Worker Service"
 golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
+golem-rib = { path = "../golem-rib" }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 

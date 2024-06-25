@@ -22,6 +22,7 @@ harness = false
 [dependencies]
 golem-client = { path = "../golem-client", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-rib = { path = "../golem-rib", version = "0.0.0" }
 
 async-trait = { workspace = true }
 chrono = { workspace = true }
