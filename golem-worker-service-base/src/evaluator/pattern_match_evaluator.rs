@@ -1,7 +1,7 @@
 use crate::evaluator::evaluator_context::EvaluationContext;
 use crate::evaluator::{DefaultEvaluator, Evaluator};
 use crate::evaluator::{EvaluationError, ExprEvaluationResult};
-use rib::expr::{ArmPattern, Expr, MatchArm};
+use rib::{ArmPattern, Expr, MatchArm};
 use crate::worker_bridge_execution::WorkerRequestExecutor;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;

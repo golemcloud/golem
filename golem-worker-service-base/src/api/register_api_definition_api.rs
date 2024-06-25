@@ -8,8 +8,7 @@ use golem_common::model::ComponentId;
 
 use crate::api_definition::http::MethodPattern;
 use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
-use rib::expr::Expr;
-use rib::text;
+use rib::Expr;
 use crate::parser::ParseError;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]

@@ -15,9 +15,8 @@ use crate::primitive::{GetPrimitive, Primitive};
 use getter::GetError;
 use getter::Getter;
 use path::Path;
-use rib::expr::Expr;
-use rib::expr::Number;
-use rib::text;
+use rib::Expr;
+use rib::Number;
 
 use crate::worker_bridge_execution::{
     NoopWorkerRequestExecutor, RefinedWorkerResponse, WorkerRequestExecutor,
@@ -496,7 +495,7 @@ mod internal {
     use golem_wasm_rpc::TypeAnnotatedValue;
     use std::str::FromStr;
     use std::sync::Arc;
-    use rib::function_name::ParsedFunctionName;
+    use rib::ParsedFunctionName;
 
     pub(crate) async fn call_worker_function(
         runtime: &EvaluationContext,
@@ -585,8 +584,7 @@ mod tests {
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, Uri};
     use serde_json::{json, Value};
-    use rib::expr::Expr;
-    use rib::text;
+    use rib::Expr;
 
     use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::evaluator_context::EvaluationContext;
@@ -1823,7 +1821,6 @@ mod tests {
         use http::{HeaderMap, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;
-        use rib::text;
 
         pub(crate) fn get_complex_variant_typed_value() -> TypeAnnotatedValue {
             TypeAnnotatedValue::Variant {

@@ -76,7 +76,7 @@ impl ParseFromJSON for JsonOpenApiDefinition {
 
 mod internal {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use rib::expr::Expr;
+    use rib::Expr;
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
