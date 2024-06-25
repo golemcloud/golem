@@ -8,8 +8,8 @@ use golem_common::model::ComponentId;
 
 use crate::api_definition::http::MethodPattern;
 use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
-use crate::expression;
-use crate::expression::Expr;
+use rib::expr::Expr;
+use rib::text;
 use crate::parser::ParseError;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -154,12 +154,12 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
 
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
         let response: String =
-            expression::to_string(&value.response.0).map_err(|e| e.to_string())?;
+            text::to_string(&value.response.0).map_err(|e| e.to_string())?;
 
-        let worker_id = expression::to_string(&value.worker_name).map_err(|e| e.to_string())?;
+        let worker_id = rib::to_string(&value.worker_name).map_err(|e| e.to_string())?;
 
         let idempotency_key = if let Some(key) = &value.idempotency_key {
-            Some(expression::to_string(key).map_err(|e| e.to_string())?)
+            Some(rib::to_string(key).map_err(|e| e.to_string())?)
         } else {
             None
         };
@@ -178,15 +178,15 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
 
     fn try_into(self) -> Result<crate::worker_binding::GolemWorkerBinding, Self::Error> {
         let response: crate::worker_binding::ResponseMapping = {
-            let r = expression::from_string(self.response).map_err(|e| e.to_string())?;
+            let r = rib::from_string(self.response.as_str()).map_err(|e| e.to_string())?;
             crate::worker_binding::ResponseMapping(r)
         };
 
         let worker_name: Expr =
-            expression::from_string(self.worker_name).map_err(|e| e.to_string())?;
+            rib::from_string(self.worker_name.as_str()).map_err(|e| e.to_string())?;
 
         let idempotency_key = if let Some(key) = &self.idempotency_key {
-            Some(expression::from_string(key).map_err(|e| e.to_string())?)
+            Some(rib::from_string(key).map_err(|e| e.to_string())?)
         } else {
             None
         };
@@ -314,10 +314,10 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
         let response: String = value.response.0.to_string();
 
-        let worker_id = expression::to_string(&value.worker_name).map_err(|e| e.to_string())?;
+        let worker_id = rib::to_string(&value.worker_name).map_err(|e| e.to_string())?;
 
         let idempotency_key = if let Some(key) = &value.idempotency_key {
-            Some(expression::to_string(key).map_err(|e| e.to_string())?)
+            Some(rib::to_string(key).map_err(|e| e.to_string())?)
         } else {
             None
         };

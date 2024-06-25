@@ -86,7 +86,7 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
 #[cfg(test)]
 mod tests {
     use crate::api_definition::http::{MethodPattern, Route};
-    use crate::expression::Expr;
+    use rib::expr::Expr;
     use crate::service::http::http_api_definition_validator::unique_routes;
     use crate::worker_binding::ResponseMapping;
     use golem_common::model::ComponentId;

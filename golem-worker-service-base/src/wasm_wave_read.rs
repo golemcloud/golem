@@ -12,7 +12,7 @@ pub async fn read_wasm_wave_string(wave_syntax_str: impl AsRef<str>) -> Result<V
 async fn read_wasm_wave_string_internal(
     wave_syntax_str: impl AsRef<str>,
 ) -> Result<TypeAnnotatedValue, String> {
-    let expr = expression::from_string(wave_syntax_str).map_err(|e| e.to_string())?;
+    let expr = rib::from_string(wave_syntax_str).map_err(|e| e.to_string())?;
     let noop_executor = DefaultEvaluator::noop();
     let result = noop_executor
         .evaluate(&expr, &EvaluationContext::empty())
