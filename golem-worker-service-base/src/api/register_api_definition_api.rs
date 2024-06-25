@@ -153,7 +153,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
 
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
         let response: String =
-            text::to_string(&value.response.0).map_err(|e| e.to_string())?;
+            rib::to_string(&value.response.0).map_err(|e| e.to_string())?;
 
         let worker_id = rib::to_string(&value.worker_name).map_err(|e| e.to_string())?;
 

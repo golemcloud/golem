@@ -149,9 +149,9 @@ impl Display for Expr {
 }
 
 impl FromStr for Expr {
-    type Err = easy::ParseError<&'static str>;
+    type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Expr::from_interpolated_str(s)
+        Expr::from_interpolated_str(s).map_err(|err| err.to_string())
     }
 
 }
@@ -162,7 +162,7 @@ impl<'de> Deserialize<'de> for Expr {
     {
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
-            Value::String(expr_string) => match rib::from_string(expr_string.as_str()) {
+            Value::String(expr_string) => match text::from_string(expr_string.as_str()) {
                 Ok(expr) => Ok(expr),
                 Err(message) => Err(serde::de::Error::custom(message.to_string())),
             },

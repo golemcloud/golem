@@ -303,7 +303,7 @@ impl Evaluator for DefaultEvaluator {
                                 if let Some(value) = eval_result.get_value() {
                                     result.push(value);
                                 } else {
-                                    return Err(format!("The text {} is evaluated to unit and cannot be part of a record", text::to_string(expr).unwrap()).into());
+                                    return Err(format!("The text {} is evaluated to unit and cannot be part of a record", rib::to_string(expr).unwrap()).into());
                                 }
                             }
                             Err(result) => return Err(result),
@@ -404,7 +404,7 @@ impl Evaluator for DefaultEvaluator {
                             }
                             .into())
                         } else {
-                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a option", text::to_string(expr).unwrap())))
+                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a option", rib::to_string(expr).unwrap())))
                         }
                     }
                     None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option {
@@ -427,7 +427,7 @@ impl Evaluator for DefaultEvaluator {
                             }
                             .into())
                         } else {
-                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", text::to_string(expr).unwrap())))
+                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", rib::to_string(expr).unwrap())))
                         }
                     }
                     Err(expr) => {
@@ -443,7 +443,7 @@ impl Evaluator for DefaultEvaluator {
                             }
                             .into())
                         } else {
-                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", text::to_string(expr).unwrap())))
+                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", rib::to_string(expr).unwrap())))
                         }
                     }
                 },
@@ -457,7 +457,7 @@ impl Evaluator for DefaultEvaluator {
                         if let Some(value) = eval_result.get_value() {
                             result.push(value);
                         } else {
-                            return Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a tuple", text::to_string(expr).unwrap())));
+                            return Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a tuple", rib::to_string(expr).unwrap())));
                         }
                     }
 
