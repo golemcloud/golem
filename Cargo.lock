@@ -3355,6 +3355,7 @@ dependencies = [
  "golem-client",
  "golem-common",
  "golem-examples",
+ "golem-rib",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3577,7 +3578,7 @@ dependencies = [
 
 [[package]]
 name = "golem-rib"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "async-trait",
  "bincode",
@@ -3941,6 +3942,7 @@ dependencies = [
  "futures-util",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc",

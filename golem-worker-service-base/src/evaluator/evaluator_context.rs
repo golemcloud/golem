@@ -19,7 +19,7 @@ pub struct EvaluationContext {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct FQN {
-    pub parsed_function_name: ParsedFunctionName,
+    pub parsed_function_name: ParsedF,
 }
 
 impl TryFrom<&str> for FQN {

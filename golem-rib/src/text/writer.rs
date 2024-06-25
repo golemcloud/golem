@@ -1,5 +1,5 @@
 use std::io::Write;
-use crate::rib::expr::Expr;
+use crate::expr::Expr;
 
 pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
     let mut buf = vec![];
@@ -32,6 +32,21 @@ struct Writer<W> {
 #[derive(Debug)]
 pub enum WriterError {
     Io(std::io::Error),
+}
+
+impl From<std::io::Error> for WriterError {
+    fn from(err: std::io::Error) -> Self {
+        WriterError::Io(err)
+    }
+}
+
+
+impl Display for WriterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WriterError::Io(err) => write!(f, "IO error: {err}"),
+        }
+    }
 }
 
 impl<W: Write> Writer<W> {
@@ -242,8 +257,8 @@ impl<W: Write> Writer<W> {
 }
 
 mod internal {
-    use crate::rib::text::writer::{Writer, WriterError};
-    use crate::rib::expr::{ArmPattern, Expr};
+    use crate::text::writer::{Writer, WriterError};
+    use crate::expr::{ArmPattern, Expr};
 
     pub(crate) enum ExprType<'a> {
         Code(&'a Expr),

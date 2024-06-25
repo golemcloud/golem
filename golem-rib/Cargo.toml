@@ -1,11 +1,11 @@
 [package]
 name = "golem-rib"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 
 [dependencies]
 async-trait = { workspace = true }
-bincode = { worksapace = true }
+bincode = { workspace = true }
 combine = "4.6.7"
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
