@@ -199,7 +199,7 @@ pub mod wasm {
     use prometheus::*;
     use tracing::debug;
 
-    use golem_common::metrics::grpc::ErrorKind;
+    use golem_common::metrics::grpc::TraceErrorKind;
 
     use crate::error::GolemError;
 
@@ -278,7 +278,7 @@ pub mod wasm {
 
     pub fn record_create_worker_failure(error: &GolemError) {
         CREATE_WORKER_FAILURE_TOTAL
-            .with_label_values(&[error.kind()])
+            .with_label_values(&[error.trace_error_kind()])
             .inc();
     }
 

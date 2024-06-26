@@ -289,8 +289,8 @@ pub mod grpc {
         pub span: Span,
     }
 
-    pub trait ErrorKind {
-        fn kind(&self) -> &'static str;
+    pub trait TraceErrorKind {
+        fn trace_error_kind(&self) -> &'static str;
     }
 
     impl RecordedGrpcRequest {
@@ -315,7 +315,7 @@ pub mod grpc {
             }
         }
 
-        pub fn fail<T, E: Debug + ErrorKind>(mut self, result: T, error: &E) -> T {
+        pub fn fail<T, E: Debug + TraceErrorKind>(mut self, result: T, error: &E) -> T {
             match self.start_time.take() {
                 Some(start) => self.span.in_scope(|| {
                     let elapsed = start.elapsed();
@@ -325,7 +325,7 @@ pub mod grpc {
                         error
                     );
 
-                    record_grpc_failure(self.api_name, error.kind(), elapsed);
+                    record_grpc_failure(self.api_name, error.trace_error_kind(), elapsed);
                     result
                 }),
 

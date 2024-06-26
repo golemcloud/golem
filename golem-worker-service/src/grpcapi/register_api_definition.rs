@@ -23,7 +23,7 @@ use golem_common::grpc::{
     proto_api_definition_draft_string, proto_api_definition_id_string,
     proto_api_definition_kind_string, proto_api_definition_version_string,
 };
-use golem_common::metrics::grpc::ErrorKind;
+use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::recorded_grpc_request;
 use golem_worker_service_base::{
     api_definition::{
@@ -435,8 +435,8 @@ impl<'a> Debug for ApiDefinitionErrorKind<'a> {
     }
 }
 
-impl<'a> ErrorKind for ApiDefinitionErrorKind<'a> {
-    fn kind(&self) -> &'static str {
+impl<'a> TraceErrorKind for ApiDefinitionErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",
             Some(error) => match error {

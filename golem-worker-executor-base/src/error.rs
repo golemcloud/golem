@@ -20,7 +20,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use golem_api_grpc::proto::golem;
-use golem_common::metrics::grpc::ErrorKind;
+use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use tonic::Status;
 
@@ -288,8 +288,8 @@ impl Error for GolemError {
     }
 }
 
-impl ErrorKind for GolemError {
-    fn kind(&self) -> &'static str {
+impl TraceErrorKind for GolemError {
+    fn trace_error_kind(&self) -> &'static str {
         match self {
             GolemError::InvalidRequest { .. } => "InvalidRequest",
             GolemError::WorkerAlreadyExists { .. } => "WorkerAlreadyExists",

@@ -161,7 +161,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let host = gethostname().to_string_lossy().to_string();
 
-        info!("Registering worker executor as {}:{}", host, port);
+        info!(host, port, "Registering worker executor");
 
         let shard_assignment = worker_executor
             .shard_manager_service()
