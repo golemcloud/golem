@@ -132,7 +132,7 @@ impl<W: Write> Writer<W> {
                 self.write_display("(")?;
                 for (idx, expr) in tuple.iter().enumerate() {
                     if idx != 0 {
-                        self.write_display(")")?;
+                        self.write_display(",")?;
                         self.write_display(" ")?;
                     }
                     self.write_expr(expr)?;

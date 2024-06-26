@@ -17,13 +17,14 @@ use combine::{
     parser::char::{char, letter, spaces},
     Parser,
 };
+use combine::parser::char::digit;
 
 use crate::expr::Expr;
 use combine::sep_by;
 use combine::stream::easy;
 
 pub fn flag<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    let flag_name = many1(letter().or(char('_'))).map(|s: Vec<char>| s.into_iter().collect());
+    let flag_name = many1(letter().or(char('_')).or(digit()).or(char('-'))).map(|s: Vec<char>| s.into_iter().collect());
 
     spaces().with(
         between(
@@ -48,6 +49,13 @@ mod tests {
         let input = "{}";
         let result = rib_expr().easy_parse(input);
         assert_eq!(result, Ok((Expr::Flags(vec![]), "")));
+    }
+
+    #[test]
+    fn test_flag_singleton() {
+        let input = "{foo}";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(result, Ok((Expr::Flags(vec!["foo".to_string()]), "")));
     }
 
     #[test]

@@ -853,6 +853,7 @@ mod tuple_tests {
             Expr::Flags(vec!["flag3".to_string(), "flag4".to_string()]),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
+        dbg!(expr_str.clone());
         let expected_str = "${({flag1, flag2}, {flag3, flag4})}".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
