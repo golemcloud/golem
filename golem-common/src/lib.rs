@@ -14,6 +14,7 @@
 
 pub mod cache;
 pub mod config;
+pub mod grpc;
 pub mod metrics;
 pub mod model;
 pub mod newtype;
