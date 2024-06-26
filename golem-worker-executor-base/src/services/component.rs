@@ -565,6 +565,33 @@ impl ComponentServiceLocalFileSystem {
             })
             .await
     }
+
+    async fn analyize_memories(
+        component_id: &ComponentId,
+        path: &&PathBuf,
+    ) -> Result<Vec<LinearMemory>, GolemError> {
+        let analysis: AnalysisContext<IgnoreAll> = golem_wasm_ast::analysis::AnalysisContext::new(
+            golem_wasm_ast::component::Component::from_bytes(&tokio::fs::read(&path).await?)
+                .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
+                    component_id: component_id.clone(),
+                    reason,
+                })?,
+        );
+        Ok(analysis
+            .get_all_memories()
+            .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
+                component_id: component_id.clone(),
+                reason: match reason {
+                    AnalysisFailure::Failed(reason) => reason,
+                },
+            })?
+            .into_iter()
+            .map(|mem| LinearMemory {
+                initial: mem.mem_type.limits.min * 65536,
+                maximum: mem.mem_type.limits.max.map(|m| m * 65536),
+            })
+            .collect::<Vec<_>>())
+    }
 }
 
 #[async_trait]
@@ -671,28 +698,9 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         };
 
         let size = tokio::fs::metadata(&path).await?.len();
-        let analysis: AnalysisContext<IgnoreAll> = golem_wasm_ast::analysis::AnalysisContext::new(
-            golem_wasm_ast::component::Component::from_bytes(&tokio::fs::read(&path).await?)
-                .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
-                    component_id: component_id.clone(),
-                    reason,
-                })?,
-        );
-        let memories = analysis
-            .get_all_memories()
-            .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
-                component_id: component_id.clone(),
-                reason: match reason {
-                    AnalysisFailure::Failed(reason) => reason,
-                },
-            })?
-            .into_iter()
-            .map(|mem| LinearMemory {
-                initial: mem.mem_type.limits.min * 65536,
-                maximum: mem.mem_type.limits.max.map(|m| m * 65536),
-            })
-            .collect();
-
+        let memories = Self::analyize_memories(component_id, &path)
+            .await
+            .unwrap_or_default(); // We don't want to fail here if the component cannot be read, because that lead to a different kind of error compared to using the gRPC based component service
         Ok(ComponentMetadata {
             version: *version,
             size,
