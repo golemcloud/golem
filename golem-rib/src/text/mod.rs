@@ -1425,10 +1425,7 @@ mod match_tests {
                     Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor(
-                        "bar",
-                        vec![ArmPattern::custom_constructor("c", vec![])],
-                    ),
+                    ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
                     Box::new(Expr::Result(Err(Box::new(Expr::Literal(
                         "bar".to_string(),
                     ))))),
@@ -1471,7 +1468,7 @@ mod match_tests {
                                 "d".to_string(),
                                 Box::new(ArmPattern::custom_constructor(
                                     "baz",
-                                    vec![ArmPattern::custom_constructor("x", vec![])],
+                                    vec![ArmPattern::identifier("x")],
                                 )),
                             )],
                         )),

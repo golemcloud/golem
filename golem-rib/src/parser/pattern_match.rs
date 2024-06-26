@@ -76,11 +76,14 @@ mod arm_pattern {
         choice((
             attempt(arm_pattern_constructor()),
             attempt(char('_').map(|_| ArmPattern::WildCard)),
-            attempt((alias_name().skip(spaces()), char('@').skip(spaces()), arm_pattern().skip(spaces())).map(
-                |(iden, _, pattern)| {
-                    ArmPattern::As(iden, Box::new(pattern))
-                },
-            )),
+            attempt(
+                (
+                    alias_name().skip(spaces()),
+                    char('@').skip(spaces()),
+                    arm_pattern().skip(spaces()),
+                )
+                    .map(|(iden, _, pattern)| ArmPattern::As(iden, Box::new(pattern))),
+            ),
             attempt(arm_pattern_literal()),
         ))
     }
@@ -150,8 +153,6 @@ mod internal {
             .map(|(name, _, patterns, _)| ArmPattern::Constructor(name, patterns))
     }
 
-
-
     fn constructor_type_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
         many1(letter().or(digit()).or(char_('_')))
             .and_then(|s: Vec<char>| {
@@ -205,11 +206,14 @@ mod tests {
                 Expr::PatternMatch(
                     Box::new(Expr::Identifier("foo".to_string())),
                     vec![MatchArm((
-                        ArmPattern::custom_constructor("foo", vec![
-                            ArmPattern::WildCard,
-                            ArmPattern::WildCard,
-                            ArmPattern::identifier("iden")
-                        ]),
+                        ArmPattern::custom_constructor(
+                            "foo",
+                            vec![
+                                ArmPattern::WildCard,
+                                ArmPattern::WildCard,
+                                ArmPattern::identifier("iden")
+                            ]
+                        ),
                         Box::new(Expr::Identifier("bar".to_string()))
                     ))]
                 ),
@@ -228,15 +232,23 @@ mod tests {
                 Expr::PatternMatch(
                     Box::new(Expr::Identifier("foo".to_string())),
                     vec![MatchArm((
-                        ArmPattern::As("abc".to_string(),
-                        Box::new(ArmPattern::custom_constructor("foo", vec![
-                            ArmPattern::WildCard,
-                            ArmPattern::WildCard,
-                            ArmPattern::As(
-                                "d".to_string(),
-                                Box::new(ArmPattern::custom_constructor("baz", vec![ArmPattern::WildCard]))
-                            )
-                        ]))),
+                        ArmPattern::As(
+                            "abc".to_string(),
+                            Box::new(ArmPattern::custom_constructor(
+                                "foo",
+                                vec![
+                                    ArmPattern::WildCard,
+                                    ArmPattern::WildCard,
+                                    ArmPattern::As(
+                                        "d".to_string(),
+                                        Box::new(ArmPattern::custom_constructor(
+                                            "baz",
+                                            vec![ArmPattern::WildCard]
+                                        ))
+                                    )
+                                ]
+                            ))
+                        ),
                         Box::new(Expr::Identifier("bar".to_string()))
                     ))]
                 ),
