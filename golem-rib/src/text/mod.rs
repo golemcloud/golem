@@ -20,7 +20,7 @@ mod writer;
 use crate::text::writer::WriterError;
 use combine::stream::easy;
 
-pub fn from_string(input: &str) -> Result<Expr, easy::ParseError<&str>> {
+pub fn from_string(input: &str) -> Result<Expr, String> {
    Expr::from_str(input.as_ref())
 }
 

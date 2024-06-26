@@ -68,8 +68,9 @@ impl Expr {
     /// Rib supports conditional calls, function calls, pattern-matching,
     /// string interpolation (see error_message above) etc.
     ///
-    pub fn from_str(input: &str) -> Result<Expr, easy::ParseError<&str>> {
+    pub fn from_str(input: &str) -> Result<Expr, String> {
         rib_program().easy_parse(input.as_ref()).map(|(expr, _)| expr)
+            .map_err(|err| err.to_string())
     }
 
     /// Parse an interpolated text as Rib expression. The input is always expected to be wrapped with `${..}`
@@ -117,9 +118,9 @@ impl Expr {
     ///   if foo > 1 then bar else "baz-${user.id}"
     /// ```
     ///
-    pub fn from_interpolated_str(input: &str) -> Result<Expr, easy::ParseError<&str>> {
+    pub fn from_interpolated_str(input: &str) -> Result<Expr, String> {
         let input = format!("\"{}\"", input);
-        rib_program().easy_parse(input.as_ref()).map(|(expr, _)| expr)
+        Self::from_str(input.as_str())
     }
     pub fn unsigned_integer(u64: u64) -> Expr {
         Expr::Number(Number::Unsigned(u64))
