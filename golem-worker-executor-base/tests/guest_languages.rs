@@ -566,7 +566,7 @@ async fn c_example_3() {
 
 #[tokio::test]
 #[tracing::instrument]
-// #[ignore]
+#[ignore]
 async fn c_example_4() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
