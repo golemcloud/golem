@@ -112,9 +112,7 @@ mod tests {
     use crate::expr::MatchArm;
 
     use super::*;
-    use combine::stream::StreamErrorFor;
     use combine::EasyParser;
-    use combine::Parser;
     use crate::function_name::ParsedFunctionName;
     use crate::function_name::ParsedFunctionReference::RawResourceStaticMethod;
     use crate::function_name::ParsedFunctionSite::PackagedInterface;
