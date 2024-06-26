@@ -1,6 +1,8 @@
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tracing::Instrument;
 
 use golem_api_grpc::proto::golem::{
     apidefinition::{
@@ -17,6 +19,12 @@ use golem_api_grpc::proto::golem::{
     },
     common::{Empty, ErrorBody, ErrorsBody},
 };
+use golem_common::grpc::{
+    proto_api_definition_draft_string, proto_api_definition_id_string,
+    proto_api_definition_kind_string, proto_api_definition_version_string,
+};
+use golem_common::metrics::grpc::ErrorKind;
+use golem_common::recorded_grpc_request;
 use golem_worker_service_base::{
     api_definition::{
         http::{get_api_definition, HttpApiDefinition as CoreHttpApiDefinition},
@@ -53,9 +61,24 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         &self,
         request: tonic::Request<CreateApiDefinitionRequest>,
     ) -> Result<tonic::Response<CreateApiDefinitionResponse>, tonic::Status> {
-        let result = match self.create_api_definition(request.into_inner()).await {
-            Ok(result) => create_api_definition_response::Result::Success(result),
-            Err(error) => create_api_definition_response::Result::Error(error),
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "create_api_definition",
+            kind = proto_api_definition_kind_string(&request.api_definition),
+            version = proto_api_definition_version_string(&request.api_definition),
+            draft = proto_api_definition_draft_string(&request.api_definition),
+        );
+
+        let result = match self
+            .create_api_definition(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(create_api_definition_response::Result::Success(result)),
+            Err(error) => record.fail(
+                create_api_definition_response::Result::Error(error.clone()),
+                &ApiDefinitionErrorKind(&error),
+            ),
         };
 
         Ok(tonic::Response::new(CreateApiDefinitionResponse {
@@ -67,9 +90,25 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         &self,
         request: tonic::Request<UpdateApiDefinitionRequest>,
     ) -> Result<tonic::Response<UpdateApiDefinitionResponse>, tonic::Status> {
-        let result = match self.update_api_definition(request.into_inner()).await {
-            Ok(result) => update_api_definition_response::Result::Success(result),
-            Err(error) => update_api_definition_response::Result::Error(error),
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "update_api_definition",
+            kind = proto_api_definition_kind_string(&request.api_definition),
+            api_definition_id = proto_api_definition_id_string(&request.api_definition),
+            version = proto_api_definition_version_string(&request.api_definition),
+            draft = proto_api_definition_draft_string(&request.api_definition),
+        );
+
+        let result = match self
+            .update_api_definition(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(update_api_definition_response::Result::Success(result)),
+            Err(error) => record.fail(
+                update_api_definition_response::Result::Error(error.clone()),
+                &ApiDefinitionErrorKind(&error),
+            ),
         };
 
         Ok(tonic::Response::new(UpdateApiDefinitionResponse {
@@ -81,9 +120,26 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         &self,
         request: tonic::Request<GetApiDefinitionRequest>,
     ) -> Result<tonic::Response<GetApiDefinitionResponse>, tonic::Status> {
-        let result = match self.get_api_definition(request.into_inner()).await {
-            Ok(result) => get_api_definition_response::Result::Success(result),
-            Err(error) => get_api_definition_response::Result::Error(error),
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "get_api_definition",
+            api_definition_id = request
+                .api_definition_id
+                .as_ref()
+                .map(|id| { id.value.clone() }),
+            version = request.version,
+        );
+
+        let result = match self
+            .get_api_definition(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(get_api_definition_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_api_definition_response::Result::Error(error.clone()),
+                &ApiDefinitionErrorKind(&error),
+            ),
         };
 
         Ok(tonic::Response::new(GetApiDefinitionResponse {
@@ -95,16 +151,29 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         &self,
         request: tonic::Request<GetApiDefinitionVersionsRequest>,
     ) -> Result<tonic::Response<GetApiDefinitionVersionsResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "get_api_definition_versions",
+            api_definition_id = request
+                .api_definition_id
+                .as_ref()
+                .map(|id| { id.value.clone() }),
+        );
+
         let result = match self
-            .get_all_api_definition_versions(request.into_inner())
+            .get_all_api_definition_versions(request)
+            .instrument(record.span.clone())
             .await
         {
             Ok(definitions) => {
-                get_api_definition_versions_response::Result::Success(ApiDefinitionList {
-                    definitions,
-                })
+                record.succeed(get_api_definition_versions_response::Result::Success(
+                    ApiDefinitionList { definitions },
+                ))
             }
-            Err(error) => get_api_definition_versions_response::Result::Error(error),
+            Err(error) => record.fail(
+                get_api_definition_versions_response::Result::Error(error.clone()),
+                &ApiDefinitionErrorKind(&error),
+            ),
         };
 
         Ok(tonic::Response::new(GetApiDefinitionVersionsResponse {
@@ -115,12 +184,22 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
     async fn get_all_api_definitions(
         &self,
         request: tonic::Request<GetAllApiDefinitionsRequest>,
-    ) -> std::result::Result<tonic::Response<GetAllApiDefinitionsResponse>, tonic::Status> {
-        let result = match self.get_all_api_definitions(request.into_inner()).await {
-            Ok(definitions) => {
-                get_all_api_definitions_response::Result::Success(ApiDefinitionList { definitions })
-            }
-            Err(error) => get_all_api_definitions_response::Result::Error(error),
+    ) -> Result<tonic::Response<GetAllApiDefinitionsResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_request!("get_all_api_definitions",);
+
+        let result = match self
+            .get_all_api_definitions(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(definitions) => record.succeed(get_all_api_definitions_response::Result::Success(
+                ApiDefinitionList { definitions },
+            )),
+            Err(error) => record.fail(
+                get_all_api_definitions_response::Result::Error(error.clone()),
+                &ApiDefinitionErrorKind(&error),
+            ),
         };
 
         Ok(tonic::Response::new(GetAllApiDefinitionsResponse {
@@ -132,9 +211,22 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         &self,
         request: tonic::Request<DeleteApiDefinitionRequest>,
     ) -> Result<tonic::Response<DeleteApiDefinitionResponse>, tonic::Status> {
-        let result = match self.delete_api_definition(request.into_inner()).await {
-            Ok(_) => delete_api_definition_response::Result::Success(Empty {}),
-            Err(error) => delete_api_definition_response::Result::Error(error),
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "delete_api_definition",
+            api_definition_id = request
+                .api_definition_id
+                .as_ref()
+                .map(|id| { id.value.clone() }),
+            version = request.version,
+        );
+
+        let result = match self.delete_api_definition(request).await {
+            Ok(_) => record.succeed(delete_api_definition_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                delete_api_definition_response::Result::Error(error.clone()),
+                &ApiDefinitionErrorKind(&error),
+            ),
         };
 
         Ok(tonic::Response::new(DeleteApiDefinitionResponse {
@@ -332,5 +424,31 @@ fn internal_error(error: impl Into<String>) -> ApiDefinitionError {
         error: Some(api_definition_error::Error::InternalError(ErrorBody {
             error: error.into(),
         })),
+    }
+}
+
+struct ApiDefinitionErrorKind<'a>(&'a ApiDefinitionError);
+
+impl<'a> Debug for ApiDefinitionErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> ErrorKind for ApiDefinitionErrorKind<'a> {
+    fn kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                api_definition_error::Error::BadRequest(_) => "BadRequest",
+                api_definition_error::Error::InvalidRoutes(_) => "InvalidRoutes",
+                api_definition_error::Error::Unauthorized(_) => "Unauthorized",
+                api_definition_error::Error::LimitExceeded(_) => "LimitExceeded",
+                api_definition_error::Error::NotFound(_) => "NotFound",
+                api_definition_error::Error::AlreadyExists(_) => "AlreadyExists",
+                api_definition_error::Error::InternalError(_) => "InternalError",
+                api_definition_error::Error::NotDraft(_) => "NotDraft",
+            },
+        }
     }
 }

@@ -254,7 +254,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
                 proto_invocation_context_parent_worker_id_string(&request.context)
         );
 
-        let reponse = match self.invoke(request).instrument(record.span.clone()).await {
+        let response = match self.invoke(request).instrument(record.span.clone()).await {
             Ok(()) => record.succeed(invoke_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 invoke_response::Result::Error(error.clone()),
@@ -263,7 +263,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(InvokeResponse {
-            result: Some(reponse),
+            result: Some(response),
         }))
     }
 
@@ -271,9 +271,22 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<ResumeWorkerRequest>,
     ) -> Result<Response<ResumeWorkerResponse>, Status> {
-        let response = match self.resume_worker(request.into_inner()).await {
-            Ok(()) => resume_worker_response::Result::Success(Empty {}),
-            Err(error) => resume_worker_response::Result::Error(error),
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "resume_worker",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let response = match self
+            .resume_worker(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(()) => record.succeed(resume_worker_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                resume_worker_response::Result::Error(error.clone()),
+                &WorkerErrorKind(&error),
+            ),
         };
 
         Ok(Response::new(ResumeWorkerResponse {
@@ -287,7 +300,16 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<ConnectWorkerRequest>,
     ) -> Result<Response<Self::ConnectWorkerStream>, Status> {
-        let stream = self.connect_worker(request.into_inner()).await;
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "connect_worker",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let stream = self
+            .connect_worker(request)
+            .instrument(record.span.clone())
+            .await;
         match stream {
             Ok(stream) => Ok(Response::new(stream)),
             Err(error) => Err(error_to_status(error)),
@@ -298,14 +320,27 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<GetWorkersMetadataRequest>,
     ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
-        let response = match self.get_workers_metadata(request.into_inner()).await {
-            Ok((cursor, workers)) => {
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "get_workers_metadata",
+            component_id = proto_component_id_string(&request.component_id),
+        );
+
+        let response = match self
+            .get_workers_metadata(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok((cursor, workers)) => record.succeed(
                 get_workers_metadata_response::Result::Success(GetWorkersMetadataSuccessResponse {
                     workers,
                     cursor: cursor.map(|c| c.into()),
-                })
-            }
-            Err(error) => get_workers_metadata_response::Result::Error(error),
+                }),
+            ),
+            Err(error) => record.fail(
+                get_workers_metadata_response::Result::Error(error.clone()),
+                &WorkerErrorKind(&error),
+            ),
         };
 
         Ok(Response::new(GetWorkersMetadataResponse {
@@ -317,11 +352,22 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<UpdateWorkerRequest>,
     ) -> Result<Response<UpdateWorkerResponse>, Status> {
-        let response = match self.update_worker(request.into_inner()).await {
-            Ok(()) => update_worker_response::Result::Success(
-                golem_api_grpc::proto::golem::common::Empty {},
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "update_worker",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let response = match self
+            .update_worker(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(()) => record.succeed(update_worker_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                update_worker_response::Result::Error(error.clone()),
+                &WorkerErrorKind(&error),
             ),
-            Err(error) => update_worker_response::Result::Error(error),
         };
 
         Ok(Response::new(UpdateWorkerResponse {

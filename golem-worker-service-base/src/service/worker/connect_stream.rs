@@ -7,8 +7,12 @@ use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::{Status, Streaming};
+use tracing::Instrument;
 
 use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_common::metrics::grpc::{
+    record_closed_grpc_active_stream, record_new_grpc_active_stream,
+};
 
 pub struct ConnectWorkerStream {
     receiver: mpsc::Receiver<Result<LogEvent, Status>>,
@@ -25,6 +29,8 @@ impl ConnectWorkerStream {
         let cancel = CancellationToken::new();
 
         tokio::spawn({
+            record_new_grpc_active_stream();
+
             let cancel = cancel.clone();
 
             let forward_loop = {
@@ -37,6 +43,7 @@ impl ConnectWorkerStream {
                         }
                     }
                 }
+                .in_current_span()
             };
 
             async move {
@@ -49,7 +56,9 @@ impl ConnectWorkerStream {
                     }
                 };
                 sender.closed().await;
+                record_closed_grpc_active_stream();
             }
+            .in_current_span()
         });
 
         Self { receiver, cancel }
