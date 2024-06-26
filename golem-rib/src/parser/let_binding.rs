@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use combine::error::StreamError;
+use combine::parser::char::digit;
 use combine::{
     many1,
     parser::char::{char as char_, letter, spaces, string},
     Parser,
 };
-use combine::error::StreamError;
-use combine::parser::char::digit;
 
 use crate::expr::Expr;
 use crate::parser::rib_expr::rib_expr;
@@ -171,7 +171,10 @@ mod tests {
             Ok((
                 Expr::Let(
                     "foo".to_string(),
-                    Box::new(Expr::Record(vec![("bar".to_string(), Box::new(Expr::Identifier("baz".to_string())))]))
+                    Box::new(Expr::Record(vec![(
+                        "bar".to_string(),
+                        Box::new(Expr::Identifier("baz".to_string()))
+                    )]))
                 ),
                 ""
             ))

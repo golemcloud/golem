@@ -69,8 +69,6 @@ mod tests {
     use super::*;
     use combine::EasyParser;
 
-    // Empty Records can be empty flags or empty records and has to return a possibility which can be deduded only during evaluation phase
-
     #[test]
     fn test_singleton_record() {
         let input = "{foo: bar}";

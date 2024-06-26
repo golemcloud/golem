@@ -69,7 +69,11 @@ mod internal {
     }
 
     fn interpolation<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-        between(char_('$').with(char_('{')).skip(spaces()), char_('}'), rib_program())
+        between(
+            char_('$').with(char_('{')).skip(spaces()),
+            char_('}'),
+            rib_program(),
+        )
     }
 }
 
