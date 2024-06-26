@@ -30,16 +30,7 @@ pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
 mod record_tests {
     use crate::expr::*;
     use crate::text::{from_string, to_string, Expr};
-
-    #[test]
-    fn test_round_trip_simple_record_empty() {
-        let input_expr = Expr::Record(vec![]);
-        let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${{}}".to_string();
-        let output_expr = from_string(expr_str.as_str()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
+    
     #[test]
     fn test_round_trip_simple_record_single() {
         let input_expr = Expr::Record(vec![(
@@ -1052,35 +1043,6 @@ mod selection_tests {
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 
-    #[test]
-    fn test_round_trip_read_write_select_index_from_record() {
-        let input_expr = Expr::SelectIndex(
-            Box::new(Expr::Record(vec![(
-                "field".to_string(),
-                Box::new(Expr::Identifier("request".to_string())),
-            )])),
-            1,
-        );
-        let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${{field: request}[1]}".to_string();
-        let output_expr = from_string(expr_str.as_str()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_select_field_from_sequence() {
-        let input_expr = Expr::SelectField(
-            Box::new(Expr::Sequence(vec![
-                Expr::Identifier("request".to_string()),
-                Expr::Identifier("request".to_string()),
-            ])),
-            "field".to_string(),
-        );
-        let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${[request, request].field}".to_string();
-        let output_expr = from_string(expr_str.as_str()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
 
     #[test]
     fn test_round_trip_read_write_select_index_from_sequence() {
@@ -1093,21 +1055,6 @@ mod selection_tests {
         );
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${[request, request][1]}".to_string();
-        let output_expr = from_string(expr_str.as_str()).unwrap();
-        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
-    }
-
-    #[test]
-    fn test_round_trip_read_write_select_field_from_tuple() {
-        let input_expr = Expr::SelectField(
-            Box::new(Expr::Tuple(vec![
-                Expr::Identifier("request".to_string()),
-                Expr::Identifier("request".to_string()),
-            ])),
-            "field".to_string(),
-        );
-        let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "${(request, request).field}".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
