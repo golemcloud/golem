@@ -2914,6 +2914,12 @@ components:
           format: date-time
         lastError:
           type: string
+        componentSize:
+          type: integer
+          format: uint64
+        totalLinearMemorySize:
+          type: integer
+          format: uint64
       required:
       - workerId
       - args
@@ -2924,6 +2930,8 @@ components:
       - pendingInvocationCount
       - updates
       - createdAt
+      - componentSize
+      - totalLinearMemorySize
     WorkerNameFilter:
       type: object
       properties:
@@ -3082,9 +3090,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Producers'
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinearMemory'
       required:
       - exports
       - producers
+      - memories
     Export:
       discriminator:
         propertyName: type
@@ -3167,6 +3180,19 @@ components:
           $ref: '#/components/schemas/Type'
       required:
       - typ
+    LinearMemory:
+      type: object
+      properties:
+        initial:
+          description: Initial size of the linear memory in bytes
+          type: integer
+          format: uint64
+        maximum:
+          description: Optional maximal size of the linear memory in bytes
+          type: integer
+          format: uint64
+      required:
+      - initial
     NameOptionTypePair:
       type: object
       properties:

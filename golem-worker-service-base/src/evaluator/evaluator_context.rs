@@ -83,6 +83,7 @@ impl WorkerMetadataFetcher for NoopWorkerMetadataFetcher {
         Ok(ComponentMetadata {
             exports: vec![],
             producers: vec![],
+            memories: vec![],
         })
     }
 }

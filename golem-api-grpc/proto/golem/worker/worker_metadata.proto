@@ -19,6 +19,8 @@ message WorkerMetadata {
   repeated UpdateRecord updates = 9;
   google.protobuf.Timestamp created_at = 10;
   optional string last_error = 11;
+  uint64 component_size = 12;
+  uint64 total_linear_memory_size = 13;
 }
 
 message UpdateRecord {

@@ -147,6 +147,7 @@ mod tests {
                     parameters: Vec::new(),
                     results: func_res,
                 })],
+                memories: vec![],
             },
             project_id: None,
         };
