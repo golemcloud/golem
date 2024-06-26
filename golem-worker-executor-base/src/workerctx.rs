@@ -31,7 +31,7 @@ use crate::model::{
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::events::Events;
+use crate::services::component::ComponentMetadata;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
@@ -71,8 +71,8 @@ pub trait WorkerCtx:
     /// Creates a new worker context
     ///
     /// Arguments:
-    /// - `worker_id`: The worker ID (consists of the component id and worker name)
-    /// - `account_id`: The account that initiated the creation of the worker
+    /// - `owned_worker_id`: The worker ID (consists of the component id and worker name as well as the worker's owner account)
+    /// - `component_metadata`: Metadata associated with the worker's component
     /// - `promise_service`: The service for managing promises
     /// - `worker_service`: The service for managing workers
     /// - `key_value_service`: The service for storing key-value pairs
@@ -91,8 +91,8 @@ pub trait WorkerCtx:
     #[allow(clippy::too_many_arguments)]
     async fn create(
         owned_worker_id: OwnedWorkerId,
+        component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -124,6 +124,8 @@ pub trait WorkerCtx:
 
     /// Get the worker ID associated with this worker context
     fn worker_id(&self) -> &WorkerId;
+
+    fn component_metadata(&self) -> &ComponentMetadata;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -286,7 +288,11 @@ pub trait UpdateManagement {
     );
 
     /// Called when an update attempt succeeded
-    async fn on_worker_update_succeeded(&self, target_version: ComponentVersion);
+    async fn on_worker_update_succeeded(
+        &self,
+        target_version: ComponentVersion,
+        new_component_size: u64,
+    );
 }
 
 /// Stores resources created within the worker indexed by their constructor parameters
