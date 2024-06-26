@@ -12,19 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use combine::parser::char::digit;
 use combine::{
     between, many1,
     parser::char::{char, letter, spaces},
     Parser,
 };
-use combine::parser::char::digit;
 
 use crate::expr::Expr;
 use combine::sep_by;
 use combine::stream::easy;
 
 pub fn flag<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    let flag_name = many1(letter().or(char('_')).or(digit()).or(char('-'))).map(|s: Vec<char>| s.into_iter().collect());
+    let flag_name = many1(letter().or(char('_')).or(digit()).or(char('-')))
+        .map(|s: Vec<char>| s.into_iter().collect());
 
     spaces().with(
         between(

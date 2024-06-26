@@ -30,7 +30,7 @@ pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
 mod record_tests {
     use crate::expr::*;
     use crate::text::{from_string, to_string, Expr};
-    
+
     #[test]
     fn test_round_trip_simple_record_single() {
         let input_expr = Expr::Record(vec![(
@@ -991,12 +991,15 @@ mod let_tests {
 
     #[test]
     fn test_round_trip_read_write_let() {
-        let input_expr = Expr::Let(
-            "x".to_string(),
-            Box::new(Expr::Literal("hello".to_string())),
-        );
+        let input_expr = Expr::Multiple(vec![
+            Expr::Let(
+                "x".to_string(),
+                Box::new(Expr::Literal("hello".to_string())),
+            ),
+            Expr::Let("y".to_string(), Box::new(Expr::Literal("bar".to_string()))),
+        ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = r#"${let x = "hello";}"#.to_string();
+        let expected_str = "${let x = \"hello\";\nlet y = \"bar\"}".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1042,7 +1045,6 @@ mod selection_tests {
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
-
 
     #[test]
     fn test_round_trip_read_write_select_index_from_sequence() {
@@ -1322,13 +1324,13 @@ mod match_tests {
             Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
-                    ArmPattern::custom_constructor("foo", vec![]),
+                    ArmPattern::identifier("foo"),
                     Box::new(Expr::Literal("success".to_string())),
                 )),
                 MatchArm((
                     ArmPattern::custom_constructor(
                         "bar",
-                        vec![ArmPattern::custom_constructor("c", vec![])],
+                        vec![ArmPattern::identifier("c")],
                     ),
                     Box::new(Expr::Literal("failure".to_string())),
                 )),
@@ -1352,7 +1354,7 @@ mod match_tests {
                         "foo",
                         vec![ArmPattern::custom_constructor(
                             "bar",
-                            vec![ArmPattern::custom_constructor("v1", vec![])],
+                            vec![ArmPattern::identifier("v1")],
                         )],
                     ),
                     Box::new(Expr::Literal("success".to_string())),
@@ -1360,7 +1362,7 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::custom_constructor(
                         "bar",
-                        vec![ArmPattern::custom_constructor("c", vec![])],
+                        vec![ArmPattern::identifier("c")],
                     ),
                     Box::new(Expr::Literal("failure".to_string())),
                 )),
@@ -1368,6 +1370,7 @@ mod match_tests {
         );
 
         let expr_str = to_string(&input_expr).unwrap();
+        dbg!(expr_str.clone());
         let expected_str =
             r#"${match request {  foo(bar(v1)) => "success", bar(c) => "failure" } }"#.to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
@@ -1589,13 +1592,10 @@ mod if_cond_tests {
     fn test_round_trip_if_condition_of_tuple() {
         let input_expr = Expr::Cond(
             Box::new(Expr::EqualTo(
-                Box::new(Expr::SelectField(
-                    Box::new(Expr::Tuple(vec![
-                        Expr::Identifier("request".to_string()),
-                        Expr::Identifier("request".to_string()),
-                    ])),
-                    "foo".to_string(),
-                )),
+                Box::new(Expr::Tuple(vec![
+                    Expr::Identifier("foo".to_string()),
+                    Expr::Identifier("bar".to_string()),
+                ])),
                 Box::new(Expr::Tuple(vec![
                     Expr::Identifier("request".to_string()),
                     Expr::Identifier("request".to_string()),
@@ -1607,8 +1607,7 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            r#"${if (request, request).foo == (request, request) then "success" else "failed"}"#
-                .to_string();
+            r#"${if (foo, bar) == (request, request) then "success" else "failed"}"#.to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1617,13 +1616,10 @@ mod if_cond_tests {
     fn test_round_trip_if_condition_of_sequence() {
         let input_expr = Expr::Cond(
             Box::new(Expr::EqualTo(
-                Box::new(Expr::SelectField(
-                    Box::new(Expr::Sequence(vec![
-                        Expr::Identifier("request".to_string()),
-                        Expr::Identifier("request".to_string()),
-                    ])),
-                    "foo".to_string(),
-                )),
+                Box::new(Expr::Sequence(vec![
+                    Expr::Identifier("foo".to_string()),
+                    Expr::Identifier("bar".to_string()),
+                ])),
                 Box::new(Expr::Sequence(vec![
                     Expr::Identifier("request".to_string()),
                     Expr::Identifier("request".to_string()),
@@ -1635,8 +1631,7 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            r#"${if [request, request].foo == [request, request] then "success" else "failed"}"#
-                .to_string();
+            r#"${if [foo, bar] == [request, request] then "success" else "failed"}"#.to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

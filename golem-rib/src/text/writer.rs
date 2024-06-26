@@ -89,8 +89,7 @@ impl<W: Write> Writer<W> {
                 self.write_str("let ")?;
                 self.write_str(let_variable)?;
                 self.write_str(" = ")?;
-                self.write_expr(expr)?;
-                self.write_display(":")
+                self.write_expr(expr)
             }
             Expr::SelectField(expr, field_name) => {
                 self.write_expr(expr)?;
@@ -160,6 +159,7 @@ impl<W: Write> Writer<W> {
             Expr::Multiple(expr) => {
                 for (idx, expr) in expr.iter().enumerate() {
                     if idx != 0 {
+                        self.write_display(";")?;
                         self.write_display("\n")?;
                     }
                     self.write_expr(expr)?;

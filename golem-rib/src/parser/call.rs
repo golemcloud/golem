@@ -14,11 +14,9 @@
 
 use combine::error::Commit;
 use combine::parser::char::{alpha_num, string};
+use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
 use combine::stream::easy;
-use combine::{
-    parser::char::{char, spaces},
-};
 
 use combine::{any, attempt, between, choice, many1, optional, parser, token, Parser};
 

@@ -145,5 +145,4 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(result, Ok((Expr::Flags(vec!["foo".to_string()]), "")));
     }
-
 }

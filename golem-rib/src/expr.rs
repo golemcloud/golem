@@ -188,6 +188,9 @@ impl ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Option(None)))
     }
 
+    pub fn identifier(binding_variable: &str) -> ArmPattern {
+        ArmPattern::Literal(Box::new(Expr::Identifier(binding_variable.to_string())))
+    }
     pub fn custom_constructor(name: &str, args: Vec<ArmPattern>) -> ArmPattern {
         ArmPattern::Constructor(name.to_string(), args)
     }

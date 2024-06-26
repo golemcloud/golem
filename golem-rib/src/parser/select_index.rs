@@ -92,7 +92,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use crate::expr::*;
-    use crate::parser::rib_expr::{rib_expr};
+    use crate::parser::rib_expr::rib_expr;
     use combine::EasyParser;
 
     #[test]

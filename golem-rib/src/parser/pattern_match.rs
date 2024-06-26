@@ -98,8 +98,9 @@ mod internal {
 
     use crate::parser::pattern_match::arm_pattern::*;
     use combine::attempt;
+    use combine::error::StreamError;
     use combine::many1;
-    use combine::parser::char::letter;
+    use combine::parser::char::{digit, letter};
     use combine::parser::char::{spaces, string};
     use combine::sep_by;
 
@@ -129,7 +130,14 @@ mod internal {
     }
 
     fn constructor_type_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
-        many1(letter().or(char_('_')))
+        many1(letter().or(digit()).or(char_('_')))
+            .and_then(|s: Vec<char>| {
+                if s.first().map_or(false, |&c| c.is_alphabetic()) {
+                    Ok(s)
+                } else {
+                    Err(easy::Error::message_static_message("Constructor type name must start with a letter"))
+                }
+            })
             .map(|s: Vec<char>| s.into_iter().collect())
             .message("Unable to parse custom constructor name")
     }
