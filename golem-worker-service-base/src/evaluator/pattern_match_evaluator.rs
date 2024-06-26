@@ -290,11 +290,11 @@ fn handle_variant(
     // and become a generic variant. We still want them to be handled as if they are Result::Ok, Option::Some etc
     // We can solve this problem by not reusing `Expr` when parsing pattern-match's arm-pattern.
     if variant_name == "ok" {
-        return handle_ok(match_expr_result, &variables[0], binding_variable, input);
+        handle_ok(match_expr_result, &variables[0], binding_variable, input)
     } else if variant_name == "err" {
-        return handle_err(match_expr_result, &variables[0], binding_variable, input);
+        handle_err(match_expr_result, &variables[0], binding_variable, input)
     } else if variant_name == "some" {
-        return handle_some(match_expr_result, &variables[0], binding_variable, input);
+        handle_some(match_expr_result, &variables[0], binding_variable, input)
     } else {
         match match_expr_result {
             result @ TypeAnnotatedValue::Variant {
