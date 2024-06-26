@@ -3548,7 +3548,7 @@ dependencies = [
  "derive_more",
  "dir-diff",
  "fancy-regex",
- "golem-wit",
+ "golem-wit 0.2.10",
  "include_dir",
  "once_cell",
  "serde 1.0.203",
@@ -3679,9 +3679,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-ast"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ece8710411f0474ae85b2ff6ec69b01cd8bbb732334694fcf60ba1b36d8ac686"
+checksum = "e05faf69efd564e1463a386d5b365301b3fc1e264dfce4d9a3ace0c97c5c6bdc"
 dependencies = [
  "leb128",
  "mappable-rc",
@@ -3693,11 +3693,12 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.29"
+version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ae26028226e258a3cfa04cd35b6e1fdcde4d86037ee7df4f1ec9dfc537447b7"
+checksum = "a11deb596bb04f6eab5c4a3a294db1a4d3b1f1d3a3ccc9480e21a373ebb21217"
 dependencies = [
  "arbitrary",
+ "async-trait",
  "bigdecimal",
  "bincode",
  "golem-wasm-ast",
@@ -3707,14 +3708,15 @@ dependencies = [
  "serde_json",
  "wasm-wave",
  "wasmtime",
+ "wasmtime-wasi",
  "wit-bindgen-rt",
 ]
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "0.0.29"
+version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6747797bb59967886446693f6fbe574c1c1e84fdaf9367ef1bb5cc2aa1f1c3e4"
+checksum = "88a316d82041a03b22b7820b252430fa19d5b81d13719596b5c03778df32b771"
 dependencies = [
  "anyhow",
  "cargo-component",
@@ -3748,6 +3750,12 @@ name = "golem-wit"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09a9f3d1abc406d69396138285161f49bef5ce4faa3d840ca27c7b2cefe49449"
+
+[[package]]
+name = "golem-wit"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe38e8abe5a18164ccb7e8c08736a9a8bae4f3368872e349d526057b1a09cc0f"
 
 [[package]]
 name = "golem-worker-executor"
@@ -3815,10 +3823,11 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit",
+ "golem-wit 0.3.0",
  "http 0.2.12",
  "http 1.1.0",
  "http-body 1.0.0",
+ "humansize",
  "humantime-serde",
  "hyper 1.3.1",
  "io-extras",
@@ -3837,6 +3846,7 @@ dependencies = [
  "rustls 0.23.10",
  "serde 1.0.203",
  "serde_json",
+ "sysinfo",
  "tempfile",
  "testcontainers",
  "testcontainers-modules",
@@ -4261,6 +4271,15 @@ name = "httpdate"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
+name = "humansize"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6cb51c9a029ddc91b07a787f1d86b53ccfa49b0e86688c946ebe8d3555685dd7"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "humantime"
@@ -5457,6 +5476,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5831952a9476f2fed74b77d74182fa5ddc4d21c72ec45a333b250e3ed0272804"
 dependencies = [
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "ntapi"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8a3895c6391c39d7fe7ebc444a87eb2991b2a0bc718fdabd071eec617fc68e4"
+dependencies = [
+ "winapi",
 ]
 
 [[package]]
@@ -8303,6 +8331,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7065abeca94b6a8a577f9bd45aa0867a2238b74e8eb67cf10d492bc39351394"
 dependencies = [
  "futures-core",
+]
+
+[[package]]
+name = "sysinfo"
+version = "0.30.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "732ffa00f53e6b2af46208fba5718d9662a421049204e156328b66791ffa15ae"
+dependencies = [
+ "cfg-if",
+ "core-foundation-sys",
+ "libc",
+ "ntapi",
+ "once_cell",
+ "rayon",
+ "windows",
 ]
 
 [[package]]

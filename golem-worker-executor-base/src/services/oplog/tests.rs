@@ -46,6 +46,8 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             env,
             account_id,
             parent,
+            component_size,
+            initial_total_linear_memory_size,
         } => OplogEntry::Create {
             timestamp: rounded_ts(timestamp),
             worker_id,
@@ -54,6 +56,8 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             env,
             account_id,
             parent,
+            component_size,
+            initial_total_linear_memory_size,
         },
         OplogEntry::ImportedFunctionInvoked {
             timestamp,
@@ -141,9 +145,11 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
         OplogEntry::SuccessfulUpdate {
             timestamp,
             target_version,
+            new_component_size,
         } => OplogEntry::SuccessfulUpdate {
             timestamp: rounded_ts(timestamp),
             target_version,
+            new_component_size,
         },
         OplogEntry::FailedUpdate {
             timestamp,

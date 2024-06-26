@@ -539,3 +539,51 @@ async fn c_example_2() {
 
     check!(first_line == format!("Hello C! {year}"));
 }
+
+#[tokio::test]
+#[tracing::instrument]
+#[ignore]
+async fn c_example_3() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_component("large-initial-memory").await;
+    let worker_id = executor
+        .start_worker(&component_id, "large-initial-memory")
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    check!(result == vec![Value::U64(536870912)]);
+}
+
+#[tokio::test]
+#[tracing::instrument]
+#[ignore]
+async fn c_example_4() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_component("large-dynamic-memory").await;
+    let worker_id = executor
+        .start_worker(&component_id, "large-dynamic-memory")
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    check!(result == vec![Value::U64(0)]);
+}

@@ -20,3 +20,4 @@ path = "wit"
 "golem:rpc" = { path = "wit/deps/wasm-rpc" }
 "auction:auction" = { path = "wit/deps/auction_auction" }
 "auction:auction-stub" = { path = "wit/deps/auction-stub" }
+"wasi:io" = { path = "wit/deps/io" }

@@ -58,7 +58,7 @@ use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::AsContextMut;
-use wasmtime_wasi::{I32Exit, ResourceTable, Stderr, Subscribe, WasiCtx, WasiView};
+use wasmtime_wasi::{I32Exit, ResourceTable, Stderr, WasiCtx, WasiView};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
@@ -90,7 +90,7 @@ mod sockets;
 pub mod wasm_rpc;
 
 mod durability;
-use crate::services::events::Events;
+use crate::services::component::ComponentMetadata;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::worker::{RecoveryDecision, Worker};
 pub use durability::*;
@@ -112,8 +112,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn create(
         owned_worker_id: OwnedWorkerId,
+        component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        _events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<
             dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
@@ -189,6 +189,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         worker_proxy,
                         worker_config.deleted_regions.clone(),
                         last_oplog_index,
+                        component_metadata,
                     ),
                     temp_dir,
                     execution_status,
@@ -214,6 +215,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn worker_id(&self) -> &WorkerId {
         &self.owned_worker_id.worker_id
+    }
+
+    pub fn component_metadata(&self) -> &ComponentMetadata {
+        &self.state.component_metadata
     }
 
     pub fn is_exit(error: &anyhow::Error) -> Option<i32> {
@@ -517,10 +522,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                         .await;
                                     RecoveryDecision::Immediate
                                 } else {
+                                    let component_metadata =
+                                        store.as_context().data().component_metadata().clone();
                                     store
                                         .as_context_mut()
                                         .data_mut()
-                                        .on_worker_update_succeeded(target_version)
+                                        .on_worker_update_succeeded(
+                                            target_version,
+                                            component_metadata.size,
+                                        )
                                         .await;
                                     RecoveryDecision::None
                                 }
@@ -548,10 +558,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                     } else {
                         // Automatic update succeeded
                         let target_version = *pending_update.description.target_version();
+                        let component_metadata =
+                            store.as_context().data().component_metadata().clone();
                         store
                             .as_context_mut()
                             .data_mut()
-                            .on_worker_update_succeeded(target_version)
+                            .on_worker_update_succeeded(target_version, component_metadata.size)
                             .await;
                         RecoveryDecision::None
                     }
@@ -689,25 +701,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision {
-        let oplog_idx = if self.state.is_live() {
-            let needs_commit = match trap_type {
-                TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
-                TrapType::Interrupt(InterruptKind::Interrupt) => {
-                    Some((OplogEntry::interrupted(), true))
-                }
-                TrapType::Interrupt(InterruptKind::Suspend) => Some((OplogEntry::suspend(), false)),
-                TrapType::Exit => Some((OplogEntry::exited(), true)),
-                _ => None,
-            };
+        let needs_commit = match trap_type {
+            TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
+            TrapType::Interrupt(InterruptKind::Interrupt) => {
+                Some((OplogEntry::interrupted(), true))
+            }
+            TrapType::Interrupt(InterruptKind::Suspend) => Some((OplogEntry::suspend(), false)),
+            TrapType::Exit => Some((OplogEntry::exited(), true)),
+            _ => None,
+        };
 
-            if let Some((entry, store)) = needs_commit {
-                let oplog_idx = self.state.oplog.add_and_commit(entry).await;
+        let oplog_idx = if let Some((entry, store)) = needs_commit {
+            let oplog_idx = self.state.oplog.add_and_commit(entry).await;
 
-                if store {
-                    Some(oplog_idx)
-                } else {
-                    None
-                }
+            if store {
+                Some(oplog_idx)
             } else {
                 None
             }
@@ -740,6 +748,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         if updated_worker_status != WorkerStatus::Retrying
             && updated_worker_status != WorkerStatus::Running
         {
+            // Giving up, associating the stored result with the current and upcoming invocations
             if let Some(oplog_idx) = oplog_idx {
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
@@ -873,10 +882,14 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         );
     }
 
-    async fn on_worker_update_succeeded(&self, target_version: ComponentVersion) {
+    async fn on_worker_update_succeeded(
+        &self,
+        target_version: ComponentVersion,
+        new_component_size: u64,
+    ) {
         info!("Worker update to {} finished successfully", target_version);
 
-        let entry = OplogEntry::successful_update(target_version);
+        let entry = OplogEntry::successful_update(target_version, new_component_size);
         let timestamp = entry.timestamp();
         self.public_state.oplog.add_and_commit(entry).await;
         self.update_worker_status(|status| {
@@ -1230,6 +1243,7 @@ pub struct PrivateDurableWorkerState {
     snapshotting_mode: Option<PersistenceLevel>,
 
     indexed_resources: HashMap<IndexedResourceKey, u64>,
+    component_metadata: ComponentMetadata,
 }
 
 impl PrivateDurableWorkerState {
@@ -1250,6 +1264,7 @@ impl PrivateDurableWorkerState {
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
+        component_metadata: ComponentMetadata,
     ) -> Self {
         let mut result = Self {
             oplog_service,
@@ -1277,6 +1292,7 @@ impl PrivateDurableWorkerState {
             replay_target: last_oplog_index,
             snapshotting_mode: None,
             indexed_resources: HashMap::new(),
+            component_metadata,
         };
         result.move_replay_idx(OplogIndex::INITIAL); // By this we handle initial deleted regions applied by manual updates correctly
         result
@@ -1750,13 +1766,6 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
             Ok(default_send_request(request, config))
         }
     }
-}
-
-struct Ready {}
-
-#[async_trait]
-impl Subscribe for Ready {
-    async fn ready(&mut self) {}
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

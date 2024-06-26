@@ -10,7 +10,7 @@ js_test_components=("js-1" "js-2" "js-3" "js-4" "js-echo")
 java_test_components=("java-1" "java-2")
 dotnet_test_components=("csharp-1")
 swift_test_components=("swift-1")
-c_test_components=("c-1")
+c_test_components=("c-1" "large-initial-memory" "large-dynamic-memory")
 python_test_components=("python-1" "py-echo")
 
 # Optional arguments:
@@ -259,7 +259,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "c" ]; then
     if [ "$rebuild" = true ]; then
       rm *.wasm
     fi
-    wit-bindgen c ./wit
+    wit-bindgen c --autodrop-borrows yes ./wit
     ~/wasi-sdk-20.0/bin/clang --sysroot ~/wasi-sdk-20.0/share/wasi-sysroot main.c c_api1.c c_api1_component_type.o -o main.wasm
 
     echo "Turning the module into a WebAssembly Component..."
