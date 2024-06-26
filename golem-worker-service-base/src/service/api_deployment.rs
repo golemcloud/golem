@@ -199,13 +199,11 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                     _ => (),
                 }
 
-                new_deployment_records.push(ApiDeploymentRecord {
-                    namespace: deployment.namespace.to_string(),
-                    subdomain: deployment.site.subdomain.clone(),
-                    host: deployment.site.host.clone(),
-                    definition_id: api_definition_key.id.0.clone(),
-                    definition_version: api_definition_key.version.0.clone(),
-                });
+                new_deployment_records.push(ApiDeploymentRecord::new(
+                    deployment.namespace.clone(),
+                    deployment.site.clone(),
+                    api_definition_key.clone(),
+                ));
             }
         }
 
@@ -386,6 +384,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
     }
 }
 
+#[derive(Default)]
 pub struct ApiDeploymentServiceNoop {}
 
 #[async_trait]

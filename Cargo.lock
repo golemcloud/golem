@@ -3962,6 +3962,8 @@ dependencies = [
  "strum",
  "strum_macros",
  "tap",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror",
  "tokio",
  "tokio-stream",

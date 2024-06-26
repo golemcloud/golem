@@ -69,6 +69,8 @@ wasm-wave = { workspace = true }
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }
 fastrand = "2.0.2"
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
 
 [[bench]]
 name = "tree"

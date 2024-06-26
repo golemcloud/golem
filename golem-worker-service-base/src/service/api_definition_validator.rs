@@ -20,7 +20,7 @@ pub struct ValidationErrors<E> {
     pub errors: Vec<E>,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct ApiDefinitionValidatorNoop {}
 
 #[async_trait]

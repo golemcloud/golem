@@ -164,7 +164,8 @@ impl Services {
     }
 
     pub fn noop() -> Services {
-        let component_service: component::ComponentService = Arc::new(ComponentServiceNoop {});
+        let component_service: component::ComponentService =
+            Arc::new(ComponentServiceNoop::default());
 
         let worker_service: worker::WorkerService = Arc::new(WorkerServiceNoOp {
             metadata: WorkerRequestMetadata {
@@ -177,7 +178,7 @@ impl Services {
             dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
                 + Sync
                 + Send,
-        > = Arc::new(ApiDefinitionValidatorNoop {});
+        > = Arc::new(ApiDefinitionValidatorNoop::default());
 
         let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
@@ -191,10 +192,10 @@ impl Services {
             dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
                 + Sync
                 + Send,
-        > = Arc::new(ApiDefinitionServiceNoop {});
+        > = Arc::new(ApiDefinitionServiceNoop::default());
 
         let deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send> =
-            Arc::new(ApiDeploymentServiceNoop {});
+            Arc::new(ApiDeploymentServiceNoop::default());
 
         let http_definition_lookup_service =
             Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));

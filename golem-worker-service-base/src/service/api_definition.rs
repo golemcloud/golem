@@ -329,6 +329,7 @@ where
     }
 }
 
+#[derive(Default)]
 pub struct ApiDefinitionServiceNoop {}
 
 #[async_trait]

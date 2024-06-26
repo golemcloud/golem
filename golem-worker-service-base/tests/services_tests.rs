@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use golem_service_base::config::DbSqliteConfig;
+    use golem_service_base::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_service_base::db;
     use golem_worker_service_base::api_definition::http::HttpApiDefinition;
     use golem_worker_service_base::api_definition::{
@@ -19,6 +19,26 @@ mod tests {
         HttpApiDefinitionValidator, RouteValidationError,
     };
     use std::sync::Arc;
+    use testcontainers::clients::Cli;
+    use testcontainers::{Container, RunnableImage};
+    use testcontainers_modules::postgres::Postgres;
+
+    fn start_docker_postgres<'d>(docker: &'d Cli) -> (DbPostgresConfig, Container<'d, Postgres>) {
+        let image = RunnableImage::from(Postgres::default()).with_tag("14.7-alpine");
+        let container: Container<'d, Postgres> = docker.run(image);
+
+        let config = DbPostgresConfig {
+            host: "localhost".to_string(),
+            port: container.get_host_port_ipv4(5432),
+            database: "postgres".to_string(),
+            username: "postgres".to_string(),
+            password: "postgres".to_string(),
+            schema: Some("test".to_string()),
+            max_connections: 10,
+        };
+
+        (config, container)
+    }
 
     struct SqliteDb {
         db_path: String,
@@ -39,7 +59,30 @@ mod tests {
     }
 
     #[tokio::test]
-    pub async fn test_sqlite_db() {
+    pub async fn test_with_postgres_db() {
+        let cli = Cli::default();
+        let (db_config, _container) = start_docker_postgres(&cli);
+
+        db::postgres_migrate(&db_config, "tests/db/migration/postgres")
+            .await
+            .unwrap();
+
+        let db_pool = db::create_postgres_pool(&db_config).await.unwrap();
+
+        let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
+            Arc::new(api_definition::DbApiDefinitionRepo::new(
+                db_pool.clone().into(),
+            ));
+        let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
+            Arc::new(api_deployment::DbApiDeploymentRepo::new(
+                db_pool.clone().into(),
+            ));
+
+        test_services(api_definition_repo, api_deployment_repo).await;
+    }
+
+    #[tokio::test]
+    pub async fn test_with_sqlite_db() {
         let db = SqliteDb::default();
         let db_config = DbSqliteConfig {
             database: db.db_path.clone(),
@@ -60,6 +103,14 @@ mod tests {
             Arc::new(api_deployment::DbApiDeploymentRepo::new(
                 db_pool.clone().into(),
             ));
+
+        test_services(api_definition_repo, api_deployment_repo).await;
+    }
+
+    async fn test_services(
+        api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send>,
+        api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send>,
+    ) {
         let component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send> =
             Arc::new(ComponentServiceNoop {});
 
