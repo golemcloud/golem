@@ -144,7 +144,7 @@ fn evaluate_arm_pattern(
             }
 
             expr => {
-                let arm_pattern = ArmPattern::from_expr(expr.clone());
+                let arm_pattern = ArmPattern::Literal(Box::new(expr.clone()));
                 evaluate_arm_pattern(&arm_pattern, match_expr_result, input, binding_variable)
             }
         },

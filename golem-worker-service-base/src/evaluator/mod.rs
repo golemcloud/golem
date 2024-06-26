@@ -512,7 +512,8 @@ mod internal {
             .map_err(|err| EvaluationError::Message(err.to_string()))?
             .ok_or(EvaluationError::Message(format!(
                 "The function {} is not found at Runtime",
-                function_name
+                function_name.site().interface_name().map_or(function_name.function.function_name(),
+                                                             |interface| format!("{{{}}}.{}", interface, function_name.function.function_name()))
             )))?;
 
         let worker_variables = variables.get(&Path::from_key("worker")).map_err(|_| {

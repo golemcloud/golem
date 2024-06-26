@@ -228,7 +228,7 @@ mod internal {
 mod tests {
     use super::*;
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::expression::{Expr, InnerNumber};
+    use rib::{Expr};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::PathItem;
@@ -294,7 +294,7 @@ mod tests {
                             ),
                             (
                                 "status".to_string(),
-                                Box::new(Expr::Number(InnerNumber::UnsignedInteger(200)))
+                                Box::new(Expr::unsigned_integer(200))
                             ),
                         ]
                         .into_iter()

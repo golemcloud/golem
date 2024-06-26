@@ -18,8 +18,8 @@ mod writer;
 
 use crate::text::writer::WriterError;
 
-pub fn from_string(input: &str) -> Result<Expr, String> {
-    Expr::from_interpolated_str(input)
+pub fn from_string(input: impl AsRef<str>) -> Result<Expr, String> {
+    Expr::from_interpolated_str(input.as_ref())
 }
 
 pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
