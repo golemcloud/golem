@@ -67,6 +67,7 @@ mod arm_pattern {
     use crate::expr::ArmPattern;
 
     use combine::attempt;
+    use combine::parser::char::spaces;
 
     use combine::stream::easy;
 
@@ -75,6 +76,11 @@ mod arm_pattern {
         choice((
             attempt(arm_pattern_constructor()),
             attempt(char('_').map(|_| ArmPattern::WildCard)),
+            attempt((alias_name().skip(spaces()), char('@').skip(spaces()), arm_pattern().skip(spaces())).map(
+                |(iden, _, pattern)| {
+                    ArmPattern::As(iden, Box::new(pattern))
+                },
+            )),
             attempt(arm_pattern_literal()),
         ))
     }
@@ -118,16 +124,33 @@ mod internal {
         rib_expr().map(|lit| ArmPattern::Literal(Box::new(lit)))
     }
 
+    pub(crate) fn alias_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
+        many1(letter().or(digit()).or(char_('_')))
+            .and_then(|s: Vec<char>| {
+                if s.first().map_or(false, |&c| c.is_alphabetic()) {
+                    Ok(s)
+                } else {
+                    Err(easy::Error::message_static_message(
+                        "Alias name must start with a letter",
+                    ))
+                }
+            })
+            .map(|s: Vec<char>| s.into_iter().collect())
+            .message("Unable to parse alias name")
+    }
+
     fn custom_arm_pattern_constructor<'t>(
     ) -> impl Parser<easy::Stream<&'t str>, Output = ArmPattern> {
         (
             constructor_type_name().skip(spaces()),
             string("(").skip(spaces()),
-            sep_by(arm_pattern().skip(spaces()), char_(',')),
+            sep_by(arm_pattern().skip(spaces()), char_(',').skip(spaces())),
             string(")").skip(spaces()),
         )
             .map(|(name, _, patterns, _)| ArmPattern::Constructor(name, patterns))
     }
+
+
 
     fn constructor_type_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
         many1(letter().or(digit()).or(char_('_')))
@@ -164,6 +187,56 @@ mod tests {
                     Box::new(Expr::Identifier("foo".to_string())),
                     vec![MatchArm((
                         ArmPattern::WildCard,
+                        Box::new(Expr::Identifier("bar".to_string()))
+                    ))]
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_simple_pattern_with_wild_card() {
+        let input = "match foo { foo(_, _, iden) => bar }";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::PatternMatch(
+                    Box::new(Expr::Identifier("foo".to_string())),
+                    vec![MatchArm((
+                        ArmPattern::custom_constructor("foo", vec![
+                            ArmPattern::WildCard,
+                            ArmPattern::WildCard,
+                            ArmPattern::identifier("iden")
+                        ]),
+                        Box::new(Expr::Identifier("bar".to_string()))
+                    ))]
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_simple_pattern_with_alias() {
+        let input = "match foo { abc @ foo(_, _, d @ baz(_)) => bar }";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::PatternMatch(
+                    Box::new(Expr::Identifier("foo".to_string())),
+                    vec![MatchArm((
+                        ArmPattern::As("abc".to_string(),
+                        Box::new(ArmPattern::custom_constructor("foo", vec![
+                            ArmPattern::WildCard,
+                            ArmPattern::WildCard,
+                            ArmPattern::As(
+                                "d".to_string(),
+                                Box::new(ArmPattern::custom_constructor("baz", vec![ArmPattern::WildCard]))
+                            )
+                        ]))),
                         Box::new(Expr::Identifier("bar".to_string()))
                     ))]
                 ),
