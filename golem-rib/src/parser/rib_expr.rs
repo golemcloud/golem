@@ -27,6 +27,21 @@ use crate::parser::call::call;
 use combine::stream::easy;
 use crate::parser::boolean::boolean_literal;
 
+// Parse a full Rib Program.
+// This is kept outside for a reason, to avoid the conditions that lead to stack over-flow
+// Please don't refactor and inline this with `parser!` macros below.
+pub fn rib_program<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+    sep_by(rib_expr().skip(spaces()), char(';').skip(spaces()))
+        .map(|expressions: Vec<Expr>| {
+            if expressions.len() == 1 {
+                expressions.first().unwrap().clone()
+            } else {
+                Expr::Multiple(expressions)
+            }
+        })
+}
+
+
 // To handle recursion based on docs
 // Also note that, the immediate parsers on the sides of a binary expression can result in stack overflow
 // Therefore we copy the parser without these binary parsers in the attempt list to build the binary comparison parsers.
@@ -37,13 +52,7 @@ parser! {
         easy::Stream<&'t str>: Stream<Token = char>,
     ]
     {
-        sep_by(rib_expr_().skip(spaces()), char(';').skip(spaces()))
-        .map(|expressions: Vec<Expr>| {
-        if expressions.len() == 1 {
-            expressions[0].clone()
-        } else {
-            Expr::Multiple(expressions)
-        }})
+       rib_expr_()
     }
 }
 
@@ -110,61 +119,15 @@ parser! {
 mod tests {
     use crate::expr::ArmPattern;
     use crate::expr::MatchArm;
-
     use super::*;
     use combine::EasyParser;
     use crate::function_name::ParsedFunctionName;
     use crate::function_name::ParsedFunctionReference::RawResourceStaticMethod;
     use crate::function_name::ParsedFunctionSite::PackagedInterface;
 
-    #[test]
-    fn test_rib_expr() {
-        let input = "let x = 1";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(
-            result,
-            Ok((
-                Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
-                ""
-            ))
-        );
-    }
 
-    #[test]
-    fn test_rib_program() {
-        let input = "let x = 1; let y = 2";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(
-            result,
-            Ok((
-                Expr::Multiple(vec![
-                    Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
-                    Expr::Let("y".to_string(), Box::new(Expr::unsigned_integer(2)))
-                ]),
-                ""
-            ))
-        );
-    }
-
-    #[test]
-    fn test_rib_program_multiline() {
-        let input = "let x = 1;\nlet y = 2";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(
-            result,
-            Ok((
-                Expr::Multiple(vec![
-                    Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
-                    Expr::Let("y".to_string(), Box::new(Expr::unsigned_integer(2)))
-                ]),
-                ""
-            ))
-        );
-    }
-
-    #[test]
-    fn test_complex_rib_program() {
-        let program = r#"
+    fn program() -> String {
+        r#"
          let x = 1;
          let y = 2;
          let result = x > y;
@@ -184,80 +147,147 @@ mod tests {
          let result = ns:name/interface.{[static]resource1.do-something-static}(baz, qux);
 
          result
-       "#;
+       "#.to_string()
+    }
 
-        let result = rib_expr().easy_parse(program);
+    fn expected() -> Expr {
+        Expr::Multiple(vec![
+            Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
+            Expr::Let("y".to_string(), Box::new(Expr::unsigned_integer(2))),
+            Expr::Let(
+                "result".to_string(),
+                Box::new(Expr::GreaterThan(
+                    Box::new(Expr::Identifier("x".to_string())),
+                    Box::new(Expr::Identifier("y".to_string()))
+                ))
+            ),
+            Expr::Let(
+                "foo".to_string(),
+                Box::new(Expr::Option(Some(Box::new(Expr::Identifier("result".to_string())))))
+            ),
+            Expr::Let(
+                "bar".to_string(),
+                Box::new(Expr::Result(Ok(Box::new(Expr::Identifier("result".to_string())))))
+            ),
+            Expr::Let(
+                "baz".to_string(),
+                Box::new(Expr::PatternMatch(
+                    Box::new(Expr::Identifier("foo".to_string())),
+                    vec![
+                        MatchArm((
+                            ArmPattern::Literal(Box::new(Expr::Option(Some(Box::new(
+                                Expr::Identifier("x".to_string())
+                            ))))),
+                            Box::new(Expr::Identifier("x".to_string()))
+                        )),
+                        MatchArm((
+                            ArmPattern::Literal(Box::new(Expr::Option(None))),
+                            Box::new(Expr::Boolean(false))
+                        ))
+                    ]
+                ))
+            ),
+            Expr::Let(
+                "qux".to_string(),
+                Box::new(Expr::PatternMatch(
+                    Box::new(Expr::Identifier("bar".to_string())),
+                    vec![
+                        MatchArm((
+                            ArmPattern::Literal(Box::new(Expr::Result(Ok(Box::new(Expr::Identifier("x".to_string())))))),
+                            Box::new(Expr::Identifier("x".to_string()))
+                        )),
+                        MatchArm((
+                            ArmPattern::Literal(Box::new(Expr::Result(Err(Box::new(Expr::Identifier("msg".to_string())))))),
+                            Box::new(Expr::Boolean(false))
+                        ))
+                    ]
+                ))
+            ),
+            Expr::Let("result".to_string(), Box::new(Expr::Call(
+                ParsedFunctionName {
+                    site: PackagedInterface {
+                        namespace: "ns".to_string(),
+                        package: "name".to_string(),
+                        interface: "interface".to_string(),
+                        version: None
+                    },
+                    function: RawResourceStaticMethod {
+                        resource: "resource1".to_string(),
+                        method: "do-something-static".to_string()
+                    }
+                }, vec![Expr::Identifier("baz".to_string()), Expr::Identifier("qux".to_string())]
+            ))),
+            Expr::Identifier("result".to_string())
+        ])
+    }
+
+    #[test]
+    fn test_rib_expr() {
+        let input = "let x = 1";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_rib_program() {
+        let input = "let x = 1; let y = 2";
+        let result = rib_program().easy_parse(input);
         assert_eq!(
             result,
             Ok((
                 Expr::Multiple(vec![
                     Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
-                    Expr::Let("y".to_string(), Box::new(Expr::unsigned_integer(2))),
-                    Expr::Let(
-                        "result".to_string(),
-                        Box::new(Expr::GreaterThan(
-                            Box::new(Expr::Identifier("x".to_string())),
-                            Box::new(Expr::Identifier("y".to_string()))
-                        ))
-                    ),
-                    Expr::Let(
-                        "foo".to_string(),
-                        Box::new(Expr::Option(Some(Box::new(Expr::Identifier("result".to_string())))))
-                    ),
-                    Expr::Let(
-                        "bar".to_string(),
-                        Box::new(Expr::Result(Ok(Box::new(Expr::Identifier("result".to_string())))))
-                    ),
-                    Expr::Let(
-                        "baz".to_string(),
-                        Box::new(Expr::PatternMatch(
-                            Box::new(Expr::Identifier("foo".to_string())),
-                            vec![
-                                MatchArm((
-                                    ArmPattern::Literal(Box::new(Expr::Option(Some(Box::new(
-                                        Expr::Identifier("x".to_string())
-                                    ))))),
-                                    Box::new(Expr::Identifier("x".to_string()))
-                                )),
-                                MatchArm((
-                                    ArmPattern::Literal(Box::new(Expr::Option(None))),
-                                    Box::new(Expr::Boolean(false))
-                                ))
-                            ]
-                        ))
-                    ),
-                    Expr::Let(
-                        "qux".to_string(),
-                        Box::new(Expr::PatternMatch(
-                            Box::new(Expr::Identifier("bar".to_string())),
-                            vec![
-                                MatchArm((
-                                    ArmPattern::Literal(Box::new(Expr::Result(Ok(Box::new(Expr::Identifier("x".to_string())))))),
-                                    Box::new(Expr::Identifier("x".to_string()))
-                                )),
-                                MatchArm((
-                                    ArmPattern::Literal(Box::new(Expr::Result(Err(Box::new(Expr::Identifier("msg".to_string())))))),
-                                    Box::new(Expr::Boolean(false))
-                                ))
-                            ]
-                        ))
-                    ),
-                    Expr::Let("result".to_string(), Box::new(Expr::Call(
-                        ParsedFunctionName {
-                            site: PackagedInterface {
-                                namespace: "ns".to_string(),
-                                package: "name".to_string(),
-                                interface: "interface".to_string(),
-                                version: None
-                            },
-                            function: RawResourceStaticMethod {
-                                resource: "resource1".to_string(),
-                                method: "do-something-static".to_string()
-                            }
-                        }, vec![Expr::Identifier("baz".to_string()), Expr::Identifier("qux".to_string())]
-                    ))),
-                    Expr::Identifier("result".to_string())
+                    Expr::Let("y".to_string(), Box::new(Expr::unsigned_integer(2)))
                 ]),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_rib_program_multiline() {
+        let input = "let x = 1;\nlet y = 2";
+        let result = rib_program().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::Multiple(vec![
+                    Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
+                    Expr::Let("y".to_string(), Box::new(Expr::unsigned_integer(2)))
+                ]),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_complex_rib_program() {
+
+        let binding = program();
+        let result = rib_program().easy_parse(binding.as_ref());
+        assert_eq!(
+            result,
+            Ok((
+                expected(),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn interpolated_program() {
+        let program_interpolated = format!("\"${{{}}}\"", program());
+        let result = rib_program().easy_parse(program_interpolated.as_str());
+        assert_eq!(
+            result,
+            Ok((
+                expected(),
                 ""
             ))
         );

@@ -1,6 +1,6 @@
 use crate::function_name::ParsedFunctionName;
 use crate::parser::literal::literal;
-use crate::parser::rib_expr::rib_expr;
+use crate::parser::rib_expr::{rib_expr, rib_program};
 use bincode::{Decode, Encode};
 use combine::easy;
 use combine::EasyParser;
@@ -53,16 +53,18 @@ impl Expr {
     /// ```
     ///
     /// Rib supports conditional calls, function calls, pattern-matching,
-    /// string interpolation (see error message above) etc.
+    /// string interpolation (see error_message above) etc.
     ///
-    /// You can see an example of string interpolation for the `none` case above.
     pub fn from_str(input: &str) -> Result<Expr, easy::ParseError<&str>> {
-        rib_expr().easy_parse(input.as_ref()).map(|(expr, _)| expr)
+        rib_program().easy_parse(input.as_ref()).map(|(expr, _)| expr)
     }
 
-    /// Parse an interpolated text as Rib expression.
-    /// Usually `from_str` is all that you need.
-    /// `from_interpolated_str` can be used when you want to be really strict that only if text is wrapped in `${..}`, it should
+    /// Parse an interpolated text as Rib expression. The input is always expected to be wrapped with `${..}`
+    /// This is mainly to keep the backward compatibility where Golem Cloud console passes a Rib Expression always wrapped in `${..}`
+    ///
+    /// Explanation:
+    /// Usually `from_str` is all that you need which takes a plain text and parse it as Expr.
+    /// `from_interpolated_str` can be used when you want to be strict - only if text is wrapped in `${..}`, it should
     /// be considered as a Rib expression.
     ///
     /// Example 1:
@@ -78,7 +80,7 @@ impl Expr {
     ///     }
     ///   }
     /// ```
-    /// You can see the entire text is wrapped in an interpolation to specify that it's containing
+    /// You can see the entire text is wrapped in `${..}` to specify that it's containing
     /// a Rib expression and anything outside is considered as a literal string.
     ///
     /// Example 2:
@@ -89,15 +91,22 @@ impl Expr {
     ///
     /// This will be parsed as `Expr::Concat(Expr::Literal("worker-id-"), Expr::SelectField(Expr::Identifier("request"), "user_id"))`
     ///
-    /// The following will work as well:
+    /// The following will work too.
+    /// In the below example, the entire if condition is a Rib expression  (because it is wrapped in ${..}) and
+    /// the else condition is resolved to  a literal where part of it is a Rib expression itself (user.id).
     ///
     /// ```rib
     ///   ${if foo > 1 then bar else "baz-${user.id}"}
     /// ```
+    /// If you need the following to be considered as Rib program (without interpolation), use `Expr::from_str` instead.
     ///
+    /// ```rib
+    ///   if foo > 1 then bar else "baz-${user.id}"
+    /// ```
     ///
     pub fn from_interpolated_str(input: &str) -> Result<Expr, easy::ParseError<&str>> {
-        literal().easy_parse(input.as_ref()).map(|(expr, _)| expr)
+        let input = format!("\"{}\"", input);
+        rib_program().easy_parse(input.as_ref()).map(|(expr, _)| expr)
     }
     pub fn unsigned_integer(u64: u64) -> Expr {
         Expr::Number(Number::Unsigned(u64))
@@ -141,6 +150,27 @@ pub enum ArmPattern {
     Literal(Box<Expr>),
 }
 
+impl ArmPattern {
+    pub fn ok(binding_variable: &str) -> ArmPattern {
+        ArmPattern::Literal(Box::new(Expr::Result(Ok(Box::new(Expr::Identifier(binding_variable.to_string()))))))
+    }
+
+    pub fn err(binding_variable: &str) -> ArmPattern {
+        ArmPattern::Literal(Box::new(Expr::Result(Err(Box::new(Expr::Identifier(binding_variable.to_string()))))))
+    }
+
+    pub fn some(binding_variable: &str) -> ArmPattern {
+        ArmPattern::Literal(Box::new(Expr::Option(Some(Box::new(Expr::Identifier(binding_variable.to_string()))))))
+    }
+
+    pub fn none() -> ArmPattern {
+        ArmPattern::Literal(Box::new(Expr::Option(None)))
+    }
+
+    pub fn custom_constructor(name: &str, args: Vec<ArmPattern>) -> ArmPattern {
+        ArmPattern::Constructor(name.to_string(), args)
+    }
+}
 
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

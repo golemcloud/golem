@@ -18,7 +18,7 @@ parser! {
 
 mod internal {
     use crate::expr::Expr;
-    use crate::parser::rib_expr::rib_expr;
+    use crate::parser::rib_expr::{rib_expr, rib_program};
     use combine::parser::char::{digit, spaces};
     use combine::parser::char::{char as char_, letter};
     use combine::parser::repeat::many;
@@ -36,11 +36,7 @@ mod internal {
             if parts.len() == 0 {
                 Expr::Literal("".to_string())
             } else if parts.len() == 1 {
-                let only_expr = parts.iter().next().unwrap();
-                match only_expr.clone() {
-                    Expr::Literal(literal) => Expr::Literal(literal),
-                    expr => expr,
-                }
+                parts.first().unwrap().clone()
             } else {
                 Expr::Concat(parts)
             }
@@ -59,7 +55,7 @@ mod internal {
     }
 
     fn interpolation<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-        between(char_('$').with(char_('{')), char_('}'), rib_expr())
+        between(char_('$').with(char_('{')), char_('}'), rib_program())
     }
 }
 
