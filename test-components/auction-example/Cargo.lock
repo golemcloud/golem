@@ -116,9 +116,7 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ae26028226e258a3cfa04cd35b6e1fdcde4d86037ee7df4f1ec9dfc537447b7"
+version = "0.0.0"
 dependencies = [
  "prost-build",
  "wit-bindgen-rt",

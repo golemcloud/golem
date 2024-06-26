@@ -45,10 +45,11 @@ fs-set-times = "0.20.1"
 futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.4.3"
-golem-wit = { version = "0.2.10" }
+golem-wit = { version = "0.3.0" }
 http = { workspace = true }
 http_02 = { workspace = true }
 http-body = "1.0.0"                                 # keep in sync with wasmtime
+humansize = "2.1.3"
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
 io-extras = "0.18.0"
@@ -64,6 +65,7 @@ ringbuf = "0.3.3"
 rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sysinfo = "0.30.12"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

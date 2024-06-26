@@ -607,21 +607,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         trap_type: &TrapType,
         oplog_index: OplogIndex,
     ) {
+        let pending = self.pending_invocations();
+        let keys_to_fail = [
+            vec![key],
+            pending
+                .iter()
+                .filter_map(|entry| entry.invocation.idempotency_key())
+                .collect(),
+        ]
+        .concat();
         let mut map = self.invocation_results.write().unwrap();
-        map.insert(
-            key.clone(),
-            InvocationResult::Cached {
-                result: Err(trap_type.clone()),
-                oplog_idx: oplog_index,
-            },
-        );
-        let golem_error = trap_type.as_golem_error();
-        if let Some(golem_error) = golem_error {
-            self.events().publish(Event::InvocationCompleted {
-                worker_id: self.owned_worker_id.worker_id(),
-                idempotency_key: key.clone(),
-                result: Err(golem_error),
-            });
+        for key in keys_to_fail {
+            debug!("store_invocation_failure for {key}");
+
+            map.insert(
+                key.clone(),
+                InvocationResult::Cached {
+                    result: Err(trap_type.clone()),
+                    oplog_idx: oplog_index,
+                },
+            );
+            let golem_error = trap_type.as_golem_error();
+            if let Some(golem_error) = golem_error {
+                self.events().publish(Event::InvocationCompleted {
+                    worker_id: self.owned_worker_id.worker_id(),
+                    idempotency_key: key.clone(),
+                    result: Err(golem_error),
+                });
+            }
         }
     }
 
@@ -697,9 +710,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         } if *worker_id == self.owned_worker_id.worker_id
                             && idempotency_key == key =>
                         {
+                            debug!("wait_for_invocation_result: accepting event {:?}", event);
                             Some(LookupResult::Complete(result.clone()))
                         }
-                        _ => None,
+                        _ => {
+                            debug!("wait_for_invocation_result: skipping event {:?}", event);
+                            None
+                        }
                     })
                     .await
             }
@@ -949,8 +966,15 @@ impl RunningWorker {
 
         let mut final_decision = {
             let mut store = store.lock().await;
+            let span = span!(
+                Level::INFO,
+                "invocation",
+                worker_id = owned_worker_id.worker_id.to_string(),
+            );
             let prepare_result =
-                Ctx::prepare_instance(&owned_worker_id.worker_id, &instance, &mut *store).await;
+                Ctx::prepare_instance(&owned_worker_id.worker_id, &instance, &mut *store)
+                    .instrument(span)
+                    .await;
 
             match prepare_result {
                 Ok(decision) => decision,
@@ -1663,6 +1687,10 @@ pub fn is_worker_error_retriable(
     error: &WorkerError,
     retry_count: u64,
 ) -> bool {
+    debug!(
+        "IS WORKER ERROR RETRIABLE? {retry_count} {}",
+        retry_config.max_attempts
+    );
     match error {
         WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
         WorkerError::StackOverflow => false,
