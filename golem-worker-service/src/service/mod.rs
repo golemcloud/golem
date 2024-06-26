@@ -105,11 +105,11 @@ impl Services {
                     .await
                     .map_err(|e| e.to_string())?;
                 let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
-                    Arc::new(api_definition::DbApiDefinitionRepoRepo::new(
+                    Arc::new(api_definition::DbApiDefinitionRepo::new(
                         db_pool.clone().into(),
                     ));
                 let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
-                    Arc::new(api_deployment::DbApiDeploymentRepoRepo::new(
+                    Arc::new(api_deployment::DbApiDeploymentRepo::new(
                         db_pool.clone().into(),
                     ));
                 (api_definition_repo, api_deployment_repo)
@@ -119,11 +119,11 @@ impl Services {
                     .await
                     .map_err(|e| e.to_string())?;
                 let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
-                    Arc::new(api_definition::DbApiDefinitionRepoRepo::new(
+                    Arc::new(api_definition::DbApiDefinitionRepo::new(
                         db_pool.clone().into(),
                     ));
                 let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
-                    Arc::new(api_deployment::DbApiDeploymentRepoRepo::new(
+                    Arc::new(api_deployment::DbApiDeploymentRepo::new(
                         db_pool.clone().into(),
                     ));
                 (api_definition_repo, api_deployment_repo)

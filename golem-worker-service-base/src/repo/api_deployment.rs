@@ -34,18 +34,18 @@ pub trait ApiDeploymentRepo {
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError>;
 }
 
-pub struct DbApiDeploymentRepoRepo<DB: Database> {
+pub struct DbApiDeploymentRepo<DB: Database> {
     db_pool: Arc<Pool<DB>>,
 }
 
-impl<DB: Database> DbApiDeploymentRepoRepo<DB> {
+impl<DB: Database> DbApiDeploymentRepo<DB> {
     pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
         Self { db_pool }
     }
 }
 
 #[async_trait]
-impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Sqlite> {
+impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Sqlite> {
     async fn create(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError> {
         if !deployments.is_empty() {
             let mut transaction = self.db_pool.begin().await?;
@@ -142,7 +142,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Sqlite> {
 }
 
 #[async_trait]
-impl ApiDeploymentRepo for DbApiDeploymentRepoRepo<sqlx::Postgres> {
+impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
     async fn create(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError> {
         if !deployments.is_empty() {
             let mut transaction = self.db_pool.begin().await?;

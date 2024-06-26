@@ -78,18 +78,18 @@ pub trait ApiDefinitionRepo {
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError>;
 }
 
-pub struct DbApiDefinitionRepoRepo<DB: Database> {
+pub struct DbApiDefinitionRepo<DB: Database> {
     db_pool: Arc<Pool<DB>>,
 }
 
-impl<DB: Database> DbApiDefinitionRepoRepo<DB> {
+impl<DB: Database> DbApiDefinitionRepo<DB> {
     pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
         Self { db_pool }
     }
 }
 
 #[async_trait]
-impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Sqlite> {
+impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
     async fn create(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
         sqlx::query(
             r#"
@@ -220,7 +220,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Sqlite> {
 }
 
 #[async_trait]
-impl ApiDefinitionRepo for DbApiDefinitionRepoRepo<sqlx::Postgres> {
+impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
     async fn create(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
         sqlx::query(
             r#"
