@@ -82,11 +82,11 @@ mod record_tests {
         let input_expr = Expr::Record(vec![
             (
                 "field".to_string(),
-                Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
+                Box::new(Expr::unsigned_integer(1)),
             ),
             (
                 "field".to_string(),
-                Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+                Box::new(Expr::unsigned_integer(2)),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -620,12 +620,12 @@ mod sequence_tests {
     fn test_round_trip_read_write_sequence_of_math_op() {
         let input_expr = Expr::Sequence(vec![
             Expr::GreaterThan(
-                Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
-                Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+                Box::new(Expr::unsigned_integer(1)),
+                Box::new(Expr::unsigned_integer(2)),
             ),
             Expr::LessThan(
-                Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
-                Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+                Box::new(Expr::unsigned_integer(1)),
+                Box::new(Expr::unsigned_integer(2)),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
@@ -1302,16 +1302,16 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::from("ok", vec![ArmPattern::from("foo", vec![]).unwrap()]).unwrap(),
                     Box::new(Expr::GreaterThan(
-                        Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
-                        Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+                        Box::new(Expr::unsigned_integer(1)),
+                        Box::new(Expr::unsigned_integer(2)),
                     )),
                 )),
                 MatchArm((
                     ArmPattern::from("err", vec![ArmPattern::from("msg", vec![]).unwrap()])
                         .unwrap(),
                     Box::new(Expr::LessThan(
-                        Box::new(Expr::Number(InnerNumber::UnsignedInteger(1))),
-                        Box::new(Expr::Number(InnerNumber::UnsignedInteger(2))),
+                        Box::new(Expr::unsigned_integer(1)),
+                        Box::new(Expr::unsigned_integer(2)),
                     )),
                 )),
             ],
