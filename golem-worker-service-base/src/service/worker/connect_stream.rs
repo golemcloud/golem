@@ -54,7 +54,7 @@ impl ConnectWorkerStream {
                     _ = forward_loop => {
                         tracing::info!("WorkerStream forward loop finished");
                     }
-                };
+                }
                 sender.closed().await;
                 record_closed_grpc_active_stream();
             }
