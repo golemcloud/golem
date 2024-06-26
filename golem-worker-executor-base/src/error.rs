@@ -20,6 +20,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use golem_api_grpc::proto::golem;
+use golem_common::metrics::grpc::ErrorKind;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use tonic::Status;
 
@@ -158,35 +159,6 @@ impl GolemError {
             details: details.into(),
         }
     }
-
-    pub fn kind(&self) -> &'static str {
-        match self {
-            GolemError::InvalidRequest { .. } => "InvalidRequest",
-            GolemError::WorkerAlreadyExists { .. } => "WorkerAlreadyExists",
-            GolemError::WorkerNotFound { .. } => "WorkerNotFound",
-            GolemError::WorkerCreationFailed { .. } => "WorkerCreationFailed",
-            GolemError::FailedToResumeWorker { .. } => "FailedToResumeWorker",
-            GolemError::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
-            GolemError::ComponentParseFailed { .. } => "ComponentParseFailed",
-            GolemError::GetLatestVersionOfComponentFailed { .. } => {
-                "GetLatestVersionOfComponentFailed"
-            }
-            GolemError::PromiseNotFound { .. } => "PromiseNotFound",
-            GolemError::PromiseDropped { .. } => "PromiseDropped",
-            GolemError::PromiseAlreadyCompleted { .. } => "PromiseAlreadyCompleted",
-            GolemError::Interrupted { .. } => "Interrupted",
-            GolemError::ParamTypeMismatch => "ParamTypeMismatch",
-            GolemError::NoValueInMessage => "NoValueInMessage",
-            GolemError::ValueMismatch { .. } => "ValueMismatch",
-            GolemError::UnexpectedOplogEntry { .. } => "UnexpectedOplogEntry",
-            GolemError::InvalidShardId { .. } => "InvalidShardId",
-            GolemError::InvalidAccount => "InvalidAccount",
-            GolemError::Runtime { .. } => "Runtime",
-            GolemError::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
-            GolemError::PreviousInvocationExited => "PreviousInvocationExited",
-            GolemError::Unknown { .. } => "Unknown",
-        }
-    }
 }
 
 impl Display for GolemError {
@@ -312,6 +284,37 @@ impl Error for GolemError {
             GolemError::PreviousInvocationFailed { .. } => "The previously invoked function failed",
             GolemError::PreviousInvocationExited => "The previously invoked function exited",
             GolemError::Unknown { .. } => "Unknown error",
+        }
+    }
+}
+
+impl ErrorKind for GolemError {
+    fn kind(&self) -> &'static str {
+        match self {
+            GolemError::InvalidRequest { .. } => "InvalidRequest",
+            GolemError::WorkerAlreadyExists { .. } => "WorkerAlreadyExists",
+            GolemError::WorkerNotFound { .. } => "WorkerNotFound",
+            GolemError::WorkerCreationFailed { .. } => "WorkerCreationFailed",
+            GolemError::FailedToResumeWorker { .. } => "FailedToResumeWorker",
+            GolemError::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
+            GolemError::ComponentParseFailed { .. } => "ComponentParseFailed",
+            GolemError::GetLatestVersionOfComponentFailed { .. } => {
+                "GetLatestVersionOfComponentFailed"
+            }
+            GolemError::PromiseNotFound { .. } => "PromiseNotFound",
+            GolemError::PromiseDropped { .. } => "PromiseDropped",
+            GolemError::PromiseAlreadyCompleted { .. } => "PromiseAlreadyCompleted",
+            GolemError::Interrupted { .. } => "Interrupted",
+            GolemError::ParamTypeMismatch => "ParamTypeMismatch",
+            GolemError::NoValueInMessage => "NoValueInMessage",
+            GolemError::ValueMismatch { .. } => "ValueMismatch",
+            GolemError::UnexpectedOplogEntry { .. } => "UnexpectedOplogEntry",
+            GolemError::InvalidShardId { .. } => "InvalidShardId",
+            GolemError::InvalidAccount => "InvalidAccount",
+            GolemError::Runtime { .. } => "Runtime",
+            GolemError::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
+            GolemError::PreviousInvocationExited => "PreviousInvocationExited",
+            GolemError::Unknown { .. } => "Unknown",
         }
     }
 }

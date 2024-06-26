@@ -12,12 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use gethostname::gethostname;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
-
 use std::sync::Arc;
+
+use gethostname::gethostname;
+use golem_wasm_rpc::protobuf::Val;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Request, Response, Status};
+use tracing::{debug, error, info, warn, Instrument};
+use uuid::Uuid;
+use wasmtime::Error;
 
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
@@ -28,25 +35,19 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
     UpdateWorkerRequest, UpdateWorkerResponse,
 };
-use golem_common::model as common_model;
+use golem_common::metrics::grpc::{
+    record_closed_grpc_active_stream, record_new_grpc_active_stream,
+};
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId,
     ScanCursor, ShardId, TimestampedWorkerInvocation, WorkerFilter, WorkerId, WorkerInvocation,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
-use golem_wasm_rpc::protobuf::Val;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tonic::{Request, Response, Status};
-use tracing::{debug, error, info, warn, Instrument};
-use uuid::Uuid;
-use wasmtime::Error;
+use golem_common::{model as common_model, recorded_grpc_request};
 
 use crate::error::*;
-use crate::metrics::grpc::{record_closed_grpc_active_stream, record_new_grpc_active_stream};
 use crate::model::{InterruptKind, LastError};
-use crate::recorded_grpc_request;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{
