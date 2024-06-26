@@ -535,27 +535,22 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
                 fs::create_dir_all(dest.parent().unwrap())?;
                 fs::write(&dest, new_data.to_string())?;
             }
-        } else {
+        } else if unresolved.name.to_string() != stub_package_name {
             println!("Copying package {}", unresolved.name);
 
             for source in unresolved.source_files() {
-                let parsed = UnresolvedPackage::parse_path(source)?;
-                let stub_package_name = format!("{}-stub", def.root_package_name);
-
-                if parsed.name.to_string() == stub_package_name {
-                    println!("Skipping copying stub package {}", stub_package_name);
-                } else {
-                    let relative = source.strip_prefix(&def.source_wit_root)?;
-                    let dest = dest_wit_root.clone().join(relative);
-                    println!(
-                        "  .. {} to {}",
-                        source.to_string_lossy(),
-                        dest.to_string_lossy()
-                    );
-                    fs::create_dir_all(dest.parent().unwrap())?;
-                    fs::copy(source, &dest)?;
-                }
+                let relative = source.strip_prefix(&def.source_wit_root)?;
+                let dest = dest_wit_root.clone().join(relative);
+                println!(
+                    "  .. {} to {}",
+                    source.to_string_lossy(),
+                    dest.to_string_lossy()
+                );
+                fs::create_dir_all(dest.parent().unwrap())?;
+                fs::copy(source, &dest)?;
             }
+        } else {
+            println!("Skipping copying stub package {}", stub_package_name);
         }
     }
     let wasm_rpc_root = dest_wit_root.join(Path::new("deps/wasm-rpc"));
