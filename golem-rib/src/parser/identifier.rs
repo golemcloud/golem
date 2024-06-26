@@ -12,22 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::error::StreamError;
 use crate::expr::Expr;
+use combine::error::StreamError;
+use combine::parser::char::digit;
 use combine::parser::char::{char as char_, letter, spaces};
 use combine::parser::repeat::many1;
 use combine::stream::easy;
 use combine::Parser;
-use combine::parser::char::digit;
 
 pub fn identifier<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     spaces().with(
-        many1(letter().or(digit()).or(char_('_')))
+        many1(letter().or(digit()).or(char_('_').or(char_('-'))))
             .and_then(|s: Vec<char>| {
                 if s.first().map_or(false, |&c| c.is_alphabetic()) {
                     Ok(s)
                 } else {
-                    Err(easy::Error::message_static_message("Identifier must start with a letter"))
+                    Err(easy::Error::message_static_message(
+                        "Identifier must start with a letter",
+                    ))
                 }
             })
             .map(|s: Vec<char>| Expr::Identifier(s.into_iter().collect()))

@@ -40,6 +40,7 @@ mod internal {
     use super::*;
     use combine::error::StreamError;
     use combine::parser::char::char;
+    use combine::parser::char::digit;
 
     // We make base_expr and the children strict enough carefully, to avoid
     // stack overflow without affecting the grammer.
@@ -92,7 +93,7 @@ mod internal {
     }
 
     pub(crate) fn field_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
-        many1(letter().or(char_('_')))
+        many1(letter().or(digit()).or(char_('-')).or(char_('_')))
             .map(|s: Vec<char>| s.into_iter().collect())
             .message("Unable to parse field name")
     }

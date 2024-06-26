@@ -679,17 +679,11 @@ mod sequence_tests {
                             Box::new(Expr::Identifier("request".to_string())),
                             vec![
                                 MatchArm((
-                                    ArmPattern::custom_constructor(
-                                        "ok",
-                                        vec![ArmPattern::custom_constructor("foo", vec![])],
-                                    ),
+                                    ArmPattern::ok("foo"),
                                     Box::new(Expr::Literal("success".to_string())),
                                 )),
                                 MatchArm((
-                                    ArmPattern::custom_constructor(
-                                        "err",
-                                        vec![ArmPattern::custom_constructor("msg", vec![])],
-                                    ),
+                                    ArmPattern::err("msg"),
                                     Box::new(Expr::Literal("failure".to_string())),
                                 )),
                             ],
@@ -1294,18 +1288,12 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::custom_constructor(
                         "foo",
-                        vec![
-                            ArmPattern::custom_constructor("a", vec![]),
-                            ArmPattern::custom_constructor("b", vec![]),
-                        ],
+                        vec![ArmPattern::identifier("a"), ArmPattern::identifier("b")],
                     ),
                     Box::new(Expr::Literal("success".to_string())),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor(
-                        "bar",
-                        vec![ArmPattern::custom_constructor("c", vec![])],
-                    ),
+                    ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
                     Box::new(Expr::Literal("failure".to_string())),
                 )),
             ],
@@ -1328,10 +1316,7 @@ mod match_tests {
                     Box::new(Expr::Literal("success".to_string())),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor(
-                        "bar",
-                        vec![ArmPattern::identifier("c")],
-                    ),
+                    ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
                     Box::new(Expr::Literal("failure".to_string())),
                 )),
             ],
@@ -1360,10 +1345,7 @@ mod match_tests {
                     Box::new(Expr::Literal("success".to_string())),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor(
-                        "bar",
-                        vec![ArmPattern::identifier("c")],
-                    ),
+                    ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
                     Box::new(Expr::Literal("failure".to_string())),
                 )),
             ],
@@ -1383,14 +1365,11 @@ mod match_tests {
             Box::new(Expr::Identifier("request".to_string())),
             vec![
                 MatchArm((
-                    ArmPattern::custom_constructor("foo1", vec![]),
+                    ArmPattern::identifier("foo1"),
                     Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor(
-                        "bar",
-                        vec![ArmPattern::custom_constructor("c", vec![])],
-                    ),
+                    ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
                     Box::new(Expr::Result(Err(Box::new(Expr::Literal(
                         "bar".to_string(),
                     ))))),
@@ -1415,10 +1394,7 @@ mod match_tests {
                     Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor(
-                        "bar",
-                        vec![ArmPattern::custom_constructor("c", vec![])],
-                    ),
+                    ArmPattern::custom_constructor("bar", vec![ArmPattern::identifier("c")]),
                     Box::new(Expr::Result(Err(Box::new(Expr::Literal(
                         "bar".to_string(),
                     ))))),

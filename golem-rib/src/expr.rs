@@ -166,18 +166,21 @@ pub enum ArmPattern {
 }
 
 impl ArmPattern {
+    // Helper to construct ok(v). Cannot be used if there is nested constructors such as ok(some(v)))
     pub fn ok(binding_variable: &str) -> ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Result(Ok(Box::new(Expr::Identifier(
             binding_variable.to_string(),
         ))))))
     }
 
+    // Helper to construct err(v). Cannot be used if there is nested constructors such as err(some(v)))
     pub fn err(binding_variable: &str) -> ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Result(Err(Box::new(Expr::Identifier(
             binding_variable.to_string(),
         ))))))
     }
 
+    // Helper to construct some(v). Cannot be used if there is nested constructors such as some(ok(v)))
     pub fn some(binding_variable: &str) -> ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Option(Some(Box::new(Expr::Identifier(
             binding_variable.to_string(),

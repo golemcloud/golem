@@ -135,7 +135,9 @@ mod internal {
                 if s.first().map_or(false, |&c| c.is_alphabetic()) {
                     Ok(s)
                 } else {
-                    Err(easy::Error::message_static_message("Constructor type name must start with a letter"))
+                    Err(easy::Error::message_static_message(
+                        "Constructor type name must start with a letter",
+                    ))
                 }
             })
             .map(|s: Vec<char>| s.into_iter().collect())
