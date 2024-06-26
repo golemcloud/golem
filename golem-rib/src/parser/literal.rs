@@ -15,7 +15,7 @@
 use crate::expr::Expr;
 
 use crate::parser::literal::internal::literal_;
-use combine::{easy, parser, Parser, Stream};
+use combine::{easy, parser, Stream};
 
 parser! {
     pub fn literal['t]()(easy::Stream<&'t str>) -> Expr
@@ -29,30 +29,32 @@ parser! {
 
 mod internal {
     use crate::expr::Expr;
-    use crate::parser::rib_expr::{rib_program};
-    use combine::parser::char::{digit, spaces};
+    use crate::parser::rib_expr::rib_program;
     use combine::parser::char::{char as char_, letter};
+    use combine::parser::char::{digit, spaces};
     use combine::parser::repeat::many;
     use combine::stream::easy;
     use combine::{attempt, between, choice, many1, Parser};
 
     // Literal can handle string interpolation
     pub fn literal_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-        spaces().with(between(
-            char_('\"').skip(spaces()),
-            char_('\"').skip(spaces()),
-            many(choice((attempt(interpolation()), static_part()))),
+        spaces().with(
+            between(
+                char_('\"').skip(spaces()),
+                char_('\"').skip(spaces()),
+                many(choice((attempt(interpolation()), static_part()))),
+            )
+            .map(|parts: Vec<Expr>| {
+                if parts.is_empty() {
+                    Expr::Literal("".to_string())
+                } else if parts.len() == 1 {
+                    parts.first().unwrap().clone()
+                } else {
+                    Expr::Concat(parts)
+                }
+            })
+            .message("Unable to parse literal"),
         )
-        .map(|parts: Vec<Expr>| {
-            if parts.is_empty() {
-                Expr::Literal("".to_string())
-            } else if parts.len() == 1 {
-                parts.first().unwrap().clone()
-            } else {
-                Expr::Concat(parts)
-            }
-        })
-        .message("Unable to parse literal"))
     }
 
     fn static_part<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {

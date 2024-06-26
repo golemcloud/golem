@@ -25,12 +25,14 @@ use super::rib_expr::rib_expr;
 use combine::stream::easy;
 
 pub fn tuple<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(between(
-        char('('),
-        char(')'),
-        sep_by(rib_expr(), char(',').skip(spaces())),
+    spaces().with(
+        between(
+            char('('),
+            char(')'),
+            sep_by(rib_expr(), char(',').skip(spaces())),
+        )
+        .map(Expr::Tuple),
     )
-    .map(Expr::Tuple))
 }
 
 #[cfg(test)]

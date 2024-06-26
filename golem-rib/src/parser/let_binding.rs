@@ -23,13 +23,15 @@ use crate::parser::rib_expr::rib_expr;
 use combine::stream::easy;
 
 pub fn let_binding<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with((
-        string("let").skip(spaces()),
-        let_variable().skip(spaces()),
-        char_('=').skip(spaces()),
-        rib_expr()
+    spaces().with(
+        (
+            string("let").skip(spaces()),
+            let_variable().skip(spaces()),
+            char_('=').skip(spaces()),
+            rib_expr(),
+        )
+            .map(|(_, var, _, expr)| Expr::Let(var, Box::new(expr))),
     )
-        .map(|(_, var, _, expr)| Expr::Let(var, Box::new(expr))))
 }
 
 fn let_variable<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {

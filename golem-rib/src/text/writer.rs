@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::Write;
 use crate::expr::Expr;
 use std::fmt::Display;
+use std::io::Write;
 
 pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
     let mut buf = vec![];
@@ -54,7 +54,6 @@ impl From<std::io::Error> for WriterError {
         WriterError::Io(err)
     }
 }
-
 
 impl Display for WriterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -243,7 +242,9 @@ impl<W: Write> Writer<W> {
 
             Expr::Call(string, params) => {
                 let function_name = match string.site().interface_name() {
-                    Some(interface) => format!("{{{}}}.{}", interface, string.function().function_name()),
+                    Some(interface) => {
+                        format!("{{{}}}.{}", interface, string.function().function_name())
+                    }
                     None => string.function().function_name().to_string(),
                 };
                 self.write_str(function_name)?;
@@ -272,8 +273,8 @@ impl<W: Write> Writer<W> {
 }
 
 mod internal {
-    use crate::text::writer::{Writer, WriterError};
     use crate::expr::{ArmPattern, Expr};
+    use crate::text::writer::{Writer, WriterError};
 
     pub(crate) enum ExprType<'a> {
         Code(&'a Expr),

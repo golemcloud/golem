@@ -37,24 +37,22 @@ use super::result::result;
 use super::select_field::select_field;
 use super::select_index::select_index;
 use super::tuple::tuple;
+use crate::parser::boolean::boolean_literal;
 use crate::parser::call::call;
 use combine::stream::easy;
-use crate::parser::boolean::boolean_literal;
 
 // Parse a full Rib Program.
 // This is kept outside for a reason, to avoid the conditions that lead to stack over-flow
 // Please don't refactor and inline this with `parser!` macros below.
 pub fn rib_program<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    sep_by(rib_expr().skip(spaces()), char(';').skip(spaces()))
-        .map(|expressions: Vec<Expr>| {
-            if expressions.len() == 1 {
-                expressions.first().unwrap().clone()
-            } else {
-                Expr::Multiple(expressions)
-            }
-        })
+    sep_by(rib_expr().skip(spaces()), char(';').skip(spaces())).map(|expressions: Vec<Expr>| {
+        if expressions.len() == 1 {
+            expressions.first().unwrap().clone()
+        } else {
+            Expr::Multiple(expressions)
+        }
+    })
 }
-
 
 // To handle recursion based on docs
 // Also note that, the immediate parsers on the sides of a binary expression can result in stack overflow
@@ -131,14 +129,13 @@ parser! {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::expr::ArmPattern;
     use crate::expr::MatchArm;
-    use super::*;
-    use combine::EasyParser;
     use crate::function_name::ParsedFunctionName;
     use crate::function_name::ParsedFunctionReference::RawResourceStaticMethod;
     use crate::function_name::ParsedFunctionSite::PackagedInterface;
-
+    use combine::EasyParser;
 
     fn program() -> String {
         r#"
@@ -161,7 +158,8 @@ mod tests {
          let result = ns:name/interface.{[static]resource1.do-something-static}(baz, qux);
 
          result
-       "#.to_string()
+       "#
+        .to_string()
     }
 
     fn expected() -> Expr {
@@ -172,16 +170,20 @@ mod tests {
                 "result".to_string(),
                 Box::new(Expr::GreaterThan(
                     Box::new(Expr::Identifier("x".to_string())),
-                    Box::new(Expr::Identifier("y".to_string()))
-                ))
+                    Box::new(Expr::Identifier("y".to_string())),
+                )),
             ),
             Expr::Let(
                 "foo".to_string(),
-                Box::new(Expr::Option(Some(Box::new(Expr::Identifier("result".to_string())))))
+                Box::new(Expr::Option(Some(Box::new(Expr::Identifier(
+                    "result".to_string(),
+                ))))),
             ),
             Expr::Let(
                 "bar".to_string(),
-                Box::new(Expr::Result(Ok(Box::new(Expr::Identifier("result".to_string())))))
+                Box::new(Expr::Result(Ok(Box::new(Expr::Identifier(
+                    "result".to_string(),
+                ))))),
             ),
             Expr::Let(
                 "baz".to_string(),
@@ -190,16 +192,16 @@ mod tests {
                     vec![
                         MatchArm((
                             ArmPattern::Literal(Box::new(Expr::Option(Some(Box::new(
-                                Expr::Identifier("x".to_string())
+                                Expr::Identifier("x".to_string()),
                             ))))),
-                            Box::new(Expr::Identifier("x".to_string()))
+                            Box::new(Expr::Identifier("x".to_string())),
                         )),
                         MatchArm((
                             ArmPattern::Literal(Box::new(Expr::Option(None))),
-                            Box::new(Expr::Boolean(false))
-                        ))
-                    ]
-                ))
+                            Box::new(Expr::Boolean(false)),
+                        )),
+                    ],
+                )),
             ),
             Expr::Let(
                 "qux".to_string(),
@@ -207,31 +209,42 @@ mod tests {
                     Box::new(Expr::Identifier("bar".to_string())),
                     vec![
                         MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::Result(Ok(Box::new(Expr::Identifier("x".to_string())))))),
-                            Box::new(Expr::Identifier("x".to_string()))
+                            ArmPattern::Literal(Box::new(Expr::Result(Ok(Box::new(
+                                Expr::Identifier("x".to_string()),
+                            ))))),
+                            Box::new(Expr::Identifier("x".to_string())),
                         )),
                         MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::Result(Err(Box::new(Expr::Identifier("msg".to_string())))))),
-                            Box::new(Expr::Boolean(false))
-                        ))
-                    ]
-                ))
+                            ArmPattern::Literal(Box::new(Expr::Result(Err(Box::new(
+                                Expr::Identifier("msg".to_string()),
+                            ))))),
+                            Box::new(Expr::Boolean(false)),
+                        )),
+                    ],
+                )),
             ),
-            Expr::Let("result".to_string(), Box::new(Expr::Call(
-                ParsedFunctionName {
-                    site: PackagedInterface {
-                        namespace: "ns".to_string(),
-                        package: "name".to_string(),
-                        interface: "interface".to_string(),
-                        version: None
+            Expr::Let(
+                "result".to_string(),
+                Box::new(Expr::Call(
+                    ParsedFunctionName {
+                        site: PackagedInterface {
+                            namespace: "ns".to_string(),
+                            package: "name".to_string(),
+                            interface: "interface".to_string(),
+                            version: None,
+                        },
+                        function: RawResourceStaticMethod {
+                            resource: "resource1".to_string(),
+                            method: "do-something-static".to_string(),
+                        },
                     },
-                    function: RawResourceStaticMethod {
-                        resource: "resource1".to_string(),
-                        method: "do-something-static".to_string()
-                    }
-                }, vec![Expr::Identifier("baz".to_string()), Expr::Identifier("qux".to_string())]
-            ))),
-            Expr::Identifier("result".to_string())
+                    vec![
+                        Expr::Identifier("baz".to_string()),
+                        Expr::Identifier("qux".to_string()),
+                    ],
+                )),
+            ),
+            Expr::Identifier("result".to_string()),
         ])
     }
 
@@ -282,28 +295,15 @@ mod tests {
 
     #[test]
     fn test_complex_rib_program() {
-
         let binding = program();
         let result = rib_program().easy_parse(binding.as_ref());
-        assert_eq!(
-            result,
-            Ok((
-                expected(),
-                ""
-            ))
-        );
+        assert_eq!(result, Ok((expected(), "")));
     }
 
     #[test]
     fn interpolated_program() {
         let program_interpolated = format!("\"${{{}}}\"", program());
         let result = rib_program().easy_parse(program_interpolated.as_str());
-        assert_eq!(
-            result,
-            Ok((
-                expected(),
-                ""
-            ))
-        );
+        assert_eq!(result, Ok((expected(), "")));
     }
 }

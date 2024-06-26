@@ -14,7 +14,7 @@
 
 use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
-use combine::{EasyParser, Parser};
+use combine::{EasyParser};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{TypeAnnotatedValue, Value};
 use semver::{BuildMetadata, Prerelease};

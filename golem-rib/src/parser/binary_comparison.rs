@@ -21,60 +21,70 @@ pub fn greater_than<'t>(
     rib_expr1: impl Parser<easy::Stream<&'t str>, Output = Expr>,
     rib_expr2: impl Parser<easy::Stream<&'t str>, Output = Expr>,
 ) -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with((
-        rib_expr1.skip(spaces()),
-        string(">").skip(spaces()),
-        rib_expr2.skip(spaces()),
+    spaces().with(
+        (
+            rib_expr1.skip(spaces()),
+            string(">").skip(spaces()),
+            rib_expr2.skip(spaces()),
+        )
+            .map(|(left, _, right)| Expr::GreaterThan(Box::new(left), Box::new(right))),
     )
-        .map(|(left, _, right)| Expr::GreaterThan(Box::new(left), Box::new(right))))
 }
 
 pub fn greater_than_or_equal_to<'t>(
     rib_expr1: impl Parser<easy::Stream<&'t str>, Output = Expr>,
     rib_expr2: impl Parser<easy::Stream<&'t str>, Output = Expr>,
 ) -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with((
-        rib_expr1.skip(spaces()),
-        string(">=").skip(spaces()),
-        rib_expr2,
+    spaces().with(
+        (
+            rib_expr1.skip(spaces()),
+            string(">=").skip(spaces()),
+            rib_expr2,
+        )
+            .map(|(left, _, right)| Expr::GreaterThanOrEqualTo(Box::new(left), Box::new(right))),
     )
-        .map(|(left, _, right)| Expr::GreaterThanOrEqualTo(Box::new(left), Box::new(right))))
 }
 
 pub fn less_than<'t>(
     rib_expr1: impl Parser<easy::Stream<&'t str>, Output = Expr>,
     rib_expr2: impl Parser<easy::Stream<&'t str>, Output = Expr>,
 ) -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with((
-        rib_expr1.skip(spaces()),
-        string("<").skip(spaces()),
-        rib_expr2,
+    spaces().with(
+        (
+            rib_expr1.skip(spaces()),
+            string("<").skip(spaces()),
+            rib_expr2,
+        )
+            .map(|(left, _, right)| Expr::LessThan(Box::new(left), Box::new(right))),
     )
-        .map(|(left, _, right)| Expr::LessThan(Box::new(left), Box::new(right))))
 }
 
 pub fn less_than_or_equal_to<'t>(
     rib_expr1: impl Parser<easy::Stream<&'t str>, Output = Expr>,
     rib_expr2: impl Parser<easy::Stream<&'t str>, Output = Expr>,
 ) -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with((
-        rib_expr1.skip(spaces()),
-        string("<=").skip(spaces()),
-        rib_expr2,
+    spaces().with(
+        (
+            rib_expr1.skip(spaces()),
+            string("<=").skip(spaces()),
+            rib_expr2,
+        )
+            .map(|(left, _, right)| Expr::LessThanOrEqualTo(Box::new(left), Box::new(right))),
     )
-        .map(|(left, _, right)| Expr::LessThanOrEqualTo(Box::new(left), Box::new(right))))
 }
 
 pub fn equal_to<'t>(
     rib_expr1: impl Parser<easy::Stream<&'t str>, Output = Expr>,
     rib_expr2: impl Parser<easy::Stream<&'t str>, Output = Expr>,
 ) -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with((
-        rib_expr1.skip(spaces()),
-        string("==").skip(spaces()),
-        rib_expr2,
+    spaces().with(
+        (
+            rib_expr1.skip(spaces()),
+            string("==").skip(spaces()),
+            rib_expr2,
+        )
+            .map(|(left, _, right)| Expr::EqualTo(Box::new(left), Box::new(right))),
     )
-        .map(|(left, _, right)| Expr::EqualTo(Box::new(left), Box::new(right))))
 }
 
 #[cfg(test)]

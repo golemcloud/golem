@@ -23,14 +23,16 @@ use combine::{sep_by1, Parser};
 pub fn pattern_match<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     let arms = sep_by1(match_arm().skip(spaces()), char(',').skip(spaces()));
 
-    spaces().with((
-        string("match").skip(spaces()),
-        rib_expr().skip(spaces()),
-        char('{').skip(spaces()),
-        arms.skip(spaces()),
-        char('}').skip(spaces()),
+    spaces().with(
+        (
+            string("match").skip(spaces()),
+            rib_expr().skip(spaces()),
+            char('{').skip(spaces()),
+            arms.skip(spaces()),
+            char('}').skip(spaces()),
+        )
+            .map(|(_, expr, _, arms, _)| Expr::PatternMatch(Box::new(expr), arms)),
     )
-        .map(|(_, expr, _, arms, _)| Expr::PatternMatch(Box::new(expr), arms)))
 }
 
 mod match_arm {

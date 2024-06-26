@@ -12,25 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::{choice, easy, Parser};
+use crate::expr::Expr;
 use combine::parser::char::spaces;
 use combine::parser::char::string;
-use crate::expr::Expr;
+use combine::{choice, easy, Parser};
 
 pub fn boolean_literal<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     choice((
         string("true").map(|_| Expr::Boolean(true)),
         string("false").map(|_| Expr::Boolean(false)),
     ))
-        .skip(spaces())
-        .message("Unable to parse boolean literal")
+    .skip(spaces())
+    .message("Unable to parse boolean literal")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use combine::EasyParser;
     use crate::parser::rib_expr::rib_expr;
+    use combine::EasyParser;
 
     #[test]
     fn test_boolean_true() {

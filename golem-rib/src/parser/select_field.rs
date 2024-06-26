@@ -44,20 +44,22 @@ mod internal {
     // We make base_expr and the children strict enough carefully, to avoid
     // stack overflow without affecting the grammer.
     pub(crate) fn select_field_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-        spaces().with((
-            base_expr(),
-            char('.').skip(spaces()),
-            choice((
-                attempt(select_field()),
-                attempt(select_index()),
-                attempt(identifier()),
-            )),
+        spaces().with(
+            (
+                base_expr(),
+                char('.').skip(spaces()),
+                choice((
+                    attempt(select_field()),
+                    attempt(select_index()),
+                    attempt(identifier()),
+                )),
+            )
+                .and_then(|(base, _, opt)| {
+                    build_selector(base, opt).ok_or(easy::Error::message_static_message(
+                        "Invalid field/index selection",
+                    ))
+                }),
         )
-            .and_then(|(base, _, opt)| {
-                build_selector(base, opt).ok_or(easy::Error::message_static_message(
-                    "Invalid field/index selection",
-                ))
-            }))
     }
 
     // To avoid stack overflow, we reverse the field selection to avoid direct recursion to be the first step

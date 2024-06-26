@@ -19,7 +19,7 @@ mod writer;
 use crate::text::writer::WriterError;
 
 pub fn from_string(input: &str) -> Result<Expr, String> {
-   Expr::from_str(input)
+    Expr::from_text(input)
 }
 
 pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
@@ -28,8 +28,8 @@ pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
 
 #[cfg(test)]
 mod record_tests {
-    use crate::text::{from_string, to_string, Expr};
     use crate::expr::*;
+    use crate::text::{from_string, to_string, Expr};
 
     #[test]
     fn test_round_trip_simple_record_empty() {
@@ -91,14 +91,8 @@ mod record_tests {
     #[test]
     fn test_round_trip_read_write_record_of_number() {
         let input_expr = Expr::Record(vec![
-            (
-                "field".to_string(),
-                Box::new(Expr::unsigned_integer(1)),
-            ),
-            (
-                "field".to_string(),
-                Box::new(Expr::unsigned_integer(2)),
-            ),
+            ("field".to_string(), Box::new(Expr::unsigned_integer(1))),
+            ("field".to_string(), Box::new(Expr::unsigned_integer(2))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${{field: 1, field: 2}}".to_string();
@@ -444,10 +438,10 @@ mod record_tests {
 
 #[cfg(test)]
 mod sequence_tests {
-    use crate::{ArmPattern, MatchArm};
-    use crate::text::{from_string, to_string};
     use crate::expr::Expr;
     use crate::text::{from_string, to_string};
+    use crate::text::{from_string, to_string};
+    use crate::{ArmPattern, MatchArm};
 
     #[test]
     fn test_round_trip_read_write_sequence_empty() {
@@ -698,16 +692,14 @@ mod sequence_tests {
                                     ArmPattern::custom_constructor(
                                         "ok",
                                         vec![ArmPattern::custom_constructor("foo", vec![])],
-                                    )
-                                        ,
+                                    ),
                                     Box::new(Expr::Literal("success".to_string())),
                                 )),
                                 MatchArm((
                                     ArmPattern::custom_constructor(
                                         "err",
                                         vec![ArmPattern::custom_constructor("msg", vec![])],
-                                    )
-                                        ,
+                                    ),
                                     Box::new(Expr::Literal("failure".to_string())),
                                 )),
                             ],
@@ -737,8 +729,8 @@ mod sequence_tests {
 
 #[cfg(test)]
 mod tuple_tests {
-    use crate::text::{from_string, to_string};
     use crate::expr::Expr;
+    use crate::text::{from_string, to_string};
     use crate::text::{from_string, to_string};
 
     #[test]
@@ -927,8 +919,8 @@ mod tuple_tests {
 
 #[cfg(test)]
 mod simple_values_test {
-    use crate::text::{from_string, to_string};
     use crate::expr::Expr;
+    use crate::text::{from_string, to_string};
 
     #[test]
     fn test_round_trip_read_write_literal() {
@@ -1004,8 +996,8 @@ mod simple_values_test {
 
 #[cfg(test)]
 mod let_tests {
-    use crate::text::{from_string, to_string};
     use crate::expr::Expr;
+    use crate::text::{from_string, to_string};
 
     #[test]
     fn test_round_trip_read_write_let() {
@@ -1022,8 +1014,8 @@ mod let_tests {
 
 #[cfg(test)]
 mod selection_tests {
-    use crate::text::{from_string, to_string};
     use crate::expr::Expr;
+    use crate::text::{from_string, to_string};
 
     #[test]
     fn test_round_trip_read_write_select_field_from_request() {
@@ -1124,8 +1116,8 @@ mod selection_tests {
 
 #[cfg(test)]
 mod flag_tests {
-    use crate::text::{from_string, to_string};
     use crate::expr::Expr;
+    use crate::text::{from_string, to_string};
 
     #[test]
     fn test_round_trip_read_write_flags_single() {
@@ -1152,10 +1144,10 @@ mod flag_tests {
 
 #[cfg(test)]
 mod match_tests {
-    use crate::text::{from_string, to_string};
-    use crate::expr::Expr;
     use crate::expr::ArmPattern;
+    use crate::expr::Expr;
     use crate::expr::MatchArm;
+    use crate::text::{from_string, to_string};
 
     #[test]
     fn test_round_trip_match_expr() {
@@ -1190,7 +1182,7 @@ mod match_tests {
                     Box::new(Expr::Flags(vec!["flag1".to_string(), "flag2".to_string()])),
                 )),
                 MatchArm((
-                             ArmPattern::err("msg"),
+                    ArmPattern::err("msg"),
                     Box::new(Expr::Literal("failure".to_string())),
                 )),
             ],
@@ -1362,7 +1354,10 @@ mod match_tests {
                     Box::new(Expr::Literal("success".to_string())),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor("bar", vec![ArmPattern::custom_constructor("c", vec![])]),
+                    ArmPattern::custom_constructor(
+                        "bar",
+                        vec![ArmPattern::custom_constructor("c", vec![])],
+                    ),
                     Box::new(Expr::Literal("failure".to_string())),
                 )),
             ],
@@ -1385,7 +1380,10 @@ mod match_tests {
                     Box::new(Expr::Literal("success".to_string())),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor("bar", vec![ArmPattern::custom_constructor("c", vec![])]),
+                    ArmPattern::custom_constructor(
+                        "bar",
+                        vec![ArmPattern::custom_constructor("c", vec![])],
+                    ),
                     Box::new(Expr::Literal("failure".to_string())),
                 )),
             ],
@@ -1409,14 +1407,15 @@ mod match_tests {
                         vec![ArmPattern::custom_constructor(
                             "bar",
                             vec![ArmPattern::custom_constructor("v1", vec![])],
-                        )
-                            ],
-                    )
-                        ,
+                        )],
+                    ),
                     Box::new(Expr::Literal("success".to_string())),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor("bar", vec![ArmPattern::custom_constructor("c", vec![])]),
+                    ArmPattern::custom_constructor(
+                        "bar",
+                        vec![ArmPattern::custom_constructor("c", vec![])],
+                    ),
                     Box::new(Expr::Literal("failure".to_string())),
                 )),
             ],
@@ -1439,7 +1438,10 @@ mod match_tests {
                     Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor("bar", vec![ArmPattern::custom_constructor("c", vec![])]),
+                    ArmPattern::custom_constructor(
+                        "bar",
+                        vec![ArmPattern::custom_constructor("c", vec![])],
+                    ),
                     Box::new(Expr::Result(Err(Box::new(Expr::Literal(
                         "bar".to_string(),
                     ))))),
@@ -1464,7 +1466,10 @@ mod match_tests {
                     Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor("bar", vec![ArmPattern::custom_constructor("c", vec![])]),
+                    ArmPattern::custom_constructor(
+                        "bar",
+                        vec![ArmPattern::custom_constructor("c", vec![])],
+                    ),
                     Box::new(Expr::Result(Err(Box::new(Expr::Literal(
                         "bar".to_string(),
                     ))))),
@@ -1487,12 +1492,18 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::As(
                         "name".to_string(),
-                        Box::new(ArmPattern::custom_constructor("foo1", vec![ArmPattern::WildCard])),
+                        Box::new(ArmPattern::custom_constructor(
+                            "foo1",
+                            vec![ArmPattern::WildCard],
+                        )),
                     ),
                     Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
                 )),
                 MatchArm((
-                    ArmPattern::custom_constructor("bar", vec![ArmPattern::custom_constructor("c", vec![])]),
+                    ArmPattern::custom_constructor(
+                        "bar",
+                        vec![ArmPattern::custom_constructor("c", vec![])],
+                    ),
                     Box::new(Expr::Result(Err(Box::new(Expr::Literal(
                         "bar".to_string(),
                     ))))),
@@ -1516,38 +1527,29 @@ mod match_tests {
                 MatchArm((
                     ArmPattern::As(
                         "a".to_string(),
-                        Box::new(
-                            ArmPattern::custom_constructor(
-                                "foo",
-                                vec![ArmPattern::As(
-                                    "b".to_string(),
-                                    Box::new(ArmPattern::WildCard),
-                                )],
-                            )
-                               ,
-                        ),
+                        Box::new(ArmPattern::custom_constructor(
+                            "foo",
+                            vec![ArmPattern::As(
+                                "b".to_string(),
+                                Box::new(ArmPattern::WildCard),
+                            )],
+                        )),
                     ),
                     Box::new(Expr::Result(Ok(Box::new(Expr::Literal("foo".to_string()))))),
                 )),
                 MatchArm((
                     ArmPattern::As(
                         "c".to_string(),
-                        Box::new(
-                            ArmPattern::custom_constructor(
-                                "bar",
-                                vec![ArmPattern::As(
-                                    "d".to_string(),
-                                    Box::new(
-                                        ArmPattern::custom_constructor(
-                                            "baz",
-                                            vec![ArmPattern::custom_constructor("x", vec![])],
-                                        )
-                                            ,
-                                    ),
-                                )],
-                            )
-                                ,
-                        ),
+                        Box::new(ArmPattern::custom_constructor(
+                            "bar",
+                            vec![ArmPattern::As(
+                                "d".to_string(),
+                                Box::new(ArmPattern::custom_constructor(
+                                    "baz",
+                                    vec![ArmPattern::custom_constructor("x", vec![])],
+                                )),
+                            )],
+                        )),
                     ),
                     Box::new(Expr::Result(Err(Box::new(Expr::Literal(
                         "bar".to_string(),
@@ -1567,8 +1569,8 @@ mod match_tests {
 
 #[cfg(test)]
 mod if_cond_tests {
-    use crate::text::{from_string, to_string};
     use crate::expr::Expr;
+    use crate::text::{from_string, to_string};
 
     #[test]
     fn test_round_trip_if_condition_literals() {

@@ -24,19 +24,21 @@ use super::rib_expr::rib_expr;
 use combine::stream::easy;
 
 pub fn record<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(between(
-        char_('{'),
-        char_('}'),
-        sep_by1(field(), char_(',').skip(spaces())),
-    )
-    .map(|fields: Vec<Field>| {
-        Expr::Record(
-            fields
-                .iter()
-                .map(|f| (f.key.clone(), Box::new(f.value.clone())))
-                .collect::<Vec<_>>(),
+    spaces().with(
+        between(
+            char_('{'),
+            char_('}'),
+            sep_by1(field(), char_(',').skip(spaces())),
         )
-    }))
+        .map(|fields: Vec<Field>| {
+            Expr::Record(
+                fields
+                    .iter()
+                    .map(|f| (f.key.clone(), Box::new(f.value.clone())))
+                    .collect::<Vec<_>>(),
+            )
+        }),
+    )
 }
 
 fn field_key<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {

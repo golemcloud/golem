@@ -18,7 +18,6 @@ use combine::parser::repeat::take_until;
 use combine::stream::easy;
 use combine::{
     parser::char::{char, spaces},
-    ParseError,
 };
 
 use combine::{any, attempt, between, choice, many1, optional, parser, token, Parser};
@@ -32,16 +31,18 @@ use combine::sep_by;
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
 pub fn call<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with((
-        function_name().skip(spaces()),
-        between(
-            char('(').skip(spaces()),
-            char(')').skip(spaces()),
-            sep_by(rib_expr().skip(spaces()), char(',').skip(spaces())),
-        ),
+    spaces().with(
+        (
+            function_name().skip(spaces()),
+            between(
+                char('(').skip(spaces()),
+                char(')').skip(spaces()),
+                sep_by(rib_expr().skip(spaces()), char(',').skip(spaces())),
+            ),
+        )
+            .map(|(name, args)| Expr::Call(name, args))
+            .message("Unable to parse call"),
     )
-        .map(|(name, args)| Expr::Call(name, args))
-        .message("Unable to parse call"))
 }
 
 // TODO;  Reusing function_name between Rib and internals of GOLEM may be a surface level requirement

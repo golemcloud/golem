@@ -25,8 +25,10 @@ use combine::stream::easy;
 
 pub fn option<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     choice((
-        spaces().with(between(string("some("), char(')'), rib_expr())
-            .map(|expr| Expr::Option(Some(Box::new(expr))))),
+        spaces().with(
+            between(string("some("), char(')'), rib_expr())
+                .map(|expr| Expr::Option(Some(Box::new(expr)))),
+        ),
         spaces().with(string("none").map(|_| Expr::Option(None))),
     ))
 }

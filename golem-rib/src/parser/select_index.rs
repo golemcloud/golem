@@ -20,21 +20,23 @@ use combine::{attempt, choice, many1, optional, Parser};
 use internal::*;
 
 pub fn select_index<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with((
-        base_expr().skip(spaces()),
-        char_('[').skip(spaces()),
-        pos_num().skip(spaces()),
-        char_(']').skip(spaces()),
-        optional(nested_indices()),
+    spaces().with(
+        (
+            base_expr().skip(spaces()),
+            char_('[').skip(spaces()),
+            pos_num().skip(spaces()),
+            char_(']').skip(spaces()),
+            optional(nested_indices()),
+        )
+            .map(
+                |(expr, _, number, _, possible_indices)| match possible_indices {
+                    Some(indices) => {
+                        build_select_index_from(Expr::SelectIndex(Box::new(expr), number), indices)
+                    }
+                    None => Expr::SelectIndex(Box::new(expr), number),
+                },
+            ),
     )
-        .map(
-            |(expr, _, number, _, possible_indices)| match possible_indices {
-                Some(indices) => {
-                    build_select_index_from(Expr::SelectIndex(Box::new(expr), number), indices)
-                }
-                None => Expr::SelectIndex(Box::new(expr), number),
-            },
-        ))
 }
 
 mod internal {

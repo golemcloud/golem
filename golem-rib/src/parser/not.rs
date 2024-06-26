@@ -19,9 +19,11 @@ use combine::stream::easy;
 use combine::Parser;
 
 pub fn not<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with((string("!").skip(spaces()), rib_expr())
-        .map(|(_, expr)| Expr::Not(Box::new(expr)))
-        .message("Unable to parse not"))
+    spaces().with(
+        (string("!").skip(spaces()), rib_expr())
+            .map(|(_, expr)| Expr::Not(Box::new(expr)))
+            .message("Unable to parse not"),
+    )
 }
 
 #[cfg(test)]

@@ -19,9 +19,11 @@ use combine::stream::easy;
 use combine::Parser;
 
 pub fn identifier<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(many1(letter().or(char_('_')))
-        .map(|s: Vec<char>| Expr::Identifier(s.into_iter().collect()))
-        .message("Unable to parse identifier"))
+    spaces().with(
+        many1(letter().or(char_('_')))
+            .map(|s: Vec<char>| Expr::Identifier(s.into_iter().collect()))
+            .message("Unable to parse identifier"),
+    )
 }
 
 #[cfg(test)]

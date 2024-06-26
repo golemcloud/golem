@@ -25,13 +25,15 @@ use combine::stream::easy;
 pub fn flag<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     let flag_name = many1(letter().or(char('_'))).map(|s: Vec<char>| s.into_iter().collect());
 
-    spaces().with(between(
-        char('{').skip(spaces()),
-        char('}').skip(spaces()),
-        sep_by(flag_name.skip(spaces()), char(',').skip(spaces())),
+    spaces().with(
+        between(
+            char('{').skip(spaces()),
+            char('}').skip(spaces()),
+            sep_by(flag_name.skip(spaces()), char(',').skip(spaces())),
+        )
+        .map(Expr::Flags)
+        .message("Unable to parse flag"),
     )
-    .map(Expr::Flags)
-    .message("Unable to parse flag"))
 }
 
 #[cfg(test)]

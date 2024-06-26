@@ -15,30 +15,32 @@
 use combine::{many1, Parser};
 
 use crate::expr::Expr;
-use combine::parser::char::{char, spaces, digit, letter};
+use combine::parser::char::{char, digit, letter, spaces};
 
 use combine::stream::easy;
 
 use combine::error::StreamError;
 
 pub fn number<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(many1(letter().or(char('-')).or(digit()).or(char('.')))
-        .and_then(|s: Vec<char>| {
-            let primitive = s.into_iter().collect::<String>();
+    spaces().with(
+        many1(letter().or(char('-')).or(digit()).or(char('.')))
+            .and_then(|s: Vec<char>| {
+                let primitive = s.into_iter().collect::<String>();
 
-            if let Ok(u64) = primitive.parse::<u64>() {
-                Ok(Expr::unsigned_integer(u64))
-            } else if let Ok(i64_value) = primitive.parse::<i64>() {
-                Ok(Expr::signed_integer(i64_value))
-            } else if let Ok(f64_value) = primitive.parse::<f64>() {
-                Ok(Expr::float(f64_value))
-            } else {
-                Err(easy::Error::message_static_message(
-                    "Unable to parse number",
-                ))
-            }
-        })
-        .message("Unable to parse number"))
+                if let Ok(u64) = primitive.parse::<u64>() {
+                    Ok(Expr::unsigned_integer(u64))
+                } else if let Ok(i64_value) = primitive.parse::<i64>() {
+                    Ok(Expr::signed_integer(i64_value))
+                } else if let Ok(f64_value) = primitive.parse::<f64>() {
+                    Ok(Expr::float(f64_value))
+                } else {
+                    Err(easy::Error::message_static_message(
+                        "Unable to parse number",
+                    ))
+                }
+            })
+            .message("Unable to parse number"),
+    )
 }
 
 #[cfg(test)]

@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use crate::function_name::ParsedFunctionName;
-use crate::parser::rib_expr::{rib_program};
+use crate::parser::rib_expr::rib_program;
+use crate::text;
 use bincode::{Decode, Encode};
 use combine::EasyParser;
-use std::fmt::Display;
-use std::str::FromStr;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
-use crate::text;
+use std::fmt::Display;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
@@ -67,8 +67,10 @@ impl Expr {
     /// Rib supports conditional calls, function calls, pattern-matching,
     /// string interpolation (see error_message above) etc.
     ///
-    pub fn from_str(input: &str) -> Result<Expr, String> {
-        rib_program().easy_parse(input.as_ref()).map(|(expr, _)| expr)
+    pub fn from_text(input: &str) -> Result<Expr, String> {
+        rib_program()
+            .easy_parse(input.as_ref())
+            .map(|(expr, _)| expr)
             .map_err(|err| err.to_string())
     }
 
@@ -76,7 +78,7 @@ impl Expr {
     /// This is mainly to keep the backward compatibility where Golem Cloud console passes a Rib Expression always wrapped in `${..}`
     ///
     /// Explanation:
-    /// Usually `from_str` is all that you need which takes a plain text and parse it as Expr.
+    /// Usually `Expr::from_text` is all that you need which takes a plain text and try to parse it as an Expr.
     /// `from_interpolated_str` can be used when you want to be strict - only if text is wrapped in `${..}`, it should
     /// be considered as a Rib expression.
     ///
@@ -111,7 +113,7 @@ impl Expr {
     /// ```rib
     ///   ${if foo > 1 then bar else "baz-${user.id}"}
     /// ```
-    /// If you need the following to be considered as Rib program (without interpolation), use `Expr::from_str` instead.
+    /// If you need the following to be considered as Rib program (without interpolation), use `Expr::from_text` instead.
     ///
     /// ```rib
     ///   if foo > 1 then bar else "baz-${user.id}"
@@ -119,7 +121,7 @@ impl Expr {
     ///
     pub fn from_interpolated_str(input: &str) -> Result<Expr, String> {
         let input = format!("\"{}\"", input);
-        Self::from_str(input.as_str())
+        Self::from_text(input.as_str())
     }
     pub fn unsigned_integer(u64: u64) -> Expr {
         Expr::Number(Number::Unsigned(u64))
@@ -165,15 +167,21 @@ pub enum ArmPattern {
 
 impl ArmPattern {
     pub fn ok(binding_variable: &str) -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Result(Ok(Box::new(Expr::Identifier(binding_variable.to_string()))))))
+        ArmPattern::Literal(Box::new(Expr::Result(Ok(Box::new(Expr::Identifier(
+            binding_variable.to_string(),
+        ))))))
     }
 
     pub fn err(binding_variable: &str) -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Result(Err(Box::new(Expr::Identifier(binding_variable.to_string()))))))
+        ArmPattern::Literal(Box::new(Expr::Result(Err(Box::new(Expr::Identifier(
+            binding_variable.to_string(),
+        ))))))
     }
 
     pub fn some(binding_variable: &str) -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Option(Some(Box::new(Expr::Identifier(binding_variable.to_string()))))))
+        ArmPattern::Literal(Box::new(Expr::Option(Some(Box::new(Expr::Identifier(
+            binding_variable.to_string(),
+        ))))))
     }
 
     pub fn none() -> ArmPattern {
@@ -196,12 +204,11 @@ impl FromStr for Expr {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Expr::from_interpolated_str(s).map_err(|err| err.to_string())
     }
-
 }
 impl<'de> Deserialize<'de> for Expr {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
+    where
+        D: serde::Deserializer<'de>,
     {
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
@@ -220,8 +227,8 @@ impl<'de> Deserialize<'de> for Expr {
 
 impl Serialize for Expr {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
+    where
+        S: Serializer,
     {
         match text::to_string(self) {
             Ok(value) => serde_json::Value::serialize(&Value::String(value), serializer),
