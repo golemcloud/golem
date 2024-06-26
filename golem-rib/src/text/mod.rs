@@ -19,7 +19,7 @@ mod writer;
 use crate::text::writer::WriterError;
 
 pub fn from_string(input: &str) -> Result<Expr, String> {
-    Expr::from_text(input)
+    Expr::from_interpolated_str(input)
 }
 
 pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
