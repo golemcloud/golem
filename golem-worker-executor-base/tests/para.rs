@@ -17,10 +17,12 @@ async fn para_contact_to_generator() {
         asset_generator_component_id,
         campaign_contact_component_id,
         campaign_manager_component_id,
+        campaign_component_id,
     ) = tokio::join! {
         executor.store_component("asset-generator"),
         executor.store_component("campaign-contact"),
-        executor.store_component("campaign-manager")
+        executor.store_component("campaign-manager"),
+        executor.store_component("campaign")
     };
 
     let env = {
@@ -36,50 +38,35 @@ async fn para_contact_to_generator() {
             campaign_manager_component_id.to_string(),
         );
 
+        env.insert(
+            "CAMPAIGN_CONTACT_COMPONENT_ID".to_string(),
+            campaign_contact_component_id.to_string(),
+        );
+
         env
     };
+    tracing::error!("Starting campaign");
 
-    tracing::error!("STARTING CAMPAIGN WORKER");
-
-    let registry_worker_id = executor
-        .start_worker_with(
-            &campaign_contact_component_id,
-            "campaign-contact-1",
-            vec![],
-            env,
-        )
+    let campaign_worker_id = executor
+        .start_worker_with(&campaign_component_id, "campaign-id", vec![], env)
         .await;
 
-    tracing::error!("STARTED CAMPAIGN WORKER");
+    let _ = executor.log_output(&campaign_worker_id).await;
 
-    let _ = executor.log_output(&registry_worker_id).await;
-
-    let initialize_contact = executor
+    let result = executor
         .invoke_and_await(
-            &registry_worker_id,
-            "para:campaign-contact/api.{initialize}",
+            &campaign_worker_id,
+            "para:campaign/api.{start-campaign}",
             vec![
-                Value::String("nico".to_string()),
-                Value::String("campaign-id".to_string()),
+                Value::String("contacts-id".into()),
+                Value::String("campaign-1".into()),
             ],
         )
         .await;
 
-    tracing::error!("initialize_contact: {:?}", initialize_contact);
-
-    let send_campaign = executor
-        .invoke_and_await(
-            &registry_worker_id,
-            "para:campaign-contact/api.{send-campaign}",
-            vec![],
-        )
-        .await;
-
-    tracing::error!("SEND CAMPAIGN");
-
     let _ = executor.log_output(&WorkerId {
         component_id: asset_generator_component_id.clone(),
-        worker_name: "nico-campaign-id".to_string(),
+        worker_name: "campaign-id-one".to_string(),
     });
 
     let _ = executor.log_output(&WorkerId {
@@ -91,8 +78,62 @@ async fn para_contact_to_generator() {
 
     tracing::error!("DONE");
 
-    println!("initialize_contact: {:?}", initialize_contact);
-    println!("send_campaign: {:?}", send_campaign);
+    println!("result: {:?}", result);
+
+    // tracing::error!("STARTING CAMPAIGN WORKER");
+
+    // let registry_worker_id = executor
+    //     .start_worker_with(
+    //         &campaign_contact_component_id,
+    //         "campaign-contact-1",
+    //         vec![],
+    //         env,
+    //     )
+    //     .await;
+
+    // tracing::error!("STARTED CAMPAIGN WORKER");
+
+    // let _ = executor.log_output(&registry_worker_id).await;
+
+    // let initialize_contact = executor
+    //     .invoke_and_await(
+    //         &registry_worker_id,
+    //         "para:campaign-contact/api.{initialize}",
+    //         vec![
+    //             Value::String("nico".to_string()),
+    //             Value::String("campaign-id".to_string()),
+    //         ],
+    //     )
+    //     .await;
+
+    // tracing::error!("initialize_contact: {:?}", initialize_contact);
+
+    // let send_campaign = executor
+    //     .invoke_and_await(
+    //         &registry_worker_id,
+    //         "para:campaign-contact/api.{send-campaign}",
+    //         vec![],
+    //     )
+    //     .await;
+
+    // tracing::error!("SEND CAMPAIGN");
+
+    // let _ = executor.log_output(&WorkerId {
+    //     component_id: asset_generator_component_id.clone(),
+    //     worker_name: "nico-campaign-id".to_string(),
+    // });
+
+    // let _ = executor.log_output(&WorkerId {
+    //     component_id: campaign_manager_component_id.clone(),
+    //     worker_name: "campaign-id".to_string(),
+    // });
+
+    // drop(executor);
+
+    // tracing::error!("DONE");
+
+    // println!("initialize_contact: {:?}", initialize_contact);
+    // println!("send_campaign: {:?}", send_campaign);
 }
 
 use golem_wasm_ast::analysis::AnalysisContext;
