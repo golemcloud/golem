@@ -440,7 +440,6 @@ mod record_tests {
 mod sequence_tests {
     use crate::expr::Expr;
     use crate::text::{from_string, to_string};
-    use crate::text::{from_string, to_string};
     use crate::{ArmPattern, MatchArm};
 
     #[test]
@@ -731,7 +730,6 @@ mod sequence_tests {
 mod tuple_tests {
     use crate::expr::Expr;
     use crate::text::{from_string, to_string};
-    use crate::text::{from_string, to_string};
 
     #[test]
     fn test_round_trip_read_write_tuple_empty() {
@@ -890,11 +888,11 @@ mod tuple_tests {
     fn test_round_trip_read_write_tuple_of_math_op() {
         let input_expr = Expr::Tuple(vec![
             Expr::GreaterThan(
-                Box::new(Expr::unsigned_integer((1))),
+                Box::new(Expr::unsigned_integer(1)),
                 Box::new(Expr::unsigned_integer(2)),
             ),
             Expr::LessThan(
-                Box::new(Expr::unsigned_integer((1))),
+                Box::new(Expr::unsigned_integer(1)),
                 Box::new(Expr::unsigned_integer(2)),
             ),
         ]);

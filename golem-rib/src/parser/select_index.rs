@@ -91,9 +91,8 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::expr::*;
-    use crate::parser::rib_expr::{rib_expr, rib_expr_};
+    use crate::parser::rib_expr::{rib_expr};
     use combine::EasyParser;
 
     #[test]
