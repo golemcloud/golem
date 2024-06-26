@@ -151,8 +151,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
-        let response: String =
-            rib::to_string(&value.response.0).map_err(|e| e.to_string())?;
+        let response: String = rib::to_string(&value.response.0).map_err(|e| e.to_string())?;
 
         let worker_id = rib::to_string(&value.worker_name).map_err(|e| e.to_string())?;
 
@@ -336,15 +335,11 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
 
     fn try_from(value: grpc_apidefinition::WorkerBinding) -> Result<Self, Self::Error> {
         let response: crate::worker_binding::ResponseMapping = {
-            let r: Expr = value
-                .response
-                .parse()?;
+            let r: Expr = value.response.parse()?;
             crate::worker_binding::ResponseMapping(r)
         };
 
-        let worker_name = value
-            .worker_id
-            .parse()?;
+        let worker_name = value.worker_id.parse()?;
 
         let component_id = value.component.ok_or("component is missing")?.try_into()?;
 

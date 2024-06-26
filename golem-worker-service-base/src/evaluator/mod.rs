@@ -250,7 +250,9 @@ impl Evaluator for DefaultEvaluator {
                         }
                         _ => Err(EvaluationError::Message(format!(
                             "The predicate text is evaluated to {} but it is not a boolean value",
-                            &pred.get_value().map_or("unit".to_string(), |eval_result| get_json_from_typed_value(&eval_result).to_string())
+                            &pred.get_value().map_or("unit".to_string(), |eval_result| {
+                                get_json_from_typed_value(&eval_result).to_string()
+                            })
                         ))),
                     }
                 }
@@ -362,7 +364,12 @@ impl Evaluator for DefaultEvaluator {
                                 if let Some(primitive) = value.get_primitive() {
                                     result.push_str(primitive.to_string().as_str())
                                 } else {
-                                    return Err(EvaluationError::Message(format!("Cannot append a complex text {} or unit to form text", &value.get_value().map_or("unit".to_string(),  |v|  get_json_from_typed_value(&v).to_string()))));
+                                    return Err(EvaluationError::Message(format!(
+                                        "Cannot append a complex text {} or unit to form text",
+                                        &value.get_value().map_or("unit".to_string(), |v| {
+                                            get_json_from_typed_value(&v).to_string()
+                                        })
+                                    )));
                                 }
                             }
 
@@ -384,69 +391,70 @@ impl Evaluator for DefaultEvaluator {
                 Expr::Boolean(bool) => Ok(TypeAnnotatedValue::Bool(*bool).into()),
                 Expr::PatternMatch(match_text, arms) => {
                     pattern_match_evaluator::evaluate_pattern_match(
-                        executor,
-                        match_text,
-                        arms,
-                        input,
+                        executor, match_text, arms, input,
                     )
                     .await
                 }
 
-                Expr::Option(option_expr) => match option_expr {
-                    Some(expr) => {
-                        let expr_result = Box::pin(go(expr, input, executor)).await?;
+                Expr::Option(option_expr) => {
+                    match option_expr {
+                        Some(expr) => {
+                            let expr_result = Box::pin(go(expr, input, executor)).await?;
 
-                        if let Some(value) = expr_result.get_value() {
-                            let analysed_type = AnalysedType::from(&value);
-                            Ok(TypeAnnotatedValue::Option {
-                                value: Some(Box::new(value)),
-                                typ: analysed_type,
+                            if let Some(value) = expr_result.get_value() {
+                                let analysed_type = AnalysedType::from(&value);
+                                Ok(TypeAnnotatedValue::Option {
+                                    value: Some(Box::new(value)),
+                                    typ: analysed_type,
+                                }
+                                .into())
+                            } else {
+                                Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a option", rib::to_string(expr).unwrap())))
                             }
-                            .into())
-                        } else {
-                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a option", rib::to_string(expr).unwrap())))
+                        }
+                        None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option {
+                            value: None,
+                            typ: AnalysedType::Str,
+                        })),
+                    }
+                }
+
+                Expr::Result(result_expr) => {
+                    match result_expr {
+                        Ok(expr) => {
+                            let expr_result = Box::pin(go(expr, input, executor)).await?;
+
+                            if let Some(value) = expr_result.get_value() {
+                                let analysed_type = AnalysedType::from(&value);
+
+                                Ok(TypeAnnotatedValue::Result {
+                                    value: Ok(Some(Box::new(value))),
+                                    ok: Some(Box::new(analysed_type)),
+                                    error: None,
+                                }
+                                .into())
+                            } else {
+                                Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", rib::to_string(expr).unwrap())))
+                            }
+                        }
+                        Err(expr) => {
+                            let eval_result = Box::pin(go(expr, input, executor)).await?;
+
+                            if let Some(value) = eval_result.get_value() {
+                                let analysed_type = AnalysedType::from(&value);
+
+                                Ok(TypeAnnotatedValue::Result {
+                                    value: Err(Some(Box::new(value))),
+                                    ok: None,
+                                    error: Some(Box::new(analysed_type)),
+                                }
+                                .into())
+                            } else {
+                                Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", rib::to_string(expr).unwrap())))
+                            }
                         }
                     }
-                    None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option {
-                        value: None,
-                        typ: AnalysedType::Str,
-                    })),
-                },
-
-                Expr::Result(result_expr) => match result_expr {
-                    Ok(expr) => {
-                        let expr_result = Box::pin(go(expr, input, executor)).await?;
-
-                        if let Some(value) = expr_result.get_value() {
-                            let analysed_type = AnalysedType::from(&value);
-
-                            Ok(TypeAnnotatedValue::Result {
-                                value: Ok(Some(Box::new(value))),
-                                ok: Some(Box::new(analysed_type)),
-                                error: None,
-                            }
-                            .into())
-                        } else {
-                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", rib::to_string(expr).unwrap())))
-                        }
-                    }
-                    Err(expr) => {
-                        let eval_result = Box::pin(go(expr, input, executor)).await?;
-
-                        if let Some(value) = eval_result.get_value() {
-                            let analysed_type = AnalysedType::from(&value);
-
-                            Ok(TypeAnnotatedValue::Result {
-                                value: Err(Some(Box::new(value))),
-                                ok: None,
-                                error: Some(Box::new(analysed_type)),
-                            }
-                            .into())
-                        } else {
-                            Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", rib::to_string(expr).unwrap())))
-                        }
-                    }
-                },
+                }
 
                 Expr::Tuple(tuple_exprs) => {
                     let mut result: Vec<TypeAnnotatedValue> = vec![];
@@ -457,7 +465,10 @@ impl Evaluator for DefaultEvaluator {
                         if let Some(value) = eval_result.get_value() {
                             result.push(value);
                         } else {
-                            return Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a tuple", rib::to_string(expr).unwrap())));
+                            return Err(EvaluationError::Message(format!(
+                                "The text {} is evaluated to unit and cannot be part of a tuple",
+                                rib::to_string(expr).unwrap()
+                            )));
                         }
                     }
 
@@ -493,9 +504,9 @@ mod internal {
     };
     use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_wasm_rpc::TypeAnnotatedValue;
+    use rib::ParsedFunctionName;
     use std::str::FromStr;
     use std::sync::Arc;
-    use rib::ParsedFunctionName;
 
     pub(crate) async fn call_worker_function(
         runtime: &EvaluationContext,
@@ -512,8 +523,14 @@ mod internal {
             .map_err(|err| EvaluationError::Message(err.to_string()))?
             .ok_or(EvaluationError::Message(format!(
                 "The function {} is not found at Runtime",
-                function_name.site().interface_name().map_or(function_name.function.function_name(),
-                                                             |interface| format!("{{{}}}.{}", interface, function_name.function.function_name()))
+                function_name.site().interface_name().map_or(
+                    function_name.function.function_name(),
+                    |interface| format!(
+                        "{{{}}}.{}",
+                        interface,
+                        function_name.function.function_name()
+                    )
+                )
             )))?;
 
         let worker_variables = variables.get(&Path::from_key("worker")).map_err(|_| {
@@ -584,8 +601,8 @@ mod tests {
     use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::TypeAnnotatedValue;
     use http::{HeaderMap, Uri};
-    use serde_json::{json, Value};
     use rib::Expr;
+    use serde_json::{json, Value};
 
     use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::evaluator_context::EvaluationContext;
@@ -769,9 +786,10 @@ mod tests {
             &HeaderMap::new(),
         );
 
-        let expr =
-            rib::from_string("${request.body.address.street} ${request.body.address.city}")
-                .unwrap();
+        let expr = rib::from_string("${request.body.address.street} ${request.body.address.city}")
+            .unwrap();
+
+        dbg!(expr.clone());
         let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet bCity".to_string());
         let result = noop_executor
             .evaluate_with_request_details(&expr, &resolved_request)
@@ -794,10 +812,9 @@ mod tests {
             &header_map,
         );
 
-        let expr = rib::from_string(
-            r#"${if request.headers.authorisation == "admin" then 200 else 401}"#,
-        )
-        .unwrap();
+        let expr =
+            rib::from_string(r#"${if request.headers.authorisation == "admin" then 200 else 401}"#)
+                .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::U64("200".parse().unwrap());
         let result = noop_executor
             .evaluate_with_request_details(&expr, &resolved_variables)
@@ -921,8 +938,8 @@ mod tests {
             &header_map,
         );
 
-        let expr = rib::from_string("${if request.headers.authorisation then 200 else 401}")
-            .unwrap();
+        let expr =
+            rib::from_string("${if request.headers.authorisation then 200 else 401}").unwrap();
 
         let expected_evaluated_result = EvaluationError::Message(format!(
             "The predicate text is evaluated to {} but it is not a boolean value",
@@ -1306,10 +1323,9 @@ mod tests {
                     }"#,
         );
 
-        let expr = rib::from_string(
-            "${match worker.response { ok(value) => some(none), none => none }}",
-        )
-        .unwrap();
+        let expr =
+            rib::from_string("${match worker.response { ok(value) => some(none), none => none }}")
+                .unwrap();
         let result = noop_executor
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
@@ -1336,10 +1352,9 @@ mod tests {
                     }"#,
         );
 
-        let expr = rib::from_string(
-            "${match worker.response { ok(value) => ok(1), none => err(2) }}",
-        )
-        .unwrap();
+        let expr =
+            rib::from_string("${match worker.response { ok(value) => ok(1), none => err(2) }}")
+                .unwrap();
         let result = noop_executor
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
@@ -1364,10 +1379,9 @@ mod tests {
                     }"#,
         );
 
-        let expr = rib::from_string(
-            "${match worker.response { ok(value) => ok(1), err(msg) => err(2) }}",
-        )
-        .unwrap();
+        let expr =
+            rib::from_string("${match worker.response { ok(value) => ok(1), err(msg) => err(2) }}")
+                .unwrap();
         let result = noop_executor
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
@@ -1393,10 +1407,11 @@ mod tests {
                     }"#,
         );
 
-        let expr = rib::from_string(
-            "${match worker.response { ok(_) => ok(1), err(_) => err(2) }}",
-        )
-        .unwrap();
+        let expr =
+            rib::from_string("${match worker.response { ok(_) => ok(1), err(_) => err(2) }}")
+                .unwrap();
+
+        dbg!(expr.clone());
         let result = noop_executor
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
@@ -1476,8 +1491,7 @@ mod tests {
         );
 
         let expr =
-            rib::from_string("${match worker.response { Foo(value) => ok(value.id) }}")
-                .unwrap();
+            rib::from_string("${match worker.response { Foo(value) => ok(value.id) }}").unwrap();
         let result = noop_executor
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
@@ -1798,6 +1812,7 @@ mod tests {
           ";
 
         let expr = rib::from_string(format!("${{{}}}", program)).unwrap();
+        dbg!(expr.clone());
 
         let result = noop_executor
             .evaluate(&expr, &EvaluationContext::empty())

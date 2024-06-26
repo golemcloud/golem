@@ -1,10 +1,10 @@
 use crate::evaluator::evaluator_context::EvaluationContext;
 use crate::evaluator::{DefaultEvaluator, Evaluator};
 use crate::evaluator::{EvaluationError, ExprEvaluationResult};
-use rib::{ArmPattern, Expr, MatchArm};
 use crate::worker_bridge_execution::WorkerRequestExecutor;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::TypeAnnotatedValue;
+use rib::{ArmPattern, Expr, MatchArm};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -117,31 +117,35 @@ fn evaluate_arm_pattern(
                     input,
                 )
             }
-        },
+        }
         ArmPattern::Literal(expr) => match expr.deref() {
             Expr::Identifier(variable) => Ok(ArmPatternOutput::Matched(MatchResult {
                 binding_variable: Some(BindingVariable(variable.clone())),
                 result: match_expr_result.clone(),
             })),
-            Expr::Result(result) =>
-                match result {
-                    Ok(ok_expr) => {
-                        handle_ok(match_expr_result, &ArmPattern::Literal(ok_expr.clone()), binding_variable, input)
-                    }
-                    Err(err_expr) => {
-                        handle_err(match_expr_result, &ArmPattern::Literal(err_expr.clone()), binding_variable, input)
-                    }
-                },
-            Expr::Option(option) => {
-                match option {
-                    Some(some_expr) => {
-                        handle_some(match_expr_result, &ArmPattern::Literal(some_expr.clone()), binding_variable, input)
-                    }
-                    None => {
-                        handle_none(match_expr_result)
-                    }
-                }
-            }
+            Expr::Result(result) => match result {
+                Ok(ok_expr) => handle_ok(
+                    match_expr_result,
+                    &ArmPattern::Literal(ok_expr.clone()),
+                    binding_variable,
+                    input,
+                ),
+                Err(err_expr) => handle_err(
+                    match_expr_result,
+                    &ArmPattern::Literal(err_expr.clone()),
+                    binding_variable,
+                    input,
+                ),
+            },
+            Expr::Option(option) => match option {
+                Some(some_expr) => handle_some(
+                    match_expr_result,
+                    &ArmPattern::Literal(some_expr.clone()),
+                    binding_variable,
+                    input,
+                ),
+                None => handle_none(match_expr_result),
+            },
 
             expr => {
                 let arm_pattern = ArmPattern::Literal(Box::new(expr.clone()));
@@ -281,40 +285,60 @@ fn handle_variant(
     binding_variable: Option<BindingVariable>,
     input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
-    match match_expr_result {
-        result @ TypeAnnotatedValue::Variant {
-            case_name,
-            case_value,
-            ..
-        } => {
-            if case_name == variant_name {
-                let type_annotated_value_in_case = *case_value.clone().ok_or(
-                    EvaluationError::Message("Variant constructor should have a value".to_string()),
-                )?;
+    // TODO; Clean up this logic, and get rid of this if-condition.
+    // This is because ok(_), err(_) wild card patterns are not really parsed Result or Option constructors,
+    // and become a generic variant. We still want them to be handled as if they are Result::Ok, Option::Some etc
+    // We can solve this problem by not reusing `Expr` when parsing pattern-match's arm-pattern.
+    if variant_name == "ok" {
+        return handle_ok(match_expr_result, &variables[0], binding_variable, input);
+    } else if variant_name == "err" {
+        return handle_err(match_expr_result, &variables[0], binding_variable, input);
+    } else if variant_name == "some" {
+        return handle_some(match_expr_result, &variables[0], binding_variable, input);
+    } else {
+        match match_expr_result {
+            result @ TypeAnnotatedValue::Variant {
+                case_name,
+                case_value,
+                ..
+            } => {
+                if case_name == variant_name {
+                    let type_annotated_value_in_case =
+                        *case_value.clone().ok_or(EvaluationError::Message(
+                            "Variant constructor should have a value".to_string(),
+                        ))?;
 
-                if let Some(bv) = binding_variable {
-                    input.merge_variables(&TypeAnnotatedValue::Record {
-                        value: vec![(bv.0.clone(), result.clone())],
-                        typ: vec![(bv.0.clone(), AnalysedType::from(result))],
-                    });
-                }
-
-                match variables.first() {
-                    Some(variable) => {
-                        evaluate_arm_pattern(variable, &type_annotated_value_in_case, input, None)
+                    if let Some(bv) = binding_variable {
+                        input.merge_variables(&TypeAnnotatedValue::Record {
+                            value: vec![(bv.0.clone(), result.clone())],
+                            typ: vec![(bv.0.clone(), AnalysedType::from(result))],
+                        });
                     }
-                    None => Ok(ArmPatternOutput::Matched(MatchResult {
-                        binding_variable: None,
-                        result: type_annotated_value_in_case,
-                    })),
+
+                    match variables.first() {
+                        Some(variable) => evaluate_arm_pattern(
+                            variable,
+                            &type_annotated_value_in_case,
+                            input,
+                            None,
+                        ),
+                        None => Ok(ArmPatternOutput::Matched(MatchResult {
+                            binding_variable: None,
+                            result: type_annotated_value_in_case,
+                        })),
+                    }
+                } else {
+                    Ok(ArmPatternOutput::NoneMatched)
                 }
-            } else {
-                Ok(ArmPatternOutput::NoneMatched)
+            }
+
+            type_annotated_value => {
+                dbg!(type_annotated_value.clone());
+                Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
+                    expected_type: format!("Variant::{}", variant_name),
+                    actual_type: format!("{:?}", AnalysedType::from(type_annotated_value)),
+                }))
             }
         }
-        type_annotated_value => Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
-            expected_type: format!("Variant::{}", variant_name),
-            actual_type: format!("{:?}", AnalysedType::from(type_annotated_value)),
-        })),
     }
 }

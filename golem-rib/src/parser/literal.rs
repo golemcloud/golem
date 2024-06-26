@@ -30,7 +30,7 @@ parser! {
 mod internal {
     use crate::expr::Expr;
     use crate::parser::rib_expr::rib_program;
-    use combine::parser::char::{char as char_, letter};
+    use combine::parser::char::{char as char_, letter, space};
     use combine::parser::char::{digit, spaces};
     use combine::parser::repeat::many;
     use combine::stream::easy;
@@ -40,8 +40,8 @@ mod internal {
     pub fn literal_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
         spaces().with(
             between(
-                char_('\"').skip(spaces()),
-                char_('\"').skip(spaces()),
+                char_('\"'),
+                char_('\"'),
                 many(choice((attempt(interpolation()), static_part()))),
             )
             .map(|parts: Vec<Expr>| {
@@ -60,6 +60,7 @@ mod internal {
     fn static_part<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
         many1(
             letter()
+                .or(space())
                 .or(digit())
                 .or(char_('_').or(char_('-').or(char_('.')).or(char_('/')).or(char_(':')))),
         )
@@ -68,7 +69,7 @@ mod internal {
     }
 
     fn interpolation<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-        between(char_('$').with(char_('{')), char_('}'), rib_program())
+        between(char_('$').with(char_('{')).skip(spaces()), char_('}'), rib_program())
     }
 }
 

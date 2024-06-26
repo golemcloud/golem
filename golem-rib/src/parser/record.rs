@@ -26,9 +26,9 @@ use combine::stream::easy;
 pub fn record<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     spaces().with(
         between(
-            char_('{'),
-            char_('}'),
-            sep_by1(field(), char_(',').skip(spaces())),
+            char_('{').skip(spaces()),
+            char_('}').skip(spaces()),
+            sep_by1(field().skip(spaces()), char_(',').skip(spaces())),
         )
         .map(|fields: Vec<Field>| {
             Expr::Record(
@@ -42,7 +42,7 @@ pub fn record<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
 }
 
 fn field_key<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
-    many1(letter().or(char_('_')))
+    many1(letter().or(char_('_').or(char_('-'))))
         .map(|s: Vec<char>| s.into_iter().collect())
         .message("Unable to parse identifier")
 }

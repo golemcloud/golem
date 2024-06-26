@@ -76,10 +76,10 @@ impl ParseFromJSON for JsonOpenApiDefinition {
 
 mod internal {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use rib::Expr;
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
+    use rib::Expr;
     use serde_json::Value;
 
     use uuid::Uuid;
@@ -228,10 +228,10 @@ mod internal {
 mod tests {
     use super::*;
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use rib::{Expr};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::PathItem;
+    use rib::Expr;
     use serde_json::json;
     use uuid::Uuid;
 
@@ -292,10 +292,7 @@ mod tests {
                                     "response".to_string(),
                                 )),
                             ),
-                            (
-                                "status".to_string(),
-                                Box::new(Expr::unsigned_integer(200))
-                            ),
+                            ("status".to_string(), Box::new(Expr::unsigned_integer(200))),
                         ]
                         .into_iter()
                         .collect()

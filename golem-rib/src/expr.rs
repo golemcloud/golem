@@ -98,13 +98,26 @@ impl Expr {
     /// You can see the entire text is wrapped in `${..}` to specify that it's containing
     /// a Rib expression and anything outside is considered as a literal string.
     ///
+    /// The advantage of using `from_interpolated_str` is Rib the behaviour is consistent that only those texts
+    //  within `${..}` are considered as Rib expressions all the time.
+    ///
     /// Example 2:
     ///
     /// ```rib
     ///  worker-id-${request.user_id}
     /// ```
+    /// ```rib
+    ///   ${"worker-id-${request.user_id}"}
+    /// ```
+    /// ```rib
+    ///   ${request.user_id}
+    /// ```
+    /// ```rib
+    ///   foo-${"worker-id-${request.user_id}"}
+    /// ```
+    /// etc.
     ///
-    /// This will be parsed as `Expr::Concat(Expr::Literal("worker-id-"), Expr::SelectField(Expr::Identifier("request"), "user_id"))`
+    /// The first one will be parsed as `Expr::Concat(Expr::Literal("worker-id-"), Expr::SelectField(Expr::Identifier("request"), "user_id"))`.
     ///
     /// The following will work too.
     /// In the below example, the entire if condition is a Rib expression  (because it is wrapped in ${..}) and

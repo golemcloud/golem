@@ -17,6 +17,8 @@ use combine::{
     parser::char::{char as char_, letter, spaces, string},
     Parser,
 };
+use combine::error::StreamError;
+use combine::parser::char::digit;
 
 use crate::expr::Expr;
 use crate::parser::rib_expr::rib_expr;
@@ -35,9 +37,18 @@ pub fn let_binding<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
 }
 
 fn let_variable<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
-    many1(letter().or(char_('_')))
+    many1(letter().or(digit()).or(char_('_')))
+        .and_then(|s: Vec<char>| {
+            if s.first().map_or(false, |&c| c.is_alphabetic()) {
+                Ok(s)
+            } else {
+                Err(easy::Error::message_static_message(
+                    "Let binding variable must start with a letter",
+                ))
+            }
+        })
         .map(|s: Vec<char>| s.into_iter().collect())
-        .message("Unable to parse identifier")
+        .message("Unable to parse let binding variable")
 }
 
 #[cfg(test)]
@@ -145,6 +156,22 @@ mod tests {
                 Expr::Let(
                     "foo".to_string(),
                     Box::new(Expr::Literal("bar".to_string()))
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_record() {
+        let input = "let foo = { bar : baz }";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::Let(
+                    "foo".to_string(),
+                    Box::new(Expr::Record(vec![("bar".to_string(), Box::new(Expr::Identifier("baz".to_string())))]))
                 ),
                 ""
             ))
