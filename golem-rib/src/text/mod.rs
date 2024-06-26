@@ -12,16 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::{EasyParser, ParseError};
 use crate::expr::Expr;
 
 mod writer;
 
 use crate::text::writer::WriterError;
-use combine::stream::easy;
 
 pub fn from_string(input: &str) -> Result<Expr, String> {
-   Expr::from_str(input.as_ref())
+   Expr::from_str(input)
 }
 
 pub fn to_string(expr: &Expr) -> Result<String, WriterError> {

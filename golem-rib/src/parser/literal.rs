@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::expr::Expr;
-use crate::parser::rib_expr::rib_expr;
 
 use crate::parser::literal::internal::literal_;
 use combine::{easy, parser, Parser, Stream};
@@ -30,7 +29,7 @@ parser! {
 
 mod internal {
     use crate::expr::Expr;
-    use crate::parser::rib_expr::{rib_expr, rib_program};
+    use crate::parser::rib_expr::{rib_program};
     use combine::parser::char::{digit, spaces};
     use combine::parser::char::{char as char_, letter};
     use combine::parser::repeat::many;
@@ -45,7 +44,7 @@ mod internal {
             many(choice((attempt(interpolation()), static_part()))),
         )
         .map(|parts: Vec<Expr>| {
-            if parts.len() == 0 {
+            if parts.is_empty() {
                 Expr::Literal("".to_string())
             } else if parts.len() == 1 {
                 parts.first().unwrap().clone()

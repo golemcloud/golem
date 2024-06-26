@@ -15,7 +15,6 @@
 use crate::function_name::ParsedFunctionName;
 use crate::parser::rib_expr::{rib_program};
 use bincode::{Decode, Encode};
-use combine::easy;
 use combine::EasyParser;
 use std::fmt::Display;
 use std::str::FromStr;

@@ -21,7 +21,7 @@ use combine::parser::char;
 use combine::parser::char::{char, spaces};
 use combine::parser::choice::choice;
 use combine::{attempt, Parser, Stream};
-use combine::{parser, sep_by, sep_by1};
+use combine::{parser, sep_by};
 
 use super::binary_comparison::{
     equal_to, greater_than, greater_than_or_equal_to, less_than, less_than_or_equal_to,

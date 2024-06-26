@@ -14,9 +14,9 @@
 
 use crate::expr::Expr;
 use crate::parser::identifier::identifier;
-use combine::parser::char::{char as char_, letter, spaces};
+use combine::parser::char::{char as char_, spaces};
 use combine::stream::easy;
-use combine::{attempt, choice, many1, optional, Parser, Stream};
+use combine::{attempt, choice, many1, optional, Parser};
 use internal::*;
 
 pub fn select_index<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
