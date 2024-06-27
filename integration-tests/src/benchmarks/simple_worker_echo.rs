@@ -88,6 +88,10 @@ impl Benchmark for SimpleWorkerEcho {
                             ))))],
                         )
                         .await
+                        .map_err(|e| {
+                            dbg!("invoke_and_await failed");
+                            dbg!(e);
+                        })
                         .expect("invoke_and_await failed");
                 }
             });
@@ -95,7 +99,10 @@ impl Benchmark for SimpleWorkerEcho {
         }
 
         for fiber in fibers {
-            fiber.await.expect("fiber failed");
+            fiber.await.map_err(|err| {
+                dbg!("Fiber failed");
+                dbg!(err);
+            }).expect("Fiber failed");
         }
     }
 
@@ -125,7 +132,10 @@ impl Benchmark for SimpleWorkerEcho {
                             ))))],
                         )
                         .await
-                        .expect("invoke_and_await failed");
+                        .map_err(|e| {
+                            dbg!("Invocation failed");
+                            dbg!(e);
+                        }).expect("Invocation failed");
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
                     recorder_clone.duration(&"invocation".to_string(), elapsed);
                     recorder_clone.duration(&format!("worker-{n}"), elapsed);
@@ -135,7 +145,10 @@ impl Benchmark for SimpleWorkerEcho {
         }
 
         for fiber in fibers {
-            fiber.await.expect("fiber failed");
+            fiber.await.map_err(|err| {
+                dbg!("Fiber failed");
+                dbg!(err);
+            }).expect("Fiber failed");
         }
     }
 
