@@ -95,10 +95,7 @@ impl Benchmark for SimpleWorkerEcho {
         }
 
         for fiber in fibers {
-            fiber.await.map_err(|err| {
-                dbg!("Fiber failed");
-                dbg!(err);
-            }).expect("Fiber failed");
+            fiber.await.expect("Fiber failed");
         }
     }
 
@@ -128,7 +125,7 @@ impl Benchmark for SimpleWorkerEcho {
                             ))))],
                         )
                         .await
-                        .expect("Invocation failed");
+                        .expect("invoke_and_await failed");
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
                     recorder_clone.duration(&"invocation".to_string(), elapsed);
                     recorder_clone.duration(&format!("worker-{n}"), elapsed);
