@@ -340,7 +340,9 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         let mut values: Vec<HttpApiDefinition> = vec![];
 
         for record in records {
-            values.push(record.into());
+            values.push(record.try_into().map_err(|_| {
+                ApiDeploymentError::InternalError("Failed to convert record".to_string())
+            })?);
         }
 
         Ok(values)

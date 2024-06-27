@@ -202,9 +202,12 @@ where
         self.api_definition_validator
             .validate(definition, components.as_slice())?;
 
-        self.definition_repo
-            .create(&ApiDefinitionRecord::new(namespace, definition.clone()))
-            .await?;
+        let record =
+            ApiDefinitionRecord::new(namespace.clone(), definition.clone()).map_err(|_| {
+                ApiDefinitionError::InternalError("Failed to convert record".to_string())
+            })?;
+
+        self.definition_repo.create(&record).await?;
 
         Ok(definition.id.clone())
     }
@@ -249,12 +252,12 @@ where
         self.api_definition_validator
             .validate(definition, components.as_slice())?;
 
-        self.definition_repo
-            .update(&ApiDefinitionRecord::new(
-                namespace.clone(),
-                definition.clone(),
-            ))
-            .await?;
+        let record =
+            ApiDefinitionRecord::new(namespace.clone(), definition.clone()).map_err(|_| {
+                ApiDefinitionError::InternalError("Failed to convert record".to_string())
+            })?;
+
+        self.definition_repo.update(&record).await?;
 
         Ok(definition.id.clone())
     }
@@ -275,7 +278,15 @@ where
             .get(&namespace.to_string(), id.0.as_str(), version.0.as_str())
             .await?;
 
-        Ok(value.map(|v| v.into()))
+        match value {
+            Some(v) => {
+                let definition = v.try_into().map_err(|_| {
+                    ApiDefinitionError::InternalError("Failed to convert record".to_string())
+                })?;
+                Ok(Some(definition))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn delete(
@@ -305,9 +316,17 @@ where
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
         info!("Get all API definitions - namespace: {}", namespace);
-        let values = self.definition_repo.get_all(&namespace.to_string()).await?;
+        let records = self.definition_repo.get_all(&namespace.to_string()).await?;
 
-        Ok(values.into_iter().map(|v| v.into()).collect())
+        let values: Vec<HttpApiDefinition> = records
+            .iter()
+            .map(|d| d.clone().try_into())
+            .collect::<Result<Vec<HttpApiDefinition>, _>>()
+            .map_err(|_| {
+                ApiDefinitionError::InternalError("Failed to convert record".to_string())
+            })?;
+
+        Ok(values)
     }
 
     async fn get_all_versions(
@@ -320,12 +339,21 @@ where
             "Get all API definitions versions - namespace: {}, id: {}",
             namespace, id
         );
-        let values = self
+
+        let records = self
             .definition_repo
             .get_all_versions(&namespace.to_string(), id.0.as_str())
             .await?;
 
-        Ok(values.into_iter().map(|v| v.into()).collect())
+        let values: Vec<HttpApiDefinition> = records
+            .iter()
+            .map(|d| d.clone().try_into())
+            .collect::<Result<Vec<HttpApiDefinition>, _>>()
+            .map_err(|_| {
+                ApiDefinitionError::InternalError("Failed to convert record".to_string())
+            })?;
+
+        Ok(values)
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::api_definition::http::HttpApiDefinition;
+use crate::repo::RepoError;
 use async_trait::async_trait;
 use sqlx::{Database, Pool, Row};
 use std::collections::HashMap;
@@ -6,37 +7,42 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
-use crate::repo::RepoError;
-
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDefinitionRecord {
     pub namespace: String,
     pub id: String,
     pub version: String,
     pub draft: bool,
-    pub data: String,
+    pub data: Vec<u8>,
 }
 
 impl ApiDefinitionRecord {
-    pub fn new<Namespace: Display>(namespace: Namespace, definition: HttpApiDefinition) -> Self {
-        Self {
+    pub fn new<Namespace: Display>(
+        namespace: Namespace,
+        definition: HttpApiDefinition,
+    ) -> Result<Self, String> {
+        let data = record_data_serde::serialize(&definition.routes)?;
+        Ok(Self {
             namespace: namespace.to_string(),
             id: definition.id.0,
             version: definition.version.0,
             draft: definition.draft,
-            data: serde_json::to_string(&definition.routes).unwrap(),
-        }
+            data: data.into(),
+        })
     }
 }
 
-impl From<ApiDefinitionRecord> for HttpApiDefinition {
-    fn from(value: ApiDefinitionRecord) -> Self {
-        Self {
+impl TryFrom<ApiDefinitionRecord> for HttpApiDefinition {
+    type Error = String;
+    fn try_from(value: ApiDefinitionRecord) -> Result<Self, Self::Error> {
+        let routes = record_data_serde::deserialize(&value.data)?;
+
+        Ok(Self {
             id: value.id.into(),
             version: value.version.into(),
-            routes: serde_json::from_str(&value.data).unwrap(),
+            routes,
             draft: value.draft,
-        }
+        })
     }
 }
 
@@ -96,7 +102,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
               INSERT INTO api_definitions
                 (namespace, id, version, draft, data)
               VALUES
-                ($1, $2, $3, $4, $5::jsonb)
+                ($1, $2, $3, $4, $5)
                "#,
         )
         .bind(definition.namespace.clone())
@@ -114,7 +120,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
         sqlx::query(
             r#"
               UPDATE api_definitions
-              SET draft = $4, data = $5::jsonb
+              SET draft = $4, data = $5
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
         )
@@ -157,7 +163,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
         id: &str,
         version: &str,
     ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, CAST(data AS TEXT) AS data FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
+        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
             .bind(namespace)
             .bind(id)
             .bind(version)
@@ -198,11 +204,13 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, CAST(data AS TEXT) AS data FROM api_definitions WHERE namespace = $1")
-            .bind(namespace)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        sqlx::query_as::<_, ApiDefinitionRecord>(
+            "SELECT namespace, id, version, draft, data FROM api_definitions WHERE namespace = $1",
+        )
+        .bind(namespace)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_all_versions(
@@ -210,7 +218,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
         namespace: &str,
         id: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, CAST(data AS TEXT) AS data FROM api_definitions WHERE namespace = $1 AND id = $2")
+        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data FROM api_definitions WHERE namespace = $1 AND id = $2")
             .bind(namespace)
             .bind(id)
             .fetch_all(self.db_pool.deref())
@@ -227,7 +235,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
               INSERT INTO api_definitions
                 (namespace, id, version, draft, data)
               VALUES
-                ($1, $2, $3, $4, $5::jsonb)
+                ($1, $2, $3, $4, $5)
                "#,
         )
         .bind(definition.namespace.clone())
@@ -245,7 +253,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         sqlx::query(
             r#"
               UPDATE api_definitions
-              SET draft = $4, data = $5::jsonb
+              SET draft = $4, data = $5
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
         )
@@ -288,7 +296,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         id: &str,
         version: &str,
     ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, jsonb_pretty(data) AS data FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
+        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
             .bind(namespace)
             .bind(id)
             .bind(version)
@@ -329,11 +337,13 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, jsonb_pretty(data) AS data FROM api_definitions WHERE namespace = $1")
-            .bind(namespace)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        sqlx::query_as::<_, ApiDefinitionRecord>(
+            "SELECT namespace, id, version, draft, data FROM api_definitions WHERE namespace = $1",
+        )
+        .bind(namespace)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_all_versions(
@@ -341,7 +351,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         namespace: &str,
         id: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, jsonb_pretty(data) AS data FROM api_definitions WHERE namespace = $1 AND id = $2")
+        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data FROM api_definitions WHERE namespace = $1 AND id = $2")
             .bind(namespace)
             .bind(id)
             .fetch_all(self.db_pool.deref())
@@ -459,5 +469,30 @@ impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
             .map(|(_, v)| v.clone())
             .collect();
         Ok(result)
+    }
+}
+
+pub mod record_data_serde {
+    use bincode::{Decode, Encode};
+    use bytes::Bytes;
+    use golem_common::serialization::serialize_with_version;
+    pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
+
+    pub fn serialize<T: Encode>(routes: &T) -> Result<Bytes, String> {
+        serialize_with_version(routes, SERIALIZATION_VERSION_V1)
+    }
+
+    pub fn deserialize<T: Decode>(bytes: &[u8]) -> Result<T, String> {
+        let (version, data) = bytes.split_at(1);
+
+        match version[0] {
+            SERIALIZATION_VERSION_V1 => {
+                let (routes, _) = bincode::decode_from_slice(data, bincode::config::standard())
+                    .map_err(|e| format!("Failed to deserialize value: {e}"))?;
+
+                Ok(routes)
+            }
+            _ => Err("Unsupported serialization version".to_string()),
+        }
     }
 }

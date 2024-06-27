@@ -4,7 +4,7 @@ CREATE TABLE api_definitions
     id         text    NOT NULL,
     version    text    NOT NULL,
     draft      boolean NOT NULL default true,
-    data       jsonb   NOT NULL,
+    data       blob    NOT NULL,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     PRIMARY KEY (namespace, id, version)
 );

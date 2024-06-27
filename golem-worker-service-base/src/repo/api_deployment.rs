@@ -147,7 +147,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Sqlite> {
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
         sqlx::query_as::<_, ApiDefinitionRecord>(
             r#"
-                SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, CAST(api_definitions.data AS TEXT) AS data
+                SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, api_definitions.data
                 FROM api_deployments
                   JOIN api_definitions ON api_deployments.namespace = api_definitions.namespace AND api_deployments.definition_id = api_definitions.id AND api_deployments.definition_version = api_definitions.version
                 WHERE
@@ -244,7 +244,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
         sqlx::query_as::<_, ApiDefinitionRecord>(
             r#"
-                SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, jsonb_pretty(api_definitions.data) AS data
+                SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, api_definitions.data AS data
                 FROM api_deployments
                   JOIN api_definitions ON api_deployments.namespace = api_definitions.namespace AND api_deployments.definition_id = api_definitions.id AND api_deployments.definition_version = api_definitions.version
                 WHERE

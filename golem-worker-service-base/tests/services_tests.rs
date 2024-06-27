@@ -132,11 +132,12 @@ mod tests {
                 api_definition_repo.clone(),
             ));
 
-        let def1 = get_api_definition("def1", "/api/get1", "worker1", "[]", "[]");
-        let def2 = get_api_definition("def2", "/api/get2", "worker2", "[]", "[]");
-        let def3 = get_api_definition("def3", "/api/get3", "worker3", "[]", "[]");
-        let def4 = get_api_definition("def4", "/api/get4", "worker4", "[]", "[]");
-        let def5 = get_api_definition("def5", "/api/get5", "worker5", "[]", "[]");
+        let def1 = get_api_definition("def1", "0.0.1", "/api/get1", "worker1", "[]", "[]");
+        let def2 = get_api_definition("def2", "0.0.1", "/api/get2", "worker2", "[]", "[]");
+        let def3 = get_api_definition("def3", "0.0.1", "/api/get3", "worker3", "[]", "[]");
+        let def4 = get_api_definition("def4", "0.0.1", "/api/get4", "worker4", "[]", "[]");
+        let def5 = get_api_definition("def5", "0.0.1", "/api/get5", "worker5", "[]", "[]");
+        let def5v2 = get_api_definition("def5", "0.0.2", "/api/get5/2", "worker5", "[]", "[]");
 
         definition_service
             .create(
@@ -178,9 +179,34 @@ mod tests {
             )
             .await
             .unwrap();
+        definition_service
+            .create(
+                &def5v2,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
 
         let deployment = get_api_deployment("test.com", None, vec!["def1", "def2"]);
         deployment_service.deploy(&deployment).await.unwrap();
+
+        let definitions = definition_service
+            .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
+            .await
+            .unwrap();
+        assert_eq!(definitions.len(), 6);
+
+        let definitions = definition_service
+            .get_all_versions(
+                &def5.id,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(definitions.len(), 2);
+        assert!(definitions.contains(&def5) && definitions.contains(&def5v2));
 
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
@@ -188,7 +214,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(definitions.len(), 2);
-
         assert!(definitions.contains(&def1) && definitions.contains(&def2));
 
         let deployment = get_api_deployment("test.com", Some("my"), vec!["def4"]);
@@ -243,6 +268,7 @@ mod tests {
 
     fn get_api_definition(
         id: &str,
+        version: &str,
         path_pattern: &str,
         worker_id: &str,
         function_params: &str,
@@ -251,7 +277,7 @@ mod tests {
         let yaml_string = format!(
             r#"
           id: {}
-          version: 0.0.1
+          version: {}
           routes:
           - method: Get
             path: {}
@@ -262,7 +288,7 @@ mod tests {
               functionParams: {}
               response: '{}'
         "#,
-            id, path_pattern, worker_id, function_params, response_mapping
+            id, version, path_pattern, worker_id, function_params, response_mapping
         );
 
         serde_yaml::from_str(yaml_string.as_str()).unwrap()
