@@ -135,10 +135,7 @@ impl Benchmark for SimpleWorkerEcho {
         }
 
         for fiber in fibers {
-            fiber.await.map_err(|err| {
-                dbg!("Fiber failed");
-                dbg!(err);
-            }).expect("Fiber failed");
+            fiber.await.expect("Fiber failed");
         }
     }
 
