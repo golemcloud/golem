@@ -90,7 +90,7 @@ async fn measure_component(
 
     let component_id = executor
         .component_service()
-        .get_or_add_component(&path)
+        .get_or_add_component(path)
         .await;
 
     let data = std::fs::read(path)?;
@@ -143,7 +143,7 @@ async fn measure_component(
         }
     }
 
-    if results.len() > 0 {
+    if !results.is_empty() {
         let delta_memory = results.iter().map(|(d, _)| d).sum::<i64>() / results.len() as i64;
         let delta_vmemory = results.iter().map(|(_, d)| d).sum::<i64>() / results.len() as i64;
         Ok((delta_memory, delta_vmemory))
