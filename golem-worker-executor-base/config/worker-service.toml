@@ -54,6 +54,10 @@ multiplier = 3
 # host
 # port
 
+[component_cache]
+max_capacity = 0
+time_to_idle = "1h"
+
 [component_service.retries]
 max_attempts = 3
 min_delay = "100ms"

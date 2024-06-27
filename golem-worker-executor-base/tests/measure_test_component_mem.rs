@@ -6,6 +6,8 @@ use golem_wasm_ast::analysis::AnalysisContext;
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use humansize::{ISizeFormatter, BINARY};
+use rand::prelude::SliceRandom;
+use rand::thread_rng;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::path::Path;
@@ -19,21 +21,32 @@ async fn measure() {
     let ctx = TestContext::new();
     let executor = start(&ctx).await.unwrap();
 
-    // measure
+    // collect
+    let mut paths = Vec::new();
     let mut read_dir = tokio::fs::read_dir(executor.component_directory())
         .await
         .unwrap();
-    let mut results = BTreeMap::new();
     while let Some(entry) = read_dir.next_entry().await.unwrap() {
         if entry.file_name().to_string_lossy().ends_with(".wasm") {
-            let component_size = tokio::fs::metadata(entry.path()).await.unwrap().len();
-            if let Ok(result) = measure_component(&mut system, &executor, &entry.path()).await {
-                results.insert(
-                    entry.file_name().to_string_lossy().to_string(),
-                    (component_size, result),
-                );
+            paths.push(entry.path());
+        }
+    }
+
+    let mut rng = thread_rng();
+
+    // measure
+    let mut results = BTreeMap::new();
+    for _idx in 0..3 {
+        paths.shuffle(&mut rng);
+        for path in &paths {
+            let component_size = tokio::fs::metadata(path).await.unwrap().len();
+            if let Ok(result) = measure_component(&mut system, &executor, path).await {
+                let entry: &mut Vec<(u64, (i64, i64))> = results
+                    .entry(path.file_name().unwrap().to_string_lossy().to_string())
+                    .or_default();
+                entry.push((component_size, result));
             } else {
-                error!("Failed to measure {:?}", entry.path());
+                error!("Failed to measure {:?}", path);
             }
         }
     }
@@ -41,15 +54,29 @@ async fn measure() {
     drop(executor);
 
     let mut csv = String::new();
-    for (name, (component_size, (result, _vresult))) in results {
+    for (name, inner_results) in results {
+        let mut component_size = 0;
+        let mut delta_memory = 0;
+        let mut vdelta_memory = 0;
+
+        for (size, (d, vd)) in &inner_results {
+            component_size += *size;
+            delta_memory += *d;
+            vdelta_memory += *vd;
+        }
+
+        let component_size = component_size / inner_results.len() as u64;
+        let delta_memory = delta_memory / inner_results.len() as i64;
+        let _vdelta_memory = vdelta_memory / inner_results.len() as i64;
+
         info!(
             "{}: component size: {}, avg delta memory: {}",
             name,
             ISizeFormatter::new(component_size, BINARY),
-            ISizeFormatter::new(result, BINARY),
+            ISizeFormatter::new(delta_memory, BINARY),
             // ISizeFormatter::new(vresult, BINARY)
         );
-        writeln!(csv, "{},{},{}", name, component_size, result).unwrap();
+        writeln!(csv, "{},{},{}", name, component_size, delta_memory).unwrap();
     }
     info!("{}", csv);
 }
@@ -76,7 +103,7 @@ async fn measure_component(
 
     let mut results = Vec::new();
 
-    for idx in 0..6 {
+    for _idx in 0..2 {
         let pid = Pid::from_u32(std::process::id());
         system.refresh_process(pid);
         let process = system.process(pid).unwrap();
@@ -111,8 +138,7 @@ async fn measure_component(
             .sum::<u64>();
         info!("{:?} initial memory: {}", path, total_initial_mem);
 
-        // first try is warmup
-        if idx > 0 && delta_memory > 0 {
+        if delta_memory >= 0 {
             results.push((delta_memory, delta_vmemory));
         }
     }
