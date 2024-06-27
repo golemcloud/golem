@@ -89,7 +89,7 @@ pub struct GolemInitCommand<ProfileAdd: clap::Args> {
     #[command(flatten)]
     pub verbosity: Verbosity,
 
-    #[arg(short = 'F', long, default_value = "text")]
+    #[arg(short = 'F', long, global = true, default_value = "text")]
     pub format: Format,
 
     #[command(subcommand)]
