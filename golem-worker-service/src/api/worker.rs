@@ -2,7 +2,7 @@ use golem_common::model::{
     CallingConvention, ComponentId, IdempotencyKey, ScanCursor, WorkerFilter,
 };
 use golem_service_base::api_tags::ApiTags;
-use golem_worker_service_base::auth::EmptyAuthCtx;
+use golem_service_base::auth::EmptyAuthCtx;
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
