@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod tests {
+    use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
     use golem_service_base::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_service_base::db;
     use golem_worker_service_base::api_definition::http::HttpApiDefinition;
     use golem_worker_service_base::api_definition::{
         ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion,
     };
-    use golem_worker_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
     use golem_worker_service_base::repo::{api_definition, api_deployment};
     use golem_worker_service_base::service::api_definition::{
         ApiDefinitionError, ApiDefinitionIdWithVersion, ApiDefinitionService,

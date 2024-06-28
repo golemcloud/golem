@@ -7,7 +7,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 
 use golem_service_base::api_tags::ApiTags;
-use golem_worker_service_base::auth::DefaultNamespace;
+use golem_service_base::auth::DefaultNamespace;
 use tracing::log::info;
 
 use golem_worker_service_base::api::ApiDeployment;
