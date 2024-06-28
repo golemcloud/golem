@@ -13,4 +13,5 @@
 // limitations under the License.
 
 pub mod config;
+pub mod repo;
 pub mod service;

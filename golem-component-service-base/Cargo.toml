@@ -12,8 +12,19 @@ golem-service-base = { path = "../golem-service-base" }
 golem-wasm-ast = { workspace = true }
 
 async-trait = { workspace = true }
+bincode = { workspace = true }
+bytes = { workspace = true }
 http_02 = { workspace = true }
 serde = { workspace = true }
+sqlx = { workspace = true, features = [
+    "runtime-tokio",
+    "sqlite",
+    "postgres",
+    "uuid",
+    "migrate",
+    "chrono",
+] }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
