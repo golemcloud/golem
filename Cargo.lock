@@ -3642,6 +3642,7 @@ dependencies = [
  "kube",
  "prometheus",
  "prost",
+ "rustls 0.23.10",
  "serde 1.0.203",
  "serde_json",
  "tokio",
