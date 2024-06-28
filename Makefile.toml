@@ -340,10 +340,10 @@ dependencies = [
     "build-release",
     "publish-golem-client",
     "publish-golem-api-grpc",
+    "publish-golem-rib",
     "publish-golem-common",
     "publish-golem-test-framework",
     "publish-golem-cli",
-    "publish-golem-rib"
 ]
 
 [tasks.set-version]
