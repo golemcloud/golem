@@ -84,5 +84,13 @@ name = "benchmark_rpc"
 path = "src/benchmarks/rpc.rs"
 
 [[bin]]
+name = "benchmark_large_initial_memory"
+path = "src/benchmarks/large_initial_memory.rs"
+
+[[bin]]
+name = "benchmark_large_dynamic_memory"
+path = "src/benchmarks/large_dynamic_memory.rs"
+
+[[bin]]
 name = "benchmark_report"
 path = "src/benchmarks/report/benchmark_report.rs"
