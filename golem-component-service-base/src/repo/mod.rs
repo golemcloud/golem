@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
-
 pub mod component;
+
+use std::fmt::Display;
 
 #[derive(Debug)]
 pub enum RepoError {
