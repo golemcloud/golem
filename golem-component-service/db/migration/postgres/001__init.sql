@@ -1,5 +1,6 @@
 CREATE TABLE components
 (
+    namespace           text    NOT NULL,
     component_id        uuid    NOT NULL,
     name                text    NOT NULL,
     size                integer NOT NULL,
@@ -8,6 +9,6 @@ CREATE TABLE components
     user_component      text    NOT NULL,
     protected_component text    NOT NULL,
     protector_version   bigint,
-    metadata            jsonb   NOT NULL,
-    PRIMARY KEY (component_id, version)
+    metadata            bytea   NOT NULL,
+    PRIMARY KEY (namespace, component_id, version)
 );
