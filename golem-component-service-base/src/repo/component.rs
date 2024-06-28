@@ -63,6 +63,15 @@ impl TryFrom<ComponentRecord> for Component {
     }
 }
 
+impl From<ComponentRecord> for VersionedComponentId {
+    fn from(value: ComponentRecord) -> Self {
+        VersionedComponentId {
+            component_id: ComponentId(value.component_id),
+            version: value.version as u64,
+        }
+    }
+}
+
 impl ComponentRecord {
     pub fn new<Namespace: Display>(
         namespace: Namespace,

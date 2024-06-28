@@ -35,7 +35,8 @@ use golem_common::model::ComponentId;
 use golem_service_base::stream::ByteStream;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::service::component;
+use golem_component_service_base::service::component;
+use golem_service_base::auth::DefaultNamespace;
 
 impl From<component::ComponentError> for ComponentError {
     fn from(value: component::ComponentError) -> Self {
@@ -83,7 +84,7 @@ fn internal_error(error: &str) -> ComponentError {
 }
 
 pub struct ComponentGrpcApi {
-    pub component_service: Arc<dyn component::ComponentService + Sync + Send>,
+    pub component_service: Arc<dyn component::ComponentService<DefaultNamespace> + Sync + Send>,
 }
 
 impl ComponentGrpcApi {
@@ -92,7 +93,10 @@ impl ComponentGrpcApi {
             .component_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
-        let result = self.component_service.get(&id).await?;
+        let result = self
+            .component_service
+            .get(&id, &DefaultNamespace::default())
+            .await?;
         Ok(result.into_iter().map(|p| p.into()).collect())
     }
 
@@ -114,7 +118,7 @@ impl ComponentGrpcApi {
 
         let result = self
             .component_service
-            .get_by_version(&versioned_component_id)
+            .get_by_version(&versioned_component_id, &DefaultNamespace::default())
             .await?;
         Ok(result.map(|p| p.into()))
     }
@@ -126,7 +130,10 @@ impl ComponentGrpcApi {
         let name: Option<golem_service_base::model::ComponentName> = request
             .component_name
             .map(golem_service_base::model::ComponentName);
-        let result = self.component_service.find_by_name(name).await?;
+        let result = self
+            .component_service
+            .find_by_name(name, &DefaultNamespace::default())
+            .await?;
         Ok(result.into_iter().map(|p| p.into()).collect())
     }
 
@@ -138,7 +145,10 @@ impl ComponentGrpcApi {
             .component_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
-        let result = self.component_service.get_latest_version(&id).await?;
+        let result = self
+            .component_service
+            .get_latest_version(&id, &DefaultNamespace::default())
+            .await?;
         match result {
             Some(component) => Ok(component.into()),
             None => Err(ComponentError {
@@ -158,7 +168,10 @@ impl ComponentGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
         let version = request.version;
-        let result = self.component_service.download_stream(&id, version).await?;
+        let result = self
+            .component_service
+            .download_stream(&id, version, &DefaultNamespace::default())
+            .await?;
         Ok(result)
     }
 
@@ -168,7 +181,10 @@ impl ComponentGrpcApi {
         data: Vec<u8>,
     ) -> Result<Component, ComponentError> {
         let name = golem_service_base::model::ComponentName(request.component_name);
-        let result = self.component_service.create(&name, data).await?;
+        let result = self
+            .component_service
+            .create(&name, data, &DefaultNamespace::default())
+            .await?;
         Ok(result.into())
     }
 
@@ -181,7 +197,10 @@ impl ComponentGrpcApi {
             .component_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
-        let result = self.component_service.update(&id, data).await?;
+        let result = self
+            .component_service
+            .update(&id, data, &DefaultNamespace::default())
+            .await?;
         Ok(result.into())
     }
 }

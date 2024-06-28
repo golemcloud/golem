@@ -3525,6 +3525,7 @@ dependencies = [
 name = "golem-component-service-base"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bincode",
  "bytes 1.6.0",
@@ -3535,7 +3536,11 @@ dependencies = [
  "http 0.2.12",
  "serde 1.0.203",
  "sqlx",
+ "tap",
  "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tracing",
  "uuid",
 ]

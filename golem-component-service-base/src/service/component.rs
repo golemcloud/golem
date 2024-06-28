@@ -15,19 +15,17 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
+use crate::service::component_compilation::ComponentCompilationService;
+use crate::service::component_processor::{process_component, ComponentProcessingError};
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
-use golem_component_service_base::service::component_compilation::ComponentCompilationService;
-use golem_component_service_base::service::component_processor::{
-    process_component, ComponentProcessingError,
-};
 use tap::TapFallible;
 use tracing::{error, info};
 
-use crate::repo::component::ComponentRepo;
+use crate::repo::component::{ComponentRecord, ComponentRepo};
 use crate::repo::RepoError;
-use crate::service::component_object_store::ComponentObjectStore;
 use golem_service_base::model::*;
+use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
 
 #[derive(Debug, thiserror::Error)]
@@ -61,53 +59,65 @@ impl From<RepoError> for ComponentError {
 }
 
 #[async_trait]
-pub trait ComponentService {
+pub trait ComponentService<Namespace> {
     async fn create(
         &self,
         component_name: &ComponentName,
         data: Vec<u8>,
+        namespace: &Namespace,
     ) -> Result<Component, ComponentError>;
 
     async fn update(
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
+        namespace: &Namespace,
     ) -> Result<Component, ComponentError>;
 
     async fn download(
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
+        namespace: &Namespace,
     ) -> Result<Vec<u8>, ComponentError>;
 
     async fn download_stream(
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
+        namespace: &Namespace,
     ) -> Result<ByteStream, ComponentError>;
 
     async fn get_protected_data(
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
+        namespace: &Namespace,
     ) -> Result<Option<Vec<u8>>, ComponentError>;
 
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
+        namespace: &Namespace,
     ) -> Result<Vec<Component>, ComponentError>;
 
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
+        namespace: &Namespace,
     ) -> Result<Option<Component>, ComponentError>;
 
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
+        _namespace: &Namespace,
     ) -> Result<Option<Component>, ComponentError>;
 
-    async fn get(&self, component_id: &ComponentId) -> Result<Vec<Component>, ComponentError>;
+    async fn get(
+        &self,
+        component_id: &ComponentId,
+        namespace: &Namespace,
+    ) -> Result<Vec<Component>, ComponentError>;
 }
 
 pub struct ComponentServiceDefault {
@@ -131,16 +141,19 @@ impl ComponentServiceDefault {
 }
 
 #[async_trait]
-impl ComponentService for ComponentServiceDefault {
+impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentService<Namespace>
+    for ComponentServiceDefault
+{
     async fn create(
         &self,
         component_name: &ComponentName,
         data: Vec<u8>,
+        namespace: &Namespace,
     ) -> Result<Component, ComponentError> {
         let tn = component_name.0.clone();
         info!("Creating component  with name {}", tn);
 
-        self.check_new_name(component_name).await?;
+        self.check_new_name(component_name, namespace).await?;
 
         let metadata = process_component(&data)?;
 
@@ -182,9 +195,10 @@ impl ComponentService for ComponentServiceDefault {
             protected_component_id,
         };
 
-        self.component_repo
-            .upsert(&component.clone().into())
-            .await?;
+        let record = ComponentRecord::new(namespace, component.clone())
+            .map_err(|e| ComponentError::internal(e, "Failed to convert record"))?;
+
+        self.component_repo.upsert(&record).await?;
 
         self.component_compilation
             .enqueue_compilation(&component.versioned_component_id.component_id, 0)
@@ -197,6 +211,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
+        namespace: &Namespace,
     ) -> Result<Component, ComponentError> {
         info!("Updating component {}", component_id);
 
@@ -204,11 +219,14 @@ impl ComponentService for ComponentServiceDefault {
 
         let next_component = self
             .component_repo
-            .get_latest_version(&component_id.0)
+            .get_latest_version(namespace.to_string().as_str(), &component_id.0)
             .await?
-            .map(Component::from)
-            .map(Component::next_version)
-            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
+            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))
+            .and_then(|c| {
+                c.try_into()
+                    .map_err(|e| ComponentError::internal(e, "Failed to convert record"))
+            })
+            .map(Component::next_version)?;
 
         info!(
             "Uploaded component {} version {} with exports {:?}",
@@ -230,10 +248,10 @@ impl ComponentService for ComponentServiceDefault {
             metadata,
             ..next_component
         };
+        let record = ComponentRecord::new(namespace, component.clone())
+            .map_err(|e| ComponentError::internal(e, "Failed to convert record"))?;
 
-        self.component_repo
-            .upsert(&component.clone().into())
-            .await?;
+        self.component_repo.upsert(&record).await?;
 
         self.component_compilation
             .enqueue_compilation(component_id, component.versioned_component_id.version)
@@ -246,6 +264,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
+        namespace: &Namespace,
     ) -> Result<Vec<u8>, ComponentError> {
         let versioned_component_id = {
             match version {
@@ -255,10 +274,9 @@ impl ComponentService for ComponentServiceDefault {
                 },
                 None => self
                     .component_repo
-                    .get_latest_version(&component_id.0)
+                    .get_latest_version(namespace.to_string().as_str(), &component_id.0)
                     .await?
-                    .map(Component::from)
-                    .map(|t| t.versioned_component_id)
+                    .map(|c| c.into())
                     .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?,
             }
         };
@@ -282,6 +300,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
+        namespace: &Namespace,
     ) -> Result<ByteStream, ComponentError> {
         let versioned_component_id = {
             match version {
@@ -291,10 +310,9 @@ impl ComponentService for ComponentServiceDefault {
                 },
                 None => self
                     .component_repo
-                    .get_latest_version(&component_id.0)
+                    .get_latest_version(namespace.to_string().as_str(), &component_id.0)
                     .await?
-                    .map(Component::from)
-                    .map(|t| t.versioned_component_id)
+                    .map(|c| c.into())
                     .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?,
             }
         };
@@ -319,6 +337,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
+        namespace: &Namespace,
     ) -> Result<Option<Vec<u8>>, ComponentError> {
         info!(
             "Getting component {} version {} data",
@@ -328,7 +347,7 @@ impl ComponentService for ComponentServiceDefault {
 
         let latest_component = self
             .component_repo
-            .get_latest_version(&component_id.0)
+            .get_latest_version(namespace.to_string().as_str(), &component_id.0)
             .await?;
 
         let v = match latest_component {
@@ -368,28 +387,53 @@ impl ComponentService for ComponentServiceDefault {
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
+        namespace: &Namespace,
     ) -> Result<Vec<Component>, ComponentError> {
         let tn = component_name.clone().map_or("N/A".to_string(), |n| n.0);
         info!("Getting component name {}", tn);
 
-        let result = match component_name {
-            Some(name) => self.component_repo.get_by_name(&name.0).await?,
+        let records = match component_name {
+            Some(name) => {
+                self.component_repo
+                    .get_by_name(namespace.to_string().as_str(), &name.0)
+                    .await?
+            }
             None => self.component_repo.get_all().await?,
         };
 
-        Ok(result.into_iter().map(|t| t.into()).collect())
+        let values: Vec<Component> = records
+            .iter()
+            .map(|d| d.clone().try_into())
+            .collect::<Result<Vec<Component>, _>>()
+            .map_err(|e| ComponentError::internal(e, "Failed to convert record".to_string()))?;
+
+        Ok(values)
     }
 
-    async fn get(&self, component_id: &ComponentId) -> Result<Vec<Component>, ComponentError> {
+    async fn get(
+        &self,
+        component_id: &ComponentId,
+        namespace: &Namespace,
+    ) -> Result<Vec<Component>, ComponentError> {
         info!("Getting component {}", component_id);
-        let result = self.component_repo.get(&component_id.0).await?;
+        let records = self
+            .component_repo
+            .get(namespace.to_string().as_str(), &component_id.0)
+            .await?;
 
-        Ok(result.into_iter().map(|t| t.into()).collect())
+        let values: Vec<Component> = records
+            .iter()
+            .map(|d| d.clone().try_into())
+            .collect::<Result<Vec<Component>, _>>()
+            .map_err(|e| ComponentError::internal(e, "Failed to convert record".to_string()))?;
+
+        Ok(values)
     }
 
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
+        namespace: &Namespace,
     ) -> Result<Option<Component>, ComponentError> {
         info!(
             "Getting component {} version {}",
@@ -398,41 +442,62 @@ impl ComponentService for ComponentServiceDefault {
 
         let result = self
             .component_repo
-            .get_by_version(&component_id.component_id.0, component_id.version)
+            .get_by_version(
+                namespace.to_string().as_str(),
+                &component_id.component_id.0,
+                component_id.version,
+            )
             .await?;
-        Ok(result.map(|t| t.into()))
+
+        match result {
+            Some(c) => {
+                let value = c.try_into().map_err(|e| {
+                    ComponentError::internal(e, "Failed to convert record".to_string())
+                })?;
+                Ok(Some(value))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
+        namespace: &Namespace,
     ) -> Result<Option<Component>, ComponentError> {
         info!("Getting component {} latest version", component_id);
         let result = self
             .component_repo
-            .get_latest_version(&component_id.0)
+            .get_latest_version(namespace.to_string().as_str(), &component_id.0)
             .await?;
-        Ok(result.map(|t| t.into()))
+
+        match result {
+            Some(c) => {
+                let value = c.try_into().map_err(|e| {
+                    ComponentError::internal(e, "Failed to convert record".to_string())
+                })?;
+                Ok(Some(value))
+            }
+            None => Ok(None),
+        }
     }
 }
 
 impl ComponentServiceDefault {
-    async fn check_new_name(&self, component_name: &ComponentName) -> Result<(), ComponentError> {
+    async fn check_new_name<Namespace: Display + Eq + Clone + Send + Sync>(
+        &self,
+        component_name: &ComponentName,
+        namespace: &Namespace,
+    ) -> Result<(), ComponentError> {
         let existing_components = self
             .component_repo
-            .get_by_name(&component_name.0)
+            .get_by_name(namespace.to_string().as_str(), &component_name.0)
             .await
             .tap_err(|e| error!("Error getting existing components: {}", e))?;
 
-        existing_components
-            .into_iter()
-            .next()
-            .map(Component::from)
-            .map_or(Ok(()), |t| {
-                Err(ComponentError::AlreadyExists(
-                    t.versioned_component_id.component_id,
-                ))
-            })
+        existing_components.into_iter().next().map_or(Ok(()), |c| {
+            Err(ComponentError::AlreadyExists(ComponentId(c.component_id)))
+        })
     }
 
     fn get_user_object_store_key(&self, id: &UserComponentId) -> String {
@@ -482,11 +547,14 @@ impl ComponentServiceDefault {
 pub struct ComponentServiceNoop {}
 
 #[async_trait]
-impl ComponentService for ComponentServiceNoop {
+impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentService<Namespace>
+    for ComponentServiceNoop
+{
     async fn create(
         &self,
         _component_name: &ComponentName,
         _data: Vec<u8>,
+        _namespace: &Namespace,
     ) -> Result<Component, ComponentError> {
         let fake_component = Component {
             component_name: ComponentName("fake".to_string()),
@@ -521,6 +589,7 @@ impl ComponentService for ComponentServiceNoop {
         &self,
         _component_id: &ComponentId,
         _data: Vec<u8>,
+        _namespace: &Namespace,
     ) -> Result<Component, ComponentError> {
         let fake_component = Component {
             component_name: ComponentName("fake".to_string()),
@@ -555,6 +624,7 @@ impl ComponentService for ComponentServiceNoop {
         &self,
         _component_id: &ComponentId,
         _version: Option<u64>,
+        _namespace: &Namespace,
     ) -> Result<Vec<u8>, ComponentError> {
         Ok(vec![])
     }
@@ -563,6 +633,7 @@ impl ComponentService for ComponentServiceNoop {
         &self,
         _component_id: &ComponentId,
         _version: Option<u64>,
+        _namespace: &Namespace,
     ) -> Result<ByteStream, ComponentError> {
         Ok(ByteStream::empty())
     }
@@ -571,6 +642,7 @@ impl ComponentService for ComponentServiceNoop {
         &self,
         _component_id: &ComponentId,
         _version: Option<u64>,
+        _namespace: &Namespace,
     ) -> Result<Option<Vec<u8>>, ComponentError> {
         Ok(None)
     }
@@ -578,6 +650,7 @@ impl ComponentService for ComponentServiceNoop {
     async fn find_by_name(
         &self,
         _component_name: Option<ComponentName>,
+        _namespace: &Namespace,
     ) -> Result<Vec<Component>, ComponentError> {
         Ok(vec![])
     }
@@ -585,6 +658,7 @@ impl ComponentService for ComponentServiceNoop {
     async fn get_by_version(
         &self,
         _component_id: &VersionedComponentId,
+        _namespace: &Namespace,
     ) -> Result<Option<Component>, ComponentError> {
         Ok(None)
     }
@@ -592,11 +666,16 @@ impl ComponentService for ComponentServiceNoop {
     async fn get_latest_version(
         &self,
         _component_id: &ComponentId,
+        _namespace: &Namespace,
     ) -> Result<Option<Component>, ComponentError> {
         Ok(None)
     }
 
-    async fn get(&self, _component_id: &ComponentId) -> Result<Vec<Component>, ComponentError> {
+    async fn get(
+        &self,
+        _component_id: &ComponentId,
+        _namespace: &Namespace,
+    ) -> Result<Vec<Component>, ComponentError> {
         Ok(vec![])
     }
 }
