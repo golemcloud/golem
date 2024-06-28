@@ -32,22 +32,89 @@ pub enum Output {
     TracingConsole,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct OutputConfig {
     pub enabled: bool,
-    pub json_logging: bool,
+    pub json: bool,
     pub json_flatten: bool,
     pub ansi: bool,
     pub span_active: bool,
     pub span_full: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+impl OutputConfig {
+    #[allow(dead_code)]
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+
+    #[allow(dead_code)]
+    pub fn text() -> Self {
+        Self {
+            enabled: true,
+            json: false,
+            json_flatten: false,
+            ansi: false,
+            span_active: false,
+            span_full: false,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn text_ansi() -> Self {
+        Self {
+            enabled: true,
+            json: false,
+            json_flatten: false,
+            ansi: true,
+            span_active: false,
+            span_full: false,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn json() -> Self {
+        Self {
+            enabled: true,
+            json: true,
+            json_flatten: false,
+            ansi: false,
+            span_active: false,
+            span_full: false,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn json_flattened() -> Self {
+        Self {
+            enabled: true,
+            json: true,
+            json_flatten: true,
+            ansi: false,
+            span_active: false,
+            span_full: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Config {
-    stdout: OutputConfig,
-    file: OutputConfig,
-    file_path: Option<String>,
-    tracing_console: bool,
+    pub stdout: OutputConfig,
+    pub file: OutputConfig,
+    pub file_path: Option<String>,
+    pub tracing_console: bool,
+}
+
+impl Config {
+    #[allow(dead_code)]
+    pub fn local_dev(service_name: &str) -> Self {
+        Self {
+            stdout: OutputConfig::text_ansi(),
+            file: OutputConfig::text(),
+            file_path: Some(format!("../logs/{}.log", service_name)),
+            tracing_console: false,
+        }
+    }
 }
 
 pub fn init<F>(config: &Config, make_filter: F)
@@ -113,7 +180,7 @@ where
         }
     };
 
-    if config.json_logging {
+    if config.json {
         tracing_subscriber::fmt::layer()
             .json()
             .flatten_event(config.json_flatten)
