@@ -439,6 +439,8 @@ impl ToCli<WorkerMetadata> for golem_cloud_client::model::WorkerMetadata {
             updates,
             created_at,
             last_error,
+            component_size,
+            total_linear_memory_size,
         } = self;
 
         WorkerMetadata {
@@ -453,6 +455,8 @@ impl ToCli<WorkerMetadata> for golem_cloud_client::model::WorkerMetadata {
             updates: updates.into_iter().map(|u| u.to_oss()).collect(),
             created_at,
             last_error,
+            component_size,
+            total_linear_memory_size,
         }
     }
 }
@@ -534,7 +538,11 @@ impl ToOss<golem_client::model::ComponentMetadata>
     for golem_cloud_client::model::ComponentMetadata
 {
     fn to_oss(self) -> golem_client::model::ComponentMetadata {
-        let golem_cloud_client::model::ComponentMetadata { exports, producers } = self;
+        let golem_cloud_client::model::ComponentMetadata {
+            exports,
+            producers,
+            memories,
+        } = self;
 
         fn to_oss_notp(
             p: golem_cloud_client::model::NameOptionTypePair,
@@ -796,9 +804,19 @@ impl ToOss<golem_client::model::ComponentMetadata>
             }
         }
 
+        fn to_oss_memory(
+            p: golem_cloud_client::model::LinearMemory,
+        ) -> golem_client::model::LinearMemory {
+            golem_client::model::LinearMemory {
+                initial: p.initial,
+                maximum: p.maximum,
+            }
+        }
+
         golem_client::model::ComponentMetadata {
             exports: exports.into_iter().map(to_oss_export).collect(),
             producers: producers.into_iter().map(to_oss_producers).collect(),
+            memories: memories.into_iter().map(to_oss_memory).collect(),
         }
     }
 }
