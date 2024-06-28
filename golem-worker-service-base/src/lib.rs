@@ -4,7 +4,6 @@ pub mod api_definition;
 pub mod app_config;
 pub mod auth;
 pub mod evaluator;
-mod expression;
 pub mod http;
 mod merge;
 pub mod metrics;
@@ -12,8 +11,6 @@ mod parser;
 mod primitive;
 pub mod repo;
 pub mod service;
-pub mod tokeniser;
-pub mod wasm_wave_read;
 mod worker_binding;
 pub mod worker_bridge_execution;
 

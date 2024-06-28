@@ -86,10 +86,10 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
 #[cfg(test)]
 mod tests {
     use crate::api_definition::http::{MethodPattern, Route};
-    use crate::expression::Expr;
     use crate::service::http::http_api_definition_validator::unique_routes;
     use crate::worker_binding::ResponseMapping;
     use golem_common::model::ComponentId;
+    use rib::Expr;
 
     #[test]
     fn test_unique_routes() {
@@ -99,7 +99,7 @@ mod tests {
                 path: crate::api_definition::http::AllPathPatterns::parse(path).unwrap(),
                 binding: crate::worker_binding::GolemWorkerBinding {
                     component_id: ComponentId::new_v4(),
-                    worker_name: crate::expression::Expr::Identifier("request".to_string()),
+                    worker_name: Expr::Identifier("request".to_string()),
                     idempotency_key: None,
                     response: ResponseMapping(Expr::Literal("sample".to_string())),
                 },

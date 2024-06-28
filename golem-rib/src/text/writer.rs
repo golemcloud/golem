@@ -1,5 +1,19 @@
-use crate::expression::Expr;
-use crate::tokeniser::tokenizer::{MultiCharTokens, Token};
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::expr::Expr;
+use std::fmt::Display;
 use std::io::Write;
 
 pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
@@ -30,11 +44,23 @@ struct Writer<W> {
     inner: W,
 }
 
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
+#[derive(Debug)]
 pub enum WriterError {
-    #[error("write failed: {0}")]
-    Io(#[from] std::io::Error),
+    Io(std::io::Error),
+}
+
+impl From<std::io::Error> for WriterError {
+    fn from(err: std::io::Error) -> Self {
+        WriterError::Io(err)
+    }
+}
+
+impl Display for WriterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WriterError::Io(err) => write!(f, "IO error: {err}"),
+        }
+    }
 }
 
 impl<W: Write> Writer<W> {
@@ -43,19 +69,19 @@ impl<W: Write> Writer<W> {
     }
 
     fn write_code_start(&mut self) -> Result<(), WriterError> {
-        self.write_display(Token::MultiChar(MultiCharTokens::InterpolationStart))
+        self.write_display("${")
     }
 
     fn write_code_end(&mut self) -> Result<(), WriterError> {
-        self.write_display(Token::RCurly)
+        self.write_display("}")
     }
 
     fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError> {
         match expr {
             Expr::Literal(string) => {
-                self.write_display(Token::Quote)?;
+                self.write_display("\"")?;
                 self.write_str(string)?;
-                self.write_display(Token::Quote)
+                self.write_display("\"")
             }
             Expr::Identifier(identifier) => self.write_str(identifier),
 
@@ -63,8 +89,7 @@ impl<W: Write> Writer<W> {
                 self.write_str("let ")?;
                 self.write_str(let_variable)?;
                 self.write_str(" = ")?;
-                self.write_expr(expr)?;
-                self.write_display(Token::SemiColon)
+                self.write_expr(expr)
             }
             Expr::SelectField(expr, field_name) => {
                 self.write_expr(expr)?;
@@ -73,68 +98,69 @@ impl<W: Write> Writer<W> {
             }
             Expr::SelectIndex(expr, index) => {
                 self.write_expr(expr)?;
-                self.write_display(Token::LSquare)?;
+                self.write_display("[")?;
                 self.write_display(index)?;
-                self.write_display(Token::RSquare)
+                self.write_display("]")
             }
             Expr::Sequence(sequence) => {
-                self.write_display(Token::LSquare)?;
+                self.write_display("[")?;
                 for (idx, expr) in sequence.iter().enumerate() {
                     if idx != 0 {
-                        self.write_display(Token::Comma)?;
-                        self.write_display(Token::Space)?;
+                        self.write_display(",")?;
+                        self.write_display(" ")?;
                     }
                     self.write_expr(expr)?;
                 }
-                self.write_display(Token::RSquare)
+                self.write_display("]")
             }
             Expr::Record(record) => {
-                self.write_display(Token::LCurly)?;
+                self.write_display("{")?;
                 for (idx, (key, value)) in record.iter().enumerate() {
                     if idx != 0 {
-                        self.write_display(Token::Comma)?;
-                        self.write_display(Token::Space)?;
+                        self.write_display(",")?;
+                        self.write_display(" ")?;
                     }
                     self.write_str(key)?;
-                    self.write_display(Token::Colon)?;
-                    self.write_display(Token::Space)?;
+                    self.write_display(":")?;
+                    self.write_display(" ")?;
                     self.write_expr(value)?;
                 }
-                self.write_display(Token::RCurly)
+                self.write_display("}")
             }
             Expr::Tuple(tuple) => {
-                self.write_display(Token::LParen)?;
+                self.write_display("(")?;
                 for (idx, expr) in tuple.iter().enumerate() {
                     if idx != 0 {
-                        self.write_display(Token::Comma)?;
-                        self.write_display(Token::Space)?;
+                        self.write_display(",")?;
+                        self.write_display(" ")?;
                     }
                     self.write_expr(expr)?;
                 }
-                self.write_display(Token::RParen)
+                self.write_display(")")
             }
             Expr::Number(number) => self.write_display(number),
             Expr::Flags(flags) => {
-                self.write_display(Token::LCurly)?;
+                self.write_display("{")?;
                 for (idx, flag) in flags.iter().enumerate() {
                     if idx != 0 {
-                        self.write_display(Token::Comma)?;
-                        self.write_display(Token::Space)?;
+                        self.write_display(",")?;
+                        self.write_display(" ")?;
                     }
                     self.write_str(flag)?;
                 }
-                self.write_display(Token::RCurly)
+                self.write_display("}")
             }
             Expr::Boolean(bool) => self.write_display(bool),
             Expr::Concat(concatenated) => {
-                self.write_display(Token::Quote)?;
+                self.write_display("\"")?;
                 internal::write_concatenated_exprs(self, concatenated)?;
-                self.write_display(Token::Quote)
+                self.write_display("\"")
             }
             Expr::Multiple(expr) => {
                 for (idx, expr) in expr.iter().enumerate() {
                     if idx != 0 {
-                        self.write_display(Token::NewLine)?;
+                        self.write_display(";")?;
+                        self.write_display("\n")?;
                     }
                     self.write_expr(expr)?;
                 }
@@ -181,7 +207,7 @@ impl<W: Write> Writer<W> {
                 self.write_str("match ")?;
                 self.write_expr(match_expr)?;
                 self.write_str(" { ")?;
-                self.write_display(Token::Space)?;
+                self.write_display(" ")?;
                 for (idx, match_term) in match_terms.iter().enumerate() {
                     if idx != 0 {
                         self.write_str(", ")?;
@@ -215,16 +241,22 @@ impl<W: Write> Writer<W> {
             },
 
             Expr::Call(string, params) => {
-                self.write_str(string)?;
-                self.write_display(Token::LParen)?;
+                let function_name = match string.site().interface_name() {
+                    Some(interface) => {
+                        format!("{{{}}}.{}", interface, string.function().function_name())
+                    }
+                    None => string.function().function_name().to_string(),
+                };
+                self.write_str(function_name)?;
+                self.write_display("(")?;
                 for (idx, param) in params.iter().enumerate() {
                     if idx != 0 {
-                        self.write_display(Token::Comma)?;
-                        self.write_display(Token::Space)?;
+                        self.write_display(",")?;
+                        self.write_display(" ")?;
                     }
                     self.write_expr(param)?;
                 }
-                self.write_display(Token::RParen)
+                self.write_display(")")
             }
         }
     }
@@ -241,8 +273,8 @@ impl<W: Write> Writer<W> {
 }
 
 mod internal {
-    use crate::expression::writer::{Writer, WriterError};
-    use crate::expression::{ArmPattern, Expr};
+    use crate::expr::{ArmPattern, Expr};
+    use crate::text::writer::{Writer, WriterError};
 
     pub(crate) enum ExprType<'a> {
         Code(&'a Expr),

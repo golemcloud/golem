@@ -76,13 +76,12 @@ impl ParseFromJSON for JsonOpenApiDefinition {
 
 mod internal {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::expression::Expr;
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
+    use rib::Expr;
     use serde_json::Value;
 
-    use crate::expression;
     use uuid::Uuid;
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
@@ -188,7 +187,7 @@ mod internal {
             )?;
 
             match response_mapping_optional {
-                Value::String(expr) => expression::from_string(expr).map_err(|err| err.to_string()),
+                Value::String(expr) => rib::from_string(expr).map_err(|err| err.to_string()),
                 _ => Err(
                     "Invalid response mapping type. It should be a string representing expression"
                         .to_string(),
@@ -206,14 +205,14 @@ mod internal {
             .as_str()
             .ok_or("worker-name is not a string")?;
 
-        expression::from_string(worker_id).map_err(|err| err.to_string())
+        rib::from_string(worker_id).map_err(|err| err.to_string())
     }
 
     pub(crate) fn get_idempotency_key(worker_bridge_info: &Value) -> Result<Option<Expr>, String> {
         if let Some(key) = worker_bridge_info.get("idempotency-key") {
             let key_expr = key.as_str().ok_or("idempotency-key is not a string")?;
             Ok(Some(
-                expression::from_string(key_expr).map_err(|err| err.to_string())?,
+                rib::from_string(key_expr).map_err(|err| err.to_string())?,
             ))
         } else {
             Ok(None)
@@ -229,10 +228,10 @@ mod internal {
 mod tests {
     use super::*;
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::expression::{Expr, InnerNumber};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::PathItem;
+    use rib::Expr;
     use serde_json::json;
     use uuid::Uuid;
 
@@ -293,10 +292,7 @@ mod tests {
                                     "response".to_string(),
                                 )),
                             ),
-                            (
-                                "status".to_string(),
-                                Box::new(Expr::Number(InnerNumber::UnsignedInteger(200)))
-                            ),
+                            ("status".to_string(), Box::new(Expr::unsigned_integer(200))),
                         ]
                         .into_iter()
                         .collect()

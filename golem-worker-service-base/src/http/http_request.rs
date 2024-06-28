@@ -737,9 +737,11 @@ mod tests {
         );
 
         let expression = r#"
-          let response = golem:it/api.{get-cart-contents}(if (2 < 1) then 0 else 1);
+          let response = golem:it/api.{get-cart-contents}(if 2 < 1 then 0 else 1);
           response
         "#;
+
+        dbg!(rib::from_string(expression).unwrap());
 
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", expression);
@@ -776,7 +778,7 @@ mod tests {
         );
 
         let expression = r#"
-          let response = golem:it/api.{get-cart-contents}(if (request.body.number < 11) then 0 else 1);
+          let response = golem:it/api.{get-cart-contents}(if request.body.number < 11 then 0 else 1);
           response
         "#;
 
@@ -815,8 +817,8 @@ mod tests {
         );
 
         let expression = r#"
-          let condition1 = if (request.body.number < 11) then request.path.user-id else 1;
-          let condition2 = if (request.body.number < 5) then request.path.user-id else 1;
+          let condition1 = if request.body.number < 11 then request.path.user-id else 1;
+          let condition2 = if request.body.number < 5 then request.path.user-id else 1;
           let response = golem:it/api.{get-cart-contents}(condition1, condition2);
           response
         "#;

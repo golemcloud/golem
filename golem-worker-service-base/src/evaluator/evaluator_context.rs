@@ -1,11 +1,5 @@
 use std::fmt::{Debug, Display, Formatter};
 
-use async_trait::async_trait;
-use golem_wasm_rpc::TypeAnnotatedValue;
-
-use golem_common::model::function_name::ParsedFunctionName;
-use golem_service_base::model::{ComponentMetadata, FunctionParameter, FunctionResult, WorkerId};
-
 use crate::evaluator::evaluator_context::internal::create_record;
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
@@ -13,6 +7,10 @@ use crate::evaluator::Getter;
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::RefinedWorkerResponse;
+use async_trait::async_trait;
+use golem_service_base::model::{ComponentMetadata, FunctionParameter, FunctionResult, WorkerId};
+use golem_wasm_rpc::TypeAnnotatedValue;
+use rib::ParsedFunctionName;
 
 #[derive(Debug, Clone)]
 pub struct EvaluationContext {
@@ -98,9 +96,12 @@ impl EvaluationContext {
         }
     }
 
-    pub fn find_function(&self, function: &str) -> Result<Option<Function>, String> {
-        let fqn = FQN::try_from(function)?;
-        Ok(self.functions.iter().find(|f| f.fqn == fqn).cloned())
+    pub fn find_function(&self, function: ParsedFunctionName) -> Result<Option<Function>, String> {
+        Ok(self
+            .functions
+            .iter()
+            .find(|f| f.fqn.parsed_function_name == function)
+            .cloned())
     }
 
     pub fn merge(&mut self, that: &EvaluationContext) -> EvaluationContext {

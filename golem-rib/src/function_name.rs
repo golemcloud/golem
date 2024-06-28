@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::error::Commit;
-use combine::parser::char::{alpha_num, string};
-use combine::parser::repeat::take_until;
+use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
-use combine::{any, attempt, choice, many1, optional, parser, token, EasyParser, Parser};
+use combine::EasyParser;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{TypeAnnotatedValue, Value};
+use semver::{BuildMetadata, Prerelease};
+use std::borrow::Cow;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub enum ParsedFunctionSite {
     Global,
     Interface {
@@ -30,8 +30,80 @@ pub enum ParsedFunctionSite {
         namespace: String,
         package: String,
         interface: String,
-        version: Option<semver::Version>,
+        version: Option<SemVer>,
     },
+}
+
+#[derive(PartialEq, Eq, Clone)]
+pub struct SemVer(pub semver::Version);
+
+impl std::fmt::Debug for SemVer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Encode for SemVer {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        self.0.major.encode(encoder)?;
+        self.0.minor.encode(encoder)?;
+        self.0.patch.encode(encoder)?;
+        self.0.pre.as_str().encode(encoder)?;
+        self.0.build.as_str().encode(encoder)?;
+        Ok(())
+    }
+}
+
+impl Decode for SemVer {
+    fn decode<D: bincode::de::Decoder>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let major = u64::decode(decoder)?;
+        let minor = u64::decode(decoder)?;
+        let patch = u64::decode(decoder)?;
+        let pre_str = String::decode(decoder)?;
+        let build_str = String::decode(decoder)?;
+        let pre = Prerelease::new(&pre_str)
+            .map_err(|_| bincode::error::DecodeError::OtherString("Invalid prerelease".into()))?;
+        let build = BuildMetadata::new(&build_str).map_err(|_| {
+            bincode::error::DecodeError::OtherString("Invalid build metadata".into())
+        })?;
+
+        Ok(SemVer(semver::Version {
+            major,
+            minor,
+            patch,
+            pre,
+            build,
+        }))
+    }
+}
+
+impl<'de> BorrowDecode<'de> for SemVer {
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let major = u64::borrow_decode(decoder)?;
+        let minor = u64::borrow_decode(decoder)?;
+        let patch = u64::borrow_decode(decoder)?;
+        let pre_str = <Cow<'de, str> as BorrowDecode>::borrow_decode(decoder)?;
+        let build_str = <Cow<'de, str> as BorrowDecode>::borrow_decode(decoder)?;
+        let pre = Prerelease::new(&pre_str)
+            .map_err(|_| bincode::error::DecodeError::OtherString("Invalid prerelease".into()))?;
+        let build = BuildMetadata::new(&build_str).map_err(|_| {
+            bincode::error::DecodeError::OtherString("Invalid build metadata".into())
+        })?;
+        Ok(SemVer(semver::Version {
+            major,
+            minor,
+            patch,
+            pre,
+            build,
+        }))
+    }
 }
 
 impl ParsedFunctionSite {
@@ -50,12 +122,12 @@ impl ParsedFunctionSite {
                 package,
                 interface,
                 version: Some(version),
-            } => Some(format!("{namespace}:{package}/{interface}@{version}")),
+            } => Some(format!("{namespace}:{package}/{interface}@{}", version.0)),
         }
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub enum ParsedFunctionReference {
     Function {
         function: String,
@@ -211,10 +283,10 @@ impl ParsedFunctionReference {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub struct ParsedFunctionName {
-    site: ParsedFunctionSite,
-    function: ParsedFunctionReference,
+    pub site: ParsedFunctionSite,
+    pub function: ParsedFunctionReference,
 }
 
 impl ParsedFunctionName {
@@ -239,157 +311,11 @@ impl ParsedFunctionName {
     pub fn parse(name: impl AsRef<str>) -> Result<Self, String> {
         let name = name.as_ref();
 
-        let identifier = || many1(alpha_num().or(token('-'))).map(|string: String| string);
-        let namespace = many1(identifier()).message("namespace");
-        let package = many1(identifier()).message("package");
-        let ns_pkg = (namespace, token(':'), package).map(|(ns, _, pkg)| (ns, pkg));
-        let interface = many1(identifier()).message("interface");
-
-        let capture_resource_params = || {
-            parser(|input| {
-                let _: &mut easy::Stream<&str> = input;
-                let mut nesting = 1;
-                let mut current_param = String::new();
-                let mut result = Vec::new();
-                let mut result_committed: Option<Commit<()>> = None;
-                while nesting > 0 {
-                    let (next_char, committed) = any().parse_stream(input).into_result()?;
-                    if next_char == ')' {
-                        nesting -= 1;
-                        if nesting > 0 {
-                            current_param.push(next_char);
-                        }
-                    } else if next_char == '(' {
-                        nesting += 1;
-                        current_param.push(next_char);
-                    } else if next_char == ',' && nesting == 1 {
-                        result.push(current_param.trim().to_string());
-                        current_param.clear();
-                    } else {
-                        current_param.push(next_char);
-                    }
-
-                    result_committed = match result_committed {
-                        Some(c) => Some(c.merge(committed)),
-                        None => Some(committed),
-                    };
-                }
-
-                if !current_param.is_empty() {
-                    result.push(current_param.trim().to_string());
-                }
-
-                Ok((result, result_committed.unwrap()))
-            })
-        };
-
-        let version = attempt(token('@'))
-            .with(take_until(attempt(string(".{"))))
-            .and_then(|v: String| {
-                let stripped = v.strip_suffix('.').unwrap_or(&v);
-                semver::Version::parse(stripped)
-            })
-            .message("version");
-
-        let single_function =
-            identifier().map(|id| ParsedFunctionReference::Function { function: id });
-
-        let indexed_resource_syntax = || (identifier(), token('(').with(capture_resource_params()));
-        let indexed_constructor_syntax = (indexed_resource_syntax(), token('.'), string("new"))
-            .map(|((resource, resource_params), _, _)| {
-                ParsedFunctionReference::IndexedResourceConstructor {
-                    resource,
-                    resource_params,
-                }
-            });
-        let indexed_drop_syntax = (indexed_resource_syntax(), token('.'), string("drop")).map(
-            |((resource, resource_params), _, _)| ParsedFunctionReference::IndexedResourceDrop {
-                resource,
-                resource_params,
-            },
-        );
-        let indexed_method_syntax = (indexed_resource_syntax(), token('.'), identifier()).map(
-            |((resource, resource_params), _, method)| {
-                ParsedFunctionReference::IndexedResourceMethod {
-                    resource,
-                    resource_params,
-                    method,
-                }
-            },
-        );
-
-        let raw_constructor_syntax = (identifier(), token('.'), string("new"))
-            .map(|(resource, _, _)| ParsedFunctionReference::RawResourceConstructor { resource })
-            .or((string("[constructor]"), identifier())
-                .map(|(_, resource)| ParsedFunctionReference::RawResourceConstructor { resource }));
-        let raw_drop_syntax = (identifier(), token('.'), string("drop"))
-            .map(|(resource, _, _)| ParsedFunctionReference::RawResourceDrop { resource })
-            .or((string("[drop]"), identifier())
-                .map(|(_, resource)| ParsedFunctionReference::RawResourceDrop { resource }));
-        let raw_method_syntax = (identifier(), token('.'), identifier())
-            .map(
-                |(resource, _, method)| ParsedFunctionReference::RawResourceMethod {
-                    resource,
-                    method,
-                },
-            )
-            .or(
-                (string("[method]"), identifier(), token('.'), identifier()).map(
-                    |(_, resource, _, method)| ParsedFunctionReference::RawResourceMethod {
-                        resource,
-                        method,
-                    },
-                ),
-            );
-        let raw_static_method_syntax = (string("[static]"), identifier(), token('.'), identifier())
-            .map(
-                |(_, resource, _, method)| ParsedFunctionReference::RawResourceStaticMethod {
-                    resource,
-                    method,
-                },
-            );
-
-        let function = choice((
-            attempt(indexed_constructor_syntax),
-            attempt(indexed_drop_syntax),
-            attempt(indexed_method_syntax),
-            attempt(raw_constructor_syntax),
-            attempt(raw_drop_syntax),
-            attempt(raw_method_syntax),
-            attempt(raw_static_method_syntax),
-            attempt(single_function),
-        ));
-
-        let mut parser = attempt(
-            (
-                optional(attempt((ns_pkg, token('/')))),
-                interface,
-                optional(version),
-                token('.'),
-                token('{'),
-                function,
-                token('}'),
-            )
-                .map(|(nspkg, iface, ver, _, _, function, _)| {
-                    let site = match nspkg {
-                        Some(((ns, pkg), _)) => ParsedFunctionSite::PackagedInterface {
-                            namespace: ns,
-                            package: pkg,
-                            interface: iface,
-                            version: ver,
-                        },
-                        None => ParsedFunctionSite::Interface { name: iface },
-                    };
-                    ParsedFunctionName { site, function }
-                }),
-        )
-        .or(identifier().map(|id| ParsedFunctionName {
-            site: ParsedFunctionSite::Global,
-            function: ParsedFunctionReference::Function { function: id },
-        }));
+        let mut parser = crate::parser::call::function_name();
 
         let result: Result<(ParsedFunctionName, &str), easy::ParseError<&str>> =
             parser.easy_parse(name);
+
         match result {
             Ok((parsed, _)) => Ok(parsed),
             Err(error) => {
@@ -418,10 +344,8 @@ impl ParsedFunctionName {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::model::function_name::{
-        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite,
-    };
+mod function_name_tests {
+    use super::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 
     #[test]
     fn parse_function_name_global() {
@@ -500,7 +424,7 @@ mod tests {
                     namespace: "wasi".to_string(),
                     package: "cli".to_string(),
                     interface: "run".to_string(),
-                    version: Some(semver::Version::new(0, 2, 0))
+                    version: Some(SemVer(semver::Version::new(0, 2, 0)))
                 },
                 function: ParsedFunctionReference::Function {
                     function: "run".to_string()

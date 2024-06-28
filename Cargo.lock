@@ -3355,6 +3355,7 @@ dependencies = [
  "golem-client",
  "golem-common",
  "golem-examples",
+ "golem-rib",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3424,12 +3425,12 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes 1.6.0",
- "combine",
  "dashmap",
  "derive_more",
  "fred",
  "futures-core",
  "golem-api-grpc",
+ "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "humantime-serde",
@@ -3442,7 +3443,6 @@ dependencies = [
  "prost-types",
  "rand 0.8.5",
  "range-set-blaze",
- "semver",
  "serde 1.0.203",
  "serde_json",
  "tokio",
@@ -3575,6 +3575,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-rib"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bincode",
+ "combine",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "semver",
+ "serde 1.0.203",
+ "serde_json",
+ "wasm-wave",
+]
+
+[[package]]
 name = "golem-service-base"
 version = "0.0.0"
 dependencies = [
@@ -3586,6 +3601,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 0.2.12",
@@ -3821,6 +3837,7 @@ dependencies = [
  "gethostname",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3937,6 +3954,7 @@ dependencies = [
  "futures-util",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc",
