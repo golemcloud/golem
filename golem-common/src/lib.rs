@@ -21,3 +21,4 @@ pub mod newtype;
 pub mod redis;
 pub mod retries;
 pub mod serialization;
+pub mod tracing;
