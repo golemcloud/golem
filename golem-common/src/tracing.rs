@@ -117,18 +117,22 @@ impl Config {
     }
 }
 
+pub fn default_env_filter(_output: Output) -> Box<dyn Filter<Registry> + 'static + Send + Sync> {
+    Box::new(EnvFilter::from_default_env())
+}
+
 pub fn init<F>(config: &Config, make_filter: F)
 where
-    F: Fn(Output) -> Option<Box<dyn Filter<Registry> + 'static + Send + Sync>>,
+    F: Fn(Output) -> Box<dyn Filter<Registry> + 'static + Send + Sync>,
 {
-    let filter = |output: Output| -> Box<dyn Filter<Registry> + 'static + Send + Sync> {
-        make_filter(output).unwrap_or(Box::new(EnvFilter::from_default_env()))
-    };
-
     let mut layers = Vec::new();
 
     if config.stdout.enabled {
-        layers.push(make_layer(&config.stdout, filter(Output::Stdout), stdout))
+        layers.push(make_layer(
+            &config.stdout,
+            make_filter(Output::Stdout),
+            stdout,
+        ))
     }
 
     match config.file_path {
@@ -138,7 +142,7 @@ where
             });
             layers.push(make_layer(
                 &config.file,
-                filter(Output::File),
+                make_filter(Output::File),
                 Arc::new(file),
             ))
         }
@@ -148,7 +152,7 @@ where
     if config.tracing_console {
         layers.push(
             console_subscriber::spawn()
-                .with_filter(filter(Output::TracingConsole))
+                .with_filter(make_filter(Output::TracingConsole))
                 .boxed(),
         );
     }
