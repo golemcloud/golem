@@ -78,8 +78,8 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
         ///
         /// You can specify this argument multiple times for multiple parameters.
         #[arg(
-            short = 'p',
-            long = "param",
+            short = 'a',
+            long = "arg",
             value_name = "wave",
             conflicts_with = "parameters"
         )]
@@ -117,8 +117,8 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
         ///
         /// You can specify this argument multiple times for multiple parameters.
         #[arg(
-            short = 'p',
-            long = "param",
+            short = 'a',
+            long = "arg",
             value_name = "wave",
             conflicts_with = "parameters"
         )]

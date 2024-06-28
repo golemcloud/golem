@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 once_cell = "1.19.0"
 rand = "0.8.5"
 uuid = { version = "1.7.0", features = ["v4", "serde"] }
-wit-bindgen = { version = "0.17.0", default-features = false, features = ["realloc"] }
+wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
 
 [package.metadata.component.target]
 path = "wit"
@@ -20,3 +20,4 @@ path = "wit"
 "golem:rpc" = { path = "wit/deps/wasm-rpc" }
 "auction:auction" = { path = "wit/deps/auction_auction" }
 "auction:auction-stub" = { path = "wit/deps/auction-stub" }
+"wasi:io" = { path = "wit/deps/io" }

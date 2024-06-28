@@ -1,9 +1,15 @@
 mod bindings;
 
-use std::cell::RefCell;
 use crate::bindings::exports::golem::it::api::*;
+use std::cell::RefCell;
 
 use rand::prelude::*;
+
+struct Component;
+
+impl Guest for Component {
+    type Cart = crate::Cart;
+}
 
 pub struct Cart {
     user_id: String,
@@ -33,7 +39,9 @@ impl GuestCart for Cart {
             product_id, self.user_id
         );
 
-        self.items.borrow_mut().retain(|item| item.product_id != product_id);
+        self.items
+            .borrow_mut()
+            .retain(|item| item.product_id != product_id);
     }
 
     fn update_item_quantity(&self, product_id: String, quantity: u32) {
@@ -66,7 +74,7 @@ impl GuestCart for Cart {
         self.items.borrow().clone()
     }
 
-    fn merge_with(&self, other_cart: &Cart) {
+    fn merge_with(&self, _other_cart: CartBorrow<'_>) {
         todo!()
     }
 }
@@ -125,3 +133,5 @@ fn dispatch_order() -> Result<(), &'static str> {
     // Otherwise, return a success result.
     Ok(())
 }
+
+bindings::export!(Component with_types_in bindings);

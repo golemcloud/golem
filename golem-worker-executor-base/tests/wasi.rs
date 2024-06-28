@@ -681,9 +681,8 @@ async fn failing_worker() {
     check!(result3.is_err());
     check!(worker_error_message(&result2.clone().err().unwrap())
         .starts_with("Runtime error: error while executing at wasm backtrace:"));
-    check!(
-        worker_error_message(&result2.err().unwrap()).contains("<unknown>!golem:component/api#add")
-    );
+    check!(worker_error_message(&result2.err().unwrap())
+        .contains("failing_component.wasm!golem:component/api#add"));
     check!(worker_error_message(&result3.err().unwrap()).starts_with("Previous invocation failed"));
 }
 

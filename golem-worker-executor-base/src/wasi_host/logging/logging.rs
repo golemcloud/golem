@@ -14,7 +14,7 @@
 
 use async_trait::async_trait;
 use tracing::debug;
-use wasmtime_wasi::preview2::WasiView;
+use wasmtime_wasi::WasiView;
 
 use crate::preview2::wasi::logging::logging::{Host, Level};
 

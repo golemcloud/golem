@@ -369,10 +369,11 @@ async fn invoke<Ctx: WorkerCtx>(
 
             match results {
                 Ok(results) => {
+                    let types = function.results(&store);
                     let mut output: Vec<Value> = Vec::new();
-                    for result in results.iter() {
+                    for (val, typ) in results.iter().zip(types.iter()) {
                         let result_value =
-                            encode_output(result, store.data_mut()).map_err(GolemError::from)?;
+                            encode_output(val, typ, store.data_mut()).map_err(GolemError::from)?;
                         output.push(result_value);
                     }
 

@@ -27,6 +27,9 @@ use tracing::{info, Level};
 
 pub struct DockerWorkerService {
     container: Container<'static, GolemWorkerServiceImage>,
+    public_http_port: u16,
+    public_grpc_port: u16,
+    public_custom_request_port: u16,
 }
 
 impl DockerWorkerService {
@@ -35,7 +38,7 @@ impl DockerWorkerService {
     const GRPC_PORT: u16 = 9092;
     const CUSTOM_REQUEST_PORT: u16 = 9093;
 
-    pub fn new(
+    pub async fn new(
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
@@ -65,7 +68,16 @@ impl DockerWorkerService {
         .with_network(NETWORK);
         let container = DOCKER.run(image);
 
-        Self { container }
+        let public_http_port = container.get_host_port_ipv4(Self::HTTP_PORT);
+        let public_grpc_port = container.get_host_port_ipv4(Self::GRPC_PORT);
+        let public_custom_request_port = container.get_host_port_ipv4(Self::CUSTOM_REQUEST_PORT);
+
+        Self {
+            container,
+            public_http_port,
+            public_grpc_port,
+            public_custom_request_port,
+        }
     }
 }
 
@@ -92,19 +104,19 @@ impl WorkerService for DockerWorkerService {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::HTTP_PORT)
+        self.public_http_port
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::GRPC_PORT)
+        self.public_grpc_port
     }
 
     fn public_custom_request_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::CUSTOM_REQUEST_PORT)
+        self.public_custom_request_port
     }
 
     fn kill(&self) {
-        self.container.stop()
+        self.container.stop();
     }
 }
 
@@ -116,10 +128,8 @@ impl Drop for DockerWorkerService {
 
 #[derive(Debug)]
 struct GolemWorkerServiceImage {
-    grpc_port: u16,
-    http_port: u16,
-    custom_request_port: u16,
     env_vars: HashMap<String, String>,
+    expose_ports: [u16; 3],
 }
 
 impl GolemWorkerServiceImage {
@@ -130,10 +140,8 @@ impl GolemWorkerServiceImage {
         env_vars: HashMap<String, String>,
     ) -> GolemWorkerServiceImage {
         GolemWorkerServiceImage {
-            grpc_port,
-            http_port,
-            custom_request_port,
             env_vars,
+            expose_ports: [grpc_port, http_port, custom_request_port],
         }
     }
 }
@@ -158,6 +166,6 @@ impl Image for GolemWorkerServiceImage {
     }
 
     fn expose_ports(&self) -> Vec<u16> {
-        vec![self.grpc_port, self.http_port, self.custom_request_port]
+        self.expose_ports.to_vec()
     }
 }

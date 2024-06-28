@@ -92,3 +92,5 @@ impl Guest for Component {
         set_many(&bucket, outgoing_values_refs.as_slice()).unwrap()
     }
 }
+
+bindings::export!(Component with_types_in bindings);

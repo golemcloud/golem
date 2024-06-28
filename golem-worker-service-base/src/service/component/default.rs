@@ -211,6 +211,7 @@ impl ComponentServiceNoop {
             metadata: ComponentMetadata {
                 exports: vec![],
                 producers: vec![],
+                memories: vec![],
             },
         }
     }

@@ -6,6 +6,11 @@ port = 9000
 custom_request_port = 9001
 worker_grpc_port = 9092
 
+[memory]
+# system_memory_override = 4294967296
+worker_memory_ratio = 0.8
+worker_estimate_coefficient = 1.1
+
 [key_value_storage]
 type = "Redis"
 

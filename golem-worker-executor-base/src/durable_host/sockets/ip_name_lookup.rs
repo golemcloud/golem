@@ -21,11 +21,11 @@ use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
-use wasmtime_wasi::preview2::bindings::sockets::network::ErrorCode;
-use wasmtime_wasi::preview2::bindings::wasi::sockets::ip_name_lookup::{
+use wasmtime_wasi::bindings::sockets::ip_name_lookup::{
     Host, HostResolveAddressStream, IpAddress, Network, Pollable, ResolveAddressStream,
 };
-use wasmtime_wasi::preview2::{SocketError, Subscribe};
+use wasmtime_wasi::bindings::sockets::network::ErrorCode;
+use wasmtime_wasi::{SocketError, Subscribe};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {
@@ -78,7 +78,39 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await;
 
         let stream = ResolveAddressStream::Done(Ok(addresses?.into_iter()));
-        Ok(self.table.push(stream)?)
+        Ok(self.table().push(stream)?)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostResolveAddressStream for &mut DurableWorkerCtx<Ctx> {
+    fn resolve_next_address(
+        &mut self,
+        self_: Resource<ResolveAddressStream>,
+    ) -> Result<Option<IpAddress>, SocketError> {
+        (*self).resolve_next_address(self_)
+    }
+
+    fn subscribe(
+        &mut self,
+        self_: Resource<ResolveAddressStream>,
+    ) -> anyhow::Result<Resource<Pollable>> {
+        (*self).subscribe(self_)
+    }
+
+    fn drop(&mut self, rep: Resource<ResolveAddressStream>) -> anyhow::Result<()> {
+        (*self).drop(rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn resolve_addresses(
+        &mut self,
+        network: Resource<Network>,
+        name: String,
+    ) -> Result<Resource<ResolveAddressStream>, SocketError> {
+        (*self).resolve_addresses(network, name).await
     }
 }
 
@@ -88,7 +120,7 @@ async fn resolve_and_drain_addresses<Ctx: WorkerCtx>(
     name: String,
 ) -> Result<Vec<IpAddress>, SocketError> {
     let stream = Host::resolve_addresses(&mut ctx.as_wasi_view(), network, name).await?;
-    let stream = ctx.table.delete(stream)?;
+    let stream = ctx.table().delete(stream)?;
     let addresses = drain_resolve_address_stream(stream).await?;
     Ok(addresses)
 }

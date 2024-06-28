@@ -1717,9 +1717,53 @@ impl From<Type> for golem_wasm_ast::analysis::AnalysedType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct LinearMemory {
+    /// Initial size of the linear memory in bytes
+    pub initial: u64,
+    /// Optional maximal size of the linear memory in bytes
+    pub maximum: Option<u64>,
+}
+
+impl LinearMemory {
+    const PAGE_SIZE: u64 = 65536;
+}
+
+impl From<golem_wasm_ast::core::Mem> for LinearMemory {
+    fn from(value: golem_wasm_ast::core::Mem) -> Self {
+        Self {
+            initial: value.mem_type.limits.min * LinearMemory::PAGE_SIZE,
+            maximum: value
+                .mem_type
+                .limits
+                .max
+                .map(|m| m * LinearMemory::PAGE_SIZE),
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::component::LinearMemory> for LinearMemory {
+    fn from(value: golem_api_grpc::proto::golem::component::LinearMemory) -> Self {
+        Self {
+            initial: value.initial,
+            maximum: value.maximum,
+        }
+    }
+}
+
+impl From<LinearMemory> for golem_api_grpc::proto::golem::component::LinearMemory {
+    fn from(value: LinearMemory) -> Self {
+        Self {
+            initial: value.initial,
+            maximum: value.maximum,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct ComponentMetadata {
     pub exports: Vec<Export>,
     pub producers: Vec<Producers>,
+    pub memories: Vec<LinearMemory>,
 }
 
 impl ComponentMetadata {
@@ -1781,6 +1825,16 @@ impl ComponentMetadata {
             }
         }
     }
+
+    /// Gets the sum of all the initial memory sizes of the component
+    pub fn total_initial_memory(&self) -> u64 {
+        self.memories.iter().map(|m| m.initial).sum()
+    }
+
+    /// Gets the sum of the maximum memory sizes, if all are bounded
+    pub fn total_maximum_memory(&self) -> Option<u64> {
+        self.memories.iter().map(|m| m.maximum).sum()
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata> for ComponentMetadata {
@@ -1800,6 +1854,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata> for Com
                 .into_iter()
                 .map(|producer| producer.into())
                 .collect(),
+            memories: value
+                .memories
+                .into_iter()
+                .map(|memory| memory.into())
+                .collect(),
         })
     }
 }
@@ -1816,6 +1875,11 @@ impl From<ComponentMetadata> for golem_api_grpc::proto::golem::component::Compon
                 .producers
                 .into_iter()
                 .map(|producer| producer.into())
+                .collect(),
+            memories: value
+                .memories
+                .into_iter()
+                .map(|memory| memory.into())
                 .collect(),
         }
     }
@@ -2705,6 +2769,8 @@ pub struct WorkerMetadata {
     pub updates: Vec<UpdateRecord>,
     pub created_at: Timestamp,
     pub last_error: Option<String>,
+    pub component_size: u64,
+    pub total_linear_memory_size: u64,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -2728,6 +2794,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
                 .collect::<Result<Vec<UpdateRecord>, String>>()?,
             created_at: value.created_at.ok_or("Missing created_at")?.into(),
             last_error: value.last_error,
+            component_size: value.component_size,
+            total_linear_memory_size: value.total_linear_memory_size,
         })
     }
 }
@@ -2748,6 +2816,8 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             updates: value.updates.iter().cloned().map(|u| u.into()).collect(),
             created_at: Some(value.created_at.into()),
             last_error: value.last_error,
+            component_size: value.component_size,
+            total_linear_memory_size: value.total_linear_memory_size,
         }
     }
 }

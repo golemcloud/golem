@@ -21,7 +21,7 @@ console-subscriber = { workspace = true }
 ctor = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 plotters = "0.3.6"
-poem = { version = "2.0.0", features = ["prometheus", "opentelemetry", "test"] }
+poem = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
@@ -82,6 +82,14 @@ path = "src/benchmarks/throughput.rs"
 [[bin]]
 name = "benchmark_rpc"
 path = "src/benchmarks/rpc.rs"
+
+[[bin]]
+name = "benchmark_large_initial_memory"
+path = "src/benchmarks/large_initial_memory.rs"
+
+[[bin]]
+name = "benchmark_large_dynamic_memory"
+path = "src/benchmarks/large_dynamic_memory.rs"
 
 [[bin]]
 name = "benchmark_report"

@@ -215,16 +215,20 @@ checksum = "4271d37baee1b8c7e4b708028c57d816cf9d2434acb33a549475f78c181f6253"
 
 [[package]]
 name = "golem-rust"
-version = "0.0.0"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "528a1a25e41a33e2eb107aade5aca822cdf34f69e842c9546431630f6879dabe"
 dependencies = [
  "golem-rust-macro",
  "uuid",
- "wit-bindgen",
+ "wit-bindgen-rt",
 ]
 
 [[package]]
 name = "golem-rust-macro"
-version = "0.0.0"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99d3c24dccea11431d77b66f36aed220845729023f7c54cdda2c6a526f8b3ca7"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -239,7 +243,7 @@ dependencies = [
  "golem-rust",
  "golem-rust-macro",
  "reqwest",
- "wit-bindgen",
+ "wit-bindgen-rt",
 ]
 
 [[package]]
@@ -563,7 +567,7 @@ dependencies = [
 [[package]]
 name = "reqwest"
 version = "0.11.18"
-source = "git+https://github.com/zivergetech/reqwest?branch=update-apr-2024#313324b1c9867e520f537a2205eaf4333f1a5300"
+source = "git+https://github.com/zivergetech/reqwest?branch=update-jun-2024#bd7f40be61748668b054742e64e9d10d3ab29014"
 dependencies = [
  "base64",
  "bytes",
@@ -594,7 +598,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "winreg",
- "wit-bindgen",
+ "wit-bindgen-rt",
 ]
 
 [[package]]
@@ -1112,10 +1116,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "wit-bindgen"
-version = "0.17.0"
+name = "wit-bindgen-rt"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6237168d93497b26dacdab157b08ad2787d74cdce10f89735f791b2a225eba4d"
+checksum = "29c7526379ace8709ee9ab9f2bb50f112d95581063a59ef3097d9c10153886c9"
 dependencies = [
  "bitflags 2.5.0",
 ]

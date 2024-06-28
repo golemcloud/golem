@@ -14,12 +14,13 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use golem_service_base::model::ComponentMetadata;
 use golem_wasm_ast::{
     analysis::{AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure},
     component::Component,
     IgnoreAllButMetadata,
 };
+
+use golem_service_base::model::ComponentMetadata;
 
 pub fn process_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProcessingError> {
     let component = Component::<IgnoreAllButMetadata>::from_bytes(data)
@@ -44,7 +45,18 @@ pub fn process_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProc
         .map(|export| export.into())
         .collect::<Vec<_>>();
 
-    Ok(ComponentMetadata { exports, producers })
+    let memories = state
+        .get_all_memories()
+        .map_err(ComponentProcessingError::Analysis)?
+        .into_iter()
+        .map(|mem| mem.into())
+        .collect();
+
+    Ok(ComponentMetadata {
+        exports,
+        producers,
+        memories,
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -67,7 +79,7 @@ impl Display for ComponentProcessingError {
 
 fn add_resource_drops(exports: &mut Vec<AnalysedExport>) {
     // Components are not exporting explicit drop functions for exported resources, but
-    // worker executor does. So we keep golem-wasm-ast as an universal library and extend
+    // worker executor does. So we keep golem-wasm-ast as a universal library and extend
     // its result with the explicit drops here, for each resource, identified by an exported
     // constructor.
 

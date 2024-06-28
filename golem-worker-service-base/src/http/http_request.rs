@@ -252,6 +252,7 @@ mod tests {
                     }],
                 })],
                 producers: vec![],
+                memories: vec![],
             })
         }
     }

@@ -640,7 +640,7 @@ impl<B: Benchmark> BenchmarkApi for B {
 
         let groups = runs
             .iter()
-            .group_by(|r| r.cluster_size)
+            .chunk_by(|r| r.cluster_size)
             .into_iter()
             .map(|(cluster_size, group)| (cluster_size, group.collect::<Vec<_>>()))
             .collect::<Vec<_>>();

@@ -17,3 +17,5 @@ impl Guest for Component {
         "done".to_string()
     }
 }
+
+bindings::export!(Component with_types_in bindings);

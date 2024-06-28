@@ -30,7 +30,7 @@ lazy_static! {
 
 pub fn register_all() -> Registry {
     VERSION_INFO
-        .with_label_values(&[version(), wasmtime_runtime::VERSION])
+        .with_label_values(&[version(), wasmtime::VERSION])
         .inc();
 
     default_registry().clone()

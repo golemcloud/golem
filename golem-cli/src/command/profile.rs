@@ -144,7 +144,7 @@ pub enum ProfileSubCommand<ProfileAdd: clap::Args> {
     #[command()]
     Add {
         /// Switch to created profile.
-        #[arg(short, long, default_value_t = false)]
+        #[arg(short, long, global = true, default_value_t = false)]
         set_active: bool,
 
         #[command(flatten)]
@@ -340,13 +340,14 @@ impl<ProfileAdd: Into<UniversalProfileAdd> + clap::Args> ProfileSubCommand<Profi
                     active_profile,
                     active_cloud_profile,
                 } = Config::read_from_file(config_dir);
-                let active_profile =
-                    match cli_kind {
-                        CliKind::Universal => active_profile
-                            .unwrap_or_else(|| ProfileName::default(CliKind::Universal)),
-                        CliKind::Cloud => active_cloud_profile
-                            .unwrap_or_else(|| ProfileName::default(CliKind::Cloud)),
-                    };
+                let active_profile = match cli_kind {
+                    CliKind::Universal | CliKind::Golem => {
+                        active_profile.unwrap_or_else(|| ProfileName::default(cli_kind))
+                    }
+                    CliKind::Cloud => {
+                        active_cloud_profile.unwrap_or_else(|| ProfileName::default(cli_kind))
+                    }
+                };
 
                 let res = profiles
                     .into_iter()

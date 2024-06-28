@@ -123,6 +123,8 @@ pub enum OplogEntry {
         env: Vec<(String, String)>,
         account_id: AccountId,
         parent: Option<WorkerId>,
+        component_size: u64,
+        initial_total_linear_memory_size: u64,
     },
     /// The worker invoked a host function
     ImportedFunctionInvoked {
@@ -206,6 +208,7 @@ pub enum OplogEntry {
     SuccessfulUpdate {
         timestamp: Timestamp,
         target_version: ComponentVersion,
+        new_component_size: u64,
     },
     /// An update failed to be applied
     FailedUpdate {
@@ -223,6 +226,8 @@ impl OplogEntry {
         env: Vec<(String, String)>,
         account_id: AccountId,
         parent: Option<WorkerId>,
+        component_size: u64,
+        initial_total_linear_memory_size: u64,
     ) -> OplogEntry {
         OplogEntry::Create {
             timestamp: Timestamp::now_utc(),
@@ -232,6 +237,8 @@ impl OplogEntry {
             env,
             account_id,
             parent,
+            component_size,
+            initial_total_linear_memory_size,
         }
     }
 
@@ -320,10 +327,14 @@ impl OplogEntry {
         }
     }
 
-    pub fn successful_update(target_version: ComponentVersion) -> OplogEntry {
+    pub fn successful_update(
+        target_version: ComponentVersion,
+        new_component_size: u64,
+    ) -> OplogEntry {
         OplogEntry::SuccessfulUpdate {
             timestamp: Timestamp::now_utc(),
             target_version,
+            new_component_size,
         }
     }
 

@@ -24,6 +24,8 @@ fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
 }
 
 impl Guest for Component {
+    type Counter = crate::Counter;
+
     fn get_all_dropped() -> Vec<(String, u64)> {
         with_state(|state| state.dropped_counters.clone())
     }
@@ -82,3 +84,5 @@ impl Drop for Counter {
         });
     }
 }
+
+bindings::export!(Component with_types_in bindings);
