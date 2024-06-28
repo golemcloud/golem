@@ -72,6 +72,7 @@ services:
       - GOLEM__COMPILATION__CONFIG__PORT=${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
       - GOLEM__DB__TYPE=Postgres
       - GOLEM__DB__CONFIG__DATABASE=golem_db
+      - GOLEM__DB__CONFIG__SCHEMA=golem_component
       - GOLEM__DB__CONFIG__MAX_CONNECTIONS=10
       - GOLEM__DB__CONFIG__HOST=postgres
       - GOLEM__DB__CONFIG__PORT=${POSTGRES_PORT}
@@ -94,9 +95,14 @@ services:
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
-      - GOLEM__REDIS__HOST=redis
-      - GOLEM__REDIS__PORT=${REDIS_PORT}
-      - GOLEM__REDIS__DATABASE=1
+      - GOLEM__DB__TYPE=Postgres
+      - GOLEM__DB__CONFIG__DATABASE=golem_db
+      - GOLEM__DB__CONFIG__SCHEMA=golem_worker
+      - GOLEM__DB__CONFIG__PORT=${POSTGRES_PORT}
+      - GOLEM__DB__CONFIG__MAX_CONNECTIONS=10
+      - GOLEM__DB__CONFIG__HOST=postgres
+      - GOLEM__DB__CONFIG__USERNAME=golem_user
+      - GOLEM__DB__CONFIG__PASSWORD=golem_password
       - GOLEM__ENVIRONMENT=local
       - GOLEM__COMPONENT_SERVICE__HOST=golem-component-service
       - GOLEM__COMPONENT_SERVICE__PORT=${COMPONENT_SERVICE_GRPC_PORT}
@@ -111,7 +117,8 @@ services:
       - "${WORKER_SERVICE_CUSTOM_REQUEST_PORT}:${WORKER_SERVICE_CUSTOM_REQUEST_PORT}"
       - "${WORKER_SERVICE_GRPC_PORT}:${WORKER_SERVICE_GRPC_PORT}"
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
 
   golem-component-compilation-service:
     image: golemservices/golem-component-compilation-service:latest
