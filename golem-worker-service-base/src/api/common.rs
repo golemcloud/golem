@@ -88,28 +88,31 @@ mod conversion {
     use poem_openapi::payload::Json;
     use std::fmt::Display;
 
-    use crate::repo::api_definition_repo::ApiRegistrationRepoError;
-    use crate::service::api_definition::ApiRegistrationError;
+    use crate::service::api_definition::ApiDefinitionError as ApiDefinitionServiceError;
     use crate::service::api_definition_validator::ValidationErrors;
     use crate::service::api_deployment::ApiDeploymentError;
     use crate::service::http::http_api_definition_validator::RouteValidationError;
 
     use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
 
-    impl From<ApiRegistrationError<RouteValidationError>> for ApiEndpointError {
-        fn from(error: ApiRegistrationError<RouteValidationError>) -> Self {
+    impl From<ApiDefinitionServiceError<RouteValidationError>> for ApiEndpointError {
+        fn from(error: ApiDefinitionServiceError<RouteValidationError>) -> Self {
             match error {
-                ApiRegistrationError::RepoError(error) => match error {
-                    ApiRegistrationRepoError::AlreadyExists(_) => {
-                        ApiEndpointError::already_exists(error)
-                    }
-                    ApiRegistrationRepoError::NotDraft(_) => ApiEndpointError::bad_request(error),
-                    ApiRegistrationRepoError::NotFound(_) => ApiEndpointError::not_found(error),
-                    ApiRegistrationRepoError::Internal(_) => ApiEndpointError::internal(error),
-                },
-                ApiRegistrationError::ValidationError(e) => e.into(),
-                e @ ApiRegistrationError::ComponentNotFoundError(_) => {
+                ApiDefinitionServiceError::ValidationError(e) => e.into(),
+                e @ ApiDefinitionServiceError::ComponentNotFoundError(_) => {
                     ApiEndpointError::bad_request(e)
+                }
+                ApiDefinitionServiceError::InternalError(error) => {
+                    ApiEndpointError::internal(error)
+                }
+                ApiDefinitionServiceError::ApiDefinitionNotDraft(_) => {
+                    ApiEndpointError::bad_request(error)
+                }
+                ApiDefinitionServiceError::ApiDefinitionNotFound(_) => {
+                    ApiEndpointError::not_found(error)
+                }
+                ApiDefinitionServiceError::ApiDefinitionAlreadyExists(_) => {
+                    ApiEndpointError::already_exists(error)
                 }
             }
         }
@@ -118,27 +121,15 @@ mod conversion {
     impl<Namespace: Display> From<ApiDeploymentError<Namespace>> for ApiEndpointError {
         fn from(error: ApiDeploymentError<Namespace>) -> Self {
             match error {
-                ApiDeploymentError::InternalError(e) => ApiEndpointError::internal(e),
-                ApiDeploymentError::ApiDefinitionNotFound(namespace, id) => {
-                    ApiEndpointError::not_found(format!(
-                        "Api definition not found: {}/{}",
-                        namespace, id
-                    ))
+                ApiDeploymentError::InternalError(error) => ApiEndpointError::internal(error),
+                e @ ApiDeploymentError::ApiDefinitionNotFound(_, _) => {
+                    ApiEndpointError::not_found(e)
                 }
-                ApiDeploymentError::ApiDeploymentNotFound(namespace, host) => {
-                    ApiEndpointError::not_found(format!(
-                        "Api deployment not found: {}/{}",
-                        namespace, host
-                    ))
+                e @ ApiDeploymentError::ApiDeploymentNotFound(_, _) => {
+                    ApiEndpointError::not_found(e)
                 }
-                ApiDeploymentError::DeploymentConflict(conflict) => {
-                    ApiEndpointError::already_exists(format!("Deployment conflict: {}", conflict))
-                }
-                ApiDeploymentError::ConflictingDefinitions(conflicts) => {
-                    ApiEndpointError::already_exists(format!(
-                        "Conflicting API definitions during deployment: {}",
-                        conflicts.join(", ")
-                    ))
+                e @ ApiDeploymentError::ApiDeploymentConflict(_) => {
+                    ApiEndpointError::already_exists(e)
                 }
             }
         }
@@ -163,32 +154,10 @@ mod conversion {
         }
     }
 
-    impl From<ApiRegistrationError<RouteValidationError>> for ApiDefinitionError {
-        fn from(error: ApiRegistrationError<RouteValidationError>) -> ApiDefinitionError {
+    impl From<ApiDefinitionServiceError<RouteValidationError>> for ApiDefinitionError {
+        fn from(error: ApiDefinitionServiceError<RouteValidationError>) -> ApiDefinitionError {
             match error {
-                ApiRegistrationError::RepoError(error) => match error {
-                    ApiRegistrationRepoError::AlreadyExists(_) => ApiDefinitionError {
-                        error: Some(api_definition_error::Error::AlreadyExists(ErrorBody {
-                            error: error.to_string(),
-                        })),
-                    },
-                    ApiRegistrationRepoError::Internal(_) => ApiDefinitionError {
-                        error: Some(api_definition_error::Error::InternalError(ErrorBody {
-                            error: error.to_string(),
-                        })),
-                    },
-                    ApiRegistrationRepoError::NotFound(_) => ApiDefinitionError {
-                        error: Some(api_definition_error::Error::NotFound(ErrorBody {
-                            error: error.to_string(),
-                        })),
-                    },
-                    ApiRegistrationRepoError::NotDraft(_) => ApiDefinitionError {
-                        error: Some(api_definition_error::Error::NotDraft(ErrorBody {
-                            error: error.to_string(),
-                        })),
-                    },
-                },
-                ApiRegistrationError::ValidationError(e) => {
+                ApiDefinitionServiceError::ValidationError(e) => {
                     let errors = e
                         .errors
                         .into_iter()
@@ -205,8 +174,28 @@ mod conversion {
                         )),
                     }
                 }
-                ApiRegistrationError::ComponentNotFoundError(_) => ApiDefinitionError {
+                ApiDefinitionServiceError::ComponentNotFoundError(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
+                        error: error.to_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::ApiDefinitionNotFound(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::NotFound(ErrorBody {
+                        error: error.to_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::ApiDefinitionNotDraft(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::NotDraft(ErrorBody {
+                        error: error.to_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::ApiDefinitionAlreadyExists(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::AlreadyExists(ErrorBody {
+                        error: error.to_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::InternalError(error) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_string(),
                     })),
                 },

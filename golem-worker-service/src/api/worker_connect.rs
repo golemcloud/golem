@@ -82,7 +82,11 @@ async fn get_worker_stream(
 
     let worker_stream = service
         .worker_service
-        .connect(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
+        .connect(
+            &worker_id,
+            empty_worker_metadata(),
+            &EmptyAuthCtx::default(),
+        )
         .await
         .map_err(|e| (http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

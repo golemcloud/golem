@@ -89,7 +89,7 @@ mod internal {
                 &CallingConvention::Component,
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await
             .map_err(|e| e.to_string())?;

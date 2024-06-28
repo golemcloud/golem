@@ -18,7 +18,6 @@ use crate::components::k8s::{
     Routing,
 };
 use crate::components::rdb::Rdb;
-use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{env_vars, wait_for_startup, WorkerService};
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
@@ -54,7 +53,6 @@ impl K8sWorkerService {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
@@ -67,7 +65,6 @@ impl K8sWorkerService {
             component_service,
             shard_manager,
             rdb,
-            redis,
             verbosity,
         );
         let env_vars = env_vars

@@ -383,7 +383,6 @@ impl CliTestDependencies {
                 component_service.clone(),
                 shard_manager.clone(),
                 rdb.clone(),
-                redis.clone(),
                 params.service_verbosity(),
             )
             .await,
@@ -532,7 +531,6 @@ impl CliTestDependencies {
                 component_service.clone(),
                 shard_manager.clone(),
                 rdb.clone(),
-                redis.clone(),
                 params.service_verbosity(),
                 out_level,
                 Level::ERROR,
@@ -665,7 +663,6 @@ impl CliTestDependencies {
                 component_service.clone(),
                 shard_manager.clone(),
                 rdb.clone(),
-                redis.clone(),
                 timeout,
                 None,
             )
@@ -805,7 +802,6 @@ impl CliTestDependencies {
                 component_service.clone(),
                 shard_manager.clone(),
                 rdb.clone(),
-                redis.clone(),
                 timeout,
                 service_annotations.clone(),
             )

@@ -32,7 +32,6 @@ use golem_api_grpc::proto::golem::worker::{
 
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
-use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::wait_for_startup_grpc;
 
@@ -188,7 +187,6 @@ fn env_vars(
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
     verbosity: Level,
 ) -> HashMap<String, String> {
     let log_level = verbosity.as_str().to_lowercase();
@@ -196,9 +194,6 @@ fn env_vars(
     let vars: &[(&str, &str)] = &[
         ("RUST_LOG"                                   , &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
         ("RUST_BACKTRACE"                             , "1"),
-        ("GOLEM__REDIS__HOST"                         , &redis.private_host()),
-        ("GOLEM__REDIS__PORT"                         , &redis.private_port().to_string()),
-        ("GOLEM__REDIS__DATABASE"                     , "1"),
         ("GOLEM__COMPONENT_SERVICE__HOST"             , &component_service.private_host()),
         ("GOLEM__COMPONENT_SERVICE__PORT"             , &component_service.private_grpc_port().to_string()),
         ("GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN"     , "5C832D93-FF85-4A8F-9803-513950FDFDB1"),
@@ -214,6 +209,6 @@ fn env_vars(
 
     let mut vars: HashMap<String, String> =
         HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-    vars.extend(rdb.info().env().clone());
+    vars.extend(rdb.info().env("golem_worker").clone());
     vars
 }

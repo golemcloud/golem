@@ -17,32 +17,36 @@ use golem_api_grpc::proto::golem::{
     },
     common::{Empty, ErrorBody, ErrorsBody},
 };
+use golem_worker_service_base::auth::DefaultNamespace;
 use golem_worker_service_base::{
-    api_definition::{
-        http::{get_api_definition, HttpApiDefinition as CoreHttpApiDefinition},
-        ApiDefinitionId, ApiVersion,
-    },
-    auth::{CommonNamespace, EmptyAuthCtx},
+    api_definition::{http::get_api_definition, ApiDefinitionId, ApiVersion},
+    auth::EmptyAuthCtx,
     service::http::http_api_definition_validator::RouteValidationError,
 };
 
 #[derive(Clone)]
 pub struct GrpcApiDefinitionService {
-    definition_service: DefinitionService,
+    definition_service: Arc<
+        dyn golem_worker_service_base::service::api_definition::ApiDefinitionService<
+                EmptyAuthCtx,
+                DefaultNamespace,
+                RouteValidationError,
+            > + Sync
+            + Send,
+    >,
 }
 
-type DefinitionService = Arc<
-    dyn golem_worker_service_base::service::api_definition::ApiDefinitionService<
-            EmptyAuthCtx,
-            CommonNamespace,
-            CoreHttpApiDefinition,
-            RouteValidationError,
-        > + Sync
-        + Send,
->;
-
 impl GrpcApiDefinitionService {
-    pub fn new(definition_service: DefinitionService) -> Self {
+    pub fn new(
+        definition_service: Arc<
+            dyn golem_worker_service_base::service::api_definition::ApiDefinitionService<
+                    EmptyAuthCtx,
+                    DefaultNamespace,
+                    RouteValidationError,
+                > + Sync
+                + Send,
+        >,
+    ) -> Self {
         Self { definition_service }
     }
 }
@@ -167,8 +171,8 @@ impl GrpcApiDefinitionService {
         self.definition_service
             .create(
                 &internal_definition,
-                CommonNamespace::default(),
-                &EmptyAuthCtx {},
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -200,8 +204,8 @@ impl GrpcApiDefinitionService {
         self.definition_service
             .update(
                 &internal_definition,
-                CommonNamespace::default(),
-                &EmptyAuthCtx {},
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -225,8 +229,8 @@ impl GrpcApiDefinitionService {
             .get(
                 &api_definition_id,
                 &version,
-                CommonNamespace::default(),
-                &EmptyAuthCtx {},
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
             )
             .await?
             .ok_or_else(|| {
@@ -251,8 +255,8 @@ impl GrpcApiDefinitionService {
             .definition_service
             .get_all_versions(
                 &api_definition_id,
-                CommonNamespace::default(),
-                &EmptyAuthCtx {},
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -271,7 +275,7 @@ impl GrpcApiDefinitionService {
     ) -> Result<Vec<GrpcApiDefinition>, ApiDefinitionError> {
         let definitions = self
             .definition_service
-            .get_all(CommonNamespace::default(), &EmptyAuthCtx {})
+            .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
             .await?;
 
         let definitions = definitions
@@ -295,8 +299,8 @@ impl GrpcApiDefinitionService {
             .delete(
                 &api_definition_id,
                 &version,
-                CommonNamespace::default(),
-                &EmptyAuthCtx {},
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
             )
             .await?;
 

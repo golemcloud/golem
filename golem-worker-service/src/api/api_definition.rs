@@ -13,27 +13,27 @@ use golem_worker_service_base::api::HttpApiDefinition;
 use golem_worker_service_base::api_definition::http::get_api_definition;
 use golem_worker_service_base::api_definition::http::HttpApiDefinition as CoreHttpApiDefinition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
-use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
+use golem_worker_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
 
 pub struct RegisterApiDefinitionApi {
-    pub definition_service: DefinitionService,
+    definition_service: Arc<
+        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+            + Sync
+            + Send,
+    >,
 }
-
-type DefinitionService = Arc<
-    dyn ApiDefinitionService<
-            EmptyAuthCtx,
-            CommonNamespace,
-            CoreHttpApiDefinition,
-            RouteValidationError,
-        > + Sync
-        + Send,
->;
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
-    pub fn new(definition_service: DefinitionService) -> Self {
+    pub fn new(
+        definition_service: Arc<
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+                + Sync
+                + Send,
+        >,
+    ) -> Self {
         Self { definition_service }
     }
 
@@ -103,7 +103,11 @@ impl RegisterApiDefinitionApi {
         }
 
         self.definition_service
-            .update(&definition, CommonNamespace::default(), &EmptyAuthCtx {})
+            .update(
+                &definition,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .map_err(|e| {
                 error!("API Definition ID: {} - update error: {e:?}", definition.id);
@@ -140,8 +144,8 @@ impl RegisterApiDefinitionApi {
             .get(
                 &api_definition_id,
                 &api_version,
-                CommonNamespace::default(),
-                &EmptyAuthCtx {},
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -174,8 +178,8 @@ impl RegisterApiDefinitionApi {
             .delete(
                 &api_definition_id,
                 &api_definition_version,
-                CommonNamespace::default(),
-                &EmptyAuthCtx {},
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -193,11 +197,11 @@ impl RegisterApiDefinitionApi {
     ) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
         let data = if let Some(id) = api_definition_id_query.0 {
             self.definition_service
-                .get_all_versions(&id, CommonNamespace::default(), &EmptyAuthCtx {})
+                .get_all_versions(&id, &DefaultNamespace::default(), &EmptyAuthCtx::default())
                 .await?
         } else {
             self.definition_service
-                .get_all(CommonNamespace::default(), &EmptyAuthCtx {})
+                .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
                 .await?
         };
 
@@ -214,7 +218,11 @@ impl RegisterApiDefinitionApi {
 impl RegisterApiDefinitionApi {
     async fn create_api(&self, definition: &CoreHttpApiDefinition) -> Result<(), ApiEndpointError> {
         self.definition_service
-            .create(definition, CommonNamespace::default(), &EmptyAuthCtx {})
+            .create(
+                definition,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .map_err(|e| {
                 error!(
@@ -235,7 +243,7 @@ mod test {
     use http::StatusCode;
     use poem::test::TestClient;
 
-    use golem_worker_service_base::repo::api_definition_repo::InMemoryRegistry;
+    use golem_worker_service_base::repo::api_definition::InMemoryApiDefinitionRepo;
     use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
 
     use crate::service::component::ComponentService;
@@ -246,7 +254,7 @@ mod test {
         let component_service: ComponentService = Arc::new(ComponentServiceNoop {});
         let definition_service = ApiDefinitionServiceDefault::new(
             component_service,
-            Arc::new(InMemoryRegistry::default()),
+            Arc::new(InMemoryApiDefinitionRepo::default()),
             Arc::new(ApiDefinitionValidatorNoop {}),
         );
 
