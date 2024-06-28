@@ -134,6 +134,8 @@ pub struct WorkerMetadata {
     pub updates: Vec<UpdateRecord>,
     pub created_at: Timestamp,
     pub last_error: Option<String>,
+    pub component_size: u64,
+    pub total_linear_memory_size: u64,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -158,6 +160,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
                 .collect::<Result<Vec<UpdateRecord>, String>>()?,
             created_at: value.created_at.ok_or("Missing created_at")?.into(),
             last_error: value.last_error,
+            component_size: value.component_size,
+            total_linear_memory_size: value.total_linear_memory_size,
         })
     }
 }
@@ -176,6 +180,8 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             updates: value.updates.iter().cloned().map(|u| u.into()).collect(),
             created_at: Some(value.created_at.into()),
             last_error: value.last_error,
+            component_size: value.component_size,
+            total_linear_memory_size: value.total_linear_memory_size,
         }
     }
 }
@@ -326,25 +332,6 @@ impl Certificate {
             id: CertificateId(Uuid::new_v4()),
             project_id: request.project_id.clone(),
             domain_name: request.domain_name.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct AccountCertificate {
-    pub account_id: AccountId,
-    pub certificate: Certificate,
-    pub external_id: String,
-}
-
-impl AccountCertificate {
-    pub fn new(account_id: &AccountId, certificate: &Certificate, external_id: &str) -> Self {
-        Self {
-            account_id: account_id.clone(),
-            certificate: certificate.clone(),
-            external_id: external_id.to_string(),
         }
     }
 }

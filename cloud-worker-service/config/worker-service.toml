@@ -6,19 +6,17 @@ port = 9000
 custom_request_port = 9001
 worker_grpc_port = 9091
 
-[redis]
-# host
-# port
-database = 0
-tracing = false
-pool_size = 8
-key_prefix = ""
+[db]
+type = "Postgres" # Postgres, Sqlite
 
-[redis.retries]
-max_attempts = 5
-min_delay = "100ms"
-max_delay = "2s"
-multiplier = 2
+[db.config]
+max_connections = 10
+host = "localhost"
+port = 5432
+database = "golem_worker"
+#username
+#password
+#schema
 
 [cloud_service]
 # host

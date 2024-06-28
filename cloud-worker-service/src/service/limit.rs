@@ -321,10 +321,10 @@ impl LimitService for LimitServiceDefault {
 }
 
 #[derive(Default)]
-pub struct NoOpLimitService {}
+pub struct LimitServiceNoop {}
 
 #[async_trait]
-impl LimitService for NoOpLimitService {
+impl LimitService for LimitServiceNoop {
     async fn update_worker_limit(
         &self,
         _account_id: &AccountId,

@@ -1,6 +1,8 @@
 use cloud_worker_service::app::{app, get_openapi_yaml};
 use cloud_worker_service::config::WorkerServiceCloudConfig;
-use tracing::info;
+use golem_service_base::config::DbConfig;
+use golem_service_base::db;
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -30,6 +32,26 @@ async fn main() -> std::io::Result<()> {
         } else {
             info!("Golem Worker Service starting up...");
         }
+
+        match config.base_config.db.clone() {
+            DbConfig::Postgres(c) => {
+                db::postgres_migrate(&c, "./db/migration/postgres")
+                    .await
+                    .map_err(|e| {
+                        dbg!("DB - init error: {}", e);
+                        std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                    })?;
+            }
+            DbConfig::Sqlite(c) => {
+                db::sqlite_migrate(&c, "./db/migration/sqlite")
+                    .await
+                    .map_err(|e| {
+                        error!("DB - init error: {}", e);
+                        std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                    })?;
+            }
+        };
+
         app(&config).await
     }
 }

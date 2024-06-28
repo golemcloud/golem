@@ -1,7 +1,8 @@
+use golem_service_base::config::DbConfig;
+use golem_service_base::db;
 use std::sync::Arc;
 
-use crate::config::{CloudServiceConfig, DbConfig};
-use crate::db;
+use crate::config::CloudServiceConfig;
 use crate::repo;
 
 pub mod account;
@@ -45,7 +46,7 @@ impl Services {
     pub async fn new(config: &CloudServiceConfig) -> Result<Services, String> {
         let repositories = match config.db.clone() {
             DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c, &config.workspace)
+                let db_pool = db::create_postgres_pool(&c)
                     .await
                     .map_err(|e| e.to_string())?;
                 repo::Repositories::new_postgres(Arc::new(db_pool))

@@ -7,6 +7,7 @@ COPY --from=chamber /chamber /bin/chamber
 WORKDIR /app
 COPY /target/x86_64-unknown-linux-gnu/release/cloud-component-service ./
 COPY /cloud-component-service/config/component-service.toml ./config/component-service.toml
+COPY /cloud-component-service/db ./db
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
@@ -25,6 +26,7 @@ ENV ENVIRONMENT=$ENVIRONMENT \
     RUST_BACKTRACE=1 \
     GOLEM__ENVIRONMENT=$ENVIRONMENT \
     GOLEM__WORKSPACE=$WORKSPACE \
+    GOLEM__DB__CONFIG__SCHEMA=$WORKSPACE \
     GOLEM__CLOUD_SERVICE__HOST=$CLOUD_SERVICE_HOST \
     GOLEM__CLOUD_SERVICE__PORT=9090 \
     GOLEM__COMPONENT_STORE__TYPE="S3" \

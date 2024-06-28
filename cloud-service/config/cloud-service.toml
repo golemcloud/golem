@@ -17,6 +17,7 @@ port = 5432
 database = "golem"
 #username
 #password
+#schema
 
 [plans.default]
 plan_id = "80b56370-1ed4-4d90-864b-e8809641995d" # default plan id

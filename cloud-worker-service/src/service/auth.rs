@@ -107,6 +107,22 @@ impl Display for CloudNamespace {
     }
 }
 
+impl TryFrom<String> for CloudNamespace {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 2 {
+            return Err(format!("Invalid namespace: {s}"));
+        }
+
+        Ok(Self {
+            project_id: ProjectId::try_from(parts[1])?,
+            account_id: AccountId::from(parts[0]),
+        })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AuthServiceError {
     #[error("Unauthorized: {0}")]
@@ -212,6 +228,7 @@ pub fn get_authorisation_token(metadata: MetadataMap) -> Option<TokenSecret> {
     }
 }
 
+#[derive(Default)]
 pub struct CloudAuthServiceNoop {}
 
 #[async_trait]
@@ -220,11 +237,11 @@ impl AuthService for CloudAuthServiceNoop {
         &self,
         project_id: &ProjectId,
         _permission: ProjectAction,
-        _ctx: &CloudAuthCtx,
+        ctx: &CloudAuthCtx,
     ) -> Result<CloudNamespace, AuthServiceError> {
         Ok(CloudNamespace {
             project_id: project_id.clone(),
-            account_id: AccountId::generate(),
+            account_id: AccountId::from(ctx.token_secret.value.to_string().as_str()),
         })
     }
 
@@ -232,11 +249,11 @@ impl AuthService for CloudAuthServiceNoop {
         &self,
         component_id: &ComponentId,
         _permission: ProjectAction,
-        _ctx: &CloudAuthCtx,
+        ctx: &CloudAuthCtx,
     ) -> Result<CloudNamespace, AuthServiceError> {
         Ok(CloudNamespace {
             project_id: ProjectId(component_id.0),
-            account_id: AccountId::generate(),
+            account_id: AccountId::from(ctx.token_secret.value.to_string().as_str()),
         })
     }
 }

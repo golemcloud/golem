@@ -78,12 +78,11 @@ impl ApiDeploymentApi {
 
         self.domain_route
             .register(&payload.site.host, payload.site.subdomain.as_deref())
-            .await
-            .map_err(ApiEndpointError::from)?;
+            .await?;
 
         let data = self
             .deployment_service
-            .get_by_host(&ApiSiteString(payload.site.to_string()))
+            .get_by_site(&ApiSiteString(payload.site.to_string()))
             .await?;
 
         let deployment = data
@@ -136,7 +135,7 @@ impl ApiDeploymentApi {
 
         let api_deployment = self
             .deployment_service
-            .get_by_host(&ApiSiteString(site.clone()))
+            .get_by_site(&ApiSiteString(site.clone()))
             .await?
             .ok_or(ApiEndpointError::not_found("API deployment not found"))?;
 
@@ -149,6 +148,7 @@ impl ApiDeploymentApi {
 
         Ok(Json(api_deployment.into()))
     }
+
     #[oai(path = "/:site", method = "delete", operation_id = "delete_deployment")]
     async fn delete(
         &self,
@@ -162,7 +162,7 @@ impl ApiDeploymentApi {
 
         let api_deployment = self
             .deployment_service
-            .get_by_host(&ApiSiteString(site.clone()))
+            .get_by_site(&ApiSiteString(site.clone()))
             .await?
             .ok_or(ApiEndpointError::not_found("API deployment not found"))?;
 
@@ -182,8 +182,7 @@ impl ApiDeploymentApi {
                 &api_deployment.site.host,
                 api_deployment.site.subdomain.as_deref(),
             )
-            .await
-            .map_err(ApiEndpointError::from)?;
+            .await?;
 
         Ok(Json("API deployment deleted".to_string()))
     }

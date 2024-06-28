@@ -1,27 +1,5 @@
 ## Worker Service
 
-### Run Worker Service in Local
-
-Note that, we will be removing the need of all these configurations for local set up soon.
-
-```bash
-export GOLEM__REDIS__HOST="localhost"
-export GOLEM__REDIS__PORT="1234"
-export GOLEM__REDIS__DATABASE="1"
-export GOLEM__ENVIRONMENT="local"
-export GOLEM__WORKSPACE="release"
-export GOLEM__COMPONENT_SERVICE__HOST="localhost"
-export GOLEM__COMPONENT_SERVICE__PORT="1234"
-export GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN="token"
-export GOLEM__CLOUD_SERVICE__HOST="localhost"
-export GOLEM__CLOUD_SERVICE__PORT="1234"
-export GOLEM__CLOUD_SERVICE__ACCESS_TOKEN="token"
-export GOLEM__ROUTING_TABLE__HOST="localhost"
-export GOLEM__ROUTING_TABLE__PORT="1234"
-cargo run
-
-```
-
 
 ### Certificates
 

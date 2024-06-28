@@ -2,7 +2,7 @@ use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_common::config::RetryConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_service_base::config::ComponentStoreConfig;
+use golem_service_base::config::{ComponentStoreConfig, DbConfig};
 use http::Uri;
 use serde::Deserialize;
 use url::Url;
@@ -20,38 +20,6 @@ pub struct ComponentServiceConfig {
     pub component_store: ComponentStoreConfig,
     pub compilation: ComponentCompilationConfig,
     pub cloud_service: CloudServiceConfig,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum DbConfig {
-    Postgres(DbPostgresConfig),
-    Sqlite(DbSqliteConfig),
-}
-
-impl Default for DbConfig {
-    fn default() -> Self {
-        DbConfig::Sqlite(DbSqliteConfig {
-            database: "golem_component_service.db".to_string(),
-            max_connections: 10,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct DbPostgresConfig {
-    pub host: String,
-    pub database: String,
-    pub username: String,
-    pub password: String,
-    pub port: u16,
-    pub max_connections: u32,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct DbSqliteConfig {
-    pub database: String,
-    pub max_connections: u32,
 }
 
 impl ComponentServiceConfig {
@@ -125,6 +93,7 @@ mod tests {
         std::env::set_var("GOLEM__DB__TYPE", "Postgres");
         std::env::set_var("GOLEM__DB__CONFIG__USERNAME", "postgres");
         std::env::set_var("GOLEM__DB__CONFIG__PASSWORD", "postgres");
+        std::env::set_var("GOLEM__DB__CONFIG__SCHEMA", "test");
         std::env::set_var("GOLEM__CLOUD_SERVICE__HOST", "localhost");
         std::env::set_var("GOLEM__CLOUD_SERVICE__PORT", "7899");
         std::env::set_var(

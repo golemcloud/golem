@@ -17,6 +17,7 @@ port = 5432
 database = "golem_component"
 #username
 #password
+#schema
 
 [component_store]
 type = "Local"

@@ -1,10 +1,12 @@
+use golem_service_base::config::DbConfig;
+use golem_service_base::db;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
 use cloud_service::api::make_open_api_service;
-use cloud_service::config::{CloudServiceConfig, DbConfig};
+use cloud_service::config::CloudServiceConfig;
 use cloud_service::service::Services;
-use cloud_service::{api, db, grpcapi, metrics};
+use cloud_service::{api, grpcapi, metrics};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::listener::TcpListener;
@@ -76,7 +78,7 @@ async fn async_main(
 
     match config.db.clone() {
         DbConfig::Postgres(c) => {
-            db::postgres_migrate(&c, &config.workspace)
+            db::postgres_migrate(&c, "./db/migration/postgres")
                 .await
                 .map_err(|e| {
                     error!("DB - init error: {}", e);
@@ -84,10 +86,12 @@ async fn async_main(
                 })?;
         }
         DbConfig::Sqlite(c) => {
-            db::sqlite_migrate(&c).await.map_err(|e| {
-                error!("DB - init error: {}", e);
-                std::io::Error::new(std::io::ErrorKind::Other, "Init error")
-            })?;
+            db::sqlite_migrate(&c, "./db/migration/sqlite")
+                .await
+                .map_err(|e| {
+                    error!("DB - init error: {}", e);
+                    std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                })?;
         }
     };
 

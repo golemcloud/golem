@@ -8,8 +8,7 @@ mod tests {
         PlanId, ProjectActions, ProjectAuthorisedActions, ProjectGrantId, ProjectPolicyId, TokenId,
     };
     use cloud_service::auth::AccountAuthorisation;
-    use cloud_service::config::{CloudServiceConfig, DbConfig};
-    use cloud_service::db;
+    use cloud_service::config::CloudServiceConfig;
     use cloud_service::model::{
         Account, AccountData, OAuth2Provider, OAuth2Token, Project, ProjectData, ProjectGrant,
         ProjectGrantData, ProjectPolicy, ProjectType, Token,
@@ -22,6 +21,8 @@ mod tests {
     use cloud_service::service::Services;
     use golem_common::model::AccountId;
     use golem_common::model::ProjectId;
+    use golem_service_base::config::DbConfig;
+    use golem_service_base::db;
     use testcontainers_modules::postgres::Postgres;
     use testcontainers_modules::testcontainers::clients::Cli;
     use testcontainers_modules::testcontainers::{Container, RunnableImage};
@@ -48,6 +49,7 @@ mod tests {
         std::env::set_var("GOLEM__DB__CONFIG__DATABASE", "postgres");
         std::env::set_var("GOLEM__DB__CONFIG__USERNAME", "postgres");
         std::env::set_var("GOLEM__DB__CONFIG__PASSWORD", "postgres");
+        std::env::set_var("GOLEM__DB__CONFIG__SCHEMA", "test");
         std::env::set_var("GOLEM__ENVIRONMENT", "dev");
         std::env::set_var("GOLEM__WORKSPACE", "test");
         std::env::set_var(
@@ -471,7 +473,7 @@ mod tests {
             _ => panic!("Invalid DB config"),
         };
 
-        db::postgres_migrate(&db_config, &config.workspace)
+        db::postgres_migrate(&db_config, "./db/migration/postgres")
             .await
             .unwrap();
 
@@ -542,7 +544,9 @@ mod tests {
             _ => panic!("Invalid DB config"),
         };
 
-        db::sqlite_migrate(&db_config).await.unwrap();
+        db::sqlite_migrate(&db_config, "./db/migration/sqlite")
+            .await
+            .unwrap();
 
         test_services(&config).await;
     }

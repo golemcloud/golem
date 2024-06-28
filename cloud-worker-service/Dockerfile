@@ -7,6 +7,7 @@ COPY --from=chamber /chamber /bin/chamber
 WORKDIR /app
 COPY /target/x86_64-unknown-linux-gnu/release/cloud-worker-service ./
 COPY /cloud-worker-service/config/worker-service.toml ./config/worker-service.toml
+COPY /cloud-worker-service/db ./db
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
@@ -14,8 +15,6 @@ RUN update-ca-certificates
 
 ARG ENVIRONMENT
 ARG WORKSPACE
-ARG REDIS_DATABASE
-ARG REDIS_KEY_PREFIX
 ARG CLOUD_SERVICE_HOST
 ARG COMPONENT_SERVICE_HOST
 ARG SHARD_MANAGER_HOST
@@ -31,9 +30,7 @@ ENV GOLEM__ROUTING_TABLE__PORT=9001
 ENV GOLEM__ENABLE_JSON_LOG=true
 ENV GOLEM__ENVIRONMENT=$ENVIRONMENT
 ENV GOLEM__WORKSPACE=$WORKSPACE
-ENV GOLEM__REDIS__PORT=6379
-ENV GOLEM__REDIS__DATABASE=$REDIS_DATABASE
-ENV GOLEM__REDIS__KEY_PREFIX=$REDIS_KEY_PREFIX
+ENV GOLEM__DB__CONFIG__SCHEMA=$WORKSPACE
 ENV RUST_LOG="debug,actix_web=warn,h2=warn,hyper=warn,tower=warn"
 ENV RUST_BACKTRACE=1
 

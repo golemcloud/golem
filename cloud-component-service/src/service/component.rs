@@ -744,6 +744,7 @@ impl ComponentService for ComponentServiceNoOp {
             metadata: ComponentMetadata {
                 exports: vec![],
                 producers: vec![],
+                memories: vec![],
             },
             versioned_component_id: VersionedComponentId {
                 component_id: ComponentId::new_v4(),
@@ -779,6 +780,7 @@ impl ComponentService for ComponentServiceNoOp {
             metadata: ComponentMetadata {
                 exports: vec![],
                 producers: vec![],
+                memories: vec![],
             },
             versioned_component_id: VersionedComponentId {
                 component_id: ComponentId::new_v4(),

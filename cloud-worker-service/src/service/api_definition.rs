@@ -6,7 +6,10 @@ use golem_common::model::ProjectId;
 use golem_worker_service_base::{
     api_definition::{http::HttpApiDefinition, ApiDefinitionId, ApiVersion},
     service::{
-        api_definition::{ApiDefinitionService as BaseApiDefinitionService, ApiRegistrationError},
+        api_definition::{
+            ApiDefinitionError as BaseApiDefinitionError,
+            ApiDefinitionService as BaseApiDefinitionService,
+        },
         http::http_api_definition_validator::RouteValidationError,
     },
 };
@@ -66,7 +69,7 @@ pub enum ApiDefinitionError {
     #[error(transparent)]
     Auth(#[from] AuthServiceError),
     #[error(transparent)]
-    Base(#[from] ApiRegistrationError<RouteValidationError>),
+    Base(#[from] BaseApiDefinitionError<RouteValidationError>),
 }
 
 #[derive(Clone)]
@@ -76,13 +79,7 @@ pub struct ApiDefinitionServiceDefault {
 }
 
 type BaseService = Arc<
-    dyn BaseApiDefinitionService<
-            CloudAuthCtx,
-            CloudNamespace,
-            HttpApiDefinition,
-            RouteValidationError,
-        > + Sync
-        + Send,
+    dyn BaseApiDefinitionService<CloudAuthCtx, CloudNamespace, RouteValidationError> + Sync + Send,
 >;
 
 impl ApiDefinitionServiceDefault {
@@ -113,7 +110,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         let api_definition = definition.clone();
         let api_definition_id = self
             .api_definition_service
-            .create(&api_definition, namespace.clone(), ctx)
+            .create(&api_definition, &namespace.clone(), ctx)
             .await?;
 
         Ok((api_definition_id, namespace))
@@ -133,7 +130,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         let api_definition = definition.clone();
         let api_definition_id = self
             .api_definition_service
-            .update(&api_definition, namespace.clone(), ctx)
+            .update(&api_definition, &namespace.clone(), ctx)
             .await?;
 
         Ok((api_definition_id, namespace))
@@ -153,7 +150,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
 
         let api_definition = self
             .api_definition_service
-            .get(api_definition_id, version, namespace.clone(), ctx)
+            .get(api_definition_id, version, &namespace.clone(), ctx)
             .await?;
 
         Ok((api_definition.map(Into::into), namespace))
@@ -173,7 +170,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
 
         let api_definition_id = self
             .api_definition_service
-            .delete(api_definition_id, version, namespace.clone(), ctx)
+            .delete(api_definition_id, version, &namespace.clone(), ctx)
             .await?;
 
         Ok((api_definition_id, namespace))
@@ -191,7 +188,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
 
         let api_definitions = self
             .api_definition_service
-            .get_all(namespace.clone(), ctx)
+            .get_all(&namespace.clone(), ctx)
             .await?;
 
         Ok((
@@ -213,7 +210,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
 
         let api_definitions = self
             .api_definition_service
-            .get_all_versions(api_id, namespace.clone(), ctx)
+            .get_all_versions(api_id, &namespace.clone(), ctx)
             .await?;
 
         Ok((

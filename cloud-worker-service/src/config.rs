@@ -183,11 +183,12 @@ mod tests {
     #[test]
     pub fn config_is_loadable() {
         // The following settings are always coming through environment variables:
-        std::env::set_var("GOLEM__REDIS__HOST", "localhost");
-        std::env::set_var("GOLEM__REDIS__PORT", "1234");
-        std::env::set_var("GOLEM__REDIS__DATABASE", "1");
         std::env::set_var("GOLEM__ENVIRONMENT", "dev");
         std::env::set_var("GOLEM__WORKSPACE", "release");
+        std::env::set_var("GOLEM__DB__TYPE", "Postgres");
+        std::env::set_var("GOLEM__DB__CONFIG__USERNAME", "postgres");
+        std::env::set_var("GOLEM__DB__CONFIG__PASSWORD", "postgres");
+        std::env::set_var("GOLEM__DB__CONFIG__SCHEMA", "test");
         std::env::set_var("GOLEM__CLOUD_SERVICE__HOST", "localhost");
         std::env::set_var("GOLEM__CLOUD_SERVICE__PORT", "7899");
         std::env::set_var("GOLEM__COMPONENT_SERVICE__HOST", "localhost");

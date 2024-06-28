@@ -10,6 +10,7 @@ use golem_common::config::RetryConfig;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::retries::with_retries;
+use golem_worker_service_base::repo::RepoError;
 use rusoto_acm::{
     Acm, AcmClient, DeleteCertificateError, DeleteCertificateRequest, DescribeCertificateRequest,
     ImportCertificateRequest, ListTagsForCertificateRequest, Tag,
@@ -25,8 +26,8 @@ use x509_certificate::X509Certificate;
 use crate::aws_config::AwsConfig;
 use crate::aws_load_balancer::AwsLoadBalancer;
 use crate::config::DomainRecordsConfig;
-use crate::model::{AccountCertificate, CertificateId, CertificateRequest};
-use crate::repo::api_certificate::ApiCertificateRepo;
+use crate::model::{CertificateId, CertificateRequest};
+use crate::repo::api_certificate::{ApiCertificateRepo, CertificateRecord};
 use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx, CloudNamespace};
 
 const AWS_ACCOUNT_TAG_NAME: &str = "account";
@@ -73,6 +74,14 @@ impl From<AuthServiceError> for CertificateServiceError {
             AuthServiceError::Unauthorized(error) => CertificateServiceError::Unauthorized(error),
             AuthServiceError::Forbidden(error) => CertificateServiceError::Unauthorized(error),
             AuthServiceError::Internal(error) => CertificateServiceError::Internal(error),
+        }
+    }
+}
+
+impl From<RepoError> for CertificateServiceError {
+    fn from(value: RepoError) -> Self {
+        match value {
+            RepoError::Internal(error) => CertificateServiceError::internal(error),
         }
     }
 }
@@ -167,13 +176,12 @@ impl CertificateService for CertificateServiceDefault {
         let certificate = crate::model::Certificate::new(request);
 
         self.certificate_repo
-            .create_or_update(&AccountCertificate::new(
-                &account_id,
-                &certificate,
-                &certificate_id,
+            .create_or_update(&CertificateRecord::new(
+                account_id,
+                certificate.clone(),
+                certificate_id,
             ))
-            .await
-            .map_err(CertificateServiceError::internal)?;
+            .await?;
 
         Ok(certificate)
     }
@@ -187,9 +195,9 @@ impl CertificateService for CertificateServiceDefault {
         let namespace = self
             .is_authorized(&project_id, ProjectAction::ViewApiDefinition, auth)
             .await?;
-        let account_id = namespace.account_id;
+        let account_id = namespace.account_id.clone();
 
-        if let Some(certificate_id) = certificate_id {
+        let records = if let Some(certificate_id) = certificate_id {
             info!(
                 "Get API certificate - account: {}, project: {}, id: {}",
                 account_id, project_id, certificate_id
@@ -197,32 +205,31 @@ impl CertificateService for CertificateServiceDefault {
 
             let data = self
                 .certificate_repo
-                .get(&account_id, &project_id, &certificate_id)
-                .await
-                .map_err(CertificateServiceError::internal)?;
+                .get(&namespace.to_string(), &certificate_id.0)
+                .await?;
 
-            let values: Vec<crate::model::Certificate> = match data {
-                Some(d) => vec![d.certificate],
+            match data {
+                Some(d) => vec![d],
                 None => vec![],
-            };
-
-            Ok(values)
+            }
         } else {
             info!(
                 "Get API certificates - account: {}, project: {}",
                 account_id, project_id
             );
 
-            let data = self
-                .certificate_repo
-                .get_all(&account_id, &project_id)
-                .await
-                .map_err(CertificateServiceError::internal)?;
+            self.certificate_repo
+                .get_all(&namespace.to_string())
+                .await?
+        };
 
-            let values: Vec<crate::model::Certificate> =
-                data.iter().map(|d| d.certificate.clone()).collect();
-            Ok(values)
-        }
+        let values: Vec<crate::model::Certificate> = records
+            .iter()
+            .map(|d| d.clone().try_into())
+            .collect::<Result<Vec<crate::model::Certificate>, _>>()
+            .map_err(CertificateServiceError::internal)?;
+
+        Ok(values)
     }
 
     async fn delete(
@@ -234,7 +241,7 @@ impl CertificateService for CertificateServiceDefault {
         let namespace = self
             .is_authorized(project_id, ProjectAction::DeleteApiDefinition, auth)
             .await?;
-        let account_id = namespace.account_id;
+        let account_id = namespace.account_id.clone();
 
         info!(
             "Delete API certificate - account: {}, project: {}, id: {}",
@@ -243,9 +250,8 @@ impl CertificateService for CertificateServiceDefault {
 
         let data = self
             .certificate_repo
-            .get(&account_id, project_id, certificate_id)
-            .await
-            .map_err(CertificateServiceError::internal)?;
+            .get(&namespace.to_string(), &certificate_id.0)
+            .await?;
 
         if let Some(certificate) = data {
             let _ = self
@@ -255,16 +261,46 @@ impl CertificateService for CertificateServiceDefault {
 
             let _ = self
                 .certificate_repo
-                .delete(&account_id, project_id, certificate_id)
-                .await
-                .map_err(CertificateServiceError::internal)?;
-
-            return Ok(());
+                .delete(&namespace.to_string(), &certificate_id.0)
+                .await?;
+            Ok(())
+        } else {
+            Err(CertificateServiceError::CertificateNotFound(
+                certificate_id.clone(),
+            ))
         }
+    }
+}
 
-        Err(CertificateServiceError::CertificateNotFound(
-            certificate_id.clone(),
-        ))
+#[derive(Default)]
+pub struct CertificateServiceNoop {}
+
+#[async_trait]
+impl CertificateService for CertificateServiceNoop {
+    async fn create(
+        &self,
+        request: &CertificateRequest,
+        _auth: &CloudAuthCtx,
+    ) -> Result<crate::model::Certificate, CertificateServiceError> {
+        Ok(crate::model::Certificate::new(request))
+    }
+
+    async fn delete(
+        &self,
+        _project_id: &ProjectId,
+        _certificate_id: &CertificateId,
+        _auth: &CloudAuthCtx,
+    ) -> Result<(), CertificateServiceError> {
+        Ok(())
+    }
+
+    async fn get(
+        &self,
+        _project_id: ProjectId,
+        _certificate_id: Option<CertificateId>,
+        _auth: &CloudAuthCtx,
+    ) -> Result<Vec<crate::model::Certificate>, CertificateServiceError> {
+        Ok(vec![])
     }
 }
 
@@ -330,12 +366,13 @@ pub trait CertificateManager {
     ) -> Result<bool, CertificateManagerError>;
 }
 
-pub struct NoOpCertificateManager {
+#[derive(Default)]
+pub struct CertificateManagerNoop {
     pub domain_records_config: DomainRecordsConfig,
 }
 
 #[async_trait]
-impl CertificateManager for NoOpCertificateManager {
+impl CertificateManager for CertificateManagerNoop {
     async fn import(
         &self,
         account_id: &AccountId,

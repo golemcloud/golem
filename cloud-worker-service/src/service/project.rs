@@ -206,11 +206,11 @@ impl std::error::Error for ProjectError {
     // }
 }
 
-pub struct NoOpProjectService {
+pub struct ProjectServiceNoop {
     account_id: AccountId,
 }
 
-impl Default for NoOpProjectService {
+impl Default for ProjectServiceNoop {
     fn default() -> Self {
         Self {
             account_id: AccountId::from("a1"),
@@ -219,7 +219,7 @@ impl Default for NoOpProjectService {
 }
 
 #[async_trait]
-impl ProjectService for NoOpProjectService {
+impl ProjectService for ProjectServiceNoop {
     async fn get(
         &self,
         project_id: &ProjectId,

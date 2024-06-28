@@ -8,8 +8,7 @@ use crate::service::api_domain::RegisterDomainRouteError;
 use crate::service::auth::{AuthServiceError, CloudNamespace};
 use crate::service::project::ProjectError;
 use cloud_api_grpc::proto::golem::cloud::project::project_error::Error;
-use golem_worker_service_base::repo::api_definition_repo::ApiRegistrationRepoError;
-use golem_worker_service_base::service::api_definition::ApiRegistrationError;
+use golem_worker_service_base::service::api_definition::ApiDefinitionError as BaseApiDefinitionError;
 use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Tags, Union};
@@ -117,21 +116,17 @@ impl From<golem_worker_service_base::service::api_deployment::ApiDeploymentError
                 }))
             }
 
-            golem_worker_service_base::service::api_deployment::ApiDeploymentError::DeploymentConflict(site) => {
+            golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDeploymentConflict(site) => {
                 ApiEndpointError::AlreadyExists(Json(format!("Deployment conflict for site: {}", site)))
-            }
-
-            golem_worker_service_base::service::api_deployment::ApiDeploymentError::ConflictingDefinitions(definitions) => {
-                ApiEndpointError::AlreadyExists(Json(format!("Conflicting API definitions for site: {}", definitions.join(", "))))
             }
         }
     }
 }
 
-impl From<ApiRegistrationError<RouteValidationError>> for ApiEndpointError {
-    fn from(value: ApiRegistrationError<RouteValidationError>) -> Self {
+impl From<BaseApiDefinitionError<RouteValidationError>> for ApiEndpointError {
+    fn from(value: BaseApiDefinitionError<RouteValidationError>) -> Self {
         match value {
-            ApiRegistrationError::ValidationError(error) => {
+            BaseApiDefinitionError::ValidationError(error) => {
                 let errors = error
                     .errors
                     .into_iter()
@@ -147,28 +142,16 @@ impl From<ApiRegistrationError<RouteValidationError>> for ApiEndpointError {
 
                 ApiEndpointError::BadRequest(Json(WorkerServiceErrorsBody::Validation(error)))
             }
-            ApiRegistrationError::RepoError(error) => match error {
-                ApiRegistrationRepoError::AlreadyExists(_) => ApiEndpointError::AlreadyExists(
-                    Json("ApiDefinition already exists".to_string()),
-                ),
-                ApiRegistrationRepoError::Internal(error) => {
-                    ApiEndpointError::InternalError(Json(ErrorBody {
-                        error: error.to_string(),
-                    }))
-                }
-                ApiRegistrationRepoError::NotFound(definition_key) => {
-                    ApiEndpointError::NotFound(Json(MessageBody {
-                        message: format!("ApiDefinition not found: {}", definition_key.id),
-                    }))
-                }
-                ApiRegistrationRepoError::NotDraft(e) => ApiEndpointError::bad_request(e),
-            },
-            error @ ApiRegistrationError::ComponentNotFoundError(_) => {
-                ApiEndpointError::BadRequest(Json(WorkerServiceErrorsBody::Messages(
-                    MessagesErrorsBody {
-                        errors: vec![error.to_string()],
-                    },
-                )))
+            BaseApiDefinitionError::InternalError(error) => ApiEndpointError::internal(error),
+            BaseApiDefinitionError::ApiDefinitionNotDraft(_) => {
+                ApiEndpointError::bad_request(value)
+            }
+            BaseApiDefinitionError::ApiDefinitionNotFound(_) => ApiEndpointError::not_found(value),
+            BaseApiDefinitionError::ApiDefinitionAlreadyExists(_) => {
+                ApiEndpointError::already_exists(value)
+            }
+            BaseApiDefinitionError::ComponentNotFoundError(_) => {
+                ApiEndpointError::bad_request(value)
             }
         }
     }

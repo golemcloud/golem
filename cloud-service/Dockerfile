@@ -7,6 +7,7 @@ COPY --from=chamber /chamber /bin/chamber
 WORKDIR /app
 COPY /target/x86_64-unknown-linux-gnu/release/cloud-service ./
 COPY /cloud-service/config/cloud-service.toml ./config/cloud-service.toml
+COPY /cloud-service/db ./db
 
 RUN apt-get update && apt-get install -y libssl-dev
 RUN apt-get update && apt-get install -y ca-certificates
@@ -21,6 +22,7 @@ ENV ENVIRONMENT=$ENVIRONMENT \
     RUST_BACKTRACE=1 \
     GOLEM__ENVIRONMENT=$ENVIRONMENT \
     GOLEM__WORKSPACE=$WORKSPACE \
+    GOLEM__DB__CONFIG__SCHEMA=$WORKSPACE \
     GOLEM__GRPC_PORT=9090 \
     GOLEM__HTTP_PORT=8080 \
     GOLEM__ENABLE_JSON_LOG=true

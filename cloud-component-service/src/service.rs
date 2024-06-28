@@ -8,12 +8,12 @@ use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
 };
-use golem_service_base::config::ComponentStoreConfig;
+use golem_service_base::config::{ComponentStoreConfig, DbConfig};
+use golem_service_base::db;
 use golem_service_base::service::component_object_store;
 use std::sync::Arc;
 
-use crate::config::{ComponentServiceConfig, DbConfig};
-use crate::db;
+use crate::config::ComponentServiceConfig;
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
 use crate::service::auth::{AuthService, CloudAuthService};
 use crate::service::limit::{LimitService, LimitServiceDefault};
@@ -29,7 +29,7 @@ impl Services {
     pub async fn new(config: &ComponentServiceConfig) -> Result<Services, String> {
         let component_repo: Arc<dyn ComponentRepo + Sync + Send> = match config.db.clone() {
             DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c, &config.workspace)
+                let db_pool = db::create_postgres_pool(&c)
                     .await
                     .map_err(|e| e.to_string())?;
                 Arc::new(DbComponentRepo::new(db_pool.clone().into()))

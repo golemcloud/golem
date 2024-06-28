@@ -4,6 +4,11 @@ enable_json_log = false
 grpc_address = "0.0.0.0"
 http_address = "0.0.0.0"
 
+[memory]
+# system_memory_override = 4294967296
+worker_memory_ratio = 0.8
+worker_estimate_coefficient = 1.1
+
 [oplog]
 max_operations_before_commit = 128
 max_payload_size = 65536

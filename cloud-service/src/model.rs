@@ -6,7 +6,7 @@ use chrono::{TimeZone, Utc};
 use cloud_common::model::*;
 use cloud_common::model::{PlanId, ProjectPolicyId, TokenId};
 use golem_api_grpc::proto::golem::worker::Level;
-use golem_common::model::{AccountId, ComponentVersion, ProjectId, Timestamp, WorkerStatus};
+use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::model::*;
 use poem_openapi::{Enum, Object};
 use serde_with::{serde_as, DurationSeconds};
@@ -377,73 +377,6 @@ impl From<CreateTokenDTO> for cloud_api_grpc::proto::golem::cloud::token::Create
             expires_at: value.expires_at.to_rfc3339(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct WorkerMetadata {
-    pub worker_id: WorkerId,
-    pub account_id: AccountId,
-    pub args: Vec<String>,
-    pub env: HashMap<String, String>,
-    pub status: WorkerStatus,
-    pub component_version: ComponentVersion,
-    pub retry_count: u64,
-    pub pending_invocation_count: u64,
-    pub updates: Vec<UpdateRecord>,
-    pub created_at: Timestamp,
-    pub last_error: Option<String>,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::WorkerMetadata,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            account_id: value.account_id.ok_or("Missing account_id")?.into(),
-            args: value.args,
-            env: value.env,
-            status: value.status.try_into()?,
-            component_version: value.component_version,
-            retry_count: value.retry_count,
-            pending_invocation_count: value.pending_invocation_count,
-            updates: value
-                .updates
-                .into_iter()
-                .map(|update| update.try_into())
-                .collect::<Result<Vec<UpdateRecord>, String>>()?,
-            created_at: value.created_at.ok_or("Missing created_at")?.into(),
-            last_error: value.last_error,
-        })
-    }
-}
-
-impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
-    fn from(value: WorkerMetadata) -> Self {
-        Self {
-            worker_id: Some(value.worker_id.into()),
-            account_id: Some(value.account_id.into()),
-            args: value.args,
-            env: value.env,
-            status: value.status.into(),
-            component_version: value.component_version,
-            retry_count: value.retry_count,
-            pending_invocation_count: value.pending_invocation_count,
-            updates: value.updates.iter().cloned().map(|u| u.into()).collect(),
-            created_at: Some(value.created_at.into()),
-            last_error: value.last_error,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
-pub struct WorkersMetadataResponse {
-    pub workers: Vec<WorkerMetadata>,
-    pub cursor: Option<u64>,
 }
 
 #[derive(

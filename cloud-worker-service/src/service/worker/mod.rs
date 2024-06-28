@@ -655,6 +655,8 @@ fn convert_metadata(
         updates: metadata.updates,
         created_at: metadata.created_at,
         last_error: metadata.last_error,
+        component_size: metadata.component_size,
+        total_linear_memory_size: metadata.total_linear_memory_size,
     }
 }
 
@@ -674,10 +676,10 @@ impl WorkerNamespace {
 }
 
 #[derive(Default)]
-pub struct WorkerServiceNoOp {}
+pub struct WorkerServiceNoop {}
 
 #[async_trait]
-impl WorkerService for WorkerServiceNoOp {
+impl WorkerService for WorkerServiceNoop {
     async fn create(
         &self,
         worker_id: &WorkerId,
@@ -809,6 +811,8 @@ impl WorkerService for WorkerServiceNoOp {
             pending_invocation_count: 0,
             updates: vec![],
             last_error: None,
+            component_size: 0,
+            total_linear_memory_size: 0,
         })
     }
 

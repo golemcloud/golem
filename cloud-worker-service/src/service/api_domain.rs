@@ -11,6 +11,7 @@ use cloud_common::model::ProjectAction;
 use derive_more::Display;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
+use golem_worker_service_base::repo::RepoError;
 use rusoto_route53::{
     AliasTarget, Change, ChangeBatch, ChangeResourceRecordSetsRequest, CreateHostedZoneRequest,
     DeleteHostedZoneRequest, GetHostedZoneRequest, ListHostedZonesRequest, ResourceRecordSet,
@@ -24,7 +25,7 @@ use crate::aws_config::AwsConfig;
 use crate::aws_load_balancer::AwsLoadBalancer;
 use crate::config::DomainRecordsConfig;
 use crate::model::{AccountApiDomain, ApiDomain, DomainRequest};
-use crate::repo::api_domain::ApiDomainRepo;
+use crate::repo::api_domain::{ApiDomainRecord, ApiDomainRepo};
 use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx, CloudNamespace};
 
 #[derive(Debug, thiserror::Error)]
@@ -88,6 +89,14 @@ impl From<RegisterDomainError> for ApiDomainServiceError {
             RegisterDomainError::NotAvailable(error) => {
                 ApiDomainServiceError::already_exists(error)
             }
+        }
+    }
+}
+
+impl From<RepoError> for ApiDomainServiceError {
+    fn from(value: RepoError) -> Self {
+        match value {
+            RepoError::Internal(error) => ApiDomainServiceError::internal(error),
         }
     }
 }
@@ -161,13 +170,13 @@ impl ApiDomainService for ApiDomainServiceDefault {
 
         let account_id = namespace.account_id;
 
-        let current_registration = self
-            .domain_repo
-            .get(&payload.domain_name)
-            .await
-            .map_err(ApiDomainServiceError::internal)?;
+        let current_registration = self.domain_repo.get(&payload.domain_name).await?;
 
         if let Some(current) = current_registration {
+            let current: AccountApiDomain = current
+                .try_into()
+                .map_err(ApiDomainServiceError::internal)?;
+
             if current.account_id != account_id || current.domain.project_id != namespace.project_id
             {
                 error!(
@@ -212,10 +221,10 @@ impl ApiDomainService for ApiDomainServiceDefault {
             }
         };
 
-        let domain = AccountApiDomain::new(&account_id, &ApiDomain::new(payload, name_servers));
+        let domain = ApiDomain::new(payload, name_servers);
 
         self.domain_repo
-            .create_or_update(&domain)
+            .create_or_update(&ApiDomainRecord::new(account_id.clone(), domain.clone()))
             .await
             .map_err(|e| {
                 error!(
@@ -225,7 +234,7 @@ impl ApiDomainService for ApiDomainServiceDefault {
                 ApiDomainServiceError::internal(e)
             })?;
 
-        Ok(domain.domain)
+        Ok(domain)
     }
 
     async fn get(
@@ -237,20 +246,20 @@ impl ApiDomainService for ApiDomainServiceDefault {
             .is_authorized(project_id, ProjectAction::ViewApiDefinition, auth)
             .await?;
 
-        let account_id = namespace.account_id;
+        let account_id = namespace.account_id.clone();
 
         info!(
             "Get API domains - account: {}, project: {}",
             account_id, project_id
         );
 
-        let data = self
-            .domain_repo
-            .get_by_id(&account_id, project_id)
-            .await
-            .map_err(ApiDomainServiceError::internal)?;
+        let data = self.domain_repo.get_all(&namespace.to_string()).await?;
 
-        let values: Vec<ApiDomain> = data.iter().map(|d| d.domain.clone()).collect();
+        let values: Vec<ApiDomain> = data
+            .iter()
+            .map(|d| d.clone().try_into())
+            .collect::<Result<Vec<ApiDomain>, _>>()
+            .map_err(ApiDomainServiceError::internal)?;
         Ok(values)
     }
 
@@ -271,29 +280,56 @@ impl ApiDomainService for ApiDomainServiceDefault {
             account_id, project_id, domain_name
         );
 
-        let data = self
-            .domain_repo
-            .get(domain_name)
-            .await
-            .map_err(ApiDomainServiceError::internal)?;
+        let data = self.domain_repo.get(domain_name).await?;
 
         if let Some(domain) = data {
+            let domain: AccountApiDomain =
+                domain.try_into().map_err(ApiDomainServiceError::internal)?;
+
             if domain.account_id == account_id
                 && domain.domain.project_id == *project_id
                 && domain.domain.domain_name == *domain_name
             {
                 self.register_domain.unregister(domain_name).await?;
 
-                self.domain_repo
-                    .delete(domain_name)
-                    .await
-                    .map_err(ApiDomainServiceError::internal)?;
+                self.domain_repo.delete(domain_name).await?;
 
                 return Ok(());
             }
         }
 
         Err(ApiDomainServiceError::not_found(domain_name.to_string()))
+    }
+}
+
+#[derive(Default)]
+pub struct ApiDomainServiceNoop {}
+
+#[async_trait]
+impl ApiDomainService for ApiDomainServiceNoop {
+    async fn create_or_update(
+        &self,
+        payload: &DomainRequest,
+        _auth: &CloudAuthCtx,
+    ) -> Result<ApiDomain, ApiDomainServiceError> {
+        Ok(ApiDomain::new(payload, vec![]))
+    }
+
+    async fn get(
+        &self,
+        _project_id: &ProjectId,
+        _auth: &CloudAuthCtx,
+    ) -> Result<Vec<ApiDomain>, ApiDomainServiceError> {
+        Ok(vec![])
+    }
+
+    async fn delete(
+        &self,
+        _project_id: &ProjectId,
+        _domain_name: &str,
+        _auth: &CloudAuthCtx,
+    ) -> Result<(), ApiDomainServiceError> {
+        Ok(())
     }
 }
 
@@ -813,19 +849,19 @@ impl RegisterDomainRoute for AwsDomainRoute {
     }
 }
 
-pub struct NoOpRegisterDomainRoute {
+pub struct RegisterDomainRouteNoop {
     pub environment: String,
     pub hosted_zone: String,
     pub domain_records_config: DomainRecordsConfig,
 }
 
-impl NoOpRegisterDomainRoute {
+impl RegisterDomainRouteNoop {
     pub fn new(
         environment: &str,
         hosted_zone: &str,
         domain_records_config: &DomainRecordsConfig,
-    ) -> NoOpRegisterDomainRoute {
-        NoOpRegisterDomainRoute {
+    ) -> RegisterDomainRouteNoop {
+        RegisterDomainRouteNoop {
             environment: environment.to_string(),
             hosted_zone: hosted_zone.to_string(),
             domain_records_config: domain_records_config.clone(),
@@ -834,7 +870,7 @@ impl NoOpRegisterDomainRoute {
 }
 
 #[async_trait]
-impl RegisterDomainRoute for NoOpRegisterDomainRoute {
+impl RegisterDomainRoute for RegisterDomainRouteNoop {
     async fn register(
         &self,
         domain: &str,
@@ -890,7 +926,7 @@ mod tests {
         get_name_servers, register_hosted_zone, unregister_hosted_zone, DomainConfig,
     };
     use crate::service::api_domain::{
-        AwsDomainRoute, AwsRoute53HostedZone, NoOpRegisterDomainRoute, RegisterDomainRoute,
+        AwsDomainRoute, AwsRoute53HostedZone, RegisterDomainRoute, RegisterDomainRouteNoop,
     };
     use golem_common::model::AccountId;
     use golem_common::model::ProjectId;
@@ -957,7 +993,7 @@ mod tests {
         };
 
         let domain_route =
-            NoOpRegisterDomainRoute::new("dev", "dev-api.golem.cloud", &domain_records_config);
+            RegisterDomainRouteNoop::new("dev", "dev-api.golem.cloud", &domain_records_config);
 
         let reg_result = domain_route
             .register("dev-api.golem.cloud", Some("some-test-domain"))
