@@ -33,3 +33,9 @@ tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.3", features = ["html_reports"] }
+fastrand = "2.0.2"
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
