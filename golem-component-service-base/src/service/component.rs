@@ -398,7 +398,11 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
                     .get_by_name(namespace.to_string().as_str(), &name.0)
                     .await?
             }
-            None => self.component_repo.get_all().await?,
+            None => {
+                self.component_repo
+                    .get_all(namespace.to_string().as_str())
+                    .await?
+            }
         };
 
         let values: Vec<Component> = records
