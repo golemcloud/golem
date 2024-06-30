@@ -1,25 +1,25 @@
 use std::time::Duration;
 
-use figment::providers::{Env, Format, Toml};
+use figment::providers::{Env, Format, Serialized, Toml};
 use figment::Figment;
 use http::Uri;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
 use golem_common::config::{RedisConfig, RetryConfig};
+use golem_common::tracing;
 use golem_service_base::routing_table::RoutingTableConfig;
 
 // The base configuration for the worker service
 // If there are extra cofigurations for custom services,
 // its preferred to reuse base config.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceBaseConfig {
     pub environment: String,
+    pub tracing: tracing::Config,
     pub redis: RedisConfig,
     pub component_service: ComponentServiceConfig,
-    pub enable_tracing_console: bool,
-    pub enable_json_log: bool,
     pub port: u16,
     pub custom_request_port: u16,
     pub worker_grpc_port: u16,
@@ -27,7 +27,7 @@ pub struct WorkerServiceBaseConfig {
     pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerExecutorClientCacheConfig {
     pub max_capacity: usize,
     #[serde(with = "humantime_serde")]
@@ -50,6 +50,7 @@ impl WorkerServiceBaseConfig {
 
     pub fn new() -> Self {
         Figment::new()
+            .merge(Serialized::defaults(WorkerServiceBaseConfig::default()))
             .merge(Toml::file("config/worker-service.toml"))
             .merge(Env::prefixed("GOLEM__").split("__"))
             .extract()
@@ -63,8 +64,7 @@ impl Default for WorkerServiceBaseConfig {
             environment: "local".to_string(),
             redis: RedisConfig::default(),
             component_service: ComponentServiceConfig::default(),
-            enable_tracing_console: false,
-            enable_json_log: false,
+            tracing: tracing::Config::local_dev("worker-service"),
             port: 9000,
             custom_request_port: 9001,
             worker_grpc_port: 9092,
@@ -74,7 +74,7 @@ impl Default for WorkerServiceBaseConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
     pub host: String,
     pub port: u16,

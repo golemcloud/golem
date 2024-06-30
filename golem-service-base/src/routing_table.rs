@@ -17,7 +17,7 @@ use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client;
 use golem_common::cache::*;
 use golem_common::model::RoutingTable;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -25,7 +25,7 @@ pub enum RoutingTableError {
     Unexpected(String),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RoutingTableConfig {
     host: String,
     port: u16,

@@ -1,18 +1,21 @@
-use golem_worker_service::api;
-use golem_worker_service::api::make_open_api_service;
-use golem_worker_service::service::Services;
-use golem_worker_service::{config, grpcapi};
-use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::metrics;
+use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::Arc;
+
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::EndpointExt;
 use prometheus::Registry;
-use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::Arc;
 use tokio::select;
+
+use golem_common::tracing;
+use golem_worker_service::api;
+use golem_worker_service::api::make_open_api_service;
+use golem_worker_service::service::Services;
+use golem_worker_service::{config, grpcapi};
+use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use golem_worker_service_base::metrics;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -29,11 +32,12 @@ async fn main() -> std::io::Result<()> {
 }
 
 pub async fn app(
-    worker_config: &WorkerServiceBaseConfig,
+    config: &WorkerServiceBaseConfig,
     prometheus_registry: Registry,
 ) -> std::io::Result<()> {
-    init_tracing_metrics();
-    let config = worker_config.clone();
+    let config = config.clone();
+
+    init_tracing(&config, prometheus_registry.clone());
 
     let services: Services = Services::new(&config)
         .await
@@ -87,10 +91,9 @@ pub async fn app(
     Ok(())
 }
 
-fn init_tracing_metrics() {
-    let prometheus = prometheus::default_registry();
+fn init_tracing(config: &WorkerServiceBaseConfig, prometheus_registry: Registry) {
     let exporter = opentelemetry_prometheus::exporter()
-        .with_registry(prometheus.clone())
+        .with_registry(prometheus_registry.clone())
         .build()
         .unwrap();
 
@@ -100,8 +103,8 @@ fn init_tracing_metrics() {
             .build(),
     );
 
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_ansi(true)
-        .init();
+    tracing::init(
+        &config.tracing,
+        tracing::filter::for_all_outputs::DEFAULT_ENV,
+    );
 }
