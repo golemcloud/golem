@@ -23,6 +23,7 @@ combine = "4.6.7"
 console-subscriber = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
+figment = { workspace = true }
 fred = { workspace = true }
 futures-core = { workspace = true }
 humantime-serde = { workspace = true }
@@ -38,6 +39,7 @@ range-set-blaze = "0.1.16"
 semver = "1.0.23"
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }

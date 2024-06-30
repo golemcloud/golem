@@ -1,7 +1,6 @@
+use std::fmt::Debug;
 use std::time::Duration;
 
-use figment::providers::{Env, Format, Serialized, Toml};
-use figment::Figment;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -12,8 +11,8 @@ use golem_common::tracing;
 use golem_service_base::routing_table::RoutingTableConfig;
 
 // The base configuration for the worker service
-// If there are extra cofigurations for custom services,
-// its preferred to reuse base config.
+// If there are extra configurations for custom services,
+// it's preferred to reuse base config.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceBaseConfig {
     pub environment: String,
@@ -46,15 +45,6 @@ impl Default for WorkerExecutorClientCacheConfig {
 impl WorkerServiceBaseConfig {
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
-    }
-
-    pub fn new() -> Self {
-        Figment::new()
-            .merge(Serialized::defaults(WorkerServiceBaseConfig::default()))
-            .merge(Toml::file("config/worker-service.toml"))
-            .merge(Env::prefixed("GOLEM__").split("__"))
-            .extract()
-            .expect("Failed to parse config")
     }
 }
 

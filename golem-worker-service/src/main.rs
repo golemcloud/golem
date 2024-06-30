@@ -12,8 +12,9 @@ use tokio::select;
 use golem_common::tracing;
 use golem_worker_service::api;
 use golem_worker_service::api::make_open_api_service;
+use golem_worker_service::config::make_config_loader;
+use golem_worker_service::grpcapi;
 use golem_worker_service::service::Services;
-use golem_worker_service::{config, grpcapi};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use golem_worker_service_base::metrics;
 
@@ -24,10 +25,11 @@ async fn main() -> std::io::Result<()> {
         let api_service = make_open_api_service(&services);
         println!("{}", api_service.spec_yaml());
         Ok(())
-    } else {
+    } else if let Some(config) = make_config_loader().load_or_dump_config() {
         let prometheus = metrics::register_all();
-        let config: WorkerServiceBaseConfig = config::get_config();
         app(&config, prometheus).await
+    } else {
+        Ok(())
     }
 }
 
