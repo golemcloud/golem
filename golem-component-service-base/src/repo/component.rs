@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
-use sqlx::{Database, Pool};
+use sqlx::{Database, Pool, Row};
 use uuid::Uuid;
 
 use crate::repo::RepoError;
@@ -122,6 +122,8 @@ pub trait ComponentRepo {
         namespace: &str,
         name: &str,
     ) -> Result<Vec<ComponentRecord>, RepoError>;
+
+    async fn get_ids_by_name(&self, namespace: &str, name: &str) -> Result<Vec<Uuid>, RepoError>;
 
     async fn get_namespaces(&self, component_id: &Uuid) -> Result<Vec<(String, i64)>, RepoError>;
 
@@ -238,6 +240,18 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
             .map_err(|e| e.into())
     }
 
+    async fn get_ids_by_name(&self, namespace: &str, name: &str) -> Result<Vec<Uuid>, RepoError> {
+        let result = sqlx::query(
+            "SELECT distinct component_id as component_id FROM components WHERE namespace = $1 AND name = $2"
+        )
+            .bind(namespace)
+            .bind(name)
+            .fetch_all(self.db_pool.deref())
+            .await?;
+
+        Ok(result.into_iter().map(|x| x.get("component_id")).collect())
+    }
+
     async fn get_namespaces(&self, component_id: &Uuid) -> Result<Vec<(String, i64)>, RepoError> {
         sqlx::query_as::<_, (String, i64)>(
             "SELECT namespace, max(version) FROM components WHERE component_id = $1 GROUP BY namespace",
@@ -325,6 +339,18 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
             .fetch_all(self.db_pool.deref())
             .await
             .map_err(|e| e.into())
+    }
+
+    async fn get_ids_by_name(&self, namespace: &str, name: &str) -> Result<Vec<Uuid>, RepoError> {
+        let result = sqlx::query(
+            "SELECT distinct component_id as component_id FROM components WHERE namespace = $1 AND name = $2"
+        )
+            .bind(namespace)
+            .bind(name)
+            .fetch_all(self.db_pool.deref())
+            .await?;
+
+        Ok(result.into_iter().map(|x| x.get("component_id")).collect())
     }
 
     async fn get_latest_version(
