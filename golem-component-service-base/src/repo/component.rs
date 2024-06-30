@@ -123,6 +123,8 @@ pub trait ComponentRepo {
         name: &str,
     ) -> Result<Vec<ComponentRecord>, RepoError>;
 
+    async fn get_namespaces(&self, component_id: &Uuid) -> Result<Vec<(String, i64)>, RepoError>;
+
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError>;
 }
 
@@ -236,6 +238,16 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
             .map_err(|e| e.into())
     }
 
+    async fn get_namespaces(&self, component_id: &Uuid) -> Result<Vec<(String, i64)>, RepoError> {
+        sqlx::query_as::<_, (String, i64)>(
+            "SELECT namespace, max(version) FROM components WHERE component_id = $1 GROUP BY namespace",
+        )
+            .bind(component_id)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
         sqlx::query("DELETE FROM components WHERE namespace = $1 AND component_id = $2")
             .bind(namespace)
@@ -343,6 +355,16 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
             .bind(component_id)
             .bind(version as i64)
             .fetch_optional(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    async fn get_namespaces(&self, component_id: &Uuid) -> Result<Vec<(String, i64)>, RepoError> {
+        sqlx::query_as::<_, (String, i64)>(
+            "SELECT namespace, max(version) FROM components WHERE component_id = $1 GROUP BY namespace",
+        )
+            .bind(component_id)
+            .fetch_all(self.db_pool.deref())
             .await
             .map_err(|e| e.into())
     }
