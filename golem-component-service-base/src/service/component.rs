@@ -101,6 +101,12 @@ pub trait ComponentService<Namespace> {
         namespace: &Namespace,
     ) -> Result<Vec<Component>, ComponentError>;
 
+    async fn find_ids_by_name(
+        &self,
+        component_name: &ComponentName,
+        namespace: &Namespace,
+    ) -> Result<Vec<ComponentId>, ComponentError>;
+
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
@@ -110,7 +116,7 @@ pub trait ComponentService<Namespace> {
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
-        _namespace: &Namespace,
+        namespace: &Namespace,
     ) -> Result<Option<Component>, ComponentError>;
 
     async fn get(
@@ -160,7 +166,11 @@ where
         let tn = component_name.0.clone();
         info!("Creating component  with name {}", tn);
 
-        self.check_new_name(component_name, namespace).await?;
+        self.find_ids_by_name(component_name, namespace)
+            .await?
+            .into_iter()
+            .next()
+            .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
         let metadata = process_component(&data)?;
 
@@ -391,6 +401,18 @@ where
         Ok(Some(result))
     }
 
+    async fn find_ids_by_name(
+        &self,
+        component_name: &ComponentName,
+        namespace: &Namespace,
+    ) -> Result<Vec<ComponentId>, ComponentError> {
+        let records = self
+            .component_repo
+            .get_ids_by_name(namespace.to_string().as_str(), &component_name.0)
+            .await?;
+        Ok(records.into_iter().map(ComponentId).collect())
+    }
+
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
@@ -517,22 +539,6 @@ where
 }
 
 impl ComponentServiceDefault {
-    async fn check_new_name<Namespace: Display + Eq + Clone + Send + Sync>(
-        &self,
-        component_name: &ComponentName,
-        namespace: &Namespace,
-    ) -> Result<(), ComponentError> {
-        let existing_components = self
-            .component_repo
-            .get_by_name(namespace.to_string().as_str(), &component_name.0)
-            .await
-            .tap_err(|e| error!("Error getting existing components: {}", e))?;
-
-        existing_components.into_iter().next().map_or(Ok(()), |c| {
-            Err(ComponentError::AlreadyExists(ComponentId(c.component_id)))
-        })
-    }
-
     fn get_user_object_store_key(&self, id: &UserComponentId) -> String {
         id.slug()
     }
@@ -669,6 +675,14 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
         _namespace: &Namespace,
     ) -> Result<ByteStream, ComponentError> {
         Ok(ByteStream::empty())
+    }
+
+    async fn find_ids_by_name(
+        &self,
+        _component_name: &ComponentName,
+        _namespace: &Namespace,
+    ) -> Result<Vec<ComponentId>, ComponentError> {
+        Ok(vec![])
     }
 
     async fn get_protected_data(
