@@ -1172,8 +1172,6 @@ impl From<Type> for golem_wasm_rpc::protobuf::Type {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct FunctionParameter {
     pub name: String,
-    //  TODO: Fix this in DB. Temp fix for now.
-    #[serde(rename = "tpe")]
     pub typ: Type,
 }
 
@@ -1202,8 +1200,6 @@ impl From<FunctionParameter> for golem_api_grpc::proto::golem::component::Functi
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct FunctionResult {
     pub name: Option<String>,
-    // TODO: Fix this in DB. Temp fix for now.
-    #[serde(rename = "tpe")]
     pub typ: Type,
 }
 
