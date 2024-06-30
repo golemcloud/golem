@@ -102,7 +102,7 @@ pub trait ComponentRepo {
         component_id: &Uuid,
     ) -> Result<Vec<ComponentRecord>, RepoError>;
 
-    async fn get_all(&self) -> Result<Vec<ComponentRecord>, RepoError>;
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError>;
 
     async fn get_latest_version(
         &self,
@@ -182,8 +182,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
             .map_err(|e| e.into())
     }
 
-    async fn get_all(&self) -> Result<Vec<ComponentRecord>, RepoError> {
-        sqlx::query_as::<_, ComponentRecord>("SELECT namespace, component_id, version, name, size, user_component, protected_component, protector_version, metadata FROM components")
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
+        sqlx::query_as::<_, ComponentRecord>("SELECT namespace, component_id, version, name, size, user_component, protected_component, protector_version, metadata FROM components WHERE namespace = $1")
+            .bind(namespace)
             .fetch_all(self.db_pool.deref())
             .await
             .map_err(|e| e.into())
@@ -278,8 +279,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn get_all(&self) -> Result<Vec<ComponentRecord>, RepoError> {
-        sqlx::query_as::<_, ComponentRecord>("SELECT namespace, component_id, name, size, version, user_component, protected_component, protector_version, metadata  FROM components")
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
+        sqlx::query_as::<_, ComponentRecord>("SELECT namespace, component_id, name, size, version, user_component, protected_component, protector_version, metadata  FROM components WHERE namespace = $1")
+            .bind(namespace)
             .fetch_all(self.db_pool.deref())
             .await
             .map_err(|e| e.into())
