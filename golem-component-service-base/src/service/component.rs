@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use crate::service::component_compilation::ComponentCompilationService;
@@ -118,6 +118,11 @@ pub trait ComponentService<Namespace> {
         component_id: &ComponentId,
         namespace: &Namespace,
     ) -> Result<Vec<Component>, ComponentError>;
+
+    async fn get_namespace(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Option<Namespace>, ComponentError>;
 }
 
 pub struct ComponentServiceDefault {
@@ -141,8 +146,10 @@ impl ComponentServiceDefault {
 }
 
 #[async_trait]
-impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentService<Namespace>
-    for ComponentServiceDefault
+impl<Namespace> ComponentService<Namespace> for ComponentServiceDefault
+where
+    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
+    <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
 {
     async fn create(
         &self,
@@ -485,6 +492,28 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
             None => Ok(None),
         }
     }
+
+    async fn get_namespace(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Option<Namespace>, ComponentError> {
+        info!("Getting component {} namespace", component_id);
+        let result = self.component_repo.get_namespaces(&component_id.0).await?;
+
+        if result.is_empty() {
+            Ok(None)
+        } else if result.len() == 1 {
+            let value = result[0].clone().0.try_into().map_err(|e| {
+                ComponentError::internal(e, "Failed to convert namespace".to_string())
+            })?;
+            Ok(Some(value))
+        } else {
+            Err(ComponentError::internal(
+                "",
+                "Namespace is not unique".to_string(),
+            ))
+        }
+    }
 }
 
 impl ComponentServiceDefault {
@@ -681,5 +710,12 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
         _namespace: &Namespace,
     ) -> Result<Vec<Component>, ComponentError> {
         Ok(vec![])
+    }
+
+    async fn get_namespace(
+        &self,
+        _component_id: &ComponentId,
+    ) -> Result<Option<Namespace>, ComponentError> {
+        Ok(None)
     }
 }

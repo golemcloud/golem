@@ -201,5 +201,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(component1_result.len(), 2);
+
+        let component1_result = component_service
+            .get_namespace(&component1.versioned_component_id.component_id)
+            .await
+            .unwrap();
+        assert!(component1_result.is_some());
+        assert_eq!(component1_result.unwrap(), DefaultNamespace::default());
+
+        let component2_result = component_service
+            .get_namespace(&component1.versioned_component_id.component_id)
+            .await
+            .unwrap();
+        assert!(component2_result.is_some());
+        assert_eq!(component2_result.unwrap(), DefaultNamespace::default());
     }
 }
