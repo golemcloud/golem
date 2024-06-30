@@ -3,13 +3,15 @@ use std::sync::Arc;
 
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
+use poem::EndpointExt;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
-use poem::EndpointExt;
 use prometheus::Registry;
 use tokio::select;
+use tracing::error;
 
-use golem_common::tracing;
+use golem_service_base::config::DbConfig;
+use golem_service_base::db;
 use golem_worker_service::api;
 use golem_worker_service::api::make_open_api_service;
 use golem_worker_service::config::make_config_loader;
@@ -40,6 +42,25 @@ pub async fn app(
     let config = config.clone();
 
     init_tracing(&config, prometheus_registry.clone());
+
+    match config.db.clone() {
+        DbConfig::Postgres(c) => {
+            db::postgres_migrate(&c, "./db/migration/postgres")
+                .await
+                .map_err(|e| {
+                    dbg!("DB - init error: {}", e);
+                    std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                })?;
+        }
+        DbConfig::Sqlite(c) => {
+            db::sqlite_migrate(&c, "./db/migration/sqlite")
+                .await
+                .map_err(|e| {
+                    error!("DB - init error: {}", e);
+                    std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                })?;
+        }
+    };
 
     let services: Services = Services::new(&config)
         .await
@@ -105,8 +126,8 @@ fn init_tracing(config: &WorkerServiceBaseConfig, prometheus_registry: Registry)
             .build(),
     );
 
-    tracing::init(
+    golem_common::tracing::init(
         &config.tracing,
-        tracing::filter::for_all_outputs::DEFAULT_ENV,
+        golem_common::tracing::filter::for_all_outputs::DEFAULT_ENV,
     );
 }

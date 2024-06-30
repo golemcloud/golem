@@ -23,7 +23,7 @@ impl WorkerMetadataFetcher for DefaultWorkerComponentMetadataFetcher {
         worker_id: &WorkerId,
     ) -> Result<ComponentMetadata, MetadataFetchError> {
         self.worker_service
-            .get_component_for_worker(worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
+            .get_component_for_worker(worker_id, empty_worker_metadata(), &EmptyAuthCtx::default())
             .await
             .map(|component| component.metadata)
             .map_err(|e| MetadataFetchError(e.to_string()))

@@ -2,8 +2,8 @@ use std::fmt::{Display, Formatter};
 
 use serde::Deserialize;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct EmptyAuthCtx {}
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EmptyAuthCtx();
 
 impl Display for EmptyAuthCtx {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -20,17 +20,24 @@ impl IntoIterator for EmptyAuthCtx {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, Deserialize)]
-pub struct CommonNamespace(String);
+#[derive(
+    Default, Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, Deserialize,
+)]
+pub struct DefaultNamespace();
 
-impl Default for CommonNamespace {
-    fn default() -> Self {
-        CommonNamespace("common".to_string())
+impl Display for DefaultNamespace {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "default")
     }
 }
 
-impl Display for CommonNamespace {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+impl TryFrom<String> for DefaultNamespace {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.as_str() == "default" {
+            Ok(DefaultNamespace::default())
+        } else {
+            Err("Failed to parse empty namespace".to_string())
+        }
     }
 }

@@ -14,7 +14,6 @@
 
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
-use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{env_vars, wait_for_startup, WorkerService};
 use crate::components::ChildProcessLogger;
@@ -46,7 +45,6 @@ impl SpawnedWorkerService {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
         verbosity: Level,
         out_level: Level,
         err_level: Level,
@@ -66,7 +64,6 @@ impl SpawnedWorkerService {
                 component_service,
                 shard_manager,
                 rdb,
-                redis,
                 verbosity,
             ))
             .stdin(Stdio::piped())

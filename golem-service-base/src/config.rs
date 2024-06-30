@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
@@ -40,4 +40,37 @@ pub struct ComponentStoreS3Config {
 pub struct ComponentStoreLocalConfig {
     pub root_path: String,
     pub object_prefix: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum DbConfig {
+    Postgres(DbPostgresConfig),
+    Sqlite(DbSqliteConfig),
+}
+
+impl Default for DbConfig {
+    fn default() -> Self {
+        DbConfig::Sqlite(DbSqliteConfig {
+            database: "golem_service.db".to_string(),
+            max_connections: 10,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DbSqliteConfig {
+    pub database: String,
+    pub max_connections: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DbPostgresConfig {
+    pub host: String,
+    pub database: String,
+    pub username: String,
+    pub password: String,
+    pub port: u16,
+    pub max_connections: u32,
+    pub schema: Option<String>,
 }

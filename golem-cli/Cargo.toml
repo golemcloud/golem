@@ -22,6 +22,7 @@ harness = false
 [dependencies]
 golem-client = { path = "../golem-client", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-rib = { path = "../golem-rib", version = "0.0.0" }
 
 async-trait = { workspace = true }
 chrono = { workspace = true }
@@ -33,7 +34,7 @@ futures-util = { workspace = true }
 golem-examples = "0.3.0"
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
-golem-wasm-rpc-stubgen = { version = "0.0.32", optional = true }
+golem-wasm-rpc-stubgen = { version = "0.0.33", optional = true }
 h2 = "0.3.24"
 http = { workspace = true }
 hyper = { workspace = true }

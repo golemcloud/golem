@@ -340,6 +340,7 @@ dependencies = [
     "build-release",
     "publish-golem-client",
     "publish-golem-api-grpc",
+    "publish-golem-rib",
     "publish-golem-common",
     "publish-golem-test-framework",
     "publish-golem-cli",
@@ -403,6 +404,18 @@ args = [
 description = "Publishes golem-cli package to crates.io"
 command = "cargo"
 args = ["publish", "-p", "golem-cli", "--all-features", "--allow-dirty"]
+
+[tasks.publish-golem-rib]
+description = "Publishes golem-rib package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-rib",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
 
 ## ** PACKAGE RELEASE **
 

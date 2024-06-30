@@ -144,7 +144,7 @@ pub enum ProfileSubCommand<ProfileAdd: clap::Args> {
     #[command()]
     Add {
         /// Switch to created profile.
-        #[arg(short, long, default_value_t = false)]
+        #[arg(short, long, global = true, default_value_t = false)]
         set_active: bool,
 
         #[command(flatten)]

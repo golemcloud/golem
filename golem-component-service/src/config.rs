@@ -15,15 +15,9 @@
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_service_base::config::ComponentStoreConfig;
+use golem_service_base::config::{ComponentStoreConfig, DbConfig};
 use serde::Deserialize;
 use std::time::Duration;
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct DbSqliteConfig {
-    pub database: String,
-    pub max_connections: u32,
-}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct WorkerExecutorClientCacheConfig {
@@ -50,33 +44,6 @@ pub struct ComponentServiceConfig {
     pub db: DbConfig,
     pub component_store: ComponentStoreConfig,
     pub compilation: ComponentCompilationConfig,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum DbConfig {
-    Postgres(DbPostgresConfig),
-    Sqlite(DbSqliteConfig),
-}
-
-impl Default for DbConfig {
-    fn default() -> Self {
-        DbConfig::Sqlite(DbSqliteConfig {
-            database: "golem_component_service.db".to_string(),
-            max_connections: 10,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct DbPostgresConfig {
-    pub host: String,
-    pub database: String,
-    pub username: String,
-    pub password: String,
-    pub port: u16,
-    pub max_connections: u32,
-    pub schema: Option<String>,
 }
 
 impl ComponentServiceConfig {

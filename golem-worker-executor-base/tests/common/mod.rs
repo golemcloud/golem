@@ -35,7 +35,7 @@ use golem_worker_executor_base::model::{
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::component::ComponentService;
+use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
 use golem_worker_executor_base::services::promise::PromiseService;
@@ -84,7 +84,7 @@ use golem_worker_executor_base::services::worker_enumeration::{
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::worker::{RecoveryDecision, Worker};
 use tonic::transport::Channel;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use wasmtime::component::{Instance, Linker, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 
@@ -588,9 +588,13 @@ impl UpdateManagement for TestWorkerCtx {
             .await
     }
 
-    async fn on_worker_update_succeeded(&self, target_version: ComponentVersion) {
+    async fn on_worker_update_succeeded(
+        &self,
+        target_version: ComponentVersion,
+        new_component_size: u64,
+    ) {
         self.durable_ctx
-            .on_worker_update_succeeded(target_version)
+            .on_worker_update_succeeded(target_version, new_component_size)
             .await
     }
 }
@@ -603,8 +607,8 @@ impl WorkerCtx for TestWorkerCtx {
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
+        component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
-        events: Arc<Events>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
@@ -624,8 +628,8 @@ impl WorkerCtx for TestWorkerCtx {
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
+            component_metadata,
             promise_service,
-            events,
             worker_service,
             worker_enumeration_service,
             key_value_service,
@@ -657,6 +661,10 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.worker_id()
     }
 
+    fn component_metadata(&self) -> &ComponentMetadata {
+        self.durable_ctx.component_metadata()
+    }
+
     fn is_exit(error: &Error) -> Option<i32> {
         DurableWorkerCtx::<TestWorkerCtx>::is_exit(error)
     }
@@ -674,19 +682,31 @@ impl WorkerCtx for TestWorkerCtx {
 impl ResourceLimiterAsync for TestWorkerCtx {
     async fn memory_growing(
         &mut self,
-        _current: usize,
-        _desired: usize,
+        current: usize,
+        desired: usize,
         _maximum: Option<usize>,
     ) -> anyhow::Result<bool> {
+        debug!(
+            "Memory growing for {}: current: {}, desired: {}",
+            self.worker_id(),
+            current,
+            desired
+        );
         Ok(true)
     }
 
     async fn table_growing(
         &mut self,
-        _current: u32,
-        _desired: u32,
+        current: u32,
+        desired: u32,
         _maximum: Option<u32>,
     ) -> anyhow::Result<bool> {
+        debug!(
+            "Table growing for {}: current: {}, desired: {}",
+            self.worker_id(),
+            current,
+            desired
+        );
         Ok(true)
     }
 }

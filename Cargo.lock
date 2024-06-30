@@ -3355,6 +3355,7 @@ dependencies = [
  "golem-client",
  "golem-common",
  "golem-examples",
+ "golem-rib",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3424,7 +3425,6 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes 1.6.0",
- "combine",
  "console-subscriber",
  "dashmap",
  "derive_more",
@@ -3432,6 +3432,7 @@ dependencies = [
  "fred",
  "futures-core",
  "golem-api-grpc",
+ "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "humantime-serde",
@@ -3444,7 +3445,6 @@ dependencies = [
  "prost-types",
  "rand 0.8.5",
  "range-set-blaze",
- "semver",
  "serde 1.0.203",
  "serde_json",
  "tokio",
@@ -3579,6 +3579,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-rib"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bincode",
+ "combine",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "semver",
+ "serde 1.0.203",
+ "serde_json",
+ "wasm-wave",
+]
+
+[[package]]
 name = "golem-service-base"
 version = "0.0.0"
 dependencies = [
@@ -3590,6 +3605,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 0.2.12",
@@ -3601,6 +3617,7 @@ dependencies = [
  "rand 0.8.5",
  "serde 1.0.203",
  "serde_json",
+ "sqlx",
  "thiserror",
  "tokio",
  "tonic",
@@ -3629,6 +3646,7 @@ dependencies = [
  "kube",
  "prometheus",
  "prost",
+ "rustls 0.23.10",
  "serde 1.0.203",
  "serde_json",
  "tokio",
@@ -3683,9 +3701,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-ast"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ece8710411f0474ae85b2ff6ec69b01cd8bbb732334694fcf60ba1b36d8ac686"
+checksum = "e05faf69efd564e1463a386d5b365301b3fc1e264dfce4d9a3ace0c97c5c6bdc"
 dependencies = [
  "leb128",
  "mappable-rc",
@@ -3697,9 +3715,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.32"
+version = "0.0.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a11deb596bb04f6eab5c4a3a294db1a4d3b1f1d3a3ccc9480e21a373ebb21217"
+checksum = "c69d84e580bde8e4c4b3f70610da9f1533faa0f772283170eb87bacb2ae8e4f7"
 dependencies = [
  "arbitrary",
  "async-trait",
@@ -3718,9 +3736,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "0.0.32"
+version = "0.0.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88a316d82041a03b22b7820b252430fa19d5b81d13719596b5c03778df32b771"
+checksum = "0d3945deed653f263c425c1a47753f7c2d202ced1e9edbbef82658919f5cab33"
 dependencies = [
  "anyhow",
  "cargo-component",
@@ -3824,6 +3842,7 @@ dependencies = [
  "gethostname",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3845,6 +3864,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "prost",
+ "rand 0.8.5",
  "redis",
  "ringbuf",
  "rustls 0.23.10",
@@ -3939,6 +3959,7 @@ dependencies = [
  "futures-util",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3960,9 +3981,12 @@ dependencies = [
  "serde 1.0.203",
  "serde_json",
  "serde_yaml",
+ "sqlx",
  "strum",
  "strum_macros",
  "tap",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror",
  "tokio",
  "tokio-stream",

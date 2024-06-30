@@ -10,6 +10,7 @@ members = [
     "golem-component-compilation-service",
     "golem-component-service-base",
     "golem-component-service",
+    "golem-rib",
     "golem-test-framework",
     "golem-shard-manager",
     "golem-worker-executor-base",
@@ -85,8 +86,8 @@ fred = { version = "9.0.3", features = [
 futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
-golem-wasm-ast = "0.3.0"
-golem-wasm-rpc = { version = "0.0.32", default-features = false, features = ["host"] }
+golem-wasm-ast = "0.3.1"
+golem-wasm-rpc = { version = "0.0.33", default-features = false, features = ["host"] }
 http = "1.0.0" # keep in sync with wasmtime
 http_02 = { package = "http", version = "0.2.11" }
 humantime-serde = "1.1.1"

@@ -9,7 +9,7 @@ type = "Sqlite"
 
 [db.config]
 max_connections = 10
-database = "../data/golem.sqlite"
+database = "../data/golem_component.sqlite"
 
 [component_store]
 type = "Local"

@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-use golem_common::config::{RedisConfig, RetryConfig};
+use golem_common::config::RetryConfig;
+use golem_service_base::config::DbConfig;
 use golem_common::tracing;
 use golem_service_base::routing_table::RoutingTableConfig;
 
@@ -17,7 +18,7 @@ use golem_service_base::routing_table::RoutingTableConfig;
 pub struct WorkerServiceBaseConfig {
     pub environment: String,
     pub tracing: tracing::Config,
-    pub redis: RedisConfig,
+    pub db: DbConfig,
     pub component_service: ComponentServiceConfig,
     pub port: u16,
     pub custom_request_port: u16,
@@ -52,7 +53,7 @@ impl Default for WorkerServiceBaseConfig {
     fn default() -> Self {
         Self {
             environment: "local".to_string(),
-            redis: RedisConfig::default(),
+            db: DbConfig::default(),
             component_service: ComponentServiceConfig::default(),
             tracing: tracing::Config::local_dev("worker-service"),
             port: 9000,

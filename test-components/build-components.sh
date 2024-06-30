@@ -10,7 +10,7 @@ js_test_components=("js-1" "js-2" "js-3" "js-4" "js-echo")
 java_test_components=("java-1" "java-2")
 dotnet_test_components=("csharp-1")
 swift_test_components=("swift-1")
-c_test_components=("c-1")
+c_test_components=("c-1" "large-initial-memory" "large-dynamic-memory")
 python_test_components=("python-1" "py-echo")
 
 # Optional arguments:
