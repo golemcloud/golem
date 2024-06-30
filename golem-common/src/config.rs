@@ -74,7 +74,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
 
         match dump {
             dump::Dump::RootValue(dump) => dump.root_value(&config),
-            dump::Dump::VisitorDump(dump) => {
+            dump::Dump::Visitor(dump) => {
                 Self::dump_value(figment, &*dump, &mut Vec::new(), "", &config)
             }
         }
@@ -124,11 +124,11 @@ pub(crate) mod dump {
     use figment::Metadata;
 
     pub fn print(show_source: bool) -> Dump {
-        Dump::VisitorDump(Box::new(Print { show_source }))
+        Dump::Visitor(Box::new(Print { show_source }))
     }
 
     pub fn env_var() -> Dump {
-        Dump::VisitorDump(Box::new(EnvVar))
+        Dump::Visitor(Box::new(EnvVar))
     }
 
     pub fn toml() -> Dump {
@@ -137,7 +137,7 @@ pub(crate) mod dump {
 
     pub enum Dump {
         RootValue(Box<dyn RootValueDump>),
-        VisitorDump(Box<dyn VisitorDump>),
+        Visitor(Box<dyn VisitorDump>),
     }
 
     pub trait RootValueDump {
