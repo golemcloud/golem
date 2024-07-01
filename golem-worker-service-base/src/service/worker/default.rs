@@ -280,7 +280,10 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    )-> Result<ProtoInvokeResult, WorkerServiceError> where AuthCtx: Send + Sync, {
+    ) -> Result<ProtoInvokeResult, WorkerServiceError>
+    where
+        AuthCtx: Send + Sync,
+    {
         self.retry_on_invalid_shard_id(
             worker_id,
             &(worker_id.clone(), function_name, params, idempotency_key.clone(), *calling_convention, metadata, invocation_context),
@@ -525,15 +528,17 @@ where
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        let results_val = self.get_proto_invoke_result(
-            worker_id,
-            idempotency_key.map(|k| k.into()),
-            function_name_str.clone(),
-            params_val.clone(),
-            calling_convention,
-            invocation_context.clone(),
-            metadata.clone(),
-        ).await?;
+        let results_val = self
+            .get_proto_invoke_result(
+                worker_id,
+                idempotency_key.map(|k| k.into()),
+                function_name_str.clone(),
+                params_val.clone(),
+                calling_convention,
+                invocation_context.clone(),
+                metadata.clone(),
+            )
+            .await?;
 
         let analysed_function_results: Vec<AnalysedFunctionResult> = function_result_types
             .iter()
@@ -589,15 +594,17 @@ where
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        let invoke_result = self.get_proto_invoke_result(
-            worker_id,
-            idempotency_key.map(|k| k.into()),
-            function_name.clone(),
-            params_val.clone(),
-            calling_convention,
-            invocation_context.clone(),
-            metadata.clone(),
-        ).await?;
+        let invoke_result = self
+            .get_proto_invoke_result(
+                worker_id,
+                idempotency_key.map(|k| k.into()),
+                function_name.clone(),
+                params_val.clone(),
+                calling_convention,
+                invocation_context.clone(),
+                metadata.clone(),
+            )
+            .await?;
 
         let function_results: Vec<AnalysedFunctionResult> = function_type
             .results
@@ -652,15 +659,17 @@ where
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        let invoke_result = self.get_proto_invoke_result(
-            worker_id,
-            idempotency_key.map(|k| k.into()),
-            function_name.clone(),
-            params_val.clone(),
-            calling_convention,
-            invocation_context.clone(),
-            metadata.clone(),
-        ).await?;
+        let invoke_result = self
+            .get_proto_invoke_result(
+                worker_id,
+                idempotency_key.map(|k| k.into()),
+                function_name.clone(),
+                params_val.clone(),
+                calling_convention,
+                invocation_context.clone(),
+                metadata.clone(),
+            )
+            .await?;
 
         Ok(invoke_result)
     }
