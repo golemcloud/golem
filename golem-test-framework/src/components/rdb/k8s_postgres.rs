@@ -70,6 +70,13 @@ impl K8sPostgresRdb {
                 },
             },
             "spec": {
+                 "initContainers": [
+                    {
+                        "name": "init",
+                        "image": "busybox",
+                        "command": ["sh", "-c", "ulimit -n 1000000 && exec sleep 1"]
+                    }
+                ],
                 "ports": [{
                     "port": 5432,
                     "protocol": "TCP"

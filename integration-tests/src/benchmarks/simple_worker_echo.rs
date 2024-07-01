@@ -95,7 +95,7 @@ impl Benchmark for SimpleWorkerEcho {
         }
 
         for fiber in fibers {
-            fiber.await.expect("fiber failed");
+            fiber.await.expect("Fiber failed");
         }
     }
 
@@ -135,7 +135,7 @@ impl Benchmark for SimpleWorkerEcho {
         }
 
         for fiber in fibers {
-            fiber.await.expect("fiber failed");
+            fiber.await.expect("Fiber failed");
         }
     }
 

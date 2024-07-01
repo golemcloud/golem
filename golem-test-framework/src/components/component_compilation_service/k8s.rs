@@ -90,6 +90,13 @@ impl K8sComponentCompilationService {
                 },
             },
             "spec": {
+                 "initContainers": [
+                    {
+                        "name": "init",
+                        "image": "busybox",
+                        "command": ["sh", "-c", "ulimit -n 1000000 && exec sleep 1"]
+                    }
+                ],
                 "ports": [
                     {
                         "port": Self::GRPC_PORT,
