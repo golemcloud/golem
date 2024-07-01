@@ -119,7 +119,7 @@ mod tests {
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
     use crate::evaluator::{
-        ComponentMetadataFetcher, DefaultEvaluator, EvaluationError, Evaluator,
+        ComponentMetadataFetch, DefaultEvaluator, EvaluationError, Evaluator,
         ExprEvaluationResult, MetadataFetchError, FQN,
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
@@ -226,7 +226,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl ComponentMetadataFetcher for TestMetadataFetcher {
+    impl ComponentMetadataFetch for TestMetadataFetcher {
         async fn get_component_metadata(
             &self,
             _component_id: &ComponentId,
@@ -259,7 +259,7 @@ mod tests {
 
     fn get_test_metadata_fetcher(
         function_name: &str,
-    ) -> Arc<dyn ComponentMetadataFetcher + Sync + Send> {
+    ) -> Arc<dyn ComponentMetadataFetch + Sync + Send> {
         Arc::new(TestMetadataFetcher {
             test_fqn: FQN::try_from(function_name).unwrap(),
         })

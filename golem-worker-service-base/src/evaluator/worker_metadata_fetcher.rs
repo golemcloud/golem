@@ -4,7 +4,7 @@ use golem_service_base::model::ComponentMetadata;
 use std::fmt::Display;
 
 #[async_trait]
-pub trait ComponentMetadataFetcher {
+pub trait ComponentMetadataFetch {
     async fn get_component_metadata(
         &self,
         component_id: &ComponentId,
@@ -20,10 +20,10 @@ impl Display for MetadataFetchError {
     }
 }
 
-pub struct NoopComponentMetadataFetcher;
+pub struct NoopComponentMetadataFetch;
 
 #[async_trait]
-impl ComponentMetadataFetcher for NoopComponentMetadataFetcher {
+impl ComponentMetadataFetch for NoopComponentMetadataFetch {
     async fn get_component_metadata(
         &self,
         _component_id: &ComponentId,

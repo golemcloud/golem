@@ -59,7 +59,7 @@ impl StaticSymbolTable {
 
 pub mod cached {
     use crate::evaluator::symbol_table::StaticSymbolTable;
-    use crate::evaluator::worker_metadata_fetcher::{ComponentMetadataFetcher, MetadataFetchError};
+    use crate::evaluator::worker_metadata_fetcher::{ComponentMetadataFetch, MetadataFetchError};
     use async_trait::async_trait;
     use golem_common::cache::{BackgroundEvictionMode, Cache, SimpleCache};
     use golem_common::model::ComponentId;
@@ -68,13 +68,13 @@ pub mod cached {
 
     // The logic shouldn't be visible outside the crate
     pub(crate) struct DefaultSymbolTableFetch {
-        metadata_fetcher: Arc<dyn ComponentMetadataFetcher + Sync + Send>,
+        metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send>,
         cache: Cache<ComponentId, (), StaticSymbolTable, MetadataFetchError>,
     }
 
     impl DefaultSymbolTableFetch {
         pub(crate) fn new(
-            metadata_fetcher: Arc<dyn ComponentMetadataFetcher + Sync + Send>,
+            metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send>,
         ) -> Self {
             DefaultSymbolTableFetch {
                 metadata_fetcher,

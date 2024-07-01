@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::api_definition::http::HttpApiDefinition;
 use crate::evaluator::{
-    ComponentMetadataFetcher, DefaultEvaluator, DefaultSymbolTableFetch, Evaluator,
+    ComponentMetadataFetch, DefaultEvaluator, DefaultSymbolTableFetch, Evaluator,
     StaticSymbolTableFetch,
 };
 use futures_util::FutureExt;
@@ -31,7 +31,7 @@ pub struct CustomHttpRequestApi {
 impl CustomHttpRequestApi {
     pub fn new(
         worker_request_executor_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
-        component_metadata_fetch: Arc<dyn ComponentMetadataFetcher + Sync + Send>,
+        component_metadata_fetch: Arc<dyn ComponentMetadataFetch + Sync + Send>,
         api_definition_lookup_service: Arc<
             dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         >,
