@@ -1767,7 +1767,6 @@ pub struct ComponentMetadata {
 }
 
 impl ComponentMetadata {
-
     pub fn empty() -> ComponentMetadata {
         ComponentMetadata {
             exports: vec![],

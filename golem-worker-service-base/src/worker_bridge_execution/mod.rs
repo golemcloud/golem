@@ -19,5 +19,5 @@ pub struct WorkerRequest {
     pub function_name: FQN,
     pub function_params: Vec<TypeAnnotatedValue>,
     pub idempotency_key: Option<IdempotencyKey>,
-    pub component_metadata: ComponentMetadata
+    pub component_metadata: ComponentMetadata,
 }

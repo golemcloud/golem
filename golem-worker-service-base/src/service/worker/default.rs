@@ -520,6 +520,7 @@ where
             auth_ctx,
             &component_details.metadata,
         )
+        .await
     }
 
     async fn invoke_and_await_function_proto(

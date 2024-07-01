@@ -1,5 +1,5 @@
 use crate::evaluator::{Function, FQN};
-use golem_service_base::model::{Component, ComponentMetadata};
+use golem_service_base::model::ComponentMetadata;
 use rib::ParsedFunctionName;
 
 // ComponentElements consist of richer
@@ -16,7 +16,10 @@ pub struct ComponentElements {
 
 impl ComponentElements {
     pub fn empty() -> Self {
-        ComponentElements { functions: vec![], metadata: ComponentMetadata::empty() }
+        ComponentElements {
+            functions: vec![],
+            metadata: ComponentMetadata::empty(),
+        }
     }
 
     pub fn from_component_metadata(component_metadata: ComponentMetadata) -> Self {
