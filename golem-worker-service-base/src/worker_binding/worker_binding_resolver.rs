@@ -105,7 +105,7 @@ impl ResolvedWorkerBinding {
     pub async fn execute_with<R>(
         &self,
         evaluator: &Arc<dyn Evaluator + Sync + Send>,
-        symbol_fetch: &Arc<dyn StaticSymbolTableFetch + Sync + Send>,
+        symbol_fetch: &Arc<dyn ComponentElementsFetch + Sync + Send>,
     ) -> R
     where
         ExprEvaluationResult: ToResponse<R>,
@@ -231,7 +231,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 mod internal {
     use crate::evaluator::{
         EvaluationContext, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError,
-        StaticSymbolTableFetch,
+        ComponentElementsFetch,
     };
     use crate::worker_binding::ResolvedWorkerBinding;
     use crate::worker_bridge_execution::to_response::ToResponse;
@@ -255,7 +255,7 @@ mod internal {
         resolved_worker_binding: &ResolvedWorkerBinding,
         worker_id: &WorkerId,
         evaluator: &Arc<dyn Evaluator + Sync + Send>,
-        symbol_table_fetch: &Arc<dyn StaticSymbolTableFetch + Sync + Send>,
+        component_elements_fetch: &Arc<dyn ComponentElementsFetch + Sync + Send>,
         cache_presence: CachePresence,
     ) -> R
     where
@@ -263,16 +263,16 @@ mod internal {
         EvaluationError: ToResponse<R>,
         MetadataFetchError: ToResponse<R>,
     {
-        let functions_available = symbol_table_fetch
-            .get_static_symbol_table(worker_id.component_id.clone())
+        let functions_available = component_elements_fetch
+            .get_component_elements(worker_id.component_id.clone())
             .await;
 
         match functions_available {
-            Ok(symbol_table) => {
+            Ok(component_elements) => {
                 let evaluation_context = EvaluationContext::from_all(
                     &resolved_worker_binding.worker_detail,
                     &resolved_worker_binding.request_details,
-                    symbol_table,
+                    component_elements,
                 );
 
                 match evaluation_context {
@@ -291,13 +291,13 @@ mod internal {
                                 EvaluationError::FunctionInvokeError(_)
                                     if cache_presence.is_present() =>
                                 {
-                                    symbol_table_fetch
-                                        .invalidate_in_memory_symbol_table(&worker_id.component_id);
+                                    component_elements_fetch
+                                        .invalidate_cached_component_elements(&worker_id.component_id);
                                     Box::pin(get_response(
                                         resolved_worker_binding,
                                         worker_id,
                                         evaluator,
-                                        symbol_table_fetch,
+                                        component_elements_fetch,
                                         CachePresence::Absent,
                                     ))
                                     .await

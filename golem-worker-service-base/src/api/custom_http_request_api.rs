@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use crate::api_definition::http::HttpApiDefinition;
 use crate::evaluator::{
-    ComponentMetadataFetch, DefaultEvaluator, DefaultSymbolTableFetch, Evaluator,
-    StaticSymbolTableFetch,
+    ComponentMetadataFetch, DefaultEvaluator, DefaultComponentElementsFetch, Evaluator,
+    ComponentElementsFetch,
 };
 use futures_util::FutureExt;
 use hyper::header::HOST;
@@ -23,7 +23,7 @@ use crate::worker_bridge_execution::WorkerRequestExecutor;
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
     evaluator: Arc<dyn Evaluator + Sync + Send>,
-    static_symbol_table_fetch: Arc<dyn StaticSymbolTableFetch + Sync + Send>,
+    component_elements_fetch: Arc<dyn ComponentElementsFetch + Sync + Send>,
     api_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
 }
@@ -40,13 +40,13 @@ impl CustomHttpRequestApi {
             worker_request_executor_service.clone(),
         ));
 
-        let static_symbol_table_fetch = Arc::new(DefaultSymbolTableFetch::new(
+        let component_elements_fetch = Arc::new(DefaultComponentElementsFetch::new(
             component_metadata_fetch.clone(),
         ));
 
         Self {
             evaluator,
-            static_symbol_table_fetch,
+            component_elements_fetch,
             api_definition_lookup_service,
         }
     }
@@ -110,7 +110,7 @@ impl CustomHttpRequestApi {
                 resolved_worker_request
                     .execute_with::<poem::Response>(
                         &self.evaluator,
-                        &self.static_symbol_table_fetch,
+                        &self.component_elements_fetch,
                     )
                     .await
             }

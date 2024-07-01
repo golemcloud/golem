@@ -6,13 +6,13 @@ use rib::ParsedFunctionName;
 // except for worker_id
 // Here the lowest
 #[derive(Debug, Clone)]
-pub struct StaticSymbolTable {
+pub struct ComponentElements {
     pub functions: Vec<Function>,
 }
 
-impl StaticSymbolTable {
+impl ComponentElements {
     pub fn empty() -> Self {
-        StaticSymbolTable { functions: vec![] }
+        ComponentElements { functions: vec![] }
     }
 
     pub fn from_component_metadata(component_metadata: ComponentMetadata) -> Self {
@@ -48,7 +48,7 @@ impl StaticSymbolTable {
             })
             .collect::<Vec<Function>>();
 
-        StaticSymbolTable {
+        ComponentElements {
             functions: function_of_interfaces
                 .into_iter()
                 .chain(functions)
@@ -58,8 +58,8 @@ impl StaticSymbolTable {
 }
 
 pub mod cached {
-    use crate::evaluator::symbol_table::StaticSymbolTable;
-    use crate::evaluator::worker_metadata_fetcher::{ComponentMetadataFetch, MetadataFetchError};
+    use crate::evaluator::component_elements::ComponentElements;
+    use crate::evaluator::component_metadata_fetch::{ComponentMetadataFetch, MetadataFetchError};
     use async_trait::async_trait;
     use golem_common::cache::{BackgroundEvictionMode, Cache, SimpleCache};
     use golem_common::model::ComponentId;
@@ -67,16 +67,16 @@ pub mod cached {
     use std::sync::Arc;
 
     // The logic shouldn't be visible outside the crate
-    pub(crate) struct DefaultSymbolTableFetch {
-        metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send>,
-        cache: Cache<ComponentId, (), StaticSymbolTable, MetadataFetchError>,
+    pub(crate) struct DefaultComponentElementsFetch {
+        component_metadata_fetch: Arc<dyn ComponentMetadataFetch + Sync + Send>,
+        component_elements_cache: Cache<ComponentId, (), ComponentElements, MetadataFetchError>,
     }
 
-    impl DefaultSymbolTableFetch {
+    impl DefaultComponentElementsFetch {
         pub(crate) fn new(metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send>) -> Self {
-            DefaultSymbolTableFetch {
-                metadata_fetcher,
-                cache: Cache::new(
+            DefaultComponentElementsFetch {
+                component_metadata_fetch: metadata_fetcher,
+                component_elements_cache: Cache::new(
                     Some(10000),
                     golem_common::cache::FullCacheEvictionMode::LeastRecentlyUsed(1),
                     BackgroundEvictionMode::None,
@@ -87,29 +87,29 @@ pub mod cached {
     }
 
     #[async_trait]
-    pub(crate) trait StaticSymbolTableFetch {
-        async fn get_static_symbol_table(
+    pub(crate) trait ComponentElementsFetch {
+        async fn get_component_elements(
             &self,
             component_id: ComponentId,
-        ) -> Result<StaticSymbolTable, MetadataFetchError>;
+        ) -> Result<ComponentElements, MetadataFetchError>;
 
-        fn invalidate_in_memory_symbol_table(&self, component_id: &ComponentId);
+        fn invalidate_cached_component_elements(&self, component_id: &ComponentId);
     }
 
     #[async_trait]
-    impl StaticSymbolTableFetch for DefaultSymbolTableFetch {
-        async fn get_static_symbol_table(
+    impl ComponentElementsFetch for DefaultComponentElementsFetch {
+        async fn get_component_elements(
             &self,
             component_id: ComponentId,
-        ) -> Result<StaticSymbolTable, MetadataFetchError> {
-            self.cache
+        ) -> Result<ComponentElements, MetadataFetchError> {
+            self.component_elements_cache
                 .get_or_insert_simple(&component_id.clone(), || {
-                    let metadata_fetcher = self.metadata_fetcher.clone();
+                    let metadata_fetcher = self.component_metadata_fetch.clone();
                     Box::pin(async move {
                         let component_metadata = metadata_fetcher
                             .get_component_metadata(&component_id)
                             .await?;
-                        Ok(StaticSymbolTable::from_component_metadata(
+                        Ok(ComponentElements::from_component_metadata(
                             component_metadata,
                         ))
                     })
@@ -117,8 +117,8 @@ pub mod cached {
                 .await
         }
 
-        fn invalidate_in_memory_symbol_table(&self, component_id: &ComponentId) {
-            self.cache.remove(component_id);
+        fn invalidate_cached_component_elements(&self, component_id: &ComponentId) {
+            self.component_elements_cache.remove(component_id);
         }
     }
 }

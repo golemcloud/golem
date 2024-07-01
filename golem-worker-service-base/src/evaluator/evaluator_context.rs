@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display, Formatter};
 use crate::evaluator::evaluator_context::internal::create_record;
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
-use crate::evaluator::{Getter, StaticSymbolTable};
+use crate::evaluator::{Getter, ComponentElements};
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::RefinedWorkerResponse;
@@ -14,7 +14,7 @@ use rib::ParsedFunctionName;
 #[derive(Debug, Clone)]
 pub struct EvaluationContext {
     pub variables: Option<TypeAnnotatedValue>,
-    pub static_symbol_table: StaticSymbolTable,
+    pub component_elements: ComponentElements,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -57,13 +57,13 @@ pub struct Function {
 
 impl EvaluationContext {
     pub fn functions(&self) -> &Vec<Function> {
-        &self.static_symbol_table.functions
+        &self.component_elements.functions
     }
 
     pub fn empty() -> Self {
         EvaluationContext {
             variables: None,
-            static_symbol_table: StaticSymbolTable::empty(),
+            component_elements: ComponentElements::empty(),
         }
     }
 
@@ -104,7 +104,7 @@ impl EvaluationContext {
     pub fn from_all(
         worker_detail: &WorkerDetail,
         request: &RequestDetails,
-        static_symbol_table: StaticSymbolTable,
+        component_elements: ComponentElements,
     ) -> Result<Self, String> {
         let mut request_data = internal::request_type_annotated_value(request);
         let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
@@ -112,7 +112,7 @@ impl EvaluationContext {
 
         Ok(EvaluationContext {
             variables: Some(merged.clone()),
-            static_symbol_table,
+            component_elements,
         })
     }
 
@@ -122,7 +122,7 @@ impl EvaluationContext {
 
         EvaluationContext {
             variables: Some(worker_data),
-            static_symbol_table: StaticSymbolTable::empty(),
+            component_elements: ComponentElements::empty(),
         }
     }
 
@@ -131,7 +131,7 @@ impl EvaluationContext {
 
         EvaluationContext {
             variables: Some(variables),
-            static_symbol_table: StaticSymbolTable::empty(),
+            component_elements: ComponentElements::empty(),
         }
     }
 
@@ -145,7 +145,7 @@ impl EvaluationContext {
 
             EvaluationContext {
                 variables: Some(worker_data),
-                static_symbol_table: StaticSymbolTable::empty(),
+                component_elements: ComponentElements::empty(),
             }
         } else {
             EvaluationContext::empty()

@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 pub use evaluator_context::*;
-pub(crate) use symbol_table::cached::*;
-pub use symbol_table::*;
-pub use worker_metadata_fetcher::*;
+pub(crate) use component_elements::cached::*;
+pub use component_elements::*;
+pub use component_metadata_fetch::*;
 
 use std::sync::Arc;
 mod evaluator_context;
@@ -10,9 +10,9 @@ pub(crate) mod getter;
 mod math_op_evaluator;
 pub(crate) mod path;
 mod pattern_match_evaluator;
-mod worker_metadata_fetcher;
+mod component_metadata_fetch;
 
-mod symbol_table;
+mod component_elements;
 
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
