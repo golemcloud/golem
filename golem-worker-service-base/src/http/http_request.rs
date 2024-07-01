@@ -112,15 +112,15 @@ mod tests {
 
     use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_service_base::model::{
-        ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId,
+        ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult,
     };
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
     use crate::evaluator::{
-        ComponentMetadataFetch, DefaultEvaluator, EvaluationError, Evaluator,
-        ExprEvaluationResult, MetadataFetchError, FQN,
+        ComponentMetadataFetch, DefaultEvaluator, DefaultSymbolTableFetch, EvaluationError,
+        Evaluator, ExprEvaluationResult, MetadataFetchError, StaticSymbolTableFetch, FQN,
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
@@ -323,16 +323,18 @@ mod tests {
         api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api.{get-cart-contents}");
+        let symbol_fetch: Arc<dyn StaticSymbolTableFetch + Sync + Send> = {
+            Arc::new(DefaultSymbolTableFetch::new(get_test_metadata_fetcher(
+                "golem:it/api.{get-cart-contents}",
+            )))
+        };
 
         let resolved_route = api_request
             .resolve(vec![api_specification.clone()])
             .await
             .unwrap();
 
-        resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await
+        resolved_route.execute_with(&evaluator, &symbol_fetch).await
     }
 
     #[tokio::test]

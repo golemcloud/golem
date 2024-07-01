@@ -105,7 +105,7 @@ impl ResolvedWorkerBinding {
     pub async fn execute_with<R>(
         &self,
         evaluator: &Arc<dyn Evaluator + Sync + Send>,
-        worker_metadata_fetcher: &Arc<dyn StaticSymbolTableFetch + Sync + Send>,
+        symbol_fetch: &Arc<dyn StaticSymbolTableFetch + Sync + Send>,
     ) -> R
     where
         ExprEvaluationResult: ToResponse<R>,
@@ -125,10 +125,10 @@ impl ResolvedWorkerBinding {
         };
 
         internal::get_response(
-            &self,
+            self,
             &worker_id,
             evaluator,
-            worker_metadata_fetcher,
+            symbol_fetch,
             internal::CachePresence::Present,
         )
         .await
@@ -294,7 +294,7 @@ mod internal {
                                     symbol_table_fetch
                                         .invalidate_in_memory_symbol_table(&worker_id.component_id);
                                     Box::pin(get_response(
-                                        &resolved_worker_binding,
+                                        resolved_worker_binding,
                                         worker_id,
                                         evaluator,
                                         symbol_table_fetch,

@@ -73,9 +73,7 @@ pub mod cached {
     }
 
     impl DefaultSymbolTableFetch {
-        pub(crate) fn new(
-            metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send>,
-        ) -> Self {
+        pub(crate) fn new(metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send>) -> Self {
             DefaultSymbolTableFetch {
                 metadata_fetcher,
                 cache: Cache::new(
