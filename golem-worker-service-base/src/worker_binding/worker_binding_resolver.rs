@@ -254,7 +254,7 @@ mod internal {
             MetadataFetchError: ToResponse<R>, {
 
         let functions_available = symbol_table_fetch
-            .get_static_symbol_table(&worker_id.component_id)
+            .get_static_symbol_table(worker_id.component_id.clone())
             .await;
 
         match functions_available {

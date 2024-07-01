@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::api_definition::http::HttpApiDefinition;
-use crate::evaluator::{DefaultEvaluator, Evaluator, ComponentMetadataFetcher, StaticSymbolTableFetch};
+use crate::evaluator::{DefaultEvaluator, Evaluator, ComponentMetadataFetcher, StaticSymbolTableFetch, DefaultSymbolTableFetch};
 use futures_util::FutureExt;
 use hyper::header::HOST;
 use poem::http::StatusCode;
@@ -20,7 +20,7 @@ use crate::worker_bridge_execution::WorkerRequestExecutor;
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
     pub evaluator: Arc<dyn Evaluator + Sync + Send>,
-    pub static_symbol_table_fetcher: Arc<dyn StaticSymbolTableFetch + Sync + Send>,
+    pub(crate) static_symbol_table_fetch: Arc<dyn StaticSymbolTableFetch + Sync + Send>,
     pub api_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
 }
@@ -28,7 +28,7 @@ pub struct CustomHttpRequestApi {
 impl CustomHttpRequestApi {
     pub fn new(
         worker_request_executor_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
-        symbol_table_fetch: Arc<dyn ComponentMetadataFetcher + Sync + Send>,
+        component_metadata_fetch: Arc<dyn ComponentMetadataFetcher + Sync + Send>,
         api_definition_lookup_service: Arc<
             dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         >,
@@ -37,9 +37,13 @@ impl CustomHttpRequestApi {
             worker_request_executor_service.clone(),
         ));
 
+        let static_symbol_table_fetch = Arc::new(DefaultSymbolTableFetch::new(
+            component_metadata_fetch.clone(),
+        ));
+
         Self {
             evaluator,
-            static_symbol_table_fetcher: symbol_table_fetch,
+            static_symbol_table_fetch,
             api_definition_lookup_service,
         }
     }
@@ -101,7 +105,7 @@ impl CustomHttpRequestApi {
         match api_request.resolve(possible_api_definitions).await {
             Ok(resolved_worker_request) => {
                 resolved_worker_request
-                    .execute_with::<poem::Response>(&self.evaluator, &self.static_symbol_table_fetcher)
+                    .execute_with::<poem::Response>(&self.evaluator, &self.static_symbol_table_fetch)
                     .await
             }
 

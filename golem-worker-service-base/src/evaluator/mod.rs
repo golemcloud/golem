@@ -2,7 +2,7 @@ use async_trait::async_trait;
 pub use evaluator_context::*;
 pub use worker_metadata_fetcher::*;
 pub use symbol_table::*;
-pub use symbol_table::cached::*;
+pub(crate) use symbol_table::cached::*;
 
 use std::sync::Arc;
 mod evaluator_context;

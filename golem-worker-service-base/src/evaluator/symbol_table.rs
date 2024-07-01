@@ -59,7 +59,7 @@ impl StaticSymbolTable {
     }
 }
 
-pub(crate) mod cached {
+pub mod cached {
     use std::sync::Arc;
     use async_trait::async_trait;
     use golem_common::cache::{BackgroundEvictionMode, Cache, SimpleCache};
@@ -75,7 +75,7 @@ pub(crate) mod cached {
     }
 
     impl DefaultSymbolTableFetch {
-        pub fn new(metadata_fetcher:  Arc<dyn ComponentMetadataFetcher + Sync + Send>,) -> Self {
+        pub(crate) fn new(metadata_fetcher:  Arc<dyn ComponentMetadataFetcher + Sync + Send>,) -> Self {
             DefaultSymbolTableFetch {
                 metadata_fetcher,
                 cache: Cache::new(
@@ -92,7 +92,7 @@ pub(crate) mod cached {
     pub(crate) trait StaticSymbolTableFetch {
         async fn get_static_symbol_table(
             &self,
-            component_id: &ComponentId,
+            component_id: ComponentId,
         ) -> Result<StaticSymbolTable, MetadataFetchError>;
 
         fn invalidate_in_memory_symbol_table(&self, component_id: &ComponentId);
@@ -102,13 +102,13 @@ pub(crate) mod cached {
     impl StaticSymbolTableFetch for DefaultSymbolTableFetch {
         async fn get_static_symbol_table(
             &self,
-            component_id: &ComponentId,
+            component_id: ComponentId,
         ) -> Result<StaticSymbolTable, MetadataFetchError> {
             self.cache
-                .get_or_insert_simple(component_id, || {
+                .get_or_insert_simple(&component_id.clone(), || {
                     let metadata_fetcher = self.metadata_fetcher.clone();
                     Box::pin(async move {
-                        let component_metadata= metadata_fetcher.get_component_metadata(component_id).await?;
+                        let component_metadata= metadata_fetcher.get_component_metadata(&component_id).await?;
                         Ok(StaticSymbolTable::from_component_metadata(component_metadata))
                     })
                 })
