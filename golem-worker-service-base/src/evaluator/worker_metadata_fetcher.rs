@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
-use golem_service_base::model::{ComponentMetadata};
+use golem_service_base::model::ComponentMetadata;
 use std::fmt::Display;
 
 #[async_trait]
