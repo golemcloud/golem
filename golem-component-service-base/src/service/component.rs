@@ -163,8 +163,11 @@ where
         data: Vec<u8>,
         namespace: &Namespace,
     ) -> Result<Component, ComponentError> {
-        let tn = component_name.0.clone();
-        info!("Creating component  with name {}", tn);
+        info!(
+            "Creating component - namespace: {}, name: {}",
+            namespace,
+            component_name.0.clone()
+        );
 
         self.find_ids_by_name(component_name, namespace)
             .await?
@@ -189,8 +192,8 @@ where
         };
 
         info!(
-            "Uploaded component {} version 0 with exports {:?}",
-            versioned_component_id.component_id, metadata.exports
+            "Uploaded component - namespace: {}, id: {}, version: 0, exports {:?}",
+            namespace, versioned_component_id.component_id, metadata.exports
         );
 
         let component_size: u64 = data
@@ -230,7 +233,10 @@ where
         data: Vec<u8>,
         namespace: &Namespace,
     ) -> Result<Component, ComponentError> {
-        info!("Updating component {}", component_id);
+        info!(
+            "Updating component - namespace: {}, id: {}",
+            namespace, component_id
+        );
 
         let metadata = process_component(&data)?;
 
@@ -246,8 +252,11 @@ where
             .map(Component::next_version)?;
 
         info!(
-            "Uploaded component {} version {} with exports {:?}",
-            component_id, next_component.versioned_component_id.version, metadata.exports
+            "Uploaded component - namespace: {}, id: {}, version: {}, exports {:?}",
+            namespace,
+            component_id,
+            next_component.versioned_component_id.version,
+            metadata.exports
         );
 
         let component_size: u64 = data
@@ -298,8 +307,8 @@ where
             }
         };
         info!(
-            "Downloading component {} version {}",
-            component_id, versioned_component_id.version
+            "Downloading component - namespace: {}, id: {}, version: {}",
+            namespace, component_id, versioned_component_id.version
         );
 
         let id = ProtectedComponentId {
@@ -334,8 +343,8 @@ where
             }
         };
         info!(
-            "Downloading component {} version {}",
-            component_id, versioned_component_id.version
+            "Downloading component - namespace: {}, id: {}, version: {}",
+            namespace, component_id, versioned_component_id.version
         );
 
         let id = ProtectedComponentId {
@@ -357,7 +366,8 @@ where
         namespace: &Namespace,
     ) -> Result<Option<Vec<u8>>, ComponentError> {
         info!(
-            "Getting component {} version {} data",
+            "Getting component data - namespace: {}, id: {}, version: {}",
+            namespace,
             component_id,
             version.map_or("N/A".to_string(), |v| v.to_string())
         );
@@ -418,8 +428,11 @@ where
         component_name: Option<ComponentName>,
         namespace: &Namespace,
     ) -> Result<Vec<Component>, ComponentError> {
-        let tn = component_name.clone().map_or("N/A".to_string(), |n| n.0);
-        info!("Getting component name {}", tn);
+        let cn = component_name.clone().map_or("N/A".to_string(), |n| n.0);
+        info!(
+            "Find component by name - namespace: {}, name: {}",
+            namespace, cn
+        );
 
         let records = match component_name {
             Some(name) => {
@@ -448,7 +461,10 @@ where
         component_id: &ComponentId,
         namespace: &Namespace,
     ) -> Result<Vec<Component>, ComponentError> {
-        info!("Getting component {}", component_id);
+        info!(
+            "Getting component - namespace: {}, id: {}",
+            namespace, component_id
+        );
         let records = self
             .component_repo
             .get(namespace.to_string().as_str(), &component_id.0)
@@ -469,8 +485,8 @@ where
         namespace: &Namespace,
     ) -> Result<Option<Component>, ComponentError> {
         info!(
-            "Getting component {} version {}",
-            component_id.component_id, component_id.version
+            "Getting component - namespace: {}, id: {}, version: {}",
+            namespace, component_id.component_id, component_id.version
         );
 
         let result = self
@@ -498,7 +514,10 @@ where
         component_id: &ComponentId,
         namespace: &Namespace,
     ) -> Result<Option<Component>, ComponentError> {
-        info!("Getting component {} latest version", component_id);
+        info!(
+            "Getting component - namespace: {}, id: {}, version: latest",
+            namespace, component_id
+        );
         let result = self
             .component_repo
             .get_latest_version(namespace.to_string().as_str(), &component_id.0)
@@ -519,7 +538,7 @@ where
         &self,
         component_id: &ComponentId,
     ) -> Result<Option<Namespace>, ComponentError> {
-        info!("Getting component {} namespace", component_id);
+        info!("Getting component namespace - id: {}", component_id);
         let result = self.component_repo.get_namespaces(&component_id.0).await?;
 
         if result.is_empty() {
