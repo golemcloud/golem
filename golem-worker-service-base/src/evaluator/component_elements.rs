@@ -9,9 +9,7 @@ pub struct ComponentElements {
 
 impl ComponentElements {
     pub fn empty() -> Self {
-        ComponentElements {
-            functions: vec![],
-        }
+        ComponentElements { functions: vec![] }
     }
 
     pub fn from_component_metadata(component_metadata: ComponentMetadata) -> Self {

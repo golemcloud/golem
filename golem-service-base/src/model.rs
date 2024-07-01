@@ -1801,9 +1801,16 @@ impl ComponentMetadata {
         self.get_export_function(parsed)
     }
 
-    pub fn get_export_function(&self, parsed_function_name: ParsedFunctionName) -> Result<Option<ExportFunction>, String> {
+    pub fn get_export_function(
+        &self,
+        parsed_function_name: ParsedFunctionName,
+    ) -> Result<Option<ExportFunction>, String> {
         match &parsed_function_name.site().interface_name() {
-            None => Ok(self.functions().iter().find(|f| f.name == *parsed_function_name.function.function_name()).cloned()),
+            None => Ok(self
+                .functions()
+                .iter()
+                .find(|f| f.name == *parsed_function_name.function.function_name())
+                .cloned()),
             Some(interface_name) => {
                 let exported_function = self
                     .instances()

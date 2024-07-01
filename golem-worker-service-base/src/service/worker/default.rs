@@ -23,11 +23,15 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
 };
 
+use crate::evaluator::{ComponentElements, FQN};
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
 };
-use golem_service_base::model::{ComponentMetadata, ExportFunction, FunctionParameter, FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata};
+use golem_service_base::model::{
+    ComponentMetadata, ExportFunction, FunctionParameter, FunctionResult, GolemErrorUnknown,
+    PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
+};
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
     model::{Component, GolemError, GolemErrorInvalidShardId, GolemErrorRuntimeError},
@@ -35,7 +39,6 @@ use golem_service_base::{
     worker_executor_clients::WorkerExecutorClients,
 };
 use rib::ParsedFunctionName;
-use crate::evaluator::{ComponentElements, FQN};
 
 use crate::service::component::ComponentService;
 
@@ -103,7 +106,7 @@ pub trait WorkerService<AuthCtx> {
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         function_parameters: Vec<FunctionParameter>,
-        function_results: Vec<FunctionResult>
+        function_results: Vec<FunctionResult>,
     ) -> WorkerResult<TypedResult>;
 
     async fn invoke_and_await_function_proto(
@@ -240,7 +243,6 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
             .unwrap_or(false);
 
         Self::get_expected_function_parameters_internal(is_indexed, function_parameters)
-
     }
 
     fn get_expected_function_parameters_parsed(
@@ -269,6 +271,60 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
         }
     }
 
+    async fn get_proto_invoke_result(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: Option<ProtoIdempotencyKey>,
+        function_name: String,
+        params: Vec<ProtoVal>,
+        calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
+        metadata: WorkerRequestMetadata,
+    ) -> Result<ProtoInvokeResult, WorkerServiceError> {
+        self.retry_on_invalid_shard_id(
+            worker_id,
+            &(worker_id.clone(), function_name, params, idempotency_key.clone(), *calling_convention, metadata, invocation_context),
+            |worker_executor_client, (worker_id, function_name, params_val, idempotency_key, calling_convention, metadata, invocation_context)| {
+                Box::pin(async move {
+                    let response = worker_executor_client.invoke_and_await_worker(
+                        InvokeAndAwaitWorkerRequest {
+                            worker_id: Some(worker_id.clone().into()),
+                            name: function_name.clone(),
+                            input: params_val.clone(),
+                            idempotency_key: idempotency_key.clone(),
+                            calling_convention: (*calling_convention).into(),
+                            account_id: metadata.account_id.clone().map(|id| id.into()),
+                            account_limits: metadata.limits.clone().map(|id| id.into()),
+                            context: invocation_context.clone()
+                        }
+                    ).await.map_err(|err| {
+                        GolemError::RuntimeError(GolemErrorRuntimeError {
+                            details: err.to_string(),
+                        })
+                    })?;
+                    match response.into_inner() {
+                        workerexecutor::InvokeAndAwaitWorkerResponse {
+                            result:
+                            Some(workerexecutor::invoke_and_await_worker_response::Result::Success(
+                                     workerexecutor::InvokeAndAwaitWorkerSuccess {
+                                         output,
+                                     },
+                                 )),
+                        } => Ok(ProtoInvokeResult { result: output }),
+                        workerexecutor::InvokeAndAwaitWorkerResponse {
+                            result:
+                            Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(err)),
+                        } => Err(err.try_into().unwrap()),
+                        workerexecutor::InvokeAndAwaitWorkerResponse { .. } => {
+                            Err(GolemError::Unknown(GolemErrorUnknown {
+                                details: "Empty response".to_string(),
+                            }))
+                        }
+                    }
+                })
+            },
+        ).await
+    }
 }
 
 #[async_trait]
@@ -455,61 +511,28 @@ where
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         function_parameter_types: Vec<FunctionParameter>,
-        function_result_types: Vec<FunctionResult>
+        function_result_types: Vec<FunctionResult>,
     ) -> WorkerResult<TypedResult> {
-        let function_name_str= function_name.function.function_name().to_string();
+        let function_name_str = function_name.function.function_name().to_string();
 
         let params_val = params
             .validate_function_parameters(
-                Self::get_expected_function_parameters_parsed(&function_name, &function_parameter_types),
+                Self::get_expected_function_parameters_parsed(
+                    &function_name,
+                    &function_parameter_types,
+                ),
                 *calling_convention,
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        let proto_idempotency_key = idempotency_key.map(|k| k.into());
-
-        let results_val = self.retry_on_invalid_shard_id(
+        let results_val = self.get_proto_invoke_result(
             worker_id,
-            &(worker_id.clone(), function_name, params_val, proto_idempotency_key.clone(), *calling_convention, metadata, invocation_context),
-            |worker_executor_client, (worker_id, function_name, params_val, idempotency_key, calling_convention, metadata, invocation_context)| {
-                Box::pin(async move {
-                    let response = worker_executor_client.invoke_and_await_worker(
-                        InvokeAndAwaitWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
-                            name: function_name_str.clone(),
-                            input: params_val.clone(),
-                            idempotency_key: idempotency_key.clone(),
-                            calling_convention: (*calling_convention).into(),
-                            account_id: metadata.account_id.clone().map(|id| id.into()),
-                            account_limits: metadata.limits.clone().map(|id| id.into()),
-                            context: invocation_context.clone()
-                        }
-                    ).await.map_err(|err| {
-                        GolemError::RuntimeError(GolemErrorRuntimeError {
-                            details: err.to_string(),
-                        })
-                    })?;
-                    match response.into_inner() {
-                        workerexecutor::InvokeAndAwaitWorkerResponse {
-                            result:
-                            Some(workerexecutor::invoke_and_await_worker_response::Result::Success(
-                                     workerexecutor::InvokeAndAwaitWorkerSuccess {
-                                         output,
-                                     },
-                                 )),
-                        } => Ok(ProtoInvokeResult { result: output }),
-                        workerexecutor::InvokeAndAwaitWorkerResponse {
-                            result:
-                            Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(err)),
-                        } => Err(err.try_into().unwrap()),
-                        workerexecutor::InvokeAndAwaitWorkerResponse { .. } => {
-                            Err(GolemError::Unknown(GolemErrorUnknown {
-                                details: "Empty response".to_string(),
-                            }))
-                        }
-                    }
-                })
-            },
+            idempotency_key.map(|k| k.into()),
+            function_name_str.clone(),
+            params_val.clone(),
+            calling_convention,
+            invocation_context.clone(),
+            metadata.clone(),
         ).await?;
 
         let analysed_function_results: Vec<AnalysedFunctionResult> = function_result_types
@@ -566,50 +589,14 @@ where
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        let proto_idempotency_key = idempotency_key.map(|k| k.into());
-
-        let invoke_response = self.retry_on_invalid_shard_id(
+        let invoke_result = self.get_proto_invoke_result(
             worker_id,
-            &(worker_id.clone(), function_name, params_val, proto_idempotency_key.clone(), *calling_convention, metadata, invocation_context),
-            |worker_executor_client, (worker_id, function_name, params_val, idempotency_key, calling_convention, metadata, invocation_context)| {
-                Box::pin(async move {
-                    let response = worker_executor_client.invoke_and_await_worker(
-                        InvokeAndAwaitWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
-                            name: function_name.clone(),
-                            input: params_val.clone(),
-                            idempotency_key: idempotency_key.clone(),
-                            calling_convention: (*calling_convention).into(),
-                            account_id: metadata.account_id.clone().map(|id| id.into()),
-                            account_limits: metadata.limits.clone().map(|id| id.into()),
-                            context: invocation_context.clone()
-                        }
-                    ).await.map_err(|err| {
-                        GolemError::RuntimeError(GolemErrorRuntimeError {
-                            details: err.to_string(),
-                        })
-                    })?;
-                    match response.into_inner() {
-                        workerexecutor::InvokeAndAwaitWorkerResponse {
-                            result:
-                            Some(workerexecutor::invoke_and_await_worker_response::Result::Success(
-                                     workerexecutor::InvokeAndAwaitWorkerSuccess {
-                                         output,
-                                     },
-                                 )),
-                        } => Ok(ProtoInvokeResult { result: output }),
-                        workerexecutor::InvokeAndAwaitWorkerResponse {
-                            result:
-                            Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(err)),
-                        } => Err(err.try_into().unwrap()),
-                        workerexecutor::InvokeAndAwaitWorkerResponse { .. } => {
-                            Err(GolemError::Unknown(GolemErrorUnknown {
-                                details: "Empty response".to_string(),
-                            }))
-                        }
-                    }
-                })
-            },
+            idempotency_key.map(|k| k.into()),
+            function_name.clone(),
+            params_val.clone(),
+            calling_convention,
+            invocation_context.clone(),
+            metadata.clone(),
         ).await?;
 
         let function_results: Vec<AnalysedFunctionResult> = function_type
@@ -618,7 +605,7 @@ where
             .map(|x| x.clone().into())
             .collect();
 
-        invoke_response
+        invoke_result
             .result
             .validate_function_result(function_results, *calling_convention)
             .map(|result| TypedResult {
@@ -626,7 +613,6 @@ where
                 function_result_types: function_type.results,
             })
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
-
     }
 
     async fn invoke_and_await_function_proto(
@@ -666,51 +652,17 @@ where
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        let invoke_response = self.retry_on_invalid_shard_id(
+        let invoke_result = self.get_proto_invoke_result(
             worker_id,
-            &(worker_id.clone(), function_name, params_val, idempotency_key.clone(), *calling_convention, metadata, invocation_context),
-            |worker_executor_client, (worker_id, function_name, params_val, idempotency_key, calling_convention, metadata, invocation_context)| {
-                Box::pin(async move {
-                    let response = worker_executor_client.invoke_and_await_worker(
-                        InvokeAndAwaitWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
-                            name: function_name.clone(),
-                            input: params_val.clone(),
-                            idempotency_key: idempotency_key.clone(),
-                            calling_convention: (*calling_convention).into(),
-                            account_id: metadata.account_id.clone().map(|id| id.into()),
-                            account_limits: metadata.limits.clone().map(|id| id.into()),
-                            context: invocation_context.clone()
-                        }
-                    ).await.map_err(|err| {
-                        GolemError::RuntimeError(GolemErrorRuntimeError {
-                            details: err.to_string(),
-                        })
-                    })?;
-                    match response.into_inner() {
-                        workerexecutor::InvokeAndAwaitWorkerResponse {
-                            result:
-                            Some(workerexecutor::invoke_and_await_worker_response::Result::Success(
-                                     workerexecutor::InvokeAndAwaitWorkerSuccess {
-                                         output,
-                                     },
-                                 )),
-                        } => Ok(ProtoInvokeResult { result: output }),
-                        workerexecutor::InvokeAndAwaitWorkerResponse {
-                            result:
-                            Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(err)),
-                        } => Err(err.try_into().unwrap()),
-                        workerexecutor::InvokeAndAwaitWorkerResponse { .. } => {
-                            Err(GolemError::Unknown(GolemErrorUnknown {
-                                details: "Empty response".to_string(),
-                            }))
-                        }
-                    }
-                })
-            },
+            idempotency_key.map(|k| k.into()),
+            function_name.clone(),
+            params_val.clone(),
+            calling_convention,
+            invocation_context.clone(),
+            metadata.clone(),
         ).await?;
 
-        Ok(invoke_response)
+        Ok(invoke_result)
     }
 
     async fn invoke_function(
@@ -1672,7 +1624,7 @@ where
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
         _function_parameters: Vec<FunctionParameter>,
-        _function_results: Vec<FunctionResult>
+        _function_results: Vec<FunctionResult>,
     ) -> WorkerResult<TypedResult> {
         Ok(TypedResult {
             result: TypeAnnotatedValue::Tuple {

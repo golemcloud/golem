@@ -79,7 +79,6 @@ mod internal {
             invoke_parameters_values.push(value);
         }
 
-
         let invoke_result = default_executor
             .worker_service
             .invoke_and_await_parsed_function(

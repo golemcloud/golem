@@ -8,7 +8,7 @@ mod refined_worker_response;
 pub mod to_response;
 mod worker_request_executor;
 
-use crate::evaluator::{ComponentElements, FQN, Function};
+use crate::evaluator::{ComponentElements, Function, FQN};
 pub use refined_worker_response::*;
 pub use worker_request_executor::*;
 
