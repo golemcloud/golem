@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use golem_service_base::model::{ComponentMetadata, WorkerId};
+use golem_service_base::model::ComponentMetadata;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::evaluator::{MetadataFetchError, ComponentMetadataFetch};
 use std::sync::Arc;
