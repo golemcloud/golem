@@ -18,23 +18,23 @@ pub struct EvaluationContext {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct FQN {
+pub struct Fqn {
     pub parsed_function_name: ParsedFunctionName,
 }
 
-impl TryFrom<&str> for FQN {
+impl TryFrom<&str> for Fqn {
     type Error = String;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let parsed_function_name = ParsedFunctionName::parse(value)?;
 
-        Ok(FQN {
+        Ok(Fqn {
             parsed_function_name,
         })
     }
 }
 
-impl Display for FQN {
+impl Display for Fqn {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let result = self.parsed_function_name.clone();
         let site = result.site();
@@ -50,7 +50,7 @@ impl Display for FQN {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct Function {
-    pub fqn: FQN,
+    pub fqn: Fqn,
     pub arguments: Vec<FunctionParameter>,
     pub return_type: Vec<FunctionResult>,
 }

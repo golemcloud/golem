@@ -234,7 +234,7 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
 
     fn get_expected_function_parameters(
         function_name: &str,
-        function_parameters: &Vec<FunctionParameter>,
+        function_parameters: &[FunctionParameter],
     ) -> Vec<AnalysedFunctionParameter> {
         let is_indexed = ParsedFunctionName::parse(function_name)
             .ok()
@@ -246,7 +246,7 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
 
     fn get_expected_function_parameters_parsed(
         parsed_function_name: &ParsedFunctionName,
-        function_parameters: &Vec<FunctionParameter>,
+        function_parameters: &[FunctionParameter],
     ) -> Vec<AnalysedFunctionParameter> {
         let is_indexed = parsed_function_name.function().is_indexed_resource();
         Self::get_expected_function_parameters_internal(is_indexed, function_parameters)
@@ -254,7 +254,7 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
 
     fn get_expected_function_parameters_internal(
         is_indexed: bool,
-        function_parameters: &Vec<FunctionParameter>,
+        function_parameters: &[FunctionParameter],
     ) -> Vec<AnalysedFunctionParameter> {
         if is_indexed {
             function_parameters
@@ -661,7 +661,7 @@ where
         let invoke_result = self
             .get_proto_invoke_result(
                 worker_id,
-                idempotency_key.map(|k| k.into()),
+                idempotency_key,
                 function_name.clone(),
                 params_val.clone(),
                 calling_convention,

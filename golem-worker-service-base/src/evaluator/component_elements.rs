@@ -1,5 +1,5 @@
 use crate::evaluator::component_metadata_fetch::{ComponentMetadataFetch, MetadataFetchError};
-use crate::evaluator::{Function, FQN};
+use crate::evaluator::{Fqn, Function};
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, SimpleCache};
 use golem_common::model::ComponentId;
@@ -23,7 +23,7 @@ impl ComponentElements {
         let functions = top_level_functions
             .iter()
             .map(|f| Function {
-                fqn: FQN {
+                fqn: Fqn {
                     parsed_function_name: ParsedFunctionName::global(f.name.clone()),
                 },
                 arguments: f.parameters.clone(),
@@ -36,7 +36,7 @@ impl ComponentElements {
             .iter()
             .flat_map(|i| {
                 i.functions.iter().map(move |f| Function {
-                    fqn: FQN {
+                    fqn: Fqn {
                         parsed_function_name: ParsedFunctionName::parse(format!(
                             "{}.{{{}}}",
                             i.name.clone(),

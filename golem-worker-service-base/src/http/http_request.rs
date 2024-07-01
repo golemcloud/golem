@@ -120,8 +120,8 @@ mod tests {
     use crate::evaluator::path::Path;
     use crate::evaluator::{
         ComponentElementsFetch, ComponentMetadataFetch, DefaultComponentElementsFetch,
-        DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError,
-        FQN,
+        DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult, Fqn,
+        MetadataFetchError,
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
@@ -223,7 +223,7 @@ mod tests {
     }
 
     struct TestMetadataFetcher {
-        test_fqn: FQN,
+        test_fqn: Fqn,
     }
 
     #[async_trait]
@@ -262,7 +262,7 @@ mod tests {
         function_name: &str,
     ) -> Arc<dyn ComponentMetadataFetch + Sync + Send> {
         Arc::new(TestMetadataFetcher {
-            test_fqn: FQN::try_from(function_name).unwrap(),
+            test_fqn: Fqn::try_from(function_name).unwrap(),
         })
     }
 
