@@ -28,8 +28,8 @@ use golem_common::model::{
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
-    ExportFunction, FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId,
-    WorkerMetadata,
+    ComponentMetadata, ExportFunction, FunctionResult, GolemErrorUnknown, PromiseId,
+    ResourceLimits, WorkerId, WorkerMetadata,
 };
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
@@ -93,6 +93,19 @@ pub trait WorkerService<AuthCtx> {
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
+    ) -> WorkerResult<TypedResult>;
+
+    async fn invoke_and_await_function_with_component_data(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Value,
+        calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+        component_metadata: &ComponentMetadata,
     ) -> WorkerResult<TypedResult>;
 
     async fn invoke_and_await_function_proto(
@@ -418,7 +431,7 @@ where
         Ok(get_json_from_typed_value(&typed_value.result))
     }
 
-    async fn invoke_and_await_function_typed_value(
+    async fn invoke_and_await_function_with_component_data(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
@@ -428,13 +441,9 @@ where
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
+        component: &ComponentMetadata,
     ) -> WorkerResult<TypedResult> {
-        let component_details = self
-            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
-            .await?;
-
-        let function_type = component_details
-            .metadata
+        let function_type = component
             .function_by_name(&function_name)
             .map_err(|err| {
                 WorkerServiceError::TypeChecker(format!(
@@ -444,9 +453,8 @@ where
             })?
             .ok_or_else(|| {
                 WorkerServiceError::TypeChecker(format!(
-                    "Failed to find the function {}, Available functions: {}",
+                    "Failed to find the function {}",
                     &function_name,
-                    component_details.function_names().join(", ")
                 ))
             })?;
 
@@ -456,6 +464,7 @@ where
                 *calling_convention,
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
+
         let results_val = self
             .invoke_and_await_function_proto(
                 worker_id,
@@ -483,6 +492,34 @@ where
                 function_result_types: function_type.results,
             })
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
+    }
+
+    async fn invoke_and_await_function_typed_value(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Value,
+        calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<TypedResult> {
+        let component_details = self
+            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
+            .await?;
+
+        self.invoke_and_await_function_with_component_data(
+            worker_id,
+            idempotency_key,
+            function_name,
+            params,
+            calling_convention,
+            invocation_context,
+            metadata,
+            auth_ctx,
+            &component_details.metadata,
+        )
     }
 
     async fn invoke_and_await_function_proto(
@@ -1508,6 +1545,27 @@ where
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<TypedResult> {
+        Ok(TypedResult {
+            result: TypeAnnotatedValue::Tuple {
+                value: vec![],
+                typ: vec![],
+            },
+            function_result_types: vec![],
+        })
+    }
+
+    async fn invoke_and_await_function_with_component_data(
+        &self,
+        _worker_id: &WorkerId,
+        _idempotency_key: Option<IdempotencyKey>,
+        _function_name: String,
+        _params: Value,
+        _calling_convention: &CallingConvention,
+        _invocation_context: Option<InvocationContext>,
+        _metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+        _component_metadata: &ComponentMetadata,
     ) -> WorkerResult<TypedResult> {
         Ok(TypedResult {
             result: TypeAnnotatedValue::Tuple {

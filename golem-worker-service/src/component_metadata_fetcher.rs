@@ -1,10 +1,10 @@
 use async_trait::async_trait;
+use golem_common::model::ComponentId;
 use golem_service_base::model::ComponentMetadata;
 use golem_worker_service_base::auth::EmptyAuthCtx;
-use golem_worker_service_base::evaluator::{MetadataFetchError, ComponentMetadataFetch};
-use std::sync::Arc;
-use golem_common::model::ComponentId;
+use golem_worker_service_base::evaluator::{ComponentMetadataFetch, MetadataFetchError};
 use golem_worker_service_base::service::component::ComponentService;
+use std::sync::Arc;
 
 pub struct DefaultComponentMetadataFetch {
     component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send>,
@@ -23,7 +23,7 @@ impl ComponentMetadataFetch for DefaultComponentMetadataFetch {
         component_id: &ComponentId,
     ) -> Result<ComponentMetadata, MetadataFetchError> {
         self.component_service
-            .get_latest(component_id,  &EmptyAuthCtx::default())
+            .get_latest(component_id, &EmptyAuthCtx::default())
             .await
             .map(|component| component.metadata)
             .map_err(|e| MetadataFetchError(e.to_string()))

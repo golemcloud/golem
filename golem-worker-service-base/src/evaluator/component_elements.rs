@@ -1,18 +1,22 @@
 use crate::evaluator::{Function, FQN};
-use golem_service_base::model::ComponentMetadata;
+use golem_service_base::model::{Component, ComponentMetadata};
 use rib::ParsedFunctionName;
 
-// Static details of an evaluation context that doesn't change corresponding to input request details
-// except for worker_id
-// Here the lowest
+// ComponentElements consist of richer
+// information than the raw ComponentMetadata
+// While everything is derivable from ComponentMetadata,
+// certain details such as collection of parsed functions
+// are pre-computed allowing caching if needed.
 #[derive(Debug, Clone)]
 pub struct ComponentElements {
     pub functions: Vec<Function>,
+    // Keeping details of rest of the details of Component
+    pub metadata: ComponentMetadata,
 }
 
 impl ComponentElements {
     pub fn empty() -> Self {
-        ComponentElements { functions: vec![] }
+        ComponentElements { functions: vec![], metadata: ComponentMetadata::empty() }
     }
 
     pub fn from_component_metadata(component_metadata: ComponentMetadata) -> Self {
@@ -53,6 +57,7 @@ impl ComponentElements {
                 .into_iter()
                 .chain(functions)
                 .collect(),
+            metadata: component_metadata,
         }
     }
 }
@@ -86,6 +91,9 @@ pub mod cached {
         }
     }
 
+    // A service that will give richer data
+    // compared to ComponentMetadataFetch service
+    // which is required for the evaluator
     #[async_trait]
     pub(crate) trait ComponentElementsFetch {
         async fn get_component_elements(

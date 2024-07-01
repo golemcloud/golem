@@ -1767,6 +1767,15 @@ pub struct ComponentMetadata {
 }
 
 impl ComponentMetadata {
+
+    pub fn empty() -> ComponentMetadata {
+        ComponentMetadata {
+            exports: vec![],
+            producers: vec![],
+            memories: vec![],
+        }
+    }
+
     pub fn instances(&self) -> Vec<ExportInstance> {
         let mut instances = vec![];
         for export in self.exports.clone() {

@@ -230,8 +230,8 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 
 mod internal {
     use crate::evaluator::{
-        EvaluationContext, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError,
-        ComponentElementsFetch,
+        ComponentElementsFetch, EvaluationContext, EvaluationError, Evaluator,
+        ExprEvaluationResult, MetadataFetchError,
     };
     use crate::worker_binding::ResolvedWorkerBinding;
     use crate::worker_bridge_execution::to_response::ToResponse;
@@ -291,8 +291,9 @@ mod internal {
                                 EvaluationError::FunctionInvokeError(_)
                                     if cache_presence.is_present() =>
                                 {
-                                    component_elements_fetch
-                                        .invalidate_cached_component_elements(&worker_id.component_id);
+                                    component_elements_fetch.invalidate_cached_component_elements(
+                                        &worker_id.component_id,
+                                    );
                                     Box::pin(get_response(
                                         resolved_worker_binding,
                                         worker_id,

@@ -1,6 +1,7 @@
 use golem_wasm_rpc::TypeAnnotatedValue;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
+use golem_service_base::model::ComponentMetadata;
 
 mod content_type_mapper;
 mod refined_worker_response;
@@ -18,4 +19,5 @@ pub struct WorkerRequest {
     pub function_name: FQN,
     pub function_params: Vec<TypeAnnotatedValue>,
     pub idempotency_key: Option<IdempotencyKey>,
+    pub component_metadata: ComponentMetadata
 }

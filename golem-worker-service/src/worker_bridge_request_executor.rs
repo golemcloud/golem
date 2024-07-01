@@ -81,7 +81,7 @@ mod internal {
 
         let invoke_result = default_executor
             .worker_service
-            .invoke_and_await_function_typed_value(
+            .invoke_and_await_function_with_component_data(
                 &worker_id,
                 worker_request_params.idempotency_key,
                 worker_request_params.function_name.to_string(),
@@ -90,6 +90,7 @@ mod internal {
                 None,
                 empty_worker_metadata(),
                 &EmptyAuthCtx::default(),
+                &worker_request_params.component_metadata,
             )
             .await
             .map_err(|e| e.to_string())?;

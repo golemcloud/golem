@@ -119,8 +119,9 @@ mod tests {
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
     use crate::evaluator::{
-        ComponentMetadataFetch, DefaultEvaluator, DefaultComponentElementsFetch, EvaluationError,
-        Evaluator, ExprEvaluationResult, MetadataFetchError, ComponentElementsFetch, FQN,
+        ComponentElementsFetch, ComponentMetadataFetch, DefaultComponentElementsFetch,
+        DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError,
+        FQN,
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
@@ -324,9 +325,9 @@ mod tests {
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
         let symbol_fetch: Arc<dyn ComponentElementsFetch + Sync + Send> = {
-            Arc::new(DefaultComponentElementsFetch::new(get_test_metadata_fetcher(
-                "golem:it/api.{get-cart-contents}",
-            )))
+            Arc::new(DefaultComponentElementsFetch::new(
+                get_test_metadata_fetcher("golem:it/api.{get-cart-contents}"),
+            ))
         };
 
         let resolved_route = api_request

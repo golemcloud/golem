@@ -1,16 +1,16 @@
 use async_trait::async_trait;
-pub use evaluator_context::*;
 pub(crate) use component_elements::cached::*;
 pub use component_elements::*;
 pub use component_metadata_fetch::*;
+pub use evaluator_context::*;
 
 use std::sync::Arc;
+mod component_metadata_fetch;
 mod evaluator_context;
 pub(crate) mod getter;
 mod math_op_evaluator;
 pub(crate) mod path;
 mod pattern_match_evaluator;
-mod component_metadata_fetch;
 
 mod component_elements;
 
@@ -520,7 +520,7 @@ mod internal {
     pub(crate) async fn call_worker_function(
         runtime: &EvaluationContext,
         function_name: &ParsedFunctionName,
-        json_params: Vec<TypeAnnotatedValue>,
+        function_params: Vec<TypeAnnotatedValue>,
         executor: &Arc<dyn WorkerRequestExecutor + Sync + Send>,
     ) -> Result<RefinedWorkerResponse, EvaluationError> {
         let variables = runtime.clone().variables.ok_or(EvaluationError::Message(
@@ -583,8 +583,9 @@ mod internal {
             component_id,
             worker_name,
             function_name: analysed_function.fqn,
-            function_params: json_params,
+            function_params,
             idempotency_key,
+            component_metadata: runtime.component_elements.metadata.clone(),
         };
 
         let worker_response = executor.execute(worker_request).await.map_err(|err| {

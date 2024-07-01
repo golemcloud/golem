@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display, Formatter};
 use crate::evaluator::evaluator_context::internal::create_record;
 use crate::evaluator::getter::GetError;
 use crate::evaluator::path::Path;
-use crate::evaluator::{Getter, ComponentElements};
+use crate::evaluator::{ComponentElements, Getter};
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::RefinedWorkerResponse;
