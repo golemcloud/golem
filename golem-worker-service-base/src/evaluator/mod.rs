@@ -1,18 +1,19 @@
 use async_trait::async_trait;
-pub(crate) use component_elements::cached::*;
-pub use component_elements::*;
-pub use component_metadata_fetch::*;
-pub use evaluator_context::*;
-
 use std::sync::Arc;
-mod component_metadata_fetch;
-mod evaluator_context;
+
+pub use component_metadata_fetch::*;
+
+// Component Elements shouldn't be visible outside this crate
+pub(crate) use component_elements::*;
+pub(crate) use evaluator_context::*;
 pub(crate) mod getter;
-mod math_op_evaluator;
 pub(crate) mod path;
-mod pattern_match_evaluator;
 
 mod component_elements;
+mod component_metadata_fetch;
+mod evaluator_context;
+mod math_op_evaluator;
+mod pattern_match_evaluator;
 
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;

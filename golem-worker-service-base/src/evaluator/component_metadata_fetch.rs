@@ -3,6 +3,10 @@ use golem_common::model::ComponentId;
 use golem_service_base::model::ComponentMetadata;
 use std::fmt::Display;
 
+// Service to fetch the component metadata given a component-id
+// This is different to ComponentMetadataFetch which gives richer data called ComponentElements
+// that's more useful to evaluator.
+// Outside modules/crates should use this service, while ComponentElementsFetch is visible only to the base crate
 #[async_trait]
 pub trait ComponentMetadataFetch {
     async fn get_component_metadata(
