@@ -109,7 +109,12 @@ impl ComponentApi {
         let component_name = payload.name;
         let response = self
             .component_service
-            .create(&component_name, data, &DefaultNamespace::default())
+            .create(
+                &ComponentId::new_v4(),
+                &component_name,
+                data,
+                &DefaultNamespace::default(),
+            )
             .await?;
         Ok(Json(response))
     }
