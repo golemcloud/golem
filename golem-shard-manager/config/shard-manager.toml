@@ -36,6 +36,6 @@ delay = "10s"
 [health_check.mode]
 type = "Grpc"
 #type = "K8s"
-#
-#[health_check.mode.config]
+
+[health_check.mode.config]
 #namespace = "default"
