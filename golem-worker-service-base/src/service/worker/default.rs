@@ -23,13 +23,12 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
 };
 
-use crate::evaluator::{ComponentElements, FQN};
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
-    ComponentMetadata, ExportFunction, FunctionParameter, FunctionResult, GolemErrorUnknown,
+    FunctionParameter, FunctionResult, GolemErrorUnknown,
     PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
 };
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};

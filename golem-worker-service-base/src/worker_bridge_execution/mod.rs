@@ -1,14 +1,13 @@
 use golem_wasm_rpc::TypeAnnotatedValue;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
-use golem_service_base::model::ComponentMetadata;
 
 mod content_type_mapper;
 mod refined_worker_response;
 pub mod to_response;
 mod worker_request_executor;
 
-use crate::evaluator::{ComponentElements, Function, FQN};
+use crate::evaluator::{Function};
 pub use refined_worker_response::*;
 pub use worker_request_executor::*;
 
