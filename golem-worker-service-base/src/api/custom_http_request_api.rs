@@ -22,9 +22,9 @@ use crate::worker_bridge_execution::WorkerRequestExecutor;
 // This is a common API projects can make use of, similar to healthcheck service
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
-    pub evaluator: Arc<dyn Evaluator + Sync + Send>,
-    pub(crate) static_symbol_table_fetch: Arc<dyn StaticSymbolTableFetch + Sync + Send>,
-    pub api_definition_lookup_service:
+    evaluator: Arc<dyn Evaluator + Sync + Send>,
+    static_symbol_table_fetch: Arc<dyn StaticSymbolTableFetch + Sync + Send>,
+    api_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
 }
 

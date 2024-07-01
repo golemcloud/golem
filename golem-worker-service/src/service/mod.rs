@@ -28,7 +28,7 @@ use golem_worker_service_base::service::worker::{
 };
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 
-use crate::worker_component_metadata_fetcher::DefaultComponentMetadataFetcher;
+use crate::component_metadata_fetcher::DefaultComponentMetadataFetcher;
 use golem_worker_service_base::evaluator::ComponentMetadataFetcher;
 
 use golem_worker_service_base::service::api_deployment::{
