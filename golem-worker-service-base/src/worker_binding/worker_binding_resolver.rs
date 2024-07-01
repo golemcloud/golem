@@ -1,6 +1,6 @@
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
 use crate::evaluator::*;
-use crate::evaluator::{Evaluator, ComponentMetadataFetcher};
+use crate::evaluator::{ComponentMetadataFetcher, Evaluator};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
@@ -124,7 +124,14 @@ impl ResolvedWorkerBinding {
             worker_name,
         };
 
-        internal::get_response(&self, &worker_id, evaluator, worker_metadata_fetcher, internal::CachePresence::Present).await
+        internal::get_response(
+            &self,
+            &worker_id,
+            evaluator,
+            worker_metadata_fetcher,
+            internal::CachePresence::Present,
+        )
+        .await
     }
 }
 
@@ -222,22 +229,25 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 }
 
 mod internal {
-    use crate::evaluator::{EvaluationContext, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError, StaticSymbolTableFetch};
+    use crate::evaluator::{
+        EvaluationContext, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError,
+        StaticSymbolTableFetch,
+    };
     use crate::worker_binding::ResolvedWorkerBinding;
+    use crate::worker_bridge_execution::to_response::ToResponse;
     use golem_service_base::model::WorkerId;
     use std::sync::Arc;
-    use crate::worker_bridge_execution::to_response::ToResponse;
 
     pub(crate) enum CachePresence {
         Present,
-        Absent
+        Absent,
     }
 
     impl CachePresence {
         fn is_present(&self) -> bool {
             match self {
                 CachePresence::Present => true,
-                CachePresence::Absent => false
+                CachePresence::Absent => false,
             }
         }
     }
@@ -246,13 +256,13 @@ mod internal {
         worker_id: &WorkerId,
         evaluator: &Arc<dyn Evaluator + Sync + Send>,
         symbol_table_fetch: &Arc<dyn StaticSymbolTableFetch + Sync + Send>,
-        cache_presence: CachePresence
-    ) ->  R
-        where
-            ExprEvaluationResult: ToResponse<R>,
-            EvaluationError: ToResponse<R>,
-            MetadataFetchError: ToResponse<R>, {
-
+        cache_presence: CachePresence,
+    ) -> R
+    where
+        ExprEvaluationResult: ToResponse<R>,
+        EvaluationError: ToResponse<R>,
+        MetadataFetchError: ToResponse<R>,
+    {
         let functions_available = symbol_table_fetch
             .get_static_symbol_table(worker_id.component_id.clone())
             .await;
@@ -275,24 +285,30 @@ mod internal {
                             .await;
 
                         match result {
-                            Ok(worker_response) => {
-                                worker_response.to_response(&resolved_worker_binding.request_details)
-                            }
-                            Err(err) => {
-                                match err {
-                                    EvaluationError::FunctionInvokeError(_) if cache_presence.is_present() => {
-                                        symbol_table_fetch.invalidate_in_memory_symbol_table(&worker_id.component_id);
-                                        Box::pin(get_response(&resolved_worker_binding, worker_id, evaluator, symbol_table_fetch, CachePresence::Absent)).await
-                                    }
-
-                                    _ =>   err.to_response(&resolved_worker_binding.request_details)
+                            Ok(worker_response) => worker_response
+                                .to_response(&resolved_worker_binding.request_details),
+                            Err(err) => match err {
+                                EvaluationError::FunctionInvokeError(_)
+                                    if cache_presence.is_present() =>
+                                {
+                                    symbol_table_fetch
+                                        .invalidate_in_memory_symbol_table(&worker_id.component_id);
+                                    Box::pin(get_response(
+                                        &resolved_worker_binding,
+                                        worker_id,
+                                        evaluator,
+                                        symbol_table_fetch,
+                                        CachePresence::Absent,
+                                    ))
+                                    .await
                                 }
 
-
+                                _ => err.to_response(&resolved_worker_binding.request_details),
                             },
                         }
                     }
-                    Err(err) => MetadataFetchError(err).to_response(&resolved_worker_binding.request_details),
+                    Err(err) => MetadataFetchError(err)
+                        .to_response(&resolved_worker_binding.request_details),
                 }
             }
             Err(err) => err.to_response(&resolved_worker_binding.request_details),

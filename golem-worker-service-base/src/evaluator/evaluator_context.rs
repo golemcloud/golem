@@ -112,7 +112,7 @@ impl EvaluationContext {
 
         Ok(EvaluationContext {
             variables: Some(merged.clone()),
-            static_symbol_table
+            static_symbol_table,
         })
     }
 
@@ -131,7 +131,7 @@ impl EvaluationContext {
 
         EvaluationContext {
             variables: Some(variables),
-            static_symbol_table: StaticSymbolTable::empty()
+            static_symbol_table: StaticSymbolTable::empty(),
         }
     }
 
@@ -145,7 +145,7 @@ impl EvaluationContext {
 
             EvaluationContext {
                 variables: Some(worker_data),
-                static_symbol_table: StaticSymbolTable::empty()
+                static_symbol_table: StaticSymbolTable::empty(),
             }
         } else {
             EvaluationContext::empty()

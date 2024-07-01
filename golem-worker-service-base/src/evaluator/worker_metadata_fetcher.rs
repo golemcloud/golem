@@ -1,8 +1,7 @@
-use std::fmt::Display;
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
 use golem_service_base::model::{ComponentMetadata, WorkerId};
-
+use std::fmt::Display;
 
 #[async_trait]
 pub trait ComponentMetadataFetcher {

@@ -119,8 +119,8 @@ mod tests {
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
     use crate::evaluator::{
-        DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError,
-        ComponentMetadataFetcher, FQN,
+        ComponentMetadataFetcher, DefaultEvaluator, EvaluationError, Evaluator,
+        ExprEvaluationResult, MetadataFetchError, FQN,
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;

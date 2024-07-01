@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 pub use evaluator_context::*;
-pub use worker_metadata_fetcher::*;
-pub use symbol_table::*;
 pub(crate) use symbol_table::cached::*;
+pub use symbol_table::*;
+pub use worker_metadata_fetcher::*;
 
 use std::sync::Arc;
 mod evaluator_context;
@@ -91,7 +91,7 @@ pub enum EvaluationError {
     #[error("{0}")]
     Message(String),
     #[error("{0}")]
-    FunctionInvokeError(String)
+    FunctionInvokeError(String),
 }
 
 impl<T: AsRef<str>> From<T> for EvaluationError {
@@ -588,7 +588,10 @@ mod internal {
         };
 
         let worker_response = executor.execute(worker_request).await.map_err(|err| {
-            EvaluationError::FunctionInvokeError(format!("Failed to execute worker function: {}", err))
+            EvaluationError::FunctionInvokeError(format!(
+                "Failed to execute worker function: {}",
+                err
+            ))
         })?;
 
         let refined_worker_response = worker_response.refined().map_err(|err| {

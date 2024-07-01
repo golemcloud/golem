@@ -1,20 +1,18 @@
+use crate::evaluator::{Function, FQN};
 use golem_service_base::model::ComponentMetadata;
 use rib::ParsedFunctionName;
-use crate::evaluator::{FQN, Function};
 
 // Static details of an evaluation context that doesn't change corresponding to input request details
 // except for worker_id
 // Here the lowest
 #[derive(Debug, Clone)]
 pub struct StaticSymbolTable {
-    pub functions: Vec<Function>
+    pub functions: Vec<Function>,
 }
 
 impl StaticSymbolTable {
     pub fn empty() -> Self {
-        StaticSymbolTable {
-            functions: vec![],
-        }
+        StaticSymbolTable { functions: vec![] }
     }
 
     pub fn from_component_metadata(component_metadata: ComponentMetadata) -> Self {
@@ -42,7 +40,7 @@ impl StaticSymbolTable {
                             i.name.clone(),
                             f.name.clone()
                         ))
-                            .unwrap(),
+                        .unwrap(),
                     },
                     arguments: f.parameters.clone(),
                     return_type: f.results.clone(),
@@ -60,13 +58,13 @@ impl StaticSymbolTable {
 }
 
 pub mod cached {
-    use std::sync::Arc;
+    use crate::evaluator::symbol_table::StaticSymbolTable;
+    use crate::evaluator::worker_metadata_fetcher::{ComponentMetadataFetcher, MetadataFetchError};
     use async_trait::async_trait;
     use golem_common::cache::{BackgroundEvictionMode, Cache, SimpleCache};
     use golem_common::model::ComponentId;
     use golem_service_base::model::{ComponentMetadata, WorkerId};
-    use crate::evaluator::symbol_table::StaticSymbolTable;
-    use crate::evaluator::worker_metadata_fetcher::{MetadataFetchError, ComponentMetadataFetcher};
+    use std::sync::Arc;
 
     // The logic shouldn't be visible outside the crate
     pub(crate) struct DefaultSymbolTableFetch {
@@ -75,7 +73,9 @@ pub mod cached {
     }
 
     impl DefaultSymbolTableFetch {
-        pub(crate) fn new(metadata_fetcher:  Arc<dyn ComponentMetadataFetcher + Sync + Send>,) -> Self {
+        pub(crate) fn new(
+            metadata_fetcher: Arc<dyn ComponentMetadataFetcher + Sync + Send>,
+        ) -> Self {
             DefaultSymbolTableFetch {
                 metadata_fetcher,
                 cache: Cache::new(
@@ -83,7 +83,7 @@ pub mod cached {
                     golem_common::cache::FullCacheEvictionMode::LeastRecentlyUsed(1),
                     BackgroundEvictionMode::None,
                     "worker_gateway",
-                )
+                ),
             }
         }
     }
@@ -108,8 +108,12 @@ pub mod cached {
                 .get_or_insert_simple(&component_id.clone(), || {
                     let metadata_fetcher = self.metadata_fetcher.clone();
                     Box::pin(async move {
-                        let component_metadata= metadata_fetcher.get_component_metadata(&component_id).await?;
-                        Ok(StaticSymbolTable::from_component_metadata(component_metadata))
+                        let component_metadata = metadata_fetcher
+                            .get_component_metadata(&component_id)
+                            .await?;
+                        Ok(StaticSymbolTable::from_component_metadata(
+                            component_metadata,
+                        ))
                     })
                 })
                 .await
