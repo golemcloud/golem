@@ -178,7 +178,7 @@ mod tests {
                 ),
                 (
                     "function_name".to_string(),
-                    TypeAnnotatedValue::Str(worker_request.function_name.to_string()),
+                    TypeAnnotatedValue::Str(worker_request.function.to_string()),
                 ),
                 (
                     "function_params".to_string(),

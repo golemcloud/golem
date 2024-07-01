@@ -48,7 +48,7 @@ impl Display for FQN {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Function {
     pub fqn: FQN,
     pub arguments: Vec<FunctionParameter>,

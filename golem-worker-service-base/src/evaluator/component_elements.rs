@@ -2,23 +2,15 @@ use crate::evaluator::{Function, FQN};
 use golem_service_base::model::ComponentMetadata;
 use rib::ParsedFunctionName;
 
-// ComponentElements consist of richer
-// information than the raw ComponentMetadata
-// While everything is derivable from ComponentMetadata,
-// certain details such as collection of parsed functions
-// are pre-computed allowing caching if needed.
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct ComponentElements {
     pub functions: Vec<Function>,
-    // Keeping details of rest of the details of Component
-    pub metadata: ComponentMetadata,
 }
 
 impl ComponentElements {
     pub fn empty() -> Self {
         ComponentElements {
             functions: vec![],
-            metadata: ComponentMetadata::empty(),
         }
     }
 

@@ -582,10 +582,9 @@ mod internal {
         let worker_request = WorkerRequest {
             component_id,
             worker_name,
-            function_name: analysed_function.fqn,
+            function: analysed_function,
             function_params,
             idempotency_key,
-            component_metadata: runtime.component_elements.metadata.clone(),
         };
 
         let worker_response = executor.execute(worker_request).await.map_err(|err| {

@@ -32,7 +32,7 @@ mod internal {
     use crate::empty_worker_metadata;
     use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
     use golem_common::model::CallingConvention;
-    use golem_service_base::model::WorkerId;
+    use golem_service_base::model::{ExportFunction, WorkerId};
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_worker_service_base::auth::EmptyAuthCtx;
     use serde_json::Value;
@@ -56,7 +56,7 @@ mod internal {
             "Executing request for component: {}, worker: {}, function: {}",
             component_id,
             worker_name.clone(),
-            worker_request_params.function_name
+            worker_request_params.function.fqn
         );
 
         let invoke_parameters = worker_request_params.function_params;
@@ -79,18 +79,19 @@ mod internal {
             invoke_parameters_values.push(value);
         }
 
+
         let invoke_result = default_executor
             .worker_service
-            .invoke_and_await_function_with_component_data(
+            .invoke_and_await_parsed_function(
                 &worker_id,
                 worker_request_params.idempotency_key,
-                worker_request_params.function_name.to_string(),
+                worker_request_params.function.fqn.parsed_function_name,
                 Value::Array(invoke_parameters_values),
                 &CallingConvention::Component,
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-                &worker_request_params.component_metadata,
+                worker_request_params.function.arguments,
+                worker_request_params.function.return_type,
             )
             .await
             .map_err(|e| e.to_string())?;

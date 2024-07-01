@@ -1798,8 +1798,12 @@ impl ComponentMetadata {
     pub fn function_by_name(&self, name: &str) -> Result<Option<ExportFunction>, String> {
         let parsed = ParsedFunctionName::parse(name)?;
 
-        match &parsed.site().interface_name() {
-            None => Ok(self.functions().iter().find(|f| f.name == *name).cloned()),
+        self.get_export_function(parsed)
+    }
+
+    pub fn get_export_function(&self, parsed_function_name: ParsedFunctionName) -> Result<Option<ExportFunction>, String> {
+        match &parsed_function_name.site().interface_name() {
+            None => Ok(self.functions().iter().find(|f| f.name == *parsed_function_name.function.function_name()).cloned()),
             Some(interface_name) => {
                 let exported_function = self
                     .instances()
@@ -1809,11 +1813,11 @@ impl ComponentMetadata {
                         instance
                             .functions
                             .iter()
-                            .find(|f| f.name == parsed.function().function_name())
+                            .find(|f| f.name == parsed_function_name.function().function_name())
                             .cloned()
                     });
                 if exported_function.is_none() {
-                    match parsed.method_as_static() {
+                    match parsed_function_name.method_as_static() {
                         Some(parsed_static) => Ok(self
                             .instances()
                             .iter()
