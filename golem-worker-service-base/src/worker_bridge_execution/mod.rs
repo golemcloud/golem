@@ -7,7 +7,7 @@ mod refined_worker_response;
 pub mod to_response;
 mod worker_request_executor;
 
-use crate::evaluator::{Function};
+use crate::evaluator::Function;
 pub use refined_worker_response::*;
 pub use worker_request_executor::*;
 

@@ -28,8 +28,8 @@ use golem_common::model::{
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
-    FunctionParameter, FunctionResult, GolemErrorUnknown,
-    PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
+    FunctionParameter, FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId,
+    WorkerMetadata,
 };
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
