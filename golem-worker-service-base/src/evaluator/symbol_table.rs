@@ -63,7 +63,7 @@ pub mod cached {
     use async_trait::async_trait;
     use golem_common::cache::{BackgroundEvictionMode, Cache, SimpleCache};
     use golem_common::model::ComponentId;
-    use golem_service_base::model::{ComponentMetadata, WorkerId};
+    
     use std::sync::Arc;
 
     // The logic shouldn't be visible outside the crate
