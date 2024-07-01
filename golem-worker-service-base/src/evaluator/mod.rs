@@ -1,11 +1,18 @@
 use async_trait::async_trait;
 pub use evaluator_context::*;
+pub use worker_metadata_fetcher::*;
+pub use symbol_table::*;
+pub use symbol_table::cached::*;
+
 use std::sync::Arc;
 mod evaluator_context;
 pub(crate) mod getter;
 mod math_op_evaluator;
 pub(crate) mod path;
 mod pattern_match_evaluator;
+mod worker_metadata_fetcher;
+
+mod symbol_table;
 
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
@@ -83,6 +90,8 @@ pub enum EvaluationError {
     InvalidReference(#[from] GetError),
     #[error("{0}")]
     Message(String),
+    #[error("{0}")]
+    FunctionInvokeError(String)
 }
 
 impl<T: AsRef<str>> From<T> for EvaluationError {
@@ -579,7 +588,7 @@ mod internal {
         };
 
         let worker_response = executor.execute(worker_request).await.map_err(|err| {
-            EvaluationError::Message(format!("Failed to execute worker function: {}", err))
+            EvaluationError::FunctionInvokeError(format!("Failed to execute worker function: {}", err))
         })?;
 
         let refined_worker_response = worker_response.refined().map_err(|err| {

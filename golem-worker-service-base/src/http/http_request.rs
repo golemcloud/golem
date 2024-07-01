@@ -110,7 +110,7 @@ mod tests {
     use serde_json::Value;
     use std::sync::Arc;
 
-    use golem_common::model::IdempotencyKey;
+    use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_service_base::model::{
         ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId,
     };
@@ -120,7 +120,7 @@ mod tests {
     use crate::evaluator::path::Path;
     use crate::evaluator::{
         DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError,
-        WorkerMetadataFetcher, FQN,
+        ComponentMetadataFetcher, FQN,
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
@@ -226,10 +226,10 @@ mod tests {
     }
 
     #[async_trait]
-    impl WorkerMetadataFetcher for TestMetadataFetcher {
-        async fn get_worker_metadata(
+    impl ComponentMetadataFetcher for TestMetadataFetcher {
+        async fn get_component_metadata(
             &self,
-            _worker_id: &WorkerId,
+            _component_id: &ComponentId,
         ) -> Result<ComponentMetadata, MetadataFetchError> {
             Ok(ComponentMetadata {
                 exports: vec![Export::Instance(ExportInstance {
@@ -259,7 +259,7 @@ mod tests {
 
     fn get_test_metadata_fetcher(
         function_name: &str,
-    ) -> Arc<dyn WorkerMetadataFetcher + Sync + Send> {
+    ) -> Arc<dyn ComponentMetadataFetcher + Sync + Send> {
         Arc::new(TestMetadataFetcher {
             test_fqn: FQN::try_from(function_name).unwrap(),
         })

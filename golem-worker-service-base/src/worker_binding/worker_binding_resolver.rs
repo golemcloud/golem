@@ -1,8 +1,6 @@
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
-use crate::evaluator::{
-    DefaultEvaluator, EvaluationContext, EvaluationError, ExprEvaluationResult, MetadataFetchError,
-};
-use crate::evaluator::{Evaluator, WorkerMetadataFetcher};
+use crate::evaluator::*;
+use crate::evaluator::{Evaluator, ComponentMetadataFetcher};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
@@ -107,7 +105,7 @@ impl ResolvedWorkerBinding {
     pub async fn execute_with<R>(
         &self,
         evaluator: &Arc<dyn Evaluator + Sync + Send>,
-        worker_metadata_fetcher: &Arc<dyn WorkerMetadataFetcher + Sync + Send>,
+        worker_metadata_fetcher: &Arc<dyn StaticSymbolTableFetch + Sync + Send>,
     ) -> R
     where
         ExprEvaluationResult: ToResponse<R>,
@@ -125,37 +123,6 @@ impl ResolvedWorkerBinding {
             component_id: self.worker_detail.component_id.clone(),
             worker_name,
         };
-
-        let functions_available = worker_metadata_fetcher
-            .get_worker_metadata(&worker_id)
-            .await;
-
-        match functions_available {
-            Ok(functions) => {
-                let runtime = EvaluationContext::from_all(
-                    &self.worker_detail,
-                    &self.request_details,
-                    functions,
-                );
-
-                match runtime {
-                    Ok(context) => {
-                        let result = evaluator
-                            .evaluate(&self.response_mapping.clone().0, &context)
-                            .await;
-
-                        match result {
-                            Ok(worker_response) => {
-                                worker_response.to_response(&self.request_details)
-                            }
-                            Err(err) => err.to_response(&self.request_details),
-                        }
-                    }
-                    Err(err) => MetadataFetchError(err).to_response(&self.request_details),
-                }
-            }
-            Err(err) => err.to_response(&self.request_details),
-        }
     }
 }
 
@@ -249,5 +216,84 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
         };
 
         Ok(resolved_binding)
+    }
+}
+
+mod internal {
+    use crate::evaluator::{EvaluationContext, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError, StaticSymbolTableFetch};
+    use crate::worker_binding::ResolvedWorkerBinding;
+    use golem_service_base::model::WorkerId;
+    use std::sync::Arc;
+    use crate::worker_bridge_execution::to_response::ToResponse;
+
+    enum CachePresence {
+        Present,
+        Absent
+    }
+
+    impl CachePresence {
+        fn is_present(&self) -> bool {
+            match self {
+                CachePresence::Present => true,
+                CachePresence::Absent => false
+            }
+        }
+    }
+    async fn get_response<R>(
+        resolved_worker_binding: &ResolvedWorkerBinding,
+        worker_id: &WorkerId,
+        evaluator: &Arc<dyn Evaluator + Sync + Send>,
+        symbol_table_fetch: &Arc<dyn StaticSymbolTableFetch + Sync + Send>,
+        cache_presence: CachePresence
+    ) ->  R
+        where
+            ExprEvaluationResult: ToResponse<R>,
+            EvaluationError: ToResponse<R>,
+            MetadataFetchError: ToResponse<R>, {
+
+        let functions_available = symbol_table_fetch
+            .get_static_symbol_table(&worker_id.component_id)
+            .await;
+
+        match functions_available {
+            Ok(symbol_table) => {
+                let evaluation_context = EvaluationContext::from_all(
+                    &resolved_worker_binding.worker_detail,
+                    &resolved_worker_binding.request_details,
+                    symbol_table,
+                );
+
+                match evaluation_context {
+                    Ok(context) => {
+                        let result = evaluator
+                            .evaluate(
+                                &resolved_worker_binding.response_mapping.clone().0,
+                                &context,
+                            )
+                            .await;
+
+                        match result {
+                            Ok(worker_response) => {
+                                worker_response.to_response(&resolved_worker_binding.request_details)
+                            }
+                            Err(err) => {
+                                match err {
+                                    EvaluationError::FunctionInvokeError(_) if cache_presence.is_present() => {
+                                        symbol_table_fetch.invalidate_in_memory_symbol_table(&worker_id.component_id);
+                                        get_response(&resolved_worker_binding, worker_id, evaluator, symbol_table_fetch, CachePresence::Absent)
+                                    }
+
+                                    _ =>   err.to_response(&resolved_worker_binding.request_details)
+                                }
+
+
+                            },
+                        }
+                    }
+                    Err(err) => MetadataFetchError(err).to_response(&resolved_worker_binding.request_details),
+                }
+            }
+            Err(err) => err.to_response(&resolved_worker_binding.request_details),
+        }
     }
 }
