@@ -327,6 +327,7 @@ mod tests {
         let symbol_fetch: Arc<dyn ComponentElementsFetch + Sync + Send> = {
             Arc::new(DefaultComponentElementsFetch::new(
                 get_test_metadata_fetcher("golem:it/api.{get-cart-contents}"),
+                1000,
             ))
         };
 

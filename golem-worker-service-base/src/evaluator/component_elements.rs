@@ -66,11 +66,14 @@ pub(crate) struct DefaultComponentElementsFetch {
 }
 
 impl DefaultComponentElementsFetch {
-    pub(crate) fn new(metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send>) -> Self {
+    pub(crate) fn new(
+        metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send>,
+        max_cache_size: usize,
+    ) -> Self {
         DefaultComponentElementsFetch {
             component_metadata_fetch: metadata_fetcher,
             component_elements_cache: Cache::new(
-                Some(10000),
+                Some(max_cache_size),
                 golem_common::cache::FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::None,
                 "worker_gateway",

@@ -35,6 +35,7 @@ impl CustomHttpRequestApi {
         api_definition_lookup_service: Arc<
             dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
         >,
+        max_evaluator_cache_size: usize,
     ) -> Self {
         let evaluator = Arc::new(DefaultEvaluator::from_worker_request_executor(
             worker_request_executor_service.clone(),
@@ -42,6 +43,7 @@ impl CustomHttpRequestApi {
 
         let component_elements_fetch = Arc::new(DefaultComponentElementsFetch::new(
             component_metadata_fetch.clone(),
+            max_evaluator_cache_size,
         ));
 
         Self {

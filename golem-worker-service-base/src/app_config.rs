@@ -26,6 +26,7 @@ pub struct WorkerServiceBaseConfig {
     pub worker_grpc_port: u16,
     pub routing_table: RoutingTableConfig,
     pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
+    pub rib_evaluator_cache: RibEvaluatorCacheConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -33,6 +34,17 @@ pub struct WorkerExecutorClientCacheConfig {
     pub max_capacity: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RibEvaluatorCacheConfig {
+    pub max_capacity: usize,
+}
+
+impl Default for RibEvaluatorCacheConfig {
+    fn default() -> Self {
+        Self { max_capacity: 1000 }
+    }
 }
 
 impl Default for WorkerExecutorClientCacheConfig {
@@ -71,6 +83,7 @@ impl Default for WorkerServiceBaseConfig {
             worker_grpc_port: 9092,
             routing_table: RoutingTableConfig::default(),
             worker_executor_client_cache: WorkerExecutorClientCacheConfig::default(),
+            rib_evaluator_cache: RibEvaluatorCacheConfig::default(),
         }
     }
 }

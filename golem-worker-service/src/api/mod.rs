@@ -7,6 +7,7 @@ use crate::api::worker::WorkerApi;
 use crate::service::Services;
 use golem_worker_service_base::api::CustomHttpRequestApi;
 use golem_worker_service_base::api::HealthcheckApi;
+use golem_worker_service_base::app_config::RibEvaluatorCacheConfig;
 use poem::endpoint::PrometheusExporter;
 use poem::{get, EndpointExt, Route};
 use poem_openapi::OpenApiService;
@@ -41,11 +42,12 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
         )
 }
 
-pub fn custom_request_route(services: Services) -> Route {
+pub fn custom_request_route(services: Services, config: RibEvaluatorCacheConfig) -> Route {
     let custom_request_executor = CustomHttpRequestApi::new(
         services.worker_to_http_service,
         services.worker_metadata_fetcher,
         services.http_definition_lookup_service,
+        config.max_capacity,
     );
 
     Route::new().nest("/", custom_request_executor)
