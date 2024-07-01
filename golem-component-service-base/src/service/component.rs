@@ -62,6 +62,7 @@ impl From<RepoError> for ComponentError {
 pub trait ComponentService<Namespace> {
     async fn create(
         &self,
+        component_id: &ComponentId,
         component_name: &ComponentName,
         data: Vec<u8>,
         namespace: &Namespace,
@@ -159,13 +160,15 @@ where
 {
     async fn create(
         &self,
+        component_id: &ComponentId,
         component_name: &ComponentName,
         data: Vec<u8>,
         namespace: &Namespace,
     ) -> Result<Component, ComponentError> {
         info!(
-            "Creating component - namespace: {}, name: {}",
+            "Creating component - namespace: {}, id: {}, name: {}",
             namespace,
+            component_id,
             component_name.0.clone()
         );
 
@@ -177,10 +180,8 @@ where
 
         let metadata = process_component(&data)?;
 
-        let component_id = ComponentId::new_v4();
-
         let versioned_component_id = VersionedComponentId {
-            component_id,
+            component_id: component_id.clone(),
             version: 0,
         };
 
@@ -571,7 +572,10 @@ impl ComponentServiceDefault {
         user_component_id: &UserComponentId,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
-        info!("Uploading user component: {:?}", user_component_id);
+        info!(
+            "Uploading user component - id: {}",
+            user_component_id.slug()
+        );
 
         self.object_store
             .put(&self.get_user_object_store_key(user_component_id), data)
@@ -585,8 +589,8 @@ impl ComponentServiceDefault {
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
         info!(
-            "Uploading protected component: {:?}",
-            protected_component_id
+            "Uploading protected component - id: {}",
+            protected_component_id.slug()
         );
 
         self.object_store
@@ -610,12 +614,13 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
 {
     async fn create(
         &self,
-        _component_name: &ComponentName,
+        component_id: &ComponentId,
+        component_name: &ComponentName,
         _data: Vec<u8>,
         _namespace: &Namespace,
     ) -> Result<Component, ComponentError> {
         let fake_component = Component {
-            component_name: ComponentName("fake".to_string()),
+            component_name: component_name.clone(),
             component_size: 0,
             metadata: ComponentMetadata {
                 exports: vec![],
@@ -623,18 +628,18 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
                 memories: vec![],
             },
             versioned_component_id: VersionedComponentId {
-                component_id: ComponentId::new_v4(),
+                component_id: component_id.clone(),
                 version: 0,
             },
             user_component_id: UserComponentId {
                 versioned_component_id: VersionedComponentId {
-                    component_id: ComponentId::new_v4(),
+                    component_id: component_id.clone(),
                     version: 0,
                 },
             },
             protected_component_id: ProtectedComponentId {
                 versioned_component_id: VersionedComponentId {
-                    component_id: ComponentId::new_v4(),
+                    component_id: component_id.clone(),
                     version: 0,
                 },
             },
@@ -645,7 +650,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
 
     async fn update(
         &self,
-        _component_id: &ComponentId,
+        component_id: &ComponentId,
         _data: Vec<u8>,
         _namespace: &Namespace,
     ) -> Result<Component, ComponentError> {
@@ -658,18 +663,18 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
                 memories: vec![],
             },
             versioned_component_id: VersionedComponentId {
-                component_id: ComponentId::new_v4(),
+                component_id: component_id.clone(),
                 version: 0,
             },
             user_component_id: UserComponentId {
                 versioned_component_id: VersionedComponentId {
-                    component_id: ComponentId::new_v4(),
+                    component_id: component_id.clone(),
                     version: 0,
                 },
             },
             protected_component_id: ProtectedComponentId {
                 versioned_component_id: VersionedComponentId {
-                    component_id: ComponentId::new_v4(),
+                    component_id: component_id.clone(),
                     version: 0,
                 },
             },

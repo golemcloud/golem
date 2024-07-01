@@ -4,6 +4,7 @@ mod tests {
     use golem_service_base::config::{ComponentStoreLocalConfig, DbPostgresConfig, DbSqliteConfig};
     use golem_service_base::db;
 
+    use golem_common::model::ComponentId;
     use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
     use golem_component_service_base::service::component::{
         ComponentService, ComponentServiceDefault,
@@ -120,6 +121,7 @@ mod tests {
 
         let component1 = component_service
             .create(
+                &ComponentId::new_v4(),
                 &component_name1,
                 get_component_data("shopping-cart"),
                 &DefaultNamespace::default(),
@@ -129,6 +131,7 @@ mod tests {
 
         let component2 = component_service
             .create(
+                &ComponentId::new_v4(),
                 &component_name2,
                 get_component_data("rust-echo"),
                 &DefaultNamespace::default(),
