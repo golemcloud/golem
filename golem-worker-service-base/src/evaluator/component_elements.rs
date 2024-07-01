@@ -50,7 +50,6 @@ impl ComponentElements {
                 .into_iter()
                 .chain(functions)
                 .collect(),
-            metadata: component_metadata,
         }
     }
 }

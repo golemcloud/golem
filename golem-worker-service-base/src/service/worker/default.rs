@@ -280,7 +280,7 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> Result<ProtoInvokeResult, WorkerServiceError> {
+    )-> Result<ProtoInvokeResult, WorkerServiceError> where AuthCtx: Send + Sync, {
         self.retry_on_invalid_shard_id(
             worker_id,
             &(worker_id.clone(), function_name, params, idempotency_key.clone(), *calling_convention, metadata, invocation_context),
