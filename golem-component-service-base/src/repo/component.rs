@@ -143,6 +143,22 @@ impl<DB: Database> DbComponentRepo<DB> {
 #[async_trait]
 impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
     async fn upsert(&self, component: &ComponentRecord) -> Result<(), RepoError> {
+        let mut transaction = self.db_pool.begin().await?;
+
+        let result = sqlx::query(
+            "SELECT count(component_id) as count FROM components WHERE namespace != $1 AND component_id = $2",
+        )
+        .bind(component.namespace.clone())
+        .bind(component.component_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+
+        let count: i64 = result.get("count");
+
+        if count > 0 {
+            return Err(RepoError::Internal("Component id not unique".to_string()));
+        }
+
         sqlx::query(
             r#"
               INSERT INTO components
@@ -167,8 +183,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
             .bind(component.protected_component.clone())
             .bind(component.protector_version)
             .bind(component.metadata.clone())
-            .execute(self.db_pool.deref())
+            .execute(&mut *transaction)
             .await?;
+
+        transaction.commit().await?;
 
         Ok(())
     }
@@ -275,6 +293,22 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
 #[async_trait]
 impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
     async fn upsert(&self, component: &ComponentRecord) -> Result<(), RepoError> {
+        let mut transaction = self.db_pool.begin().await?;
+
+        let result = sqlx::query(
+            "SELECT count(component_id) as count FROM components WHERE namespace != $1 AND component_id = $2",
+        )
+        .bind(component.namespace.clone())
+        .bind(component.component_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+
+        let count: i64 = result.get("count");
+
+        if count > 0 {
+            return Err(RepoError::Internal("Component id not unique".to_string()));
+        }
+
         sqlx::query(
             r#"
               INSERT INTO components
@@ -288,7 +322,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                   protected_component = $7,
                   protector_version = $8,
                   metadata = $9
-            "#,
+               "#,
         )
             .bind(component.namespace.clone())
             .bind(component.component_id)
@@ -299,8 +333,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
             .bind(component.protected_component.clone())
             .bind(component.protector_version)
             .bind(component.metadata.clone())
-            .execute(self.db_pool.deref())
+            .execute(&mut *transaction)
             .await?;
+
+        transaction.commit().await?;
 
         Ok(())
     }
