@@ -12,6 +12,7 @@ pub trait ComponentMetadataFetcher {
     ) -> Result<ComponentMetadata, MetadataFetchError>;
 }
 
+#[derive(Clone)]
 pub struct MetadataFetchError(pub String);
 
 impl Display for MetadataFetchError {

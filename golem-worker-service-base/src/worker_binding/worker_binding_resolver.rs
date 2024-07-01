@@ -123,6 +123,8 @@ impl ResolvedWorkerBinding {
             component_id: self.worker_detail.component_id.clone(),
             worker_name,
         };
+
+        internal::get_response(&self, &worker_id, evaluator, worker_metadata_fetcher, internal::CachePresence::Present).await
     }
 }
 
@@ -226,7 +228,7 @@ mod internal {
     use std::sync::Arc;
     use crate::worker_bridge_execution::to_response::ToResponse;
 
-    enum CachePresence {
+    pub(crate) enum CachePresence {
         Present,
         Absent
     }
@@ -239,7 +241,7 @@ mod internal {
             }
         }
     }
-    async fn get_response<R>(
+    pub(crate) async fn get_response<R>(
         resolved_worker_binding: &ResolvedWorkerBinding,
         worker_id: &WorkerId,
         evaluator: &Arc<dyn Evaluator + Sync + Send>,
@@ -280,7 +282,7 @@ mod internal {
                                 match err {
                                     EvaluationError::FunctionInvokeError(_) if cache_presence.is_present() => {
                                         symbol_table_fetch.invalidate_in_memory_symbol_table(&worker_id.component_id);
-                                        get_response(&resolved_worker_binding, worker_id, evaluator, symbol_table_fetch, CachePresence::Absent)
+                                        Box::pin(get_response(&resolved_worker_binding, worker_id, evaluator, symbol_table_fetch, CachePresence::Absent)).await
                                     }
 
                                     _ =>   err.to_response(&resolved_worker_binding.request_details)
