@@ -213,10 +213,40 @@ mod tests {
         assert_eq!(component1_result.unwrap(), DefaultNamespace::default());
 
         let component2_result = component_service
-            .get_namespace(&component1.versioned_component_id.component_id)
+            .get_namespace(&component2.versioned_component_id.component_id)
             .await
             .unwrap();
         assert!(component2_result.is_some());
         assert_eq!(component2_result.unwrap(), DefaultNamespace::default());
+
+        let component1_result = component_service
+            .find_ids_by_name(&component1.component_name, &DefaultNamespace::default())
+            .await
+            .unwrap();
+        assert!(component1_result == vec![component1.versioned_component_id.component_id.clone()]);
+
+        let component2_result = component_service
+            .find_ids_by_name(&component2.component_name, &DefaultNamespace::default())
+            .await
+            .unwrap();
+        assert!(component2_result == vec![component2.versioned_component_id.component_id.clone()]);
+
+        let component1_result = component_service
+            .find_by_name(
+                Some(component1.component_name.clone()),
+                &DefaultNamespace::default(),
+            )
+            .await
+            .unwrap();
+        assert!(component1_result == vec![component1.clone(), component1v2.clone()]);
+
+        let component2_result = component_service
+            .find_by_name(
+                Some(component2.component_name.clone()),
+                &DefaultNamespace::default(),
+            )
+            .await
+            .unwrap();
+        assert!(component2_result == vec![component2.clone()]);
     }
 }
