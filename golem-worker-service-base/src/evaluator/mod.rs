@@ -1,10 +1,18 @@
 use async_trait::async_trait;
-pub use evaluator_context::*;
 use std::sync::Arc;
-mod evaluator_context;
+
+pub use component_metadata_fetch::*;
+
+// Component Elements shouldn't be visible outside this crate
+pub(crate) use component_elements::*;
+pub(crate) use evaluator_context::*;
 pub(crate) mod getter;
-mod math_op_evaluator;
 pub(crate) mod path;
+
+mod component_elements;
+mod component_metadata_fetch;
+mod evaluator_context;
+mod math_op_evaluator;
 mod pattern_match_evaluator;
 
 use golem_wasm_ast::analysis::AnalysedType;
@@ -83,6 +91,8 @@ pub enum EvaluationError {
     InvalidReference(#[from] GetError),
     #[error("{0}")]
     Message(String),
+    #[error("{0}")]
+    FunctionInvokeError(String),
 }
 
 impl<T: AsRef<str>> From<T> for EvaluationError {
@@ -511,7 +521,7 @@ mod internal {
     pub(crate) async fn call_worker_function(
         runtime: &EvaluationContext,
         function_name: &ParsedFunctionName,
-        json_params: Vec<TypeAnnotatedValue>,
+        function_params: Vec<TypeAnnotatedValue>,
         executor: &Arc<dyn WorkerRequestExecutor + Sync + Send>,
     ) -> Result<RefinedWorkerResponse, EvaluationError> {
         let variables = runtime.clone().variables.ok_or(EvaluationError::Message(
@@ -573,13 +583,16 @@ mod internal {
         let worker_request = WorkerRequest {
             component_id,
             worker_name,
-            function_name: analysed_function.fqn,
-            function_params: json_params,
+            function: analysed_function,
+            function_params,
             idempotency_key,
         };
 
         let worker_response = executor.execute(worker_request).await.map_err(|err| {
-            EvaluationError::Message(format!("Failed to execute worker function: {}", err))
+            EvaluationError::FunctionInvokeError(format!(
+                "Failed to execute worker function: {}",
+                err
+            ))
         })?;
 
         let refined_worker_response = worker_response.refined().map_err(|err| {

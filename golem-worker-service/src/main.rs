@@ -66,7 +66,7 @@ pub async fn app(
     let grpc_services = services.clone();
 
     let custom_request_server = tokio::spawn(async move {
-        let route = api::custom_request_route(http_service1)
+        let route = api::custom_request_route(http_service1, config.rib_evaluator_cache)
             .with(OpenTelemetryMetrics::new())
             .with(Tracing);
 

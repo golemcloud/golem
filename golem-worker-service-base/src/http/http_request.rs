@@ -110,7 +110,7 @@ mod tests {
     use serde_json::Value;
     use std::sync::Arc;
 
-    use golem_common::model::IdempotencyKey;
+    use golem_common::model::{ComponentId, ComponentVersion, IdempotencyKey};
     use golem_service_base::model::{
         ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId,
     };
@@ -119,8 +119,9 @@ mod tests {
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
     use crate::evaluator::{
-        DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError,
-        WorkerMetadataFetcher, FQN,
+        ComponentDetails, ComponentElementsService, ComponentMetadataService,
+        DefaultComponentElementsService, DefaultEvaluator, EvaluationError, Evaluator,
+        ExprEvaluationResult, Fqn, MetadataFetchError,
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
@@ -177,7 +178,7 @@ mod tests {
                 ),
                 (
                     "function_name".to_string(),
-                    TypeAnnotatedValue::Str(worker_request.function_name.to_string()),
+                    TypeAnnotatedValue::Str(worker_request.function.fqn.to_string()),
                 ),
                 (
                     "function_params".to_string(),
@@ -222,46 +223,65 @@ mod tests {
     }
 
     struct TestMetadataFetcher {
-        test_fqn: FQN,
+        test_fqn: Fqn,
     }
 
     #[async_trait]
-    impl WorkerMetadataFetcher for TestMetadataFetcher {
-        async fn get_worker_metadata(
+    impl ComponentMetadataService for TestMetadataFetcher {
+        async fn get_latest_component_metadata(
             &self,
-            _worker_id: &WorkerId,
-        ) -> Result<ComponentMetadata, MetadataFetchError> {
-            Ok(ComponentMetadata {
-                exports: vec![Export::Instance(ExportInstance {
-                    name: self
-                        .test_fqn
-                        .clone()
-                        .parsed_function_name
-                        .site()
-                        .interface_name()
-                        .unwrap(),
-                    functions: vec![ExportFunction {
+            _component_id: &ComponentId,
+        ) -> Result<ComponentDetails, MetadataFetchError> {
+            let component_details = ComponentDetails {
+                version: 1,
+                metadata: ComponentMetadata {
+                    exports: vec![Export::Instance(ExportInstance {
                         name: self
                             .test_fqn
                             .parsed_function_name
-                            .function()
-                            .function_name()
-                            .clone(),
-                        parameters: vec![],
-                        results: vec![],
-                    }],
-                })],
-                producers: vec![],
-                memories: vec![],
-            })
+                            .site()
+                            .interface_name()
+                            .unwrap(),
+                        functions: vec![ExportFunction {
+                            name: self
+                                .test_fqn
+                                .parsed_function_name
+                                .function()
+                                .function_name()
+                                .clone(),
+                            parameters: vec![],
+                            results: vec![],
+                        }],
+                    })],
+                    producers: vec![],
+                    memories: vec![],
+                },
+            };
+
+            Ok(component_details)
+        }
+
+        async fn get_component_metadata(
+            &self,
+            component_id: &ComponentId,
+            _version: ComponentVersion,
+        ) -> Result<ComponentDetails, MetadataFetchError> {
+            self.get_latest_component_metadata(component_id).await
+        }
+
+        async fn get_worker_component_version(
+            &self,
+            _worker_id: &WorkerId,
+        ) -> Result<ComponentVersion, MetadataFetchError> {
+            Ok(1)
         }
     }
 
     fn get_test_metadata_fetcher(
         function_name: &str,
-    ) -> Arc<dyn WorkerMetadataFetcher + Sync + Send> {
+    ) -> Arc<dyn ComponentMetadataService + Sync + Send> {
         Arc::new(TestMetadataFetcher {
-            test_fqn: FQN::try_from(function_name).unwrap(),
+            test_fqn: Fqn::try_from(function_name).unwrap(),
         })
     }
 
@@ -323,16 +343,19 @@ mod tests {
         api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api.{get-cart-contents}");
+        let symbol_fetch: Arc<dyn ComponentElementsService + Sync + Send> = {
+            Arc::new(DefaultComponentElementsService::new(
+                get_test_metadata_fetcher("golem:it/api.{get-cart-contents}"),
+                1000,
+            ))
+        };
 
         let resolved_route = api_request
             .resolve(vec![api_specification.clone()])
             .await
             .unwrap();
 
-        resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
-            .await
+        resolved_route.execute_with(&evaluator, &symbol_fetch).await
     }
 
     #[tokio::test]
