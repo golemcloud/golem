@@ -9,9 +9,8 @@ use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_wasm_rpc::TypeAnnotatedValue;
 use poem_openapi::types::ToJSON;
 use serde_json::Value;
-use tokio::time::sleep;
 use tonic::transport::Channel;
-use tracing::{debug, info};
+use tracing::{debug, error, field, info, Instrument};
 
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey as ProtoIdempotencyKey, InvocationContext,
@@ -22,10 +21,9 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
     InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
 };
-
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
-    ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
+    Pod, ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_service_base::model::{
     ExportFunction, FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId,
@@ -258,8 +256,8 @@ where
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerId> {
-        self.retry_on_invalid_shard_id(
-            &worker_id.clone(),
+        self.with_retry(
+            Some(&worker_id.clone()),
             &(worker_id.clone(), component_version, arguments, environment_variables, metadata),
             |worker_executor_client, (worker_id, component_version, args, env, metadata)| {
                 Box::pin(async move {
@@ -307,8 +305,8 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<ConnectWorkerStream> {
         let stream = self
-            .retry_on_invalid_shard_id(
-                worker_id,
+            .with_retry(
+                Some(worker_id),
                 &(worker_id.clone(), metadata),
                 |worker_executor_client, (worker_id, metadata)| {
                     Box::pin(async move {
@@ -351,8 +349,8 @@ where
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
-        self.retry_on_invalid_shard_id(
-            worker_id,
+        self.with_retry(
+            Some(worker_id),
             &(worker_id, metadata),
             |worker_executor_client, (worker_id, metadata)| {
                 Box::pin(async move {
@@ -522,8 +520,8 @@ where
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        let invoke_response = self.retry_on_invalid_shard_id(
-            worker_id,
+        let invoke_response = self.with_retry(
+            Some(worker_id),
             &(worker_id.clone(), function_name, params_val, idempotency_key.clone(), *calling_convention, metadata, invocation_context),
             |worker_executor_client, (worker_id, function_name, params_val, idempotency_key, calling_convention, metadata, invocation_context)| {
                 Box::pin(async move {
@@ -654,8 +652,8 @@ where
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        self.retry_on_invalid_shard_id(
-            worker_id,
+        self.with_retry(
+            Some(worker_id),
             &(
                 worker_id.clone(),
                 function_name,
@@ -717,8 +715,8 @@ where
         };
 
         let result = self
-            .retry_on_invalid_shard_id(
-                worker_id,
+            .with_retry(
+                Some(worker_id),
                 &(promise_id, data, metadata),
                 |worker_executor_client, (promise_id, data, metadata)| {
                     Box::pin(async move {
@@ -767,8 +765,8 @@ where
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
-        self.retry_on_invalid_shard_id(
-            worker_id,
+        self.with_retry(
+            Some(worker_id),
             &(worker_id, metadata),
             |worker_executor_client, (worker_id, metadata)| {
                 Box::pin(async move {
@@ -810,8 +808,8 @@ where
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata> {
-        let metadata = self.retry_on_invalid_shard_id(
-            worker_id,
+        let metadata = self.with_retry(
+            Some(worker_id),
             &(worker_id, metadata),
             |worker_executor_client, (worker_id, metadata)| {
                 Box::pin(async move {
@@ -883,8 +881,8 @@ where
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
-        self.retry_on_invalid_shard_id(
-            worker_id,
+        self.with_retry(
+            Some(worker_id),
             &(worker_id, metadata),
             |worker_executor_client, (worker_id, metadata)| {
                 Box::pin(async move {
@@ -927,8 +925,8 @@ where
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
-        self.retry_on_invalid_shard_id(
-            worker_id,
+        self.with_retry(
+            Some(worker_id),
             &(worker_id, metadata),
             |worker_executor_client, (worker_id, metadata)| {
                 Box::pin(async move {
@@ -1011,10 +1009,190 @@ where
         }
     }
 
+    async fn with_retry<F, In, Out>(
+        &self,
+        worker_id: Option<&WorkerId>, // None for random client
+        i: &In,
+        f: F,
+    ) -> Result<Out, WorkerServiceError>
+    where
+        F: for<'b> Fn(
+            &'b mut WorkerExecutorClient<Channel>,
+            &'b In,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
+    {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let span = WorkerExecutorClientRetrySpan::new(
+                if worker_id.is_some() {
+                    "by_worker_id"
+                } else {
+                    "random"
+                },
+                attempt,
+            );
+
+            let client = match worker_id {
+                Some(worker_id) => self.get_worker_executor_client(worker_id).await,
+                None => self.get_random_worker_executor_client().await,
+            };
+
+            if let Ok(Some((pod, mut worker_executor_client))) = client {
+                span.record_pod(&pod);
+                match f(&mut worker_executor_client, i).await {
+                    Ok(result) => return Ok(result),
+                    Err(error) => {
+                        self.invalidate_routing_table_on_golem_worker_errors(error)
+                            .instrument(span.span.clone())
+                            .await?;
+                    }
+                }
+            } else {
+                self.invalidate_routing_table_on_get_worker_client_errors(client.err())
+                    .instrument(span.span.clone())
+                    .await?;
+            }
+        }
+    }
+
+    async fn with_retry_and_all_workers<F, In, Out>(
+        &self,
+        i: &In,
+        f: F,
+    ) -> Result<Vec<Out>, WorkerServiceError>
+    where
+        F: for<'b> Fn(
+            &'b mut WorkerExecutorClient<Channel>,
+            &'b In,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
+    {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let span = WorkerExecutorClientRetrySpan::new("all_workers", attempt);
+
+            let clients = self.get_all_worker_executor_clients().await;
+
+            match clients {
+                Ok(clients) if !clients.is_empty() => {
+                    let mut results = vec![];
+
+                    for (pod, mut client) in clients {
+                        span.record_pod(&pod);
+                        match f(&mut client, i).await {
+                            Ok(result) => results.push(result),
+                            Err(error) => {
+                                self.invalidate_routing_table_on_golem_worker_errors(error)
+                                    .instrument(span.span.clone())
+                                    .await?;
+                                break;
+                            }
+                        }
+                    }
+
+                    return Ok(results);
+                }
+                _ => {
+                    self.invalidate_routing_table_on_get_worker_client_errors(clients.err())
+                        .instrument(span.span.clone())
+                        .await?;
+                }
+            }
+        }
+    }
+
+    async fn invalidate_routing_table_on_get_worker_client_errors(
+        &self,
+        get_client_result: Option<GetWorkerExecutorClientError>,
+    ) -> Result<(), WorkerServiceError> {
+        match get_client_result {
+            None => {
+                self.invalidate_routing_table_sleep("NoActiveShards", None)
+                    .await;
+                Ok(())
+            }
+            Some(GetWorkerExecutorClientError::FailedToGetRoutingTable(
+                RoutingTableError::Unexpected(details),
+            )) if is_connection_failure(&details) => {
+                self.invalidate_routing_table_sleep(
+                    "FailedToGetRoutingTable.ConnectionFailure",
+                    Some(&details),
+                )
+                .await;
+                Ok(())
+            }
+            Some(GetWorkerExecutorClientError::FailedToConnectToPod(details))
+                if is_connection_failure(&details) =>
+            {
+                self.invalidate_routing_table_no_sleep(
+                    "FailedToConnectToPod.ConnectionFailure",
+                    Some(&details),
+                )
+                .await;
+                Ok(())
+            }
+            Some(error) => {
+                error!(error = "Non retryable GetWorkerExecutorClientError");
+                Err(WorkerServiceError::internal(error))
+            }
+        }
+    }
+
+    async fn invalidate_routing_table_on_golem_worker_errors(
+        &self,
+        error: GolemError,
+    ) -> Result<(), WorkerServiceError> {
+        match error {
+            GolemError::InvalidShardId(GolemErrorInvalidShardId {
+                shard_id,
+                shard_ids,
+            }) => {
+                debug!(
+                    shard_id = shard_id.to_string(),
+                    available_shard_ids = format!("{:?}", shard_ids),
+                    "InvalidShardId"
+                );
+                self.invalidate_routing_table_sleep("invalid shard id", None)
+                    .await;
+                Ok(())
+            }
+            GolemError::RuntimeError(GolemErrorRuntimeError { details })
+                if is_connection_failure(&details) =>
+            {
+                self.invalidate_routing_table_no_sleep("Worker.ConnectionFailure", Some(&details))
+                    .await;
+                Ok(())
+            }
+            error => {
+                error!(error = error.to_string(), "Non retryable GolemError");
+                Err(WorkerServiceError::Golem(error))
+            }
+        }
+    }
+
+    async fn invalidate_routing_table_no_sleep(&self, reason: &str, error: Option<&str>) {
+        self.invalidate_routing_table(reason, error, false).await
+    }
+
+    async fn invalidate_routing_table_sleep(&self, reason: &str, error: Option<&str>) {
+        self.invalidate_routing_table(reason, error, true).await
+    }
+
+    async fn invalidate_routing_table(&self, reason: &str, error: Option<&str>, sleep: bool) {
+        info!(reason, error, sleep, "Invalidating routing table");
+        self.routing_table_service.invalidate_routing_table().await;
+        if sleep {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
     async fn get_worker_executor_client(
         &self,
         worker_id: &WorkerId,
-    ) -> Result<Option<WorkerExecutorClient<Channel>>, GetWorkerExecutorClientError> {
+    ) -> Result<Option<(Pod, WorkerExecutorClient<Channel>)>, GetWorkerExecutorClientError> {
         let routing_table = self
             .routing_table_service
             .get_routing_table()
@@ -1033,84 +1211,14 @@ where
                     .lookup(pod.clone())
                     .await
                     .map_err(GetWorkerExecutorClientError::FailedToConnectToPod)?;
-                Ok(Some(worker_executor_client))
+                Ok(Some((pod.clone(), worker_executor_client)))
             }
         }
     }
 
-    async fn retry_on_invalid_shard_id<F, In, Out>(
+    async fn get_random_worker_executor_client(
         &self,
-        worker_id: &WorkerId,
-        i: &In,
-        f: F,
-    ) -> Result<Out, WorkerServiceError>
-    where
-        F: for<'b> Fn(
-            &'b mut WorkerExecutorClient<Channel>,
-            &'b In,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
-    {
-        loop {
-            match self.get_worker_executor_client(worker_id).await {
-                Ok(Some(mut worker_executor_client)) => {
-                    match f(&mut worker_executor_client, i).await {
-                        Ok(result) => return Ok(result),
-                        Err(GolemError::InvalidShardId(GolemErrorInvalidShardId {
-                            shard_id,
-                            shard_ids,
-                        })) => {
-                            info!("InvalidShardId: {} not in {:?}", shard_id, shard_ids);
-                            info!("Invalidating routing table");
-                            self.routing_table_service.invalidate_routing_table().await;
-                            sleep(Duration::from_secs(1)).await;
-                        }
-                        Err(GolemError::RuntimeError(GolemErrorRuntimeError { details }))
-                            if is_connection_failure(&details) =>
-                        {
-                            info!("Worker executor unavailable");
-                            info!("Invalidating routing table and retrying immediately");
-                            self.routing_table_service.invalidate_routing_table().await;
-                        }
-                        Err(other) => {
-                            debug!("Got {:?}, not retrying", other);
-                            return Err(WorkerServiceError::Golem(other));
-                        }
-                    }
-                }
-                Ok(None) => {
-                    info!("No active shards");
-                    info!("Invalidating routing table");
-                    self.routing_table_service.invalidate_routing_table().await;
-                    sleep(Duration::from_secs(1)).await;
-                }
-                Err(GetWorkerExecutorClientError::FailedToGetRoutingTable(
-                    RoutingTableError::Unexpected(details),
-                )) if is_connection_failure(&details) => {
-                    info!("Shard manager unavailable");
-                    info!("Invalidating routing table and retrying in 1 seconds");
-                    self.routing_table_service.invalidate_routing_table().await;
-                    sleep(Duration::from_secs(1)).await;
-                }
-                Err(GetWorkerExecutorClientError::FailedToConnectToPod(details))
-                    if is_connection_failure(&details) =>
-                {
-                    info!("Worker executor unavailable");
-                    info!("Invalidating routing table and retrying immediately");
-                    self.routing_table_service.invalidate_routing_table().await;
-                }
-                Err(other) => {
-                    debug!("Got {}, not retrying", other);
-                    // let err = anyhow::Error::new(other);
-                    return Err(WorkerServiceError::internal(other));
-                }
-            }
-        }
-    }
-
-    async fn random_worker_executor_client(
-        &self,
-    ) -> Result<Option<WorkerExecutorClient<Channel>>, GetWorkerExecutorClientError> {
+    ) -> Result<Option<(Pod, WorkerExecutorClient<Channel>)>, GetWorkerExecutorClientError> {
         let routing_table = self
             .routing_table_service
             .get_routing_table()
@@ -1124,83 +1232,14 @@ where
                     .lookup(pod.clone())
                     .await
                     .map_err(GetWorkerExecutorClientError::FailedToConnectToPod)?;
-                Ok(Some(worker_executor_client))
+                Ok(Some((pod.clone(), worker_executor_client)))
             }
         }
     }
 
-    async fn execute_with_random_client<F, In, Out>(
+    async fn get_all_worker_executor_clients(
         &self,
-        input: &In,
-        execute: F,
-    ) -> Result<Out, WorkerServiceError>
-    where
-        F: for<'b> Fn(
-            &'b mut WorkerExecutorClient<Channel>,
-            &'b In,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
-    {
-        loop {
-            match self.random_worker_executor_client().await {
-                Ok(Some(mut worker_executor_client)) => {
-                    match execute(&mut worker_executor_client, input).await {
-                        Ok(result) => return Ok(result),
-                        Err(GolemError::InvalidShardId(GolemErrorInvalidShardId {
-                            shard_id,
-                            shard_ids,
-                        })) => {
-                            info!("InvalidShardId: {} not in {:?}", shard_id, shard_ids);
-                            info!("Invalidating routing table");
-                            self.routing_table_service.invalidate_routing_table().await;
-                            sleep(Duration::from_secs(1)).await;
-                        }
-                        Err(GolemError::RuntimeError(GolemErrorRuntimeError { details }))
-                            if is_connection_failure(&details) =>
-                        {
-                            info!("Worker executor unavailable");
-                            info!("Invalidating routing table and retrying immediately");
-                            self.routing_table_service.invalidate_routing_table().await;
-                        }
-                        Err(other) => {
-                            debug!("Got {:?}, not retrying", other);
-                            return Err(WorkerServiceError::Golem(other));
-                        }
-                    }
-                }
-                Ok(None) => {
-                    info!("No active shards");
-                    info!("Invalidating routing table");
-                    self.routing_table_service.invalidate_routing_table().await;
-                    sleep(Duration::from_secs(1)).await;
-                }
-                Err(GetWorkerExecutorClientError::FailedToGetRoutingTable(
-                    RoutingTableError::Unexpected(details),
-                )) if is_connection_failure(&details) => {
-                    info!("Shard manager unavailable");
-                    info!("Invalidating routing table and retrying in 1 seconds");
-                    self.routing_table_service.invalidate_routing_table().await;
-                    sleep(Duration::from_secs(1)).await;
-                }
-                Err(GetWorkerExecutorClientError::FailedToConnectToPod(details))
-                    if is_connection_failure(&details) =>
-                {
-                    info!("Worker executor unavailable");
-                    info!("Invalidating routing table and retrying immediately");
-                    self.routing_table_service.invalidate_routing_table().await;
-                }
-                Err(other) => {
-                    debug!("Got {}, not retrying", other);
-                    // let err = anyhow::Error::new(other);
-                    return Err(WorkerServiceError::internal(other));
-                }
-            }
-        }
-    }
-
-    async fn all_worker_executor_clients(
-        &self,
-    ) -> Result<Vec<WorkerExecutorClient<Channel>>, GetWorkerExecutorClientError> {
+    ) -> Result<Vec<(Pod, WorkerExecutorClient<Channel>)>, GetWorkerExecutorClientError> {
         let routing_table = self
             .routing_table_service
             .get_routing_table()
@@ -1214,90 +1253,15 @@ where
                 self.worker_executor_clients
                     .lookup(pod.clone())
                     .await
+                    .map(|client| (pod.clone(), client))
                     .map_err(GetWorkerExecutorClientError::FailedToConnectToPod)
             })
             .collect::<Vec<_>>();
 
-        let results = futures::future::join_all(get_clients).await;
-        results
+        futures::future::join_all(get_clients)
+            .await
             .into_iter()
-            .collect::<Result<Vec<WorkerExecutorClient<Channel>>, GetWorkerExecutorClientError>>()
-    }
-
-    async fn execute_with_all_clients<F, In, Out>(
-        &self,
-        input: &In,
-        execute: F,
-    ) -> Result<Vec<Out>, WorkerServiceError>
-    where
-        F: for<'b> Fn(
-            &'b mut WorkerExecutorClient<Channel>,
-            &'b In,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Out, GolemError>> + 'b + Send>>,
-    {
-        loop {
-            match self.all_worker_executor_clients().await {
-                Ok(worker_executor_clients) if !worker_executor_clients.is_empty() => {
-                    let mut results = vec![];
-
-                    for mut client in worker_executor_clients {
-                        match execute(&mut client, input).await {
-                            Ok(result) => results.push(result),
-                            Err(GolemError::InvalidShardId(GolemErrorInvalidShardId {
-                                shard_id,
-                                shard_ids,
-                            })) => {
-                                info!("InvalidShardId: {} not in {:?}", shard_id, shard_ids);
-                                info!("Invalidating routing table");
-                                self.routing_table_service.invalidate_routing_table().await;
-                                sleep(Duration::from_secs(1)).await;
-                                break;
-                            }
-                            Err(GolemError::RuntimeError(GolemErrorRuntimeError { details }))
-                                if is_connection_failure(&details) =>
-                            {
-                                info!("Worker executor unavailable");
-                                info!("Invalidating routing table and retrying immediately");
-                                self.routing_table_service.invalidate_routing_table().await;
-                                break;
-                            }
-                            Err(other) => {
-                                debug!("Got {:?}, not retrying", other);
-                                return Err(WorkerServiceError::Golem(other));
-                            }
-                        }
-                    }
-                    return Ok(results);
-                }
-                Ok(_) => {
-                    info!("No active shards");
-                    info!("Invalidating routing table");
-                    self.routing_table_service.invalidate_routing_table().await;
-                    sleep(Duration::from_secs(1)).await;
-                }
-                Err(GetWorkerExecutorClientError::FailedToGetRoutingTable(
-                    RoutingTableError::Unexpected(details),
-                )) if is_connection_failure(&details) => {
-                    info!("Shard manager unavailable");
-                    info!("Invalidating routing table and retrying in 1 seconds");
-                    self.routing_table_service.invalidate_routing_table().await;
-                    sleep(Duration::from_secs(1)).await;
-                }
-                Err(GetWorkerExecutorClientError::FailedToConnectToPod(details))
-                    if is_connection_failure(&details) =>
-                {
-                    info!("Worker executor unavailable");
-                    info!("Invalidating routing table and retrying immediately");
-                    self.routing_table_service.invalidate_routing_table().await;
-                }
-                Err(other) => {
-                    debug!("Got {}, not retrying", other);
-                    // let err = anyhow::Error::new(other);
-                    return Err(WorkerServiceError::internal(other));
-                }
-            }
-        }
+            .collect()
     }
 
     async fn find_running_metadata_internal(
@@ -1306,7 +1270,7 @@ where
         filter: Option<WorkerFilter>,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Vec<WorkerMetadata>> {
-        let result = self.execute_with_all_clients(
+        let result = self.with_retry_and_all_workers(
             &(component_id.clone(), filter.clone()),
             |worker_executor_client, (component_id, filter)| {
                 Box::pin(async move {
@@ -1361,8 +1325,8 @@ where
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
-        let result = self.execute_with_random_client(
-            &(component_id.clone(), filter.clone(), cursor, count, precise, metadata),
+        let result = self.with_retry(
+            None, &(component_id.clone(), filter.clone(), cursor, count, precise, metadata),
             |worker_executor_client, (component_id, filter, cursor, count, precise, metadata)| {
                 Box::pin(async move {
                     let component_id: golem_api_grpc::proto::golem::component::ComponentId =
@@ -1445,6 +1409,28 @@ enum GetWorkerExecutorClientError {
 #[derive(Clone, Debug)]
 pub struct WorkerServiceNoOp {
     pub metadata: WorkerRequestMetadata,
+}
+
+struct WorkerExecutorClientRetrySpan {
+    pub span: tracing::Span,
+}
+
+impl WorkerExecutorClientRetrySpan {
+    fn new(worker_selection_mode: &str, attempt: usize) -> Self {
+        Self {
+            span: tracing::span!(
+                tracing::Level::INFO,
+                "worker_executor_client_retry",
+                worker_selection_mode = worker_selection_mode,
+                pod = field::Empty,
+                attempt,
+            ),
+        }
+    }
+
+    fn record_pod(&self, pod: &Pod) {
+        self.span.record("pod", pod.uri().to_string());
+    }
 }
 
 #[async_trait]
