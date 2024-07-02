@@ -269,7 +269,7 @@ mod tests {
             self.get_latest_component_metadata(component_id).await
         }
 
-        async fn get_active_component_in_worker(
+        async fn get_worker_component_version(
             &self,
             _worker_id: &WorkerId,
         ) -> Result<ComponentVersion, MetadataFetchError> {

@@ -102,7 +102,7 @@ impl DefaultComponentElementsFetch {
                 let worker_id = worker_id.clone();
                 Box::pin(async move {
                     component_metadata_service
-                        .get_active_component_in_worker(&worker_id)
+                        .get_worker_component_version(&worker_id)
                         .await
                 })
             })

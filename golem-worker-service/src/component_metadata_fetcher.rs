@@ -58,7 +58,7 @@ impl ComponentMetadataService for DefaultComponentMetadataFetch {
             .map_err(|e| MetadataFetchError::Internal(e.to_string()))
     }
 
-    async fn get_active_component_in_worker(
+    async fn get_worker_component_version(
         &self,
         worker_id: &WorkerId,
     ) -> Result<ComponentVersion, MetadataFetchError> {

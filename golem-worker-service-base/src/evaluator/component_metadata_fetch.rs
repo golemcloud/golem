@@ -17,7 +17,7 @@ pub trait ComponentMetadataService {
         version: ComponentVersion,
     ) -> Result<ComponentDetails, MetadataFetchError>;
 
-    async fn get_active_component_in_worker(
+    async fn get_worker_component_version(
         &self,
         worker_id: &WorkerId,
     ) -> Result<ComponentVersion, MetadataFetchError>;
@@ -43,29 +43,3 @@ impl Display for MetadataFetchError {
     }
 }
 
-pub struct NoopComponentMetadataService;
-
-#[async_trait]
-impl ComponentMetadataService for NoopComponentMetadataService {
-    async fn get_latest_component_metadata(
-        &self,
-        _component_id: &ComponentId,
-    ) -> Result<ComponentDetails, MetadataFetchError> {
-        Err(MetadataFetchError::Internal("Not implemented".to_string()))
-    }
-
-    async fn get_component_metadata(
-        &self,
-        _component_id: &ComponentId,
-        _version: ComponentVersion,
-    ) -> Result<ComponentDetails, MetadataFetchError> {
-        Err(MetadataFetchError::Internal("Not implemented".to_string()))
-    }
-
-    async fn get_active_component_in_worker(
-        &self,
-        _worker_id: &WorkerId,
-    ) -> Result<ComponentVersion, MetadataFetchError> {
-        Err(MetadataFetchError::Internal("Not implemented".to_string()))
-    }
-}
