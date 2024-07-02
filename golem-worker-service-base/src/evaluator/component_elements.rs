@@ -24,10 +24,10 @@ impl ComponentElements {
         let top_level_functions = component_metadata.functions();
 
         let functions = top_level_functions
-            .iter()
+            .into_iter()
             .map(|f| Function {
                 fqn: Fqn {
-                    parsed_function_name: ParsedFunctionName::global(f.name.clone()),
+                    parsed_function_name: ParsedFunctionName::global(f.name),
                 },
                 arguments: f.parameters.clone(),
                 return_type: f.results.clone(),
@@ -36,14 +36,14 @@ impl ComponentElements {
 
         let function_of_interfaces = component_metadata
             .instances()
-            .iter()
+            .into_iter()
             .flat_map(|i| {
-                i.functions.iter().map(move |f| Function {
+                i.functions.into_iter().map(move |f| Function {
                     fqn: Fqn {
                         parsed_function_name: ParsedFunctionName::parse(format!(
                             "{}.{{{}}}",
-                            i.name.clone(),
-                            f.name.clone()
+                            i.name,
+                            f.name
                         ))
                         .unwrap(),
                     },
