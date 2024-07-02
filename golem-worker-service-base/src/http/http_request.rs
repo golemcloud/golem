@@ -110,18 +110,18 @@ mod tests {
     use serde_json::Value;
     use std::sync::Arc;
 
-    use golem_common::model::{ComponentId, IdempotencyKey};
+    use golem_common::model::{ComponentId, ComponentVersion, IdempotencyKey};
     use golem_service_base::model::{
-        ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult,
+        ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId,
     };
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
     use crate::evaluator::{
-        ComponentElementsFetch, ComponentMetadataFetch, DefaultComponentElementsFetch,
-        DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult, Fqn,
-        MetadataFetchError,
+        ComponentDetails, ComponentElementsFetch, ComponentMetadataFetch,
+        DefaultComponentElementsFetch, DefaultEvaluator, EvaluationError, Evaluator,
+        ExprEvaluationResult, Fqn, MetadataFetchError,
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
@@ -231,30 +231,41 @@ mod tests {
         async fn get_latest_version_details(
             &self,
             _component_id: &ComponentId,
-        ) -> Result<ComponentMetadata, MetadataFetchError> {
-            Ok(ComponentMetadata {
-                exports: vec![Export::Instance(ExportInstance {
-                    name: self
-                        .test_fqn
-                        .clone()
-                        .parsed_function_name
-                        .site()
-                        .interface_name()
-                        .unwrap(),
-                    functions: vec![ExportFunction {
+        ) -> Result<ComponentDetails, MetadataFetchError> {
+            let component_details = ComponentDetails {
+                version: 1,
+                metadata: ComponentMetadata {
+                    exports: vec![Export::Instance(ExportInstance {
                         name: self
                             .test_fqn
                             .parsed_function_name
-                            .function()
-                            .function_name()
-                            .clone(),
-                        parameters: vec![],
-                        results: vec![],
-                    }],
-                })],
-                producers: vec![],
-                memories: vec![],
-            })
+                            .site()
+                            .interface_name()
+                            .unwrap(),
+                        functions: vec![ExportFunction {
+                            name: self
+                                .test_fqn
+                                .parsed_function_name
+                                .function()
+                                .function_name()
+                                .clone(),
+                            parameters: vec![],
+                            results: vec![],
+                        }],
+                    })],
+                    producers: vec![],
+                    memories: vec![],
+                },
+            };
+
+            Ok(component_details)
+        }
+
+        async fn get_currently_running_component(
+            &self,
+            _worker_id: &WorkerId,
+        ) -> Result<ComponentVersion, MetadataFetchError> {
+            Ok(1)
         }
     }
 

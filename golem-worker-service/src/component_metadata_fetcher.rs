@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use golem_common::model::{ComponentId, ComponentVersion};
 use golem_service_base::model::{Component, ComponentMetadata, WorkerId};
 use golem_worker_service_base::auth::EmptyAuthCtx;
-use golem_worker_service_base::evaluator::{ComponentMetadataFetch, MetadataFetchError};
+use golem_worker_service_base::evaluator::{ComponentDetails, ComponentMetadataFetch, MetadataFetchError};
 use golem_worker_service_base::service::component::ComponentService;
 use golem_worker_service_base::service::worker::{WorkerService, WorkerServiceError};
 use std::sync::Arc;
@@ -30,10 +30,14 @@ impl ComponentMetadataFetch for DefaultComponentMetadataFetch {
     async fn get_latest_version_details(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Component, MetadataFetchError> {
+    ) -> Result<ComponentDetails, MetadataFetchError> {
         self.component_service
-            .get_latest(component_id, &EmptyAuthCtx::default())
+            .get_latest(&component_id, &EmptyAuthCtx::default())
             .await
+            .map(|component| ComponentDetails {
+                version: component.versioned_component_id.version,
+                metadata: component.metadata,
+            })
             .map_err(|e| MetadataFetchError::Internal(e.to_string()))
     }
 

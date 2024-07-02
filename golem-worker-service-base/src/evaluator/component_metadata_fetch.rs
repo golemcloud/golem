@@ -1,20 +1,15 @@
-use crate::service::worker::WorkerServiceError;
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
 use golem_common::model::ComponentVersion;
-use golem_service_base::model::{Component, ComponentMetadata, WorkerId};
+use golem_service_base::model::{ComponentMetadata, WorkerId};
 use std::fmt::Display;
 
-// Service to fetch the component metadata given a component-id
-// This is different to ComponentMetadataFetch which gives richer data called ComponentElements
-// that's more useful to evaluator.
-// Outside modules/crates should use this service, while ComponentElementsFetch is visible only to the base crate
 #[async_trait]
 pub trait ComponentMetadataFetch {
     async fn get_latest_version_details(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Component, MetadataFetchError>;
+    ) -> Result<ComponentDetails, MetadataFetchError>;
 
     async fn get_currently_running_component(
         &self,
@@ -22,7 +17,12 @@ pub trait ComponentMetadataFetch {
     ) -> Result<ComponentVersion, MetadataFetchError>;
 }
 
-#[derive(Clone)]
+pub struct ComponentDetails {
+    pub version: ComponentVersion,
+    pub metadata: ComponentMetadata,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum MetadataFetchError {
     WorkerNotFound,
     Internal(String),
@@ -30,7 +30,10 @@ pub enum MetadataFetchError {
 
 impl Display for MetadataFetchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Worker component metadata fetch error: {}", self.0)
+        match self {
+            MetadataFetchError::WorkerNotFound => write!(f, "Worker not found"),
+            MetadataFetchError::Internal(msg) => write!(f, "Internal error: {}", msg),
+        }
     }
 }
 
@@ -41,14 +44,14 @@ impl ComponentMetadataFetch for NoopComponentMetadataFetch {
     async fn get_latest_version_details(
         &self,
         _component_id: &ComponentId,
-    ) -> Result<Component, MetadataFetchError> {
+    ) -> Result<ComponentDetails, MetadataFetchError> {
         Err(MetadataFetchError::Internal("Not implemented".to_string()))
     }
 
     async fn get_currently_running_component(
         &self,
         _worker_id: &WorkerId,
-    ) -> Result<Component, MetadataFetchError> {
+    ) -> Result<ComponentVersion, MetadataFetchError> {
         Err(MetadataFetchError::Internal("Not implemented".to_string()))
     }
 }

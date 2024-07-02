@@ -105,15 +105,14 @@ impl EvaluationContext {
         worker_detail: &WorkerDetail,
         request: &RequestDetails,
         component_elements: ComponentElements,
-    ) -> Result<Self, String> {
+    ) -> Self {
         let mut request_data = internal::request_type_annotated_value(request);
         let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
         let merged = request_data.merge(&worker_data);
-
-        Ok(EvaluationContext {
+        EvaluationContext {
             variables: Some(merged.clone()),
             component_elements,
-        })
+        }
     }
 
     pub fn from_worker_detail(worker_detail: &WorkerDetail) -> Self {

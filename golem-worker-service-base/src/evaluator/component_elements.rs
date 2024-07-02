@@ -7,6 +7,9 @@ use golem_service_base::model::{ComponentMetadata, WorkerId};
 use rib::ParsedFunctionName;
 
 use std::sync::Arc;
+
+// ComponentElements is geared to be used in the evaluation context of
+// of Rib. It has more specific data coresponding to function calls
 #[derive(PartialEq, Debug, Clone)]
 pub struct ComponentElements {
     pub functions: Vec<Function>,
@@ -91,11 +94,12 @@ impl DefaultComponentElementsFetch {
 
     pub(crate) async fn get_currently_running_version_from_cache(
         &self,
-        worker_id: WorkerId,
+        worker_id: &WorkerId,
     ) -> Result<ComponentVersion, MetadataFetchError> {
         self.currently_running_version_cache
             .get_or_insert_simple(&worker_id.clone(), || {
                 let component_metadata_service = self.component_metadata_fetch.clone();
+                let worker_id = worker_id.clone();
                 Box::pin(async move {
                     component_metadata_service
                         .get_currently_running_component(&worker_id)
@@ -113,6 +117,8 @@ impl DefaultComponentElementsFetch {
         self.component_elements_cache
             .get_or_insert_simple(&(component_id.clone(), version.clone()), || {
                 let component_metadata_service = self.component_metadata_fetch.clone();
+                let component_id = component_id.clone();
+
                 Box::pin(async move {
                     let component = component_metadata_service
                         .get_latest_version_details(&component_id)
@@ -129,59 +135,66 @@ impl DefaultComponentElementsFetch {
         &self,
         worker_id: &WorkerId,
     ) -> Result<ComponentElements, MetadataFetchError> {
-        let latest_version = self
+        let latest_component_version_details = self
             .component_metadata_fetch
             .get_latest_version_details(&worker_id.component_id)
             .await?;
 
-        let result = self
-            .component_elements_cache
+        // This is ensuring if the cache is updated during this time, with another
+        // version, we don't override it
+        let _ = self
+            .currently_running_version_cache
+            .get_or_insert_simple(&worker_id.clone(), || {
+                Box::pin(async move { Ok(latest_component_version_details.version) })
+            })
+            .await;
+
+        // Caching the component_element details of the above version
+        // If there is a winner here due to concurrent calls, we don't update it.
+        // Incase there is a discrepancy between the association of worker-id -> version details
+        // and the component_elements cache, it will get fixed in the next call.
+        // -------------------------------------------------------------------------------------------
+        // The Race condition of worker-executor getting updated with another version of component-id
+        // -------------------------------------------------------------------------------------------
+        // If worker-executor is updated with another version of component-id after the successful updation
+        // of evaluation-context-related-cache, then the actual invocation will fail
+        // since Rib-evaluation-context has stale information and in that race condition,
+        // and in this scenario, we invalidate this cache and keep retrying for a configurable number of times.
+        self.component_elements_cache
             .get_or_insert_simple(
                 &(
                     worker_id.component_id.clone(),
-                    latest_version.versioned_component_id.version.clone(),
+                    latest_component_version_details.version.clone(),
                 ),
                 || {
-                    let metadata = latest_version.metadata.clone();
+                    let metadata = latest_component_version_details.metadata.clone();
                     Box::pin(
                         async move { Ok(ComponentElements::from_component_metadata(metadata)) },
                     )
                 },
             )
-            .await?;
-
-        let _ = self
-            .currently_running_version_cache
-            .get_or_insert_simple(&worker_id.clone(), || {
-                Box::pin(async move { Ok(latest_version.versioned_component_id.version) })
-            })
-            .await;
-
-        Ok(result)
+            .await
     }
 }
 
-// A service that will give richer data
-// compared to ComponentMetadataFetch service
-// which is required for the evaluator
 #[async_trait]
 pub(crate) trait ComponentElementsFetch {
     async fn get_component_elements(
         &self,
-        worker_id: WorkerId,
+        worker_id: &WorkerId,
     ) -> Result<ComponentElements, MetadataFetchError>;
 
-    fn invalidate_cached_current_running_version(&self, worker_id: WorkerId);
+    fn invalidate_cached_current_running_version(&self, worker_id: &WorkerId);
 }
 
 #[async_trait]
 impl ComponentElementsFetch for DefaultComponentElementsFetch {
     async fn get_component_elements(
         &self,
-        worker_id: WorkerId,
+        worker_id: &WorkerId,
     ) -> Result<ComponentElements, MetadataFetchError> {
         let current_version = self
-            .get_currently_running_version_from_cache(worker_id.clone())
+            .get_currently_running_version_from_cache(worker_id)
             .await;
 
         match current_version {
@@ -201,8 +214,7 @@ impl ComponentElementsFetch for DefaultComponentElementsFetch {
         }
     }
 
-    fn invalidate_cached_current_running_version(&self, component_id: &ComponentId) {
-        self.component_metadata_fetch
-            .invalidate_cached_latest_version(component_id);
+    fn invalidate_cached_current_running_version(&self, worker_id: &WorkerId) {
+        self.currently_running_version_cache.remove(&worker_id);
     }
 }
