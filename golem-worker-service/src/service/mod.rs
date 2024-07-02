@@ -29,7 +29,7 @@ use golem_worker_service_base::service::worker::{
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 
 use crate::component_metadata_fetcher::DefaultComponentMetadataFetch;
-use golem_worker_service_base::evaluator::ComponentMetadataFetch;
+use golem_worker_service_base::evaluator::ComponentMetadataService;
 
 use golem_worker_service_base::service::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault, ApiDeploymentServiceNoop,
@@ -52,7 +52,7 @@ pub struct Services {
     pub http_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
-    pub worker_metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send>,
+    pub worker_metadata_fetcher: Arc<dyn ComponentMetadataService + Sync + Send>,
     pub api_definition_validator_service: Arc<
         dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
     >,
@@ -95,7 +95,7 @@ impl Services {
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
         );
 
-        let worker_metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send> = Arc::new(
+        let worker_metadata_fetcher: Arc<dyn ComponentMetadataService + Sync + Send> = Arc::new(
             DefaultComponentMetadataFetch::new(component_service.clone(), worker_service.clone()),
         );
 
@@ -184,7 +184,7 @@ impl Services {
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
         );
 
-        let worker_metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send> = Arc::new(
+        let worker_metadata_fetcher: Arc<dyn ComponentMetadataService + Sync + Send> = Arc::new(
             DefaultComponentMetadataFetch::new(component_service.clone(), worker_service.clone()),
         );
 

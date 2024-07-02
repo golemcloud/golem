@@ -277,7 +277,7 @@ mod internal {
         component_elements_fetch: Arc<dyn ComponentElementsFetch + Sync + Send>,
     ) -> Result<ExprEvaluationResult, InvocationError> {
         with_retries(
-            "WorkerBridgeFunctionInvocation",
+            "WorkerBridgeFunctionInvocationRetries",
             "APIGateway",
             "WorkerBindingEvaluation",
             &RetryConfig::default(),
@@ -324,11 +324,13 @@ mod internal {
                     }
                 })
             },
-            |e| match e {
-                InvocationError::RibExprEvaluationError(EvaluationError::FunctionInvokeError(
-                    _,
-                )) => true,
-                _ => false,
+            |e| {
+                matches!(
+                    e,
+                    InvocationError::RibExprEvaluationError(EvaluationError::FunctionInvokeError(
+                        _
+                    ))
+                )
             },
         )
         .await

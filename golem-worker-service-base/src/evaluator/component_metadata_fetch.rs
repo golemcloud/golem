@@ -5,13 +5,19 @@ use golem_service_base::model::{ComponentMetadata, WorkerId};
 use std::fmt::Display;
 
 #[async_trait]
-pub trait ComponentMetadataFetch {
-    async fn get_latest_version_details(
+pub trait ComponentMetadataService {
+    async fn get_latest_component_metadata(
         &self,
         component_id: &ComponentId,
     ) -> Result<ComponentDetails, MetadataFetchError>;
 
-    async fn get_currently_running_component(
+    async fn get_component_metadata(
+        &self,
+        component_id: &ComponentId,
+        version: ComponentVersion
+    ) -> Result<ComponentDetails, MetadataFetchError>;
+
+    async fn get_active_component_in_worker(
         &self,
         worker_id: &WorkerId,
     ) -> Result<ComponentVersion, MetadataFetchError>;
@@ -37,18 +43,22 @@ impl Display for MetadataFetchError {
     }
 }
 
-pub struct NoopComponentMetadataFetch;
+pub struct NoopComponentMetadataService;
 
 #[async_trait]
-impl ComponentMetadataFetch for NoopComponentMetadataFetch {
-    async fn get_latest_version_details(
+impl ComponentMetadataService for NoopComponentMetadataService {
+    async fn get_latest_component_metadata(
         &self,
         _component_id: &ComponentId,
     ) -> Result<ComponentDetails, MetadataFetchError> {
         Err(MetadataFetchError::Internal("Not implemented".to_string()))
     }
 
-    async fn get_currently_running_component(
+    async fn get_component_metadata(&self, component_id: &ComponentId, version: ComponentVersion) -> Result<ComponentDetails, MetadataFetchError> {
+        Err(MetadataFetchError::Internal("Not implemented".to_string()))
+    }
+
+    async fn get_active_component_in_worker(
         &self,
         _worker_id: &WorkerId,
     ) -> Result<ComponentVersion, MetadataFetchError> {

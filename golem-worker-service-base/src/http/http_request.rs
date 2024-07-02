@@ -119,7 +119,7 @@ mod tests {
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
     use crate::evaluator::{
-        ComponentDetails, ComponentElementsFetch, ComponentMetadataFetch,
+        ComponentDetails, ComponentElementsFetch, ComponentMetadataService,
         DefaultComponentElementsFetch, DefaultEvaluator, EvaluationError, Evaluator,
         ExprEvaluationResult, Fqn, MetadataFetchError,
     };
@@ -227,8 +227,8 @@ mod tests {
     }
 
     #[async_trait]
-    impl ComponentMetadataFetch for TestMetadataFetcher {
-        async fn get_latest_version_details(
+    impl ComponentMetadataService for TestMetadataFetcher {
+        async fn get_latest_component_metadata(
             &self,
             _component_id: &ComponentId,
         ) -> Result<ComponentDetails, MetadataFetchError> {
@@ -261,7 +261,11 @@ mod tests {
             Ok(component_details)
         }
 
-        async fn get_currently_running_component(
+        async fn get_component_metadata(&self, component_id: &ComponentId, version: ComponentVersion) -> Result<ComponentDetails, MetadataFetchError> {
+            self.get_latest_component_metadata(component_id).await
+        }
+
+        async fn get_active_component_in_worker(
             &self,
             _worker_id: &WorkerId,
         ) -> Result<ComponentVersion, MetadataFetchError> {
@@ -271,7 +275,7 @@ mod tests {
 
     fn get_test_metadata_fetcher(
         function_name: &str,
-    ) -> Arc<dyn ComponentMetadataFetch + Sync + Send> {
+    ) -> Arc<dyn ComponentMetadataService + Sync + Send> {
         Arc::new(TestMetadataFetcher {
             test_fqn: Fqn::try_from(function_name).unwrap(),
         })
