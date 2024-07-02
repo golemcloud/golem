@@ -26,6 +26,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
 
+use crate::tracing::format::JsonFlattenSpanFormatter;
+
 pub enum Output {
     Stdout,
     File,
@@ -37,6 +39,7 @@ pub struct OutputConfig {
     pub enabled: bool,
     pub json: bool,
     pub json_flatten: bool,
+    pub json_flatten_span: bool,
     pub ansi: bool,
     pub span_events_active: bool,
     pub span_events_full: bool,
@@ -52,6 +55,7 @@ impl OutputConfig {
             enabled: true,
             json: false,
             json_flatten: true,
+            json_flatten_span: false,
             ansi: false,
             span_events_active: false,
             span_events_full: false,
@@ -63,6 +67,7 @@ impl OutputConfig {
             enabled: true,
             json: false,
             json_flatten: true,
+            json_flatten_span: false,
             ansi: true,
             span_events_active: false,
             span_events_full: false,
@@ -74,17 +79,31 @@ impl OutputConfig {
             enabled: true,
             json: true,
             json_flatten: false,
+            json_flatten_span: false,
             ansi: false,
             span_events_active: false,
             span_events_full: false,
         }
     }
 
-    pub fn json_flattened() -> Self {
+    pub fn json_flatten() -> Self {
         Self {
             enabled: true,
             json: true,
             json_flatten: true,
+            json_flatten_span: false,
+            ansi: false,
+            span_events_active: false,
+            span_events_full: false,
+        }
+    }
+
+    pub fn json_flatten_span() -> Self {
+        Self {
+            enabled: true,
+            json: true,
+            json_flatten: true,
+            json_flatten_span: true,
             ansi: false,
             span_events_active: false,
             span_events_full: false,
@@ -107,7 +126,7 @@ impl Config {
             stdout: OutputConfig::text_ansi(),
             file: OutputConfig {
                 enabled: false,
-                ..OutputConfig::json_flattened()
+                ..OutputConfig::json_flatten()
             },
             file_dir: None,
             file_name: Some(format!("{}.log", service_name)),
@@ -119,10 +138,10 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            stdout: OutputConfig::json_flattened(),
+            stdout: OutputConfig::json_flatten(),
             file: OutputConfig {
                 enabled: false,
-                ..OutputConfig::json_flattened()
+                ..OutputConfig::json_flatten()
             },
             file_dir: None,
             file_name: None,
@@ -323,13 +342,23 @@ where
     };
 
     if config.json {
-        tracing_subscriber::fmt::layer()
-            .json()
-            .flatten_event(config.json_flatten)
-            .with_span_events(span_events)
-            .with_writer(writer)
-            .with_filter(filter)
-            .boxed()
+        if config.json_flatten_span {
+            tracing_subscriber::fmt::layer()
+                .json() // for setting the field formatter
+                .with_span_events(span_events)
+                .event_format(JsonFlattenSpanFormatter)
+                .with_writer(writer)
+                .with_filter(filter)
+                .boxed()
+        } else {
+            tracing_subscriber::fmt::layer()
+                .json()
+                .flatten_event(config.json_flatten)
+                .with_span_events(span_events)
+                .with_writer(writer)
+                .with_filter(filter)
+                .boxed()
+        }
     } else {
         tracing_subscriber::fmt::layer()
             .with_ansi(config.ansi)
@@ -337,5 +366,103 @@ where
             .with_writer(writer)
             .with_filter(filter)
             .boxed()
+    }
+}
+
+pub(crate) mod format {
+    use std::{fmt, io};
+
+    use serde::ser::{SerializeMap, Serializer as _};
+    use serde_json::value::RawValue;
+    use serde_json::Serializer;
+    use tracing::{Event, Subscriber};
+    use tracing_serde::AsSerde;
+    use tracing_subscriber::fmt::format::Writer;
+    use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
+    use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields};
+    use tracing_subscriber::registry::LookupSpan;
+
+    pub struct JsonFlattenSpanFormatter;
+
+    // Based on `impl<S, N, T> FormatEvent<S, N> for Format<Json, T>`
+    impl<S, N> FormatEvent<S, N> for JsonFlattenSpanFormatter
+    where
+        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+        N: for<'writer> FormatFields<'writer> + 'static,
+    {
+        fn format_event(
+            &self,
+            ctx: &FmtContext<'_, S, N>,
+            mut writer: Writer<'_>,
+            event: &Event<'_>,
+        ) -> fmt::Result
+        where
+            S: Subscriber + for<'a> LookupSpan<'a>,
+        {
+            let mut timestamp = String::new();
+            SystemTime.format_time(&mut Writer::new(&mut timestamp))?;
+
+            let meta = event.metadata();
+
+            let mut visit = || {
+                let mut serializer = Serializer::new(WriteAdaptor::new(&mut writer));
+                let mut serializer = serializer.serialize_map(None)?;
+
+                serializer.serialize_entry("timestamp", &timestamp)?;
+                serializer.serialize_entry("level", &meta.level().as_serde())?;
+                serializer.serialize_entry("target", meta.target())?;
+
+                let mut visitor = tracing_serde::SerdeMapVisitor::new(serializer);
+                event.record(&mut visitor);
+
+                serializer = visitor.take_serializer()?;
+
+                if let Some(span) = ctx.lookup_current() {
+                    for span in span.scope().from_root() {
+                        let extensions = span.extensions();
+                        let data = extensions
+                            .get::<FormattedFields<N>>()
+                            .expect("Unable to find FormattedFields in extensions");
+                        let raw_data = RawValue::from_string(data.as_str().to_owned())
+                            .expect("Unable to read fields as RawValue");
+
+                        serializer.serialize_entry(span.name(), &raw_data)?
+                    }
+                }
+
+                SerializeMap::end(serializer)
+            };
+
+            visit().map_err(|_| fmt::Error)?;
+            writeln!(writer)
+        }
+    }
+
+    // From tracing_subscriber::fmt::writer::WriteAdaptor
+    struct WriteAdaptor<'a> {
+        fmt_write: &'a mut dyn fmt::Write,
+    }
+
+    impl<'a> WriteAdaptor<'a> {
+        pub fn new(fmt_write: &'a mut dyn fmt::Write) -> Self {
+            Self { fmt_write }
+        }
+    }
+
+    impl<'a> io::Write for WriteAdaptor<'a> {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let s = std::str::from_utf8(buf)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+            self.fmt_write
+                .write_str(s)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+            Ok(s.as_bytes().len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 }
