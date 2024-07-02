@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
@@ -42,7 +42,7 @@ pub struct ComponentStoreLocalConfig {
     pub object_prefix: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum DbConfig {
     Postgres(DbPostgresConfig),
@@ -58,13 +58,13 @@ impl Default for DbConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DbSqliteConfig {
     pub database: String,
     pub max_connections: u32,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DbPostgresConfig {
     pub host: String,
     pub database: String,
