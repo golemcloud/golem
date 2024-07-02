@@ -228,7 +228,7 @@ mod tests {
 
     #[async_trait]
     impl ComponentMetadataFetch for TestMetadataFetcher {
-        async fn get_component_metadata(
+        async fn get_latest_version_details(
             &self,
             _component_id: &ComponentId,
         ) -> Result<ComponentMetadata, MetadataFetchError> {

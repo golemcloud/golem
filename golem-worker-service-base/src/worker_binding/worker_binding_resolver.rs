@@ -124,14 +124,23 @@ impl ResolvedWorkerBinding {
             worker_name,
         };
 
-        internal::get_response(
+        let result = internal::get_evaluation_result(
             self,
-            &worker_id,
-            evaluator,
-            symbol_fetch,
-            internal::CachePresence::Present,
+            worker_id,
+            evaluator.clone(),
+            symbol_fetch.clone(),
         )
-        .await
+        .await;
+
+        match result {
+            Err(internal::InvocationError::ComponentMetadataFetchError(error)) => {
+                error.to_response(&self.request_details)
+            }
+            Err(internal::InvocationError::RibExprEvaluationError(error)) => {
+                error.to_response(&self.request_details)
+            }
+            Ok(result) => result.to_response(&self.request_details),
+        }
     }
 }
 
@@ -235,6 +244,8 @@ mod internal {
     };
     use crate::worker_binding::ResolvedWorkerBinding;
     use crate::worker_bridge_execution::to_response::ToResponse;
+    use golem_common::config::RetryConfig;
+    use golem_common::retries::with_retries;
     use golem_service_base::model::WorkerId;
     use std::sync::Arc;
 
@@ -243,76 +254,79 @@ mod internal {
         Absent,
     }
 
-    impl CachePresence {
-        fn is_present(&self) -> bool {
-            match self {
-                CachePresence::Present => true,
-                CachePresence::Absent => false,
-            }
-        }
+    pub(crate) enum InvocationError {
+        RibExprEvaluationError(EvaluationError),
+        ComponentMetadataFetchError(MetadataFetchError),
     }
-    pub(crate) async fn get_response<R>(
+
+    pub(crate) async fn get_evaluation_result<R>(
         resolved_worker_binding: &ResolvedWorkerBinding,
-        worker_id: &WorkerId,
-        evaluator: &Arc<dyn Evaluator + Sync + Send>,
-        component_elements_fetch: &Arc<dyn ComponentElementsFetch + Sync + Send>,
-        cache_presence: CachePresence,
-    ) -> R
-    where
-        ExprEvaluationResult: ToResponse<R>,
-        EvaluationError: ToResponse<R>,
-        MetadataFetchError: ToResponse<R>,
-    {
-        let functions_available = component_elements_fetch
-            .get_component_elements(worker_id.component_id.clone())
-            .await;
+        worker_id: WorkerId,
+        evaluator: Arc<dyn Evaluator + Sync + Send>,
+        component_elements_fetch: Arc<dyn ComponentElementsFetch + Sync + Send>,
+    ) -> Result<ExprEvaluationResult, InvocationError> {
+        with_retries(
+            "WorkerBridgeFunctionInvocation",
+            "APIGateway",
+            "WorkerBindingEvaluation",
+            &RetryConfig::default(),
+            &(
+                resolved_worker_binding,
+                worker_id,
+                evaluator,
+                component_elements_fetch,
+            ),
+            |(resolved_worker_binding, worker_id, evaluator, component_elements_fetch)| {
+                Box::pin(async move {
+                    let functions_available = component_elements_fetch
+                        .get_component_elements(worker_id.clone())
+                        .await;
 
-        match functions_available {
-            Ok(component_elements) => {
-                let evaluation_context = EvaluationContext::from_all(
-                    &resolved_worker_binding.worker_detail,
-                    &resolved_worker_binding.request_details,
-                    component_elements,
-                );
+                    match functions_available {
+                        Ok(component_elements) => {
+                            let evaluation_context = EvaluationContext::from_all(
+                                &resolved_worker_binding.worker_detail,
+                                &resolved_worker_binding.request_details,
+                                component_elements,
+                            );
 
-                match evaluation_context {
-                    Ok(context) => {
-                        let result = evaluator
-                            .evaluate(
-                                &resolved_worker_binding.response_mapping.clone().0,
-                                &context,
-                            )
-                            .await;
+                            match evaluation_context {
+                                Ok(context) => {
+                                    let result = evaluator
+                                        .evaluate(
+                                            &resolved_worker_binding.response_mapping.clone().0,
+                                            &context,
+                                        )
+                                        .await;
 
-                        match result {
-                            Ok(worker_response) => worker_response
-                                .to_response(&resolved_worker_binding.request_details),
-                            Err(err) => match err {
-                                EvaluationError::FunctionInvokeError(_)
-                                    if cache_presence.is_present() =>
-                                {
-                                    component_elements_fetch.invalidate_cached_component_elements(
-                                        &worker_id.component_id,
-                                    );
-                                    Box::pin(get_response(
-                                        resolved_worker_binding,
-                                        worker_id,
-                                        evaluator,
-                                        component_elements_fetch,
-                                        CachePresence::Absent,
-                                    ))
-                                    .await
+                                    match result {
+                                        Ok(worker_response) => Ok(worker_response),
+                                        Err(err) => match err {
+                                            EvaluationError::FunctionInvokeError(_) => {
+                                                component_elements_fetch
+                                                    .invalidate_cached_current_running_version(
+                                                        worker_id.clone(),
+                                                    );
+                                                Err(err)
+                                            }
+
+                                            _ => Err(err),
+                                        },
+                                    }
                                 }
-
-                                _ => err.to_response(&resolved_worker_binding.request_details),
-                            },
+                                Err(err) => MetadataFetchError::Internal(err)
+                                    .to_response(&resolved_worker_binding.request_details),
+                            }
                         }
+                        Err(err) => err.to_response(&resolved_worker_binding.request_details),
                     }
-                    Err(err) => MetadataFetchError(err)
-                        .to_response(&resolved_worker_binding.request_details),
-                }
-            }
-            Err(err) => err.to_response(&resolved_worker_binding.request_details),
-        }
+                })
+            },
+            |e| match e {
+                EvaluationError::InvalidReference(_) => false,
+                EvaluationError::FunctionInvokeError(_) => true,
+                EvaluationError::Message(_) => false,
+            },
+        )
     }
 }

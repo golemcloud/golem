@@ -96,7 +96,7 @@ impl Services {
         );
 
         let worker_metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send> = Arc::new(
-            DefaultComponentMetadataFetch::new(component_service.clone()),
+            DefaultComponentMetadataFetch::new(component_service.clone(), worker_service.clone()),
         );
 
         let (api_definition_repo, api_deployment_repo) = match config.db.clone() {
@@ -185,7 +185,7 @@ impl Services {
         );
 
         let worker_metadata_fetcher: Arc<dyn ComponentMetadataFetch + Sync + Send> = Arc::new(
-            DefaultComponentMetadataFetch::new(component_service.clone()),
+            DefaultComponentMetadataFetch::new(component_service.clone(), worker_service.clone()),
         );
 
         let definition_service: Arc<

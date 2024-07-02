@@ -6,7 +6,7 @@ use golem_api_grpc::proto::golem::worker::{
 
 // The dependents of golem-worker-service-base is expected
 // to have a component service internally that can depend on this base error
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum ComponentServiceError {
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
