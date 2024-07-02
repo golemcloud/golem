@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use golem_common::model::ComponentId;
+use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::WorkerId;
-use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::{proxy_worker_connection, ConnectWorkerStream};
 use poem::web::websocket::WebSocket;
 use poem::web::Data;

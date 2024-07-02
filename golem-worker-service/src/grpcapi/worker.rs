@@ -31,7 +31,7 @@ use golem_api_grpc::proto::golem::worker::{
     WorkerExecutionError, WorkerMetadata,
 };
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
-use golem_worker_service_base::auth::EmptyAuthCtx;
+use golem_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::ConnectWorkerStream;
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
