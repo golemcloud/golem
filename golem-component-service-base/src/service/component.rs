@@ -102,11 +102,11 @@ pub trait ComponentService<Namespace> {
         namespace: &Namespace,
     ) -> Result<Vec<Component>, ComponentError>;
 
-    async fn find_ids_by_name(
+    async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
         namespace: &Namespace,
-    ) -> Result<Vec<ComponentId>, ComponentError>;
+    ) -> Result<Option<ComponentId>, ComponentError>;
 
     async fn get_by_version(
         &self,
@@ -172,7 +172,7 @@ where
             component_name.0.clone()
         );
 
-        self.find_ids_by_name(component_name, namespace)
+        self.find_id_by_name(component_name, namespace)
             .await?
             .into_iter()
             .next()
@@ -412,16 +412,16 @@ where
         Ok(Some(result))
     }
 
-    async fn find_ids_by_name(
+    async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
         namespace: &Namespace,
-    ) -> Result<Vec<ComponentId>, ComponentError> {
+    ) -> Result<Option<ComponentId>, ComponentError> {
         let records = self
             .component_repo
-            .get_ids_by_name(namespace.to_string().as_str(), &component_name.0)
+            .get_id_by_name(namespace.to_string().as_str(), &component_name.0)
             .await?;
-        Ok(records.into_iter().map(ComponentId).collect())
+        Ok(records.map(ComponentId))
     }
 
     async fn find_by_name(
@@ -540,20 +540,14 @@ where
         component_id: &ComponentId,
     ) -> Result<Option<Namespace>, ComponentError> {
         info!("Getting component namespace - id: {}", component_id);
-        let result = self.component_repo.get_namespaces(&component_id.0).await?;
-
-        if result.is_empty() {
-            Ok(None)
-        } else if result.len() == 1 {
-            let value = result[0].clone().try_into().map_err(|e| {
+        let result = self.component_repo.get_namespace(&component_id.0).await?;
+        if let Some(result) = result {
+            let value = result.clone().try_into().map_err(|e| {
                 ComponentError::internal(e, "Failed to convert namespace".to_string())
             })?;
             Ok(Some(value))
         } else {
-            Err(ComponentError::internal(
-                "",
-                "Namespace is not unique".to_string(),
-            ))
+            Ok(None)
         }
     }
 }
@@ -701,12 +695,12 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
         Ok(ByteStream::empty())
     }
 
-    async fn find_ids_by_name(
+    async fn find_id_by_name(
         &self,
         _component_name: &ComponentName,
         _namespace: &Namespace,
-    ) -> Result<Vec<ComponentId>, ComponentError> {
-        Ok(vec![])
+    ) -> Result<Option<ComponentId>, ComponentError> {
+        Ok(None)
     }
 
     async fn get_protected_data(

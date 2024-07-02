@@ -123,9 +123,9 @@ pub trait ComponentRepo {
         name: &str,
     ) -> Result<Vec<ComponentRecord>, RepoError>;
 
-    async fn get_ids_by_name(&self, namespace: &str, name: &str) -> Result<Vec<Uuid>, RepoError>;
+    async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError>;
 
-    async fn get_namespaces(&self, component_id: &Uuid) -> Result<Vec<String>, RepoError>;
+    async fn get_namespace(&self, component_id: &Uuid) -> Result<Option<String>, RepoError>;
 
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError>;
 }
@@ -272,25 +272,24 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
             .map_err(|e| e.into())
     }
 
-    async fn get_ids_by_name(&self, namespace: &str, name: &str) -> Result<Vec<Uuid>, RepoError> {
-        let result = sqlx::query(
-            "SELECT distinct component_id as component_id FROM components WHERE namespace = $1 AND name = $2"
-        )
-            .bind(namespace)
-            .bind(name)
-            .fetch_all(self.db_pool.deref())
-            .await?;
+    async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {
+        let result =
+            sqlx::query("SELECT component_id FROM components WHERE namespace = $1 AND name = $2")
+                .bind(namespace)
+                .bind(name)
+                .fetch_optional(self.db_pool.deref())
+                .await?;
 
-        Ok(result.into_iter().map(|x| x.get("component_id")).collect())
+        Ok(result.map(|x| x.get("component_id")))
     }
 
-    async fn get_namespaces(&self, component_id: &Uuid) -> Result<Vec<String>, RepoError> {
+    async fn get_namespace(&self, component_id: &Uuid) -> Result<Option<String>, RepoError> {
         let result = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
             .bind(component_id)
-            .fetch_all(self.db_pool.deref())
+            .fetch_optional(self.db_pool.deref())
             .await?;
 
-        Ok(result.into_iter().map(|x| x.get("namespace")).collect())
+        Ok(result.map(|x| x.get("namespace")))
     }
 
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
@@ -444,25 +443,24 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
             .map_err(|e| e.into())
     }
 
-    async fn get_ids_by_name(&self, namespace: &str, name: &str) -> Result<Vec<Uuid>, RepoError> {
-        let result = sqlx::query(
-            "SELECT distinct component_id as component_id FROM components WHERE namespace = $1 AND name = $2"
-        )
-            .bind(namespace)
-            .bind(name)
-            .fetch_all(self.db_pool.deref())
-            .await?;
+    async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {
+        let result =
+            sqlx::query("SELECT component_id FROM components WHERE namespace = $1 AND name = $2")
+                .bind(namespace)
+                .bind(name)
+                .fetch_optional(self.db_pool.deref())
+                .await?;
 
-        Ok(result.into_iter().map(|x| x.get("component_id")).collect())
+        Ok(result.map(|x| x.get("component_id")))
     }
 
-    async fn get_namespaces(&self, component_id: &Uuid) -> Result<Vec<String>, RepoError> {
+    async fn get_namespace(&self, component_id: &Uuid) -> Result<Option<String>, RepoError> {
         let result = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
             .bind(component_id)
-            .fetch_all(self.db_pool.deref())
+            .fetch_optional(self.db_pool.deref())
             .await?;
 
-        Ok(result.into_iter().map(|x| x.get("namespace")).collect())
+        Ok(result.map(|x| x.get("namespace")))
     }
 
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
