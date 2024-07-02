@@ -1,7 +1,7 @@
 use crate::empty_worker_metadata;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, ComponentVersion};
-use golem_service_base::model::{Component, ComponentMetadata, WorkerId};
+use golem_service_base::model::WorkerId;
 use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::evaluator::{
     ComponentDetails, ComponentMetadataService, MetadataFetchError,
@@ -34,7 +34,7 @@ impl ComponentMetadataService for DefaultComponentMetadataFetch {
         component_id: &ComponentId,
     ) -> Result<ComponentDetails, MetadataFetchError> {
         self.component_service
-            .get_latest(&component_id, &EmptyAuthCtx::default())
+            .get_latest(component_id, &EmptyAuthCtx::default())
             .await
             .map(|component| ComponentDetails {
                 version: component.versioned_component_id.version,

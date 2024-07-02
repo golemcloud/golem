@@ -264,7 +264,7 @@ mod tests {
         async fn get_component_metadata(
             &self,
             component_id: &ComponentId,
-            version: ComponentVersion,
+            _version: ComponentVersion,
         ) -> Result<ComponentDetails, MetadataFetchError> {
             self.get_latest_component_metadata(component_id).await
         }

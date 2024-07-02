@@ -56,8 +56,8 @@ impl ComponentMetadataService for NoopComponentMetadataService {
 
     async fn get_component_metadata(
         &self,
-        component_id: &ComponentId,
-        version: ComponentVersion,
+        _component_id: &ComponentId,
+        _version: ComponentVersion,
     ) -> Result<ComponentDetails, MetadataFetchError> {
         Err(MetadataFetchError::Internal("Not implemented".to_string()))
     }
