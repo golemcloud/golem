@@ -14,7 +14,7 @@ pub trait ComponentMetadataService {
     async fn get_component_metadata(
         &self,
         component_id: &ComponentId,
-        version: ComponentVersion
+        version: ComponentVersion,
     ) -> Result<ComponentDetails, MetadataFetchError>;
 
     async fn get_active_component_in_worker(
@@ -54,7 +54,11 @@ impl ComponentMetadataService for NoopComponentMetadataService {
         Err(MetadataFetchError::Internal("Not implemented".to_string()))
     }
 
-    async fn get_component_metadata(&self, component_id: &ComponentId, version: ComponentVersion) -> Result<ComponentDetails, MetadataFetchError> {
+    async fn get_component_metadata(
+        &self,
+        component_id: &ComponentId,
+        version: ComponentVersion,
+    ) -> Result<ComponentDetails, MetadataFetchError> {
         Err(MetadataFetchError::Internal("Not implemented".to_string()))
     }
 

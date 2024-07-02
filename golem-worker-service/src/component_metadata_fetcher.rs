@@ -43,8 +43,13 @@ impl ComponentMetadataService for DefaultComponentMetadataFetch {
             .map_err(|e| MetadataFetchError::Internal(e.to_string()))
     }
 
-    async fn get_component_metadata(&self, component_id: &ComponentId, version: ComponentVersion) -> Result<ComponentDetails, MetadataFetchError> {
-        self.component_service.get_by_version(component_id, version, &EmptyAuthCtx::default())
+    async fn get_component_metadata(
+        &self,
+        component_id: &ComponentId,
+        version: ComponentVersion,
+    ) -> Result<ComponentDetails, MetadataFetchError> {
+        self.component_service
+            .get_by_version(component_id, version, &EmptyAuthCtx::default())
             .await
             .map(|component| ComponentDetails {
                 version: component.versioned_component_id.version,
