@@ -38,8 +38,8 @@ pub struct OutputConfig {
     pub json: bool,
     pub json_flatten: bool,
     pub ansi: bool,
-    pub span_active: bool,
-    pub span_full: bool,
+    pub span_events_active: bool,
+    pub span_events_full: bool,
 }
 
 impl OutputConfig {
@@ -51,10 +51,10 @@ impl OutputConfig {
         Self {
             enabled: true,
             json: false,
-            json_flatten: false,
+            json_flatten: true,
             ansi: false,
-            span_active: false,
-            span_full: false,
+            span_events_active: false,
+            span_events_full: false,
         }
     }
 
@@ -62,10 +62,10 @@ impl OutputConfig {
         Self {
             enabled: true,
             json: false,
-            json_flatten: false,
+            json_flatten: true,
             ansi: true,
-            span_active: false,
-            span_full: false,
+            span_events_active: false,
+            span_events_full: false,
         }
     }
 
@@ -75,8 +75,8 @@ impl OutputConfig {
             json: true,
             json_flatten: false,
             ansi: false,
-            span_active: false,
-            span_full: false,
+            span_events_active: false,
+            span_events_full: false,
         }
     }
 
@@ -86,8 +86,8 @@ impl OutputConfig {
             json: true,
             json_flatten: true,
             ansi: false,
-            span_active: false,
-            span_full: false,
+            span_events_active: false,
+            span_events_full: false,
         }
     }
 }
@@ -313,9 +313,9 @@ where
     W: for<'writer> MakeWriter<'writer> + 'static + Send + Sync,
 {
     let span_events = {
-        if config.span_full {
+        if config.span_events_full {
             FmtSpan::FULL
-        } else if config.span_active {
+        } else if config.span_events_active {
             FmtSpan::ACTIVE
         } else {
             FmtSpan::NONE
