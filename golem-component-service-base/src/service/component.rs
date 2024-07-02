@@ -217,7 +217,7 @@ where
         let record = ComponentRecord::new(namespace, component.clone())
             .map_err(|e| ComponentError::internal(e, "Failed to convert record"))?;
 
-        self.component_repo.upsert(&record).await?;
+        self.component_repo.create(&record).await?;
 
         self.component_compilation
             .enqueue_compilation(&component.versioned_component_id.component_id, 0)
@@ -276,7 +276,7 @@ where
         let record = ComponentRecord::new(namespace, component.clone())
             .map_err(|e| ComponentError::internal(e, "Failed to convert record"))?;
 
-        self.component_repo.upsert(&record).await?;
+        self.component_repo.create(&record).await?;
 
         self.component_compilation
             .enqueue_compilation(component_id, component.versioned_component_id.version)

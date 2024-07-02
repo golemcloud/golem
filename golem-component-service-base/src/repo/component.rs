@@ -94,7 +94,7 @@ impl ComponentRecord {
 
 #[async_trait]
 pub trait ComponentRepo {
-    async fn upsert(&self, component: &ComponentRecord) -> Result<(), RepoError>;
+    async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError>;
 
     async fn get(
         &self,
@@ -142,37 +142,34 @@ impl<DB: Database> DbComponentRepo<DB> {
 
 #[async_trait]
 impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
-    async fn upsert(&self, component: &ComponentRecord) -> Result<(), RepoError> {
+    async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
-        let result = sqlx::query(
-            "SELECT count(component_id) as count FROM components WHERE namespace != $1 AND component_id = $2",
-        )
-            .bind(component.namespace.clone())
+        let result = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
             .bind(component.component_id)
-            .fetch_one(&mut *transaction)
+            .fetch_optional(&mut *transaction)
             .await?;
 
-        let count: i64 = result.get("count");
-
-        if count > 0 {
-            return Err(RepoError::Internal("Component id not unique".to_string()));
+        if let Some(result) = result {
+            let namespace: String = result.get("namespace");
+            if namespace != component.namespace {
+                return Err(RepoError::Internal("Component id not unique".to_string()));
+            }
+        } else {
+            sqlx::query(
+                r#"
+                  INSERT INTO components
+                    (namespace, component_id, name)
+                  VALUES
+                    ($1, $2, $3)
+                   "#,
+            )
+            .bind(component.namespace.clone())
+            .bind(component.component_id)
+            .bind(component.name.clone())
+            .execute(&mut *transaction)
+            .await?;
         }
-
-        sqlx::query(
-            r#"
-              INSERT INTO components
-                (namespace, component_id, name)
-              VALUES
-                ($1, $2, $3)
-              ON CONFLICT (namespace, name) DO NOTHING
-               "#,
-        )
-        .bind(component.namespace.clone())
-        .bind(component.component_id)
-        .bind(component.name.clone())
-        .execute(&mut *transaction)
-        .await?;
 
         sqlx::query(
             r#"
@@ -180,12 +177,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                 (component_id, version, size, user_component, protected_component, protector_version, metadata)
               VALUES
                 ($1, $2, $3, $4, $5, $6, $7)
-              ON CONFLICT (component_id, version) DO UPDATE
-              SET size = $3,
-                  user_component = $4,
-                  protected_component = $5,
-                  protector_version = $6,
-                  metadata = $7
                "#,
         )
             .bind(component.component_id)
@@ -352,37 +343,34 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
 
 #[async_trait]
 impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
-    async fn upsert(&self, component: &ComponentRecord) -> Result<(), RepoError> {
+    async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
-        let result = sqlx::query(
-            "SELECT count(component_id) as count FROM components WHERE namespace != $1 AND component_id = $2",
-        )
-            .bind(component.namespace.clone())
+        let result = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
             .bind(component.component_id)
-            .fetch_one(&mut *transaction)
+            .fetch_optional(&mut *transaction)
             .await?;
 
-        let count: i64 = result.get("count");
-
-        if count > 0 {
-            return Err(RepoError::Internal("Component id not unique".to_string()));
+        if let Some(result) = result {
+            let namespace: String = result.get("namespace");
+            if namespace != component.namespace {
+                return Err(RepoError::Internal("Component id not unique".to_string()));
+            }
+        } else {
+            sqlx::query(
+                r#"
+                  INSERT INTO components
+                    (namespace, component_id, name)
+                  VALUES
+                    ($1, $2, $3)
+                   "#,
+            )
+            .bind(component.namespace.clone())
+            .bind(component.component_id)
+            .bind(component.name.clone())
+            .execute(&mut *transaction)
+            .await?;
         }
-
-        sqlx::query(
-            r#"
-              INSERT INTO components
-                (namespace, component_id, name)
-              VALUES
-                ($1, $2, $3)
-              ON CONFLICT (namespace, name) DO NOTHING
-               "#,
-        )
-        .bind(component.namespace.clone())
-        .bind(component.component_id)
-        .bind(component.name.clone())
-        .execute(&mut *transaction)
-        .await?;
 
         sqlx::query(
             r#"
@@ -390,12 +378,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                 (component_id, version, size, user_component, protected_component, protector_version, metadata)
               VALUES
                 ($1, $2, $3, $4, $5, $6, $7)
-              ON CONFLICT (component_id, version) DO UPDATE
-              SET size = $3,
-                  user_component = $4,
-                  protected_component = $5,
-                  protector_version = $6,
-                  metadata = $7
                "#,
         )
             .bind(component.component_id)
