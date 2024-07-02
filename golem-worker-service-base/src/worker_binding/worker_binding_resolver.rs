@@ -105,7 +105,7 @@ impl ResolvedWorkerBinding {
     pub async fn execute_with<R>(
         &self,
         evaluator: &Arc<dyn Evaluator + Sync + Send>,
-        symbol_fetch: &Arc<dyn ComponentElementsService + Sync + Send>,
+        component_element_service: &Arc<dyn ComponentElementsService + Sync + Send>,
     ) -> R
     where
         ExprEvaluationResult: ToResponse<R>,
@@ -128,7 +128,7 @@ impl ResolvedWorkerBinding {
             self,
             worker_id,
             evaluator.clone(),
-            symbol_fetch.clone(),
+            component_element_service.clone(),
         )
         .await;
 
