@@ -55,6 +55,9 @@ exclude = [
     "test-components/write-stdout",
 ]
 
+[profile.dev]
+panic = "abort"
+
 [workspace.dependencies]
 anyhow = "1.0.79"
 assert2 = "0.3.11"

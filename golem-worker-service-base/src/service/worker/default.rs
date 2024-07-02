@@ -11,7 +11,7 @@ use poem_openapi::types::ToJSON;
 use serde_json::Value;
 use tokio::time::sleep;
 use tonic::transport::Channel;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey as ProtoIdempotencyKey, InvocationContext,
@@ -527,6 +527,7 @@ where
             &(worker_id.clone(), function_name, params_val, idempotency_key.clone(), *calling_convention, metadata, invocation_context),
             |worker_executor_client, (worker_id, function_name, params_val, idempotency_key, calling_convention, metadata, invocation_context)| {
                 Box::pin(async move {
+                    info!("Invoking function on {}: {}", worker_id, function_name);
                     let response = worker_executor_client.invoke_and_await_worker(
                         InvokeAndAwaitWorkerRequest {
                             worker_id: Some(worker_id.clone().into()),
@@ -551,12 +552,19 @@ where
                                          output,
                                      },
                                  )),
-                        } => Ok(ProtoInvokeResult { result: output }),
+                        } => {
+                            info!("Invoked function on {}: {}", worker_id, function_name);
+                            Ok(ProtoInvokeResult { result: output })
+                        },
                         workerexecutor::InvokeAndAwaitWorkerResponse {
                             result:
                             Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(err)),
-                        } => Err(err.try_into().unwrap()),
+                        } => {
+                            error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name);
+                            Err(err.try_into().unwrap())
+                        },
                         workerexecutor::InvokeAndAwaitWorkerResponse { .. } => {
+                            error!("Invoked function on {}: {} failed with empty response", worker_id, function_name);
                             Err(GolemError::Unknown(GolemErrorUnknown {
                                 details: "Empty response".to_string(),
                             }))
@@ -815,6 +823,7 @@ where
             &(worker_id, metadata),
             |worker_executor_client, (worker_id, metadata)| {
                 Box::pin(async move {
+                    info!("Getting metadata for {}", worker_id);
                     let response = worker_executor_client.get_worker_metadata(
                         golem_api_grpc::proto::golem::workerexecutor::GetWorkerMetadataRequest {
                             worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from((*worker_id).clone())),
@@ -829,11 +838,17 @@ where
                         workerexecutor::GetWorkerMetadataResponse {
                             result:
                             Some(workerexecutor::get_worker_metadata_response::Result::Success(metadata)),
-                        } => Ok(metadata.try_into().unwrap()),
+                        } => {
+                            info!("Got metadata for {}", worker_id);
+                            Ok(metadata.try_into().unwrap())
+                        },
                         workerexecutor::GetWorkerMetadataResponse {
                             result:
                             Some(workerexecutor::get_worker_metadata_response::Result::Failure(err)),
-                        } => Err(err.try_into().unwrap()),
+                        } => {
+                            error!("Failed to get metadata for {}: {err:?}", worker_id);
+                            Err(err.try_into().unwrap())
+                        },
                         workerexecutor::GetWorkerMetadataResponse { .. } => {
                             Err(GolemError::Unknown(GolemErrorUnknown {
                                 details: "Empty response".to_string(),

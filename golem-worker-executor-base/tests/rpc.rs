@@ -14,7 +14,7 @@
 
 use crate::common;
 use assert2::check;
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use std::time::SystemTime;

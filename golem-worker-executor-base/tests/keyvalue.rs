@@ -14,7 +14,7 @@
 
 use crate::common::{start, TestContext};
 use assert2::check;
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 
 #[tokio::test]

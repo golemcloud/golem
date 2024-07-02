@@ -12,7 +12,7 @@ use tracing_subscriber::{EnvFilter, Layer};
 use golem_api_grpc::proto::golem::worker;
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::TestDslUnsafe;
 
 struct Tracing;
 

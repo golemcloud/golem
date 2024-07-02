@@ -45,7 +45,7 @@ jobs:
       - name: Build Benchmark Report Job
         run: |
           echo "Building all targets including benchmark-report job"
-          cargo build
+          cargo make build-release
       - name: Run Benchmark
         run: |
           echo "Running all benchmark jobs and saving to files"
@@ -62,67 +62,67 @@ jobs:
           mkdir -p ./benchmark-data-current
           
           echo "Starting cold start large benchmark"
-          ./target/debug/benchmark_cold_start_large --quiet --json spawned > benchmark-data-current/benchmark_cold_start_large.json
+          ./target/release/benchmark_cold_start_large --quiet --json spawned > benchmark-data-current/benchmark_cold_start_large.json
           cat benchmark-data-current/benchmark_cold_start_large.json
           echo "Successfully ran cold start large benchmark"
           
           echo "Starting cold start medium benchmark"
-          ./target/debug/benchmark_cold_start_medium --quiet --json spawned > benchmark-data-current/benchmark_cold_start_medium.json
+          ./target/release/benchmark_cold_start_medium --quiet --json spawned > benchmark-data-current/benchmark_cold_start_medium.json
           cat benchmark-data-current/benchmark_cold_start_medium.json
           echo "Successfully ran cold start medium benchmark"
           
           echo "Starting cold start small benchmark"
-          ./target/debug/benchmark_cold_start_small --quiet --json spawned > benchmark-data-current/benchmark_cold_start_small.json
+          ./target/release/benchmark_cold_start_small --quiet --json spawned > benchmark-data-current/benchmark_cold_start_small.json
           cat benchmark-data-current/benchmark_cold_start_small.json
           echo "Successfully ran cold start small benchmark"
           
           echo "Starting cold start large benchmark without component compilation"
-          ./target/debug/benchmark_cold_start_large --quiet --json spawned --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_large_no_compilation.json
+          ./target/release/benchmark_cold_start_large --quiet --json spawned --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_large_no_compilation.json
           cat benchmark-data-current/benchmark_cold_start_large_no_compilation.json
           echo "Successfully ran cold start large benchmark without component compilation"
           
           echo "Starting cold start medium benchmark without component compilation"
-          ./target/debug/benchmark_cold_start_medium --quiet --json spawned --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
+          ./target/release/benchmark_cold_start_medium --quiet --json spawned --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
           cat benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
           echo "Successfully ran cold start medium benchmark without component compilation"
           
           echo "Starting cold start small benchmark without component compilation"
-          ./target/debug/benchmark_cold_start_small  --quiet --json  spawned --component-compilation-disabled> benchmark-data-current/benchmark_cold_start_small_no_compilation.json
+          ./target/release/benchmark_cold_start_small  --quiet --json  spawned --component-compilation-disabled> benchmark-data-current/benchmark_cold_start_small_no_compilation.json
           cat benchmark-data-current/benchmark_cold_start_small_no_compilation.json
           echo "Successfully ran cold start small benchmark without component compilation"
           
           echo "Starting durability overhead benchmark"
-          ./target/debug/benchmark_durability_overhead --quiet --json spawned > benchmark-data-current/benchmark_durability_overhead.json
+          ./target/release/benchmark_durability_overhead --quiet --json spawned > benchmark-data-current/benchmark_durability_overhead.json
           cat benchmark-data-current/benchmark_durability_overhead.json
           echo "Successfully durability overhead benchmark"
           
           echo "Starting latency large benchmark"
-          ./target/debug/benchmark_latency_large --quiet --json spawned > benchmark-data-current/benchmark_latency_large.json
+          ./target/release/benchmark_latency_large --quiet --json spawned > benchmark-data-current/benchmark_latency_large.json
           cat benchmark-data-current/benchmark_latency_large.json
           echo "Successfully ran latency large benchmark"
           
           echo "Starting latency medium benchmark"
-          ./target/debug/benchmark_latency_medium --quiet --json spawned > benchmark-data-current/benchmark_latency_medium.json
+          ./target/release/benchmark_latency_medium --quiet --json spawned > benchmark-data-current/benchmark_latency_medium.json
           cat benchmark-data-current/benchmark_latency_medium.json
           echo "Successfully ran latency medium benchmark"
           
           echo "Starting latency small benchmark"
-          ./target/debug/benchmark_latency_small --quiet --json spawned > benchmark-data-current/benchmark_latency_small.json
+          ./target/release/benchmark_latency_small --quiet --json spawned > benchmark-data-current/benchmark_latency_small.json
           cat benchmark-data-current/benchmark_latency_small.json
           echo "Successfully ran latency small benchmark"
           
           echo "Starting suspend benchmark"
-          ./target/debug/benchmark_suspend_worker --quiet --json spawned > benchmark-data-current/benchmark_suspend_worker.json
+          ./target/release/benchmark_suspend_worker --quiet --json spawned > benchmark-data-current/benchmark_suspend_worker.json
           cat benchmark-data-current/benchmark_suspend_worker.json
           echo "Successfully ran suspend benchmark"
           
           echo "Starting RPC benchmark"
-          ./target/debug/benchmark_rpc --quiet --json spawned > benchmark-data-current/benchmark_rpc.json
+          ./target/release/benchmark_rpc --quiet --json spawned > benchmark-data-current/benchmark_rpc.json
           cat benchmark-data-current/benchmark_rpc.json
           echo "Successfully ran RPC benchmark"
           
           # echo "Starting throughput benchmark"
-          # ./target/debug/benchmark_throughput --quiet --json spawned > benchmark-data-current/benchmark_throughput.json
+          # ./target/release/benchmark_throughput --quiet --json spawned > benchmark-data-current/benchmark_throughput.json
           # cat benchmark-data-current/benchmark_throughput.json
           # echo "Successfully ran throughput benchmark"
                 
@@ -137,8 +137,8 @@ jobs:
           # Initialize arrays to store present and absent files
           present_files=()
           absent_files=()
-          compare_command="./target/debug/benchmark_report compare-benchmarks"
-          get_report_command="./target/debug/benchmark_report get-report"
+          compare_command="./target/release/benchmark_report compare-benchmarks"
+          get_report_command="./target/release/benchmark_report get-report"
           echo "Starting to pull the existing benchmark results if exists"
           
           if git fetch origin main:main && [[ ! "$COMMENT_BODY" =~ refresh ]]; then                              

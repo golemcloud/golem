@@ -327,7 +327,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_active_workers: 1024,
-            concurrency_limit_per_connection: 1024,
+            concurrency_limit_per_connection: 100000,
             max_concurrent_streams: 1024,
             event_broadcast_capacity: 16,
             event_history_size: 128,

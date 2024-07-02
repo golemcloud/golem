@@ -6,6 +6,11 @@ pub struct Api {
     rpc: WasmRpc,
 }
 impl Api {}
+struct Component;
+impl crate::bindings::exports::golem::it_stub::stub_child_component::Guest
+for Component {
+    type Api = crate::Api;
+}
 impl crate::bindings::exports::golem::it_stub::stub_child_component::GuestApi for Api {
     fn new(location: crate::bindings::golem::rpc::types::Uri) -> Self {
         let location = golem_wasm_rpc::Uri {
@@ -113,3 +118,4 @@ impl crate::bindings::exports::golem::it_stub::stub_child_component::GuestApi fo
             .expect("list not found"))
     }
 }
+bindings::export!(Component with_types_in bindings);

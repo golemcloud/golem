@@ -4,7 +4,7 @@ Internally, it uses the same functionalities (and data) as the rust-service/rust
 
 ```bash
 
-cargo make build-flow
+cargo make release-build-flow
 
 ```
 

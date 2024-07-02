@@ -40,7 +40,7 @@ use tonic::transport::Server;
 use tracing::info;
 use uuid::Uuid;
 use wasmtime::component::Linker;
-use wasmtime::{Config, Engine};
+use wasmtime::{Config, Engine, WasmBacktraceDetails};
 
 use crate::grpc::WorkerExecutorImpl;
 use crate::http_server::HttpServerImpl;
@@ -120,6 +120,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         config.wasm_component_model(true);
         config.epoch_interruption(true);
         config.consume_fuel(true);
+        config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
 
         config
     }

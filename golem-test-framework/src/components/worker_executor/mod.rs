@@ -35,7 +35,7 @@ pub mod spawned;
 
 #[async_trait]
 pub trait WorkerExecutor {
-    async fn client(&self) -> WorkerExecutorClient<Channel> {
+    async fn client(&self) -> crate::Result<WorkerExecutorClient<Channel>> {
         new_client(&self.public_host(), self.public_grpc_port()).await
     }
 
@@ -59,10 +59,8 @@ pub trait WorkerExecutor {
     async fn restart(&self);
 }
 
-async fn new_client(host: &str, grpc_port: u16) -> WorkerExecutorClient<Channel> {
-    WorkerExecutorClient::connect(format!("http://{host}:{grpc_port}"))
-        .await
-        .expect("Failed to connect to golem-worker-executor")
+async fn new_client(host: &str, grpc_port: u16) -> crate::Result<WorkerExecutorClient<Channel>> {
+    Ok(WorkerExecutorClient::connect(format!("http://{host}:{grpc_port}")).await?)
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {

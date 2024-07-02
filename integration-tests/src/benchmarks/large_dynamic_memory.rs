@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::SystemTime;
-
 use async_trait::async_trait;
-
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use golem_test_framework::dsl::TestDsl;
 use integration_tests::benchmarks::{
-    cleanup_iteration, run_benchmark, setup_benchmark, setup_iteration, BenchmarkContext,
-    IterationContext,
+    cleanup_iteration, invoke_and_await, run_benchmark, setup_benchmark, setup_iteration,
+    BenchmarkContext, IterationContext,
 };
+use tokio::task::JoinSet;
 
 struct LargeDynamicMemory {
     config: RunConfig,
@@ -59,7 +56,7 @@ impl Benchmark for LargeDynamicMemory {
         setup_iteration(
             benchmark_context,
             self.config.clone(),
-            "large-initial-memory",
+            "large-dynamic-memory",
             false,
         )
         .await
@@ -71,14 +68,8 @@ impl Benchmark for LargeDynamicMemory {
         context: &Self::IterationContext,
     ) {
         if let Some(worker_id) = context.worker_ids.first() {
-            let start = SystemTime::now();
-            benchmark_context
-                .deps
-                .invoke_and_await(worker_id, "run", vec![])
-                .await
-                .expect("invoke_and_await failed");
-            let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-            println!("Warmup invocation took {:?}", elapsed);
+            let result = invoke_and_await(&benchmark_context.deps, worker_id, "run", vec![]).await;
+            println!("Warmup invocation took {:?}", result.accumulated_time);
         }
     }
 
@@ -88,28 +79,26 @@ impl Benchmark for LargeDynamicMemory {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) {
-        // Start each worker and invoke `run` - each worker takes an initial 512Mb memory
-        let mut fibers = Vec::new();
+        // Start each worker and invoke `run` - each worker gradually allocates 512Mb memory
+        let mut fibers = JoinSet::new();
         for (n, worker_id) in context.worker_ids.iter().enumerate() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
-            let fiber = tokio::task::spawn(async move {
-                let start = SystemTime::now();
-                context_clone
-                    .deps
-                    .invoke_and_await(&worker_id_clone, "run", vec![])
-                    .await
-                    .expect("invoke_and_await failed");
-                let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                recorder_clone.duration(&"invocation".to_string(), elapsed);
-                recorder_clone.duration(&format!("worker-{n}"), elapsed);
+            let fiber = fibers.spawn(async move {
+                let result =
+                    invoke_and_await(&context_clone.deps, &worker_id_clone, "run", vec![]).await;
+                recorder_clone.duration(&"invocation".to_string(), result.accumulated_time);
+                recorder_clone.duration(&format!("worker-{n}"), result.accumulated_time);
+                recorder_clone.count(&"invocation-retries".to_string(), result.retries as u64);
+                recorder_clone.count(&format!("worker-{n}-retries"), result.retries as u64);
+                recorder_clone.count(&"invocation-timeouts".to_string(), result.timeouts as u64);
+                recorder_clone.count(&format!("worker-{n}-timeouts"), result.timeouts as u64);
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(fiber) = fibers.join_next().await {
+            fiber.expect("fiber failed");
         }
     }
 

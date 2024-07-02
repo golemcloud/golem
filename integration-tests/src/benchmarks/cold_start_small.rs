@@ -13,13 +13,12 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::model::WorkerId;
 
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use integration_tests::benchmarks::{
-    cleanup_iteration, get_worker_ids, run_benchmark, run_echo, setup_benchmark, setup_iteration,
-    start, BenchmarkContext, IterationContext,
+    cleanup_iteration, run_benchmark, run_echo, setup_benchmark, setup_iteration, BenchmarkContext,
+    IterationContext,
 };
 
 struct ColdStartEchoSmall {
@@ -55,6 +54,7 @@ impl Benchmark for ColdStartEchoSmall {
         &self,
         benchmark_context: &Self::BenchmarkContext,
     ) -> Self::IterationContext {
+        // Uploading the component and generating `size` worker IDs but not starting them
         setup_iteration(benchmark_context, self.config.clone(), "rust-echo", false).await
     }
 
@@ -63,15 +63,9 @@ impl Benchmark for ColdStartEchoSmall {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        if !self.params.mode.component_compilation_disabled() {
-            // warmup with other workers
-            if let Some(WorkerId { component_id, .. }) = context.worker_ids.clone().first() {
-                start(
-                    get_worker_ids(context.worker_ids.len(), component_id, "warmup-worker"),
-                    benchmark_context.deps.clone(),
-                )
-                .await
-            }
+        if !self.params.mode.compilation_service_disabled() {
+            // Waiting a bit so the component compilation service can precompile the component
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         }
     }
 
@@ -81,7 +75,7 @@ impl Benchmark for ColdStartEchoSmall {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) {
-        // config.benchmark_config.length is not used, we want to have only one invocation per worker in this benchmark
+        // Invoking the echo function on each worker once
         run_echo(1, benchmark_context, context, recorder).await
     }
 

@@ -16,15 +16,16 @@ use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::{env_vars, wait_for_startup, WorkerService};
+use crate::components::worker_service::{env_vars, new_client, wait_for_startup, WorkerService};
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 
+use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
+use tonic::transport::Channel;
 use tracing::info;
 use tracing::Level;
 
@@ -34,6 +35,7 @@ pub struct SpawnedWorkerService {
     custom_request_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
+    client: WorkerServiceClient<Channel>,
 }
 
 impl SpawnedWorkerService {
@@ -86,12 +88,19 @@ impl SpawnedWorkerService {
             custom_request_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
+            client: new_client("localhost", grpc_port)
+                .await
+                .expect("Failed to create client"),
         }
     }
 }
 
 #[async_trait]
 impl WorkerService for SpawnedWorkerService {
+    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
+        Ok(self.client.clone())
+    }
+
     fn private_host(&self) -> String {
         "localhost".to_string()
     }

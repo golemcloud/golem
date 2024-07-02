@@ -3650,6 +3650,7 @@ dependencies = [
  "clap 4.5.7",
  "cli-table",
  "colored",
+ "console-subscriber",
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
@@ -3877,6 +3878,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes 1.6.0",
+ "console-subscriber",
  "derive_more",
  "figment",
  "futures",
@@ -4624,6 +4626,7 @@ dependencies = [
 name = "integration-tests"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "assert2",
  "async-trait",
  "clap 4.5.7",

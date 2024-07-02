@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::SystemTime;
-
 use async_trait::async_trait;
 use golem_common::model::WorkerId;
-use golem_wasm_rpc::Value;
-
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
+use golem_wasm_rpc::Value;
 use integration_tests::benchmarks::{
-    get_worker_ids, run_benchmark, setup_benchmark, start, BenchmarkContext,
+    get_worker_ids, invoke_and_await, run_benchmark, setup_benchmark, start, BenchmarkContext,
 };
+use tokio::task::JoinSet;
+use tracing::warn;
 
 struct DurabilityOverhead {
     config: RunConfig,
@@ -92,52 +91,51 @@ impl Benchmark for DurabilityOverhead {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        async fn initialize(worker_ids: Vec<WorkerId>, context: &BenchmarkContext) {
+        async fn initialize(
+            worker_ids: Vec<WorkerId>,
+            context: &BenchmarkContext,
+            not_durable: bool,
+        ) {
             // Invoke each worker a few times in parallel
-            let mut fibers = Vec::new();
+            let mut fibers = JoinSet::new();
             for worker_id in worker_ids.clone() {
                 let context_clone = context.clone();
                 let worker_id_clone = worker_id.clone();
-                let fiber = tokio::task::spawn(async move {
-                    context_clone
-                        .deps
-                        .invoke_and_await(
+                let _ = fibers.spawn(async move {
+                    if not_durable {
+                        invoke_and_await(
+                            &context_clone.deps,
                             &worker_id_clone,
-                            "golem:it/api.{initialize-cart}",
-                            vec![Value::String(worker_id_clone.worker_name.clone())],
+                            "golem:it/api.{not-durable}",
+                            vec![],
                         )
-                        .await
-                        .expect("initialize-cart invoke_and_await failed");
-                });
-                fibers.push(fiber);
-            }
+                        .await;
+                    }
 
-            for fiber in fibers {
-                fiber.await.expect("fiber failed");
-            }
-        }
-
-        initialize(context.durable_worker_ids.clone(), benchmark_context).await;
-
-        let mut fibers = Vec::new();
-        for worker_id in &context.not_durable_worker_ids.clone() {
-            let context_clone = benchmark_context.clone();
-            let worker_id_clone = worker_id.clone();
-            let fiber = tokio::task::spawn(async move {
-                context_clone
-                    .deps
-                    .invoke_and_await(&worker_id_clone, "golem:it/api.{not-durable}", vec![])
+                    invoke_and_await(
+                        &context_clone.deps,
+                        &worker_id_clone,
+                        "golem:it/api.{initialize-cart}",
+                        vec![Value::String(worker_id_clone.worker_name.clone())],
+                    )
                     .await
-                    .expect("not-durable invoke_and_await failed");
-            });
-            fibers.push(fiber);
+                });
+            }
+
+            while let Some(fiber) = fibers.join_next().await {
+                fiber.expect("fiber failed");
+            }
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
-        }
+        let bc = benchmark_context.clone();
+        let ids = context.durable_worker_ids.clone();
+        let init1 = tokio::spawn(async move { initialize(ids, &bc, false).await });
+        let bc = benchmark_context.clone();
+        let ids = context.not_durable_worker_ids.clone();
+        let init2 = tokio::spawn(async move { initialize(ids, &bc, true).await });
 
-        initialize(context.not_durable_worker_ids.clone(), benchmark_context).await;
+        init1.await.unwrap();
+        init2.await.unwrap();
     }
 
     async fn run(
@@ -154,59 +152,78 @@ impl Benchmark for DurabilityOverhead {
             recorder: &BenchmarkRecorder,
         ) {
             // Invoke each worker a 'length' times in parallel and record the duration
-            let mut fibers = Vec::new();
+            let mut fibers = JoinSet::new();
             for (n, worker_id) in worker_ids.iter().enumerate() {
                 let prefix_clone = prefix.clone();
                 let context_clone = context.clone();
                 let worker_id_clone = worker_id.clone();
                 let recorder_clone = recorder.clone();
-                let fiber = tokio::task::spawn(async move {
+                let _ = fibers.spawn(async move {
                     for i in 0..length {
-                        let start = SystemTime::now();
-                        context_clone
-                            .deps
-                            .invoke_and_await(
-                                &worker_id_clone,
-                                "golem:it/api.{add-item}",
-                                vec![Value::Record(vec![
-                                    Value::String(i.to_string()),
-                                    Value::String(format!("{} Golem T-Shirt M", i)),
-                                    Value::F32(100.0 + i as f32),
-                                    Value::U32(i as u32),
-                                ])],
-                            )
-                            .await
-                            .expect("add-item invoke_and_await failed");
-                        let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                        recorder_clone.duration(&format!("{prefix_clone}-invocation"), elapsed);
-                        recorder_clone.duration(&format!("{prefix_clone}-worker-{n}"), elapsed);
+                        let result = invoke_and_await(
+                            &context_clone.deps,
+                            &worker_id_clone,
+                            "golem:it/api.{add-item}",
+                            vec![Value::Record(vec![
+                                Value::String(i.to_string()),
+                                Value::String(format!("{} Golem T-Shirt M", i)),
+                                Value::F32(100.0 + i as f32),
+                                Value::U32(i as u32),
+                            ])],
+                        )
+                        .await;
+                        recorder_clone.duration(
+                            &format!("{prefix_clone}-invocation"),
+                            result.accumulated_time,
+                        );
+                        recorder_clone.duration(
+                            &format!("{prefix_clone}-worker-{n}"),
+                            result.accumulated_time,
+                        );
+                        recorder_clone.count(
+                            &format!("{prefix_clone}-invocation-retries"),
+                            result.retries as u64,
+                        );
+                        recorder_clone.count(
+                            &format!("{prefix_clone}-worker-{n}-retries"),
+                            result.retries as u64,
+                        );
+                        recorder_clone.count(
+                            &format!("{prefix_clone}-invocation-timeouts"),
+                            result.timeouts as u64,
+                        );
+                        recorder_clone.count(
+                            &format!("{prefix_clone}-worker-{n}-timeouts"),
+                            result.timeouts as u64,
+                        );
                     }
                 });
-                fibers.push(fiber);
             }
 
-            for fiber in fibers {
-                fiber.await.expect("fiber failed");
+            while let Some(fiber) = fibers.join_next().await {
+                fiber.expect("fiber failed");
             }
         }
 
-        run_for(
-            context.durable_worker_ids.clone(),
-            "durable".to_string(),
-            self.config.length,
-            benchmark_context,
-            &recorder,
-        )
-        .await;
+        let length = self.config.length;
+        let bc = benchmark_context.clone();
+        let ids = context.durable_worker_ids.clone();
+        let rec = recorder.clone();
+        let set1 =
+            tokio::spawn(
+                async move { run_for(ids, "durable".to_string(), length, &bc, &rec).await },
+            );
 
-        run_for(
-            context.not_durable_worker_ids.clone(),
-            "not-durable".to_string(),
-            self.config.length,
-            benchmark_context,
-            &recorder,
-        )
-        .await;
+        let bc = benchmark_context.clone();
+        let ids = context.not_durable_worker_ids.clone();
+        let rec = recorder.clone();
+        let set2 = tokio::spawn(async move {
+            run_for(ids, "not-durable".to_string(), length, &bc, &rec).await
+        });
+
+        // Running the two types simulatenously to eliminate differences coming from ordering
+        set1.await.unwrap();
+        set2.await.unwrap();
     }
 
     async fn cleanup_iteration(
@@ -215,11 +232,15 @@ impl Benchmark for DurabilityOverhead {
         context: Self::IterationContext,
     ) {
         for worker_id in &context.durable_worker_ids {
-            benchmark_context.deps.delete_worker(worker_id).await
+            if let Err(err) = benchmark_context.deps.delete_worker(worker_id).await {
+                warn!("Failed to delete worker: {:?}", err);
+            }
         }
 
         for worker_id in &context.not_durable_worker_ids {
-            benchmark_context.deps.delete_worker(worker_id).await
+            if let Err(err) = benchmark_context.deps.delete_worker(worker_id).await {
+                warn!("Failed to delete worker: {:?}", err);
+            }
         }
     }
 }

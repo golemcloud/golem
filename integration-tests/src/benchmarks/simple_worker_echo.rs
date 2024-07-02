@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::SystemTime;
-
 use async_trait::async_trait;
-use golem_wasm_rpc::Value;
-
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
+use golem_wasm_rpc::Value;
 use integration_tests::benchmarks::{
-    cleanup_iteration, run_benchmark, setup_benchmark, setup_iteration, BenchmarkContext,
+    invoke_and_await, run_benchmark, setup_benchmark, setup_iteration, BenchmarkContext,
     IterationContext,
 };
+use tokio::task::JoinSet;
+use tracing::warn;
 
 struct SimpleWorkerEcho {
     config: RunConfig,
@@ -72,30 +71,27 @@ impl Benchmark for SimpleWorkerEcho {
         context: &Self::IterationContext,
     ) {
         // Invoke each worker a few times in parallel
-        let mut fibers = Vec::new();
+        let mut fibers = JoinSet::new();
         for worker_id in &context.worker_ids {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
-            let fiber = tokio::task::spawn(async move {
+            fibers.spawn(async move {
                 for _ in 0..5 {
-                    context_clone
-                        .deps
-                        .invoke_and_await(
-                            &worker_id_clone,
-                            "golem:it/api.{echo}",
-                            vec![Value::Option(Some(Box::new(Value::String(
-                                "hello".to_string(),
-                            ))))],
-                        )
-                        .await
-                        .expect("invoke_and_await failed");
+                    invoke_and_await(
+                        &context_clone.deps,
+                        &worker_id_clone,
+                        "golem:it/api.{echo}",
+                        vec![Value::Option(Some(Box::new(Value::String(
+                            "hello".to_string(),
+                        ))))],
+                    )
+                    .await;
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(res) = fibers.join_next().await {
+            let _ = res.unwrap();
         }
     }
 
@@ -106,36 +102,36 @@ impl Benchmark for SimpleWorkerEcho {
         recorder: BenchmarkRecorder,
     ) {
         // Invoke each worker a 'length' times in parallel and record the duration
-        let mut fibers = Vec::new();
+        let mut fibers = JoinSet::new();
         for (n, worker_id) in context.worker_ids.iter().enumerate() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
-            let fiber = tokio::task::spawn(async move {
+            fibers.spawn(async move {
                 for _ in 0..length {
-                    let start = SystemTime::now();
-                    context_clone
-                        .deps
-                        .invoke_and_await(
-                            &worker_id_clone,
-                            "golem:it/api.{echo}",
-                            vec![Value::Option(Some(Box::new(Value::String(
-                                "hello".to_string(),
-                            ))))],
-                        )
-                        .await
-                        .expect("invoke_and_await failed");
-                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"invocation".to_string(), elapsed);
-                    recorder_clone.duration(&format!("worker-{n}"), elapsed);
+                    let result = invoke_and_await(
+                        &context_clone.deps,
+                        &worker_id_clone,
+                        "golem:it/api.{echo}",
+                        vec![Value::Option(Some(Box::new(Value::String(
+                            "hello".to_string(),
+                        ))))],
+                    )
+                    .await;
+                    recorder_clone.duration(&"invocation".to_string(), result.accumulated_time);
+                    recorder_clone.duration(&format!("worker-{n}"), result.accumulated_time);
+                    recorder_clone.count(&"invocation-retries".to_string(), result.retries as u64);
+                    recorder_clone.count(&format!("worker-{n}-retries"), result.retries as u64);
+                    recorder_clone
+                        .count(&"invocation-timeouts".to_string(), result.timeouts as u64);
+                    recorder_clone.count(&format!("worker-{n}-timeouts"), result.timeouts as u64);
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(res) = fibers.join_next().await {
+            let _ = res.unwrap();
         }
     }
 
@@ -144,11 +140,23 @@ impl Benchmark for SimpleWorkerEcho {
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
     ) {
-        cleanup_iteration(benchmark_context, context).await
+        for worker_id in &context.worker_ids {
+            if let Err(err) = benchmark_context.deps.delete_worker(worker_id).await {
+                warn!("Failed to delete worker: {:?}", err);
+            }
+        }
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async_main())
+}
+
+// #[tokio::main)]
+async fn async_main() {
     run_benchmark::<SimpleWorkerEcho>().await;
 }

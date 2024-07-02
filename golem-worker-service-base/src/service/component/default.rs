@@ -126,8 +126,13 @@ where
             "component",
             "get_component",
             &self.retry_config,
-            &(self.uri.clone(), component_id.clone(), metadata.clone()),
-            |(uri, id, metadata)| {
+            &(
+                self.uri.clone(),
+                component_id.clone(),
+                metadata.clone(),
+                desc.clone(),
+            ),
+            |(uri, id, metadata, desc)| {
                 Box::pin(async move {
                     let mut client = ComponentServiceClient::connect(uri.as_http_02()).await?;
                     let request = GetVersionedComponentRequest {
@@ -143,6 +148,7 @@ where
                         None => Err(ComponentServiceError::internal("Empty response")),
 
                         Some(get_component_metadata_response::Result::Success(response)) => {
+                            info!("Got response from component service for {desc}");
                             let component_view: Result<
                                 golem_service_base::model::Component,
                                 ComponentServiceError,
@@ -163,6 +169,7 @@ where
                             Ok(component_view?)
                         }
                         Some(get_component_metadata_response::Result::Error(error)) => {
+                            info!("Got failure from component service: {error:?}");
                             Err(error.into())
                         }
                     }

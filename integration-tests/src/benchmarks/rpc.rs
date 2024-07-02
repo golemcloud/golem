@@ -16,14 +16,15 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::GetRoutingTableRequest;
 use golem_common::model::{RoutingTable, WorkerId};
-use golem_wasm_rpc::Value;
-use std::time::SystemTime;
-
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
+use golem_wasm_rpc::Value;
 use integration_tests::benchmarks::data::Data;
-use integration_tests::benchmarks::{run_benchmark, setup_benchmark, start, BenchmarkContext};
+use integration_tests::benchmarks::{
+    invoke_and_await, run_benchmark, setup_benchmark, BenchmarkContext,
+};
+use tokio::task::JoinSet;
 
 struct Rpc {
     config: RunConfig,
@@ -90,6 +91,8 @@ impl Benchmark for Rpc {
             .store_unique_component("parent_component_composed")
             .await;
 
+        // TODO: multiple pairs
+
         // Rpc parent worker-id
         let parent_worker_id = WorkerId {
             component_id: component_id.clone(),
@@ -122,7 +125,8 @@ impl Benchmark for Rpc {
                 vec![],
                 env,
             )
-            .await;
+            .await
+            .expect("Failed to start parent worker");
 
         RpcBenchmarkIteratorContext {
             worker_ids: vec![ParentChildWorkerId {
@@ -137,17 +141,7 @@ impl Benchmark for Rpc {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        if !self.params.mode.component_compilation_disabled() {
-            // warmup with other workers
-            if let Some(ParentChildWorkerId { parent, child }) = context.worker_ids.clone().first()
-            {
-                start(
-                    vec![parent.clone(), child.clone()],
-                    benchmark_context.deps.clone(),
-                )
-                .await;
-            }
-        }
+        // TODO Warmup the workers
     }
 
     async fn run(
@@ -156,7 +150,6 @@ impl Benchmark for Rpc {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) {
-        // config.benchmark_config.length is not used, we want to have only one invocation per worker in this benchmark
         let calculate_iter: u64 = 200000;
 
         let data = Data::generate_list(2000);
@@ -184,47 +177,44 @@ impl Benchmark for Rpc {
             _ => panic!("Unable to fetch the routing table from shard-manager-service"),
         };
 
-        let mut fibers = Vec::new();
-
-        // For parent worker-id, we will have a child worker once the parent's function is invoked
+        let mut fibers = JoinSet::new();
         for parent_child_worker_pair in context.worker_ids.iter().cloned() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = parent_child_worker_pair.parent.clone();
             let recorder_clone = recorder.clone();
             let rt_clone = shard_manager_routing_table.clone();
             let length = self.config.length;
-            let fiber = tokio::task::spawn(async move {
+            let fiber = fibers.spawn(async move {
                 for _ in 0..length {
-                    let start = SystemTime::now();
-                    context_clone
-                        .deps
-                        .invoke_and_await(
-                            &worker_id_clone,
-                            "golem:itrpc/rpc-api.{echo}",
-                            vec![Value::String("hello".to_string())],
-                        )
-                        .await
-                        .expect("invoke_and_await failed");
+                    let result = invoke_and_await(
+                        &context_clone.deps,
+                        &worker_id_clone,
+                        "golem:itrpc/rpc-api.{echo}",
+                        vec![Value::String("hello".to_string())],
+                    )
+                    .await;
 
-                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-
+                    // TODO: move this out of the loop
                     if parent_child_worker_pair.at_same_worker_executor(&rt_clone) {
-                        recorder_clone
-                            .duration(&"worker-echo-invocation-local".to_string(), elapsed);
+                        recorder_clone.duration(
+                            &"worker-echo-invocation-local".to_string(),
+                            result.accumulated_time,
+                        );
                     } else {
-                        recorder_clone
-                            .duration(&"worker-echo-invocation-remote".to_string(), elapsed);
+                        recorder_clone.duration(
+                            &"worker-echo-invocation-remote".to_string(),
+                            result.accumulated_time,
+                        );
                     }
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(fiber) = fibers.join_next().await {
+            fiber.expect("fiber failed");
         }
 
-        let mut fibers = Vec::new();
+        let mut fibers = JoinSet::new();
         for parent_child_worker_pair in context.clone().worker_ids.iter().cloned() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = parent_child_worker_pair.parent.clone();
@@ -232,38 +222,37 @@ impl Benchmark for Rpc {
             let length = self.config.length;
             let rt_clone = shard_manager_routing_table.clone();
 
-            let fiber = tokio::task::spawn(async move {
+            let fiber = fibers.spawn(async move {
                 for _ in 0..length {
-                    let start = SystemTime::now();
-                    context_clone
-                        .deps
-                        .invoke_and_await(
-                            &worker_id_clone,
-                            "golem:itrpc/rpc-api.{calculate}",
-                            vec![Value::U64(calculate_iter)],
-                        )
-                        .await
-                        .expect("invoke_and_await failed");
+                    let result = invoke_and_await(
+                        &context_clone.deps,
+                        &worker_id_clone,
+                        "golem:itrpc/rpc-api.{calculate}",
+                        vec![Value::U64(calculate_iter)],
+                    )
+                    .await;
 
-                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-
+                    // TODO: move this out of the loop
                     if parent_child_worker_pair.at_same_worker_executor(&rt_clone) {
-                        recorder_clone
-                            .duration(&"worker-calculate-invocation-local".to_string(), elapsed);
+                        recorder_clone.duration(
+                            &"worker-calculate-invocation-local".to_string(),
+                            result.accumulated_time,
+                        );
                     } else {
-                        recorder_clone
-                            .duration(&"worker-calculate-invocation-remote".to_string(), elapsed);
+                        recorder_clone.duration(
+                            &"worker-calculate-invocation-remote".to_string(),
+                            result.accumulated_time,
+                        );
                     }
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(fiber) = fibers.join_next().await {
+            fiber.expect("fiber failed");
         }
 
-        let mut fibers = Vec::new();
+        let mut fibers = JoinSet::new();
         for parent_child_worker in context.worker_ids.iter().cloned() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = parent_child_worker.parent.clone();
@@ -272,34 +261,34 @@ impl Benchmark for Rpc {
             let length = self.config.length;
             let rt_clone = shard_manager_routing_table.clone();
 
-            let fiber = tokio::task::spawn(async move {
+            let fiber = fibers.spawn(async move {
                 for _ in 0..length {
-                    let start = SystemTime::now();
-                    context_clone
-                        .deps
-                        .invoke_and_await(
-                            &worker_id_clone,
-                            "golem:itrpc/rpc-api.{process}",
-                            vec![Value::List(values_clone.clone())],
-                        )
-                        .await
-                        .expect("invoke_and_await failed");
-                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
+                    let result = invoke_and_await(
+                        &context_clone.deps,
+                        &worker_id_clone,
+                        "golem:itrpc/rpc-api.{process}",
+                        vec![Value::List(values_clone.clone())],
+                    )
+                    .await;
 
+                    // TODO: moev this out of the loop
                     if parent_child_worker.at_same_worker_executor(&rt_clone) {
-                        recorder_clone
-                            .duration(&"worker-process-invocation-local".to_string(), elapsed);
+                        recorder_clone.duration(
+                            &"worker-process-invocation-local".to_string(),
+                            result.accumulated_time,
+                        );
                     } else {
-                        recorder_clone
-                            .duration(&"worker-process-invocation-remote".to_string(), elapsed);
+                        recorder_clone.duration(
+                            &"worker-process-invocation-remote".to_string(),
+                            result.accumulated_time,
+                        );
                     }
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(fiber) = fibers.join_next().await {
+            fiber.expect("fiber failed");
         }
     }
 
@@ -312,8 +301,13 @@ impl Benchmark for Rpc {
             benchmark_context
                 .deps
                 .delete_worker(&worker_id.parent)
-                .await;
-            benchmark_context.deps.delete_worker(&worker_id.child).await;
+                .await
+                .expect("Failed to delete parent worker");
+            benchmark_context
+                .deps
+                .delete_worker(&worker_id.child)
+                .await
+                .expect("Failed to delete child worker");
         }
     }
 }

@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::SystemTime;
-
 use async_trait::async_trait;
-use golem_wasm_rpc::Value;
-
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use golem_test_framework::dsl::TestDsl;
+use golem_wasm_rpc::Value;
 use integration_tests::benchmarks::{
-    cleanup_iteration, run_benchmark, setup_benchmark, setup_iteration, BenchmarkContext,
-    IterationContext,
+    cleanup_iteration, invoke_and_await, run_benchmark, setup_benchmark, setup_iteration,
+    BenchmarkContext, IterationContext,
 };
+use tokio::task::JoinSet;
 
 struct SuspendWorkerLatency {
     config: RunConfig,
@@ -65,23 +62,24 @@ impl Benchmark for SuspendWorkerLatency {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        // Invoke each worker a few times in parallel
-        let mut fibers = Vec::new();
+        // Invoke each worker in parallel
+        let mut fibers = JoinSet::new();
         for worker_id in &context.worker_ids {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
-            let fiber = tokio::task::spawn(async move {
-                context_clone
-                    .deps
-                    .invoke_and_await(&worker_id_clone, "sleep-for", vec![Value::F64(1.0)])
-                    .await
-                    .expect("invoke_and_await failed");
+            let _ = fibers.spawn(async move {
+                invoke_and_await(
+                    &context_clone.deps,
+                    &worker_id_clone,
+                    "sleep-for",
+                    vec![Value::F64(1.0)],
+                )
+                .await;
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(fiber) = fibers.join_next().await {
+            fiber.expect("fiber failed");
         }
     }
 
@@ -92,30 +90,34 @@ impl Benchmark for SuspendWorkerLatency {
         recorder: BenchmarkRecorder,
     ) {
         // Invoke each worker a 'length' times in parallel and record the duration
-        let mut fibers = Vec::new();
+        let mut fibers = JoinSet::new();
         for (n, worker_id) in context.worker_ids.iter().enumerate() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
-            let fiber = tokio::task::spawn(async move {
+            let _ = fibers.spawn(async move {
                 for _ in 0..length {
-                    let start = SystemTime::now();
-                    context_clone
-                        .deps
-                        .invoke_and_await(&worker_id_clone, "sleep-for", vec![Value::F64(10.0)])
-                        .await
-                        .expect("invoke_and_await failed");
-                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"invocation".to_string(), elapsed);
-                    recorder_clone.duration(&format!("worker-{n}"), elapsed);
+                    let result = invoke_and_await(
+                        &context_clone.deps,
+                        &worker_id_clone,
+                        "sleep-for",
+                        vec![Value::F64(10.0)],
+                    )
+                    .await;
+                    recorder_clone.duration(&"invocation".to_string(), result.accumulated_time);
+                    recorder_clone.duration(&format!("worker-{n}"), result.accumulated_time);
+                    recorder_clone.count(&"invocation-retries".to_string(), result.retries as u64);
+                    recorder_clone.count(&format!("worker-{n}-retries"), result.retries as u64);
+                    recorder_clone
+                        .count(&"invocation-timeouts".to_string(), result.timeouts as u64);
+                    recorder_clone.count(&format!("worker-{n}-timeouts"), result.timeouts as u64);
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(fiber) = fibers.join_next().await {
+            fiber.expect("fiber failed");
         }
     }
 

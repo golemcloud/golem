@@ -272,10 +272,7 @@ async fn async_main(
 
     let service = ShardManagerServiceServer::new(shard_manager);
 
-    // TODO: configurable limits
     Server::builder()
-        .concurrency_limit_per_connection(1024)
-        .max_concurrent_streams(Some(1024))
         .add_service(reflection_service)
         .add_service(service)
         .add_service(health_service)

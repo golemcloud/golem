@@ -117,7 +117,7 @@ impl CliParams {
         if self.verbose {
             Level::DEBUG
         } else {
-            Level::INFO
+            Level::ERROR
         }
     }
 
@@ -226,13 +226,13 @@ pub enum TestMode {
         #[arg(long, default_value = "9100")]
         worker_executor_base_grpc_port: u16,
         #[arg(long, default_value = "false")]
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     },
     #[command()]
     Spawned {
         #[arg(long, default_value = ".")]
         workspace_root: String,
-        #[arg(long, default_value = "target/debug")]
+        #[arg(long, default_value = "target/release")]
         build_target: String,
         #[arg(long, default_value = "6379")]
         redis_port: u16,
@@ -251,7 +251,7 @@ pub enum TestMode {
         #[arg(long, default_value = "9094")]
         component_compilation_service_grpc_port: u16,
         #[arg(long, default_value = "false")]
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
         #[arg(long, default_value = "8082")]
         worker_service_http_port: u16,
         #[arg(long, default_value = "9092")]
@@ -272,7 +272,7 @@ pub enum TestMode {
         #[arg(long, default_value = "")]
         redis_prefix: String,
         #[arg(long, default_value = "false")]
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     },
     #[command()]
     Aws {
@@ -281,36 +281,38 @@ pub enum TestMode {
         #[arg(long, default_value = "")]
         redis_prefix: String,
         #[arg(long, default_value = "false")]
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     },
 }
 
 impl TestMode {
-    pub fn component_compilation_disabled(&self) -> bool {
+    pub fn compilation_service_disabled(&self) -> bool {
         match self {
             TestMode::Provided { .. } => false,
             TestMode::Docker {
-                component_compilation_disabled,
+                compilation_service_disabled,
                 ..
-            } => *component_compilation_disabled,
+            } => *compilation_service_disabled,
             TestMode::Minikube {
-                component_compilation_disabled,
+                compilation_service_disabled,
                 ..
-            } => *component_compilation_disabled,
+            } => *compilation_service_disabled,
             TestMode::Aws {
-                component_compilation_disabled,
+                compilation_service_disabled,
                 ..
-            } => *component_compilation_disabled,
+            } => *compilation_service_disabled,
             TestMode::Spawned {
-                component_compilation_disabled,
+                compilation_service_disabled,
                 ..
-            } => *component_compilation_disabled,
+            } => *compilation_service_disabled,
         }
     }
 }
 
 impl CliTestDependencies {
     pub fn init_logging(params: &CliParams) {
+        // console_subscriber::init();
+
         let ansi_layer = tracing_subscriber::fmt::layer()
             .with_ansi(true)
             .with_filter(
@@ -326,7 +328,7 @@ impl CliTestDependencies {
         redis_prefix: &str,
         worker_executor_base_http_port: u16,
         worker_executor_base_grpc_port: u16,
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     ) -> Self {
         let params_clone = params.clone();
 
@@ -334,7 +336,7 @@ impl CliTestDependencies {
             let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                 Arc::new(DockerPostgresRdb::new(true).await);
 
-            let component_compilation_service = if !component_compilation_disabled {
+            let component_compilation_service = if !compilation_service_disabled {
                 Some((
                     DockerComponentCompilationService::NAME,
                     DockerComponentCompilationService::GRPC_PORT,
@@ -429,7 +431,7 @@ impl CliTestDependencies {
         component_service_grpc_port: u16,
         component_compilation_service_http_port: u16,
         component_compilation_service_grpc_port: u16,
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
         worker_service_http_port: u16,
         worker_service_grpc_port: u16,
         worker_service_custom_request_port: u16,
@@ -455,7 +457,7 @@ impl CliTestDependencies {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(DockerPostgresRdb::new(true).await);
 
-                let component_compilation_service_port = if !component_compilation_disabled {
+                let component_compilation_service_port = if !compilation_service_disabled {
                     Some(component_compilation_service_grpc_port)
                 } else {
                     None
@@ -576,7 +578,7 @@ impl CliTestDependencies {
         cluster_size: usize,
         namespace: &str,
         redis_prefix: &str,
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     ) -> Self {
         let routing_type = K8sRoutingType::Minikube;
         let namespace = K8sNamespace(namespace.to_string());
@@ -589,7 +591,7 @@ impl CliTestDependencies {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
 
-                let component_compilation_service = if !component_compilation_disabled {
+                let component_compilation_service = if !compilation_service_disabled {
                     Some((
                         K8sComponentCompilationService::NAME,
                         K8sComponentCompilationService::GRPC_PORT,
@@ -706,7 +708,7 @@ impl CliTestDependencies {
         cluster_size: usize,
         namespace: &str,
         redis_prefix: &str,
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     ) -> Self {
         let routing_type = K8sRoutingType::Service;
         let namespace = K8sNamespace(namespace.to_string());
@@ -729,7 +731,7 @@ impl CliTestDependencies {
                     .await,
                 );
 
-                let component_compilation_service = if !component_compilation_disabled {
+                let component_compilation_service = if !compilation_service_disabled {
                     Some((
                         K8sComponentCompilationService::NAME,
                         K8sComponentCompilationService::GRPC_PORT,
@@ -925,7 +927,7 @@ impl CliTestDependencies {
                 redis_prefix,
                 worker_executor_base_http_port,
                 worker_executor_base_grpc_port,
-                component_compilation_disabled,
+                compilation_service_disabled,
             } => {
                 Self::make_docker(
                     params.clone(),
@@ -933,7 +935,7 @@ impl CliTestDependencies {
                     redis_prefix,
                     *worker_executor_base_http_port,
                     *worker_executor_base_grpc_port,
-                    *component_compilation_disabled,
+                    *compilation_service_disabled,
                 )
                 .await
             }
@@ -948,7 +950,7 @@ impl CliTestDependencies {
                 component_service_grpc_port,
                 component_compilation_service_http_port,
                 component_compilation_service_grpc_port,
-                component_compilation_disabled,
+                compilation_service_disabled,
                 worker_service_http_port,
                 worker_service_grpc_port,
                 worker_service_custom_request_port,
@@ -969,7 +971,7 @@ impl CliTestDependencies {
                     *component_service_grpc_port,
                     *component_compilation_service_http_port,
                     *component_compilation_service_grpc_port,
-                    *component_compilation_disabled,
+                    *compilation_service_disabled,
                     *worker_service_http_port,
                     *worker_service_grpc_port,
                     *worker_service_custom_request_port,
@@ -982,28 +984,28 @@ impl CliTestDependencies {
             TestMode::Minikube {
                 namespace,
                 redis_prefix,
-                component_compilation_disabled,
+                compilation_service_disabled,
             } => {
                 Self::make_minikube(
                     params.clone(),
                     cluster_size,
                     namespace,
                     redis_prefix,
-                    *component_compilation_disabled,
+                    *compilation_service_disabled,
                 )
                 .await
             }
             TestMode::Aws {
                 namespace,
                 redis_prefix,
-                component_compilation_disabled,
+                compilation_service_disabled,
             } => {
                 Self::make_aws(
                     params.clone(),
                     cluster_size,
                     namespace,
                     redis_prefix,
-                    *component_compilation_disabled,
+                    *compilation_service_disabled,
                 )
                 .await
             }

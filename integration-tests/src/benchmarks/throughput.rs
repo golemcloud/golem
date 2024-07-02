@@ -25,9 +25,11 @@ use golem_test_framework::config::{
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
 use integration_tests::benchmarks::data::Data;
-use integration_tests::benchmarks::{run_benchmark, setup_with};
+use integration_tests::benchmarks::{invoke_and_await, run_benchmark, setup_with};
 use reqwest::Client;
 use reqwest::Url;
+use tokio::task::JoinSet;
+use tracing::warn;
 
 struct Throughput {
     config: RunConfig,
@@ -180,27 +182,24 @@ impl Benchmark for Throughput {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        // Invoke each worker a few times in parallel
-        let mut fibers = Vec::new();
+        // Invoke each worker in parallel
+        let mut fibers = JoinSet::new();
         for worker_id in &context.worker_ids {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
-            let fiber = tokio::task::spawn(async move {
-                context_clone
-                    .deps
-                    .invoke_and_await(
-                        &worker_id_clone,
-                        "golem:it/api.{echo}",
-                        vec![Value::String("hello".to_string())],
-                    )
-                    .await
-                    .expect("invoke_and_await failed");
+            let _ = fibers.spawn(async move {
+                invoke_and_await(
+                    &context_clone.deps,
+                    &worker_id_clone,
+                    "golem:it/api.{echo}",
+                    vec![Value::String("hello".to_string())],
+                )
+                .await;
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(res) = fibers.join_next().await {
+            res.expect("fiber failed");
         }
 
         benchmark_context.rust_client.echo("hello").await;
@@ -222,100 +221,94 @@ impl Benchmark for Throughput {
             .map(|d| d.into())
             .collect::<Vec<Value>>();
 
-        let mut fibers = Vec::new();
+        let mut fibers = JoinSet::new();
         for worker_id in context.worker_ids.iter() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
-            let fiber = tokio::task::spawn(async move {
+            let _ = fibers.spawn(async move {
                 for _ in 0..length {
-                    let start = SystemTime::now();
-                    context_clone
-                        .deps
-                        .invoke_and_await(
-                            &worker_id_clone,
-                            "golem:it/api.{echo}",
-                            vec![Value::String("hello".to_string())],
-                        )
-                        .await
-                        .expect("invoke_and_await failed");
-                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"worker-echo-invocation".to_string(), elapsed);
+                    let result = invoke_and_await(
+                        &context_clone.deps,
+                        &worker_id_clone,
+                        "golem:it/api.{echo}",
+                        vec![Value::String("hello".to_string())],
+                    )
+                    .await;
+                    recorder_clone.duration(
+                        &"worker-echo-invocation".to_string(),
+                        result.accumulated_time,
+                    );
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(res) = fibers.join_next().await {
+            res.expect("fiber failed");
         }
 
-        let mut fibers = Vec::new();
+        let mut fibers = JoinSet::new();
         for worker_id in context.worker_ids.iter() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
-            let fiber = tokio::task::spawn(async move {
+            let _ = fibers.spawn(async move {
                 for _ in 0..length {
-                    let start = SystemTime::now();
-                    context_clone
-                        .deps
-                        .invoke_and_await(
-                            &worker_id_clone,
-                            "golem:it/api.{calculate}",
-                            vec![Value::U64(calculate_iter)],
-                        )
-                        .await
-                        .expect("invoke_and_await failed");
-                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"worker-calculate-invocation".to_string(), elapsed);
+                    let result = invoke_and_await(
+                        &context_clone.deps,
+                        &worker_id_clone,
+                        "golem:it/api.{calculate}",
+                        vec![Value::U64(calculate_iter)],
+                    )
+                    .await;
+                    recorder_clone.duration(
+                        &"worker-calculate-invocation".to_string(),
+                        result.accumulated_time,
+                    );
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(res) = fibers.join_next().await {
+            res.expect("fiber failed");
         }
 
-        let mut fibers = Vec::new();
+        let mut fibers = JoinSet::new();
         for worker_id in context.worker_ids.iter() {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = worker_id.clone();
             let recorder_clone = recorder.clone();
             let values_clone = values.clone();
             let length = self.config.length;
-            let fiber = tokio::task::spawn(async move {
+            let _ = fibers.spawn(async move {
                 for _ in 0..length {
-                    let start = SystemTime::now();
-                    context_clone
-                        .deps
-                        .invoke_and_await(
-                            &worker_id_clone,
-                            "golem:it/api.{process}",
-                            vec![Value::List(values_clone.clone())],
-                        )
-                        .await
-                        .expect("invoke_and_await failed");
-                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"worker-process-invocation".to_string(), elapsed);
+                    let result = invoke_and_await(
+                        &context_clone.deps,
+                        &worker_id_clone,
+                        "golem:it/api.{process}",
+                        vec![Value::List(values_clone.clone())],
+                    )
+                    .await;
+                    recorder_clone.duration(
+                        &"worker-process-invocation".to_string(),
+                        result.accumulated_time,
+                    );
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(res) = fibers.join_next().await {
+            res.expect("fiber failed");
         }
 
-        let mut fibers = Vec::new();
+        let mut fibers = JoinSet::new();
         for _ in context.worker_ids.iter() {
             let context_clone = benchmark_context.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
-            let fiber = tokio::task::spawn(async move {
+            let _ = fibers.spawn(async move {
                 for _ in 0..length {
                     let start = SystemTime::now();
                     context_clone.rust_client.echo("hello").await;
@@ -323,19 +316,18 @@ impl Benchmark for Throughput {
                     recorder_clone.duration(&"rust-http-echo-invocation".to_string(), elapsed);
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(res) = fibers.join_next().await {
+            res.expect("fiber failed");
         }
 
-        let mut fibers = Vec::new();
+        let mut fibers = JoinSet::new();
         for _ in context.worker_ids.iter() {
             let context_clone = benchmark_context.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
-            let fiber = tokio::task::spawn(async move {
+            let _ = fibers.spawn(async move {
                 for _ in 0..length {
                     let start = SystemTime::now();
                     let res = context_clone.rust_client.calculate(calculate_iter).await;
@@ -344,20 +336,19 @@ impl Benchmark for Throughput {
                     recorder_clone.duration(&"rust-http-calculate-invocation".to_string(), elapsed);
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(res) = fibers.join_next().await {
+            res.expect("fiber failed");
         }
 
-        let mut fibers = Vec::new();
+        let mut fibers = JoinSet::new();
         for _ in context.worker_ids.iter() {
             let context_clone = benchmark_context.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
             let data_clone = data.clone();
-            let fiber = tokio::task::spawn(async move {
+            let _ = fibers.spawn(async move {
                 for _ in 0..length {
                     let start = SystemTime::now();
                     context_clone.rust_client.process(data_clone.clone()).await;
@@ -365,11 +356,10 @@ impl Benchmark for Throughput {
                     recorder_clone.duration(&"rust-http-process-invocation".to_string(), elapsed);
                 }
             });
-            fibers.push(fiber);
         }
 
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
+        while let Some(res) = fibers.join_next().await {
+            res.expect("fiber failed");
         }
     }
 
@@ -379,7 +369,9 @@ impl Benchmark for Throughput {
         context: Self::IterationContext,
     ) {
         for worker_id in &context.worker_ids {
-            benchmark_context.deps.delete_worker(worker_id).await
+            if let Err(err) = benchmark_context.deps.delete_worker(worker_id).await {
+                warn!("Failed to delete worker: {:?}", err);
+            }
         }
     }
 }

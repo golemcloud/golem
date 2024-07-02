@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use golem_wasm_rpc::Value;
+use tokio::task::JoinSet;
+use tracing::warn;
 
-use golem_common::model::{ComponentId, WorkerId};
+use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
 use golem_test_framework::config::{CliParams, CliTestDependencies};
 use golem_test_framework::dsl::benchmark::{
     BenchmarkApi, BenchmarkRecorder, BenchmarkResult, RunConfig,
@@ -104,7 +106,9 @@ pub async fn setup_iteration(
 
 pub async fn cleanup_iteration(benchmark_context: &BenchmarkContext, context: IterationContext) {
     for worker_id in &context.worker_ids {
-        benchmark_context.deps.delete_worker(worker_id).await
+        if let Err(err) = benchmark_context.deps.delete_worker(worker_id).await {
+            warn!("Failed to delete worker: {:?}", err);
+        }
     }
 }
 
@@ -112,26 +116,23 @@ pub async fn warmup_echo(
     benchmark_context: &BenchmarkContext,
     iteration_context: &IterationContext,
 ) {
-    let mut fibers = Vec::new();
+    let mut fibers = JoinSet::new();
     for worker_id in &iteration_context.worker_ids {
         let context_clone = benchmark_context.clone();
         let worker_id_clone = worker_id.clone();
-        let fiber = tokio::task::spawn(async move {
-            context_clone
-                .deps
-                .invoke_and_await(
-                    &worker_id_clone,
-                    "golem:it/api.{echo}",
-                    vec![Value::String("hello".to_string())],
-                )
-                .await
-                .expect("invoke_and_await failed");
+        let _ = fibers.spawn(async move {
+            invoke_and_await(
+                &context_clone.deps,
+                &worker_id_clone,
+                "golem:it/api.{echo}",
+                vec![Value::String("hello".to_string())],
+            )
+            .await
         });
-        fibers.push(fiber);
     }
 
-    for fiber in fibers {
-        fiber.await.expect("fiber failed");
+    while let Some(res) = fibers.join_next().await {
+        let _ = res.expect("Failed to warmup");
     }
 }
 
@@ -142,33 +143,32 @@ pub async fn run_echo(
     recorder: BenchmarkRecorder,
 ) {
     // Invoke each worker a 'length' times in parallel and record the duration
-    let mut fibers = Vec::new();
+    let mut fibers = JoinSet::new();
     for (n, worker_id) in iteration_context.worker_ids.iter().enumerate() {
         let context_clone = benchmark_context.clone();
         let worker_id_clone = worker_id.clone();
         let recorder_clone = recorder.clone();
-        let fiber = tokio::task::spawn(async move {
+        let _ = fibers.spawn(async move {
             for _ in 0..length {
-                let start = SystemTime::now();
-                context_clone
-                    .deps
-                    .invoke_and_await(
-                        &worker_id_clone,
-                        "golem:it/api.{echo}",
-                        vec![Value::String("hello".to_string())],
-                    )
-                    .await
-                    .expect("invoke_and_await failed");
-                let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                recorder_clone.duration(&"invocation".to_string(), elapsed);
-                recorder_clone.duration(&format!("worker-{n}"), elapsed);
+                let result = invoke_and_await(
+                    &context_clone.deps,
+                    &worker_id_clone,
+                    "golem:it/api.{echo}",
+                    vec![Value::String("hello".to_string())],
+                )
+                .await;
+                recorder_clone.duration(&"invocation".to_string(), result.accumulated_time);
+                recorder_clone.duration(&format!("worker-{n}"), result.accumulated_time);
+                recorder_clone.count(&"invocation-retries".to_string(), result.retries as u64);
+                recorder_clone.count(&format!("worker-{n}-retries"), result.retries as u64);
+                recorder_clone.count(&"invocation-timeouts".to_string(), result.timeouts as u64);
+                recorder_clone.count(&format!("worker-{n}-timeouts"), result.timeouts as u64);
             }
         });
-        fibers.push(fiber);
     }
 
-    for fiber in fibers {
-        fiber.await.expect("fiber failed");
+    while let Some(res) = fibers.join_next().await {
+        res.unwrap();
     }
 }
 
@@ -185,5 +185,70 @@ pub async fn run_benchmark<A: BenchmarkApi>() {
         println!("{}", str);
     } else {
         println!("{}", result.view());
+    }
+}
+
+pub struct InvokeResult {
+    pub value: Vec<Value>,
+    pub retries: usize,
+    pub timeouts: usize,
+    pub accumulated_time: Duration,
+}
+
+pub async fn invoke_and_await(
+    deps: &impl TestDsl,
+    worker_id: &WorkerId,
+    function_name: &str,
+    params: Vec<Value>,
+) -> InvokeResult {
+    const TIMEOUT: Duration = Duration::from_secs(180);
+    const RETRY_DELAY: Duration = Duration::from_millis(100);
+
+    let key = IdempotencyKey::fresh();
+
+    let mut accumulated_time = Duration::from_secs(0);
+    let mut retries = 0;
+    let mut timeouts = 0;
+
+    loop {
+        let start = SystemTime::now();
+        let result = tokio::time::timeout(
+            TIMEOUT,
+            deps.invoke_and_await_with_key(worker_id, &key, function_name, params.clone()),
+        )
+        .await;
+        let duration = start.elapsed().expect("SystemTime elapsed failed");
+
+        match result {
+            Ok(Ok(Ok(r))) => {
+                accumulated_time += duration;
+                break InvokeResult {
+                    value: r,
+                    retries,
+                    timeouts,
+                    accumulated_time,
+                };
+            }
+            Ok(Ok(Err(e))) => {
+                // worker error
+                println!("Invocation failed, retrying: {:?}", e);
+                retries += 1;
+                accumulated_time += duration;
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+            Ok(Err(e)) => {
+                // client error
+                println!("Invocation failed, retrying: {:?}", e);
+                retries += 1;
+                accumulated_time += duration;
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+            Err(e) => {
+                // timeout
+                // not counting timeouts into the accumulated time
+                timeouts += 1;
+                println!("Invocation timed out, retrying: {:?}", e);
+            }
+        }
     }
 }
