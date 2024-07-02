@@ -131,7 +131,7 @@ impl DefaultComponentElementsFetch {
             .await
     }
 
-    pub(crate) async fn get_component_elements_from_cache_latest_version(
+    pub(crate) async fn assume_latest_version_for_new_worker(
         &self,
         worker_id: &WorkerId,
     ) -> Result<ComponentElements, MetadataFetchError> {
@@ -191,7 +191,7 @@ impl ComponentElementsFetch for DefaultComponentElementsFetch {
             }
             Err(e) => match e {
                 MetadataFetchError::WorkerNotFound => {
-                    self.get_component_elements_from_cache_latest_version(worker_id)
+                    self.assume_latest_version_for_new_worker(worker_id)
                         .await
                 }
                 MetadataFetchError::Internal(_) => Err(MetadataFetchError::Internal(
