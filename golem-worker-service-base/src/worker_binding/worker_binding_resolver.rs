@@ -105,7 +105,7 @@ impl ResolvedWorkerBinding {
     pub async fn execute_with<R>(
         &self,
         evaluator: &Arc<dyn Evaluator + Sync + Send>,
-        symbol_fetch: &Arc<dyn ComponentElementsFetch + Sync + Send>,
+        symbol_fetch: &Arc<dyn ComponentElementsService + Sync + Send>,
     ) -> R
     where
         ExprEvaluationResult: ToResponse<R>,
@@ -239,7 +239,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
 
 mod internal {
     use crate::evaluator::{
-        ComponentElementsFetch, EvaluationContext, EvaluationError, Evaluator,
+        ComponentElementsService, EvaluationContext, EvaluationError, Evaluator,
         ExprEvaluationResult, MetadataFetchError,
     };
     use crate::worker_binding::ResolvedWorkerBinding;
@@ -274,7 +274,7 @@ mod internal {
         resolved_worker_binding: &ResolvedWorkerBinding,
         worker_id: WorkerId,
         evaluator: Arc<dyn Evaluator + Sync + Send>,
-        component_elements_fetch: Arc<dyn ComponentElementsFetch + Sync + Send>,
+        component_elements_fetch: Arc<dyn ComponentElementsService + Sync + Send>,
     ) -> Result<ExprEvaluationResult, InvocationError> {
         with_retries(
             "WorkerBridgeFunctionInvocationRetries",

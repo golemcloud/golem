@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::api_definition::http::HttpApiDefinition;
 use crate::evaluator::{
-    ComponentElementsFetch, ComponentMetadataService, DefaultComponentElementsFetch,
+    ComponentElementsService, ComponentMetadataService, DefaultComponentElementsService,
     DefaultEvaluator, Evaluator,
 };
 use futures_util::FutureExt;
@@ -23,7 +23,7 @@ use crate::worker_bridge_execution::WorkerRequestExecutor;
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
     evaluator: Arc<dyn Evaluator + Sync + Send>,
-    component_elements_fetch: Arc<dyn ComponentElementsFetch + Sync + Send>,
+    component_elements_fetch: Arc<dyn ComponentElementsService + Sync + Send>,
     api_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
 }
@@ -41,7 +41,7 @@ impl CustomHttpRequestApi {
             worker_request_executor_service.clone(),
         ));
 
-        let component_elements_fetch = Arc::new(DefaultComponentElementsFetch::new(
+        let component_elements_fetch = Arc::new(DefaultComponentElementsService::new(
             component_metadata_fetch.clone(),
             max_evaluator_cache_size,
         ));

@@ -119,8 +119,8 @@ mod tests {
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
     use crate::evaluator::{
-        ComponentDetails, ComponentElementsFetch, ComponentMetadataService,
-        DefaultComponentElementsFetch, DefaultEvaluator, EvaluationError, Evaluator,
+        ComponentDetails, ComponentElementsService, ComponentMetadataService,
+        DefaultComponentElementsService, DefaultEvaluator, EvaluationError, Evaluator,
         ExprEvaluationResult, Fqn, MetadataFetchError,
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
@@ -343,8 +343,8 @@ mod tests {
         api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
-        let symbol_fetch: Arc<dyn ComponentElementsFetch + Sync + Send> = {
-            Arc::new(DefaultComponentElementsFetch::new(
+        let symbol_fetch: Arc<dyn ComponentElementsService + Sync + Send> = {
+            Arc::new(DefaultComponentElementsService::new(
                 get_test_metadata_fetcher("golem:it/api.{get-cart-contents}"),
                 1000,
             ))

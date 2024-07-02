@@ -270,7 +270,7 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
         }
     }
 
-    async fn get_proto_invoke_result(
+    async fn invoke_worker(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
@@ -528,7 +528,7 @@ where
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         let results_val = self
-            .get_proto_invoke_result(
+            .invoke_worker(
                 worker_id,
                 idempotency_key.map(|k| k.into()),
                 function_name_str.clone(),
@@ -594,7 +594,7 @@ where
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         let invoke_result = self
-            .get_proto_invoke_result(
+            .invoke_worker(
                 worker_id,
                 idempotency_key.map(|k| k.into()),
                 function_name.clone(),
@@ -659,7 +659,7 @@ where
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         let invoke_result = self
-            .get_proto_invoke_result(
+            .invoke_worker(
                 worker_id,
                 idempotency_key,
                 function_name.clone(),

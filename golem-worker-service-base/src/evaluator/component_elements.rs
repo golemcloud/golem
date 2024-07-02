@@ -63,19 +63,19 @@ impl ComponentElements {
 }
 
 // The logic shouldn't be visible outside the crate
-pub(crate) struct DefaultComponentElementsFetch {
+pub(crate) struct DefaultComponentElementsService {
     component_metadata_service: Arc<dyn ComponentMetadataService + Sync + Send>,
     component_elements_cache:
         Cache<(ComponentId, ComponentVersion), (), ComponentElements, MetadataFetchError>,
     currently_running_version_cache: Cache<WorkerId, (), ComponentVersion, MetadataFetchError>,
 }
 
-impl DefaultComponentElementsFetch {
+impl DefaultComponentElementsService {
     pub(crate) fn new(
         metadata_fetcher: Arc<dyn ComponentMetadataService + Sync + Send>,
         max_cache_size: usize,
     ) -> Self {
-        DefaultComponentElementsFetch {
+        DefaultComponentElementsService {
             component_metadata_service: metadata_fetcher,
             component_elements_cache: Cache::new(
                 Some(max_cache_size),
@@ -165,7 +165,7 @@ impl DefaultComponentElementsFetch {
 }
 
 #[async_trait]
-pub(crate) trait ComponentElementsFetch {
+pub(crate) trait ComponentElementsService {
     async fn get_component_elements(
         &self,
         worker_id: &WorkerId,
@@ -175,7 +175,7 @@ pub(crate) trait ComponentElementsFetch {
 }
 
 #[async_trait]
-impl ComponentElementsFetch for DefaultComponentElementsFetch {
+impl ComponentElementsService for DefaultComponentElementsService {
     async fn get_component_elements(
         &self,
         worker_id: &WorkerId,
