@@ -147,17 +147,6 @@ impl DefaultComponentElementsFetch {
             })
             .await;
 
-        // Caching the component_element details of the above version
-        // If there is a winner here due to concurrent calls, we don't update it.
-        // Incase there is a discrepancy between the association of worker-id -> version details
-        // and the component_elements cache, it will get fixed in the next call.
-        // -------------------------------------------------------------------------------------------
-        // The Race condition of worker-executor getting updated with another version of component-id
-        // -------------------------------------------------------------------------------------------
-        // If worker-executor is updated with another version of component-id after the successfully updating
-        // any cache related to evaluator, then the actual function invocation will fail
-        // since Rib-evaluation-context has stale information and in that race condition,
-        // we invalidate this cache and keep retrying for a configurable number of times.
         self.component_elements_cache
             .get_or_insert_simple(
                 &(
