@@ -140,8 +140,6 @@ impl DefaultComponentElementsFetch {
             .get_latest_version_details(&worker_id.component_id)
             .await?;
 
-        // This is ensuring if the cache is updated during this time, with another
-        // version, we don't override it
         let _ = self
             .currently_running_version_cache
             .get_or_insert_simple(&worker_id.clone(), || {
