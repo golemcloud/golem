@@ -545,7 +545,7 @@ where
         if result.is_empty() {
             Ok(None)
         } else if result.len() == 1 {
-            let value = result[0].clone().0.try_into().map_err(|e| {
+            let value = result[0].clone().try_into().map_err(|e| {
                 ComponentError::internal(e, "Failed to convert namespace".to_string())
             })?;
             Ok(Some(value))
