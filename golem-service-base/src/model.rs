@@ -1183,7 +1183,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionParameter> for Fun
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
-            typ: value.tpe.ok_or("Missing tpe")?.try_into()?,
+            typ: value.typ.ok_or("Missing typ")?.try_into()?,
         })
     }
 }
@@ -1192,7 +1192,7 @@ impl From<FunctionParameter> for golem_api_grpc::proto::golem::component::Functi
     fn from(value: FunctionParameter) -> Self {
         Self {
             name: value.name,
-            tpe: Some(value.typ.into()),
+            typ: Some(value.typ.into()),
         }
     }
 }
@@ -1211,7 +1211,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionResult> for Functi
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
-            typ: value.tpe.ok_or("Missing tpe")?.try_into()?,
+            typ: value.typ.ok_or("Missing typ")?.try_into()?,
         })
     }
 }
@@ -1220,7 +1220,7 @@ impl From<FunctionResult> for golem_api_grpc::proto::golem::component::FunctionR
     fn from(value: FunctionResult) -> Self {
         Self {
             name: value.name,
-            tpe: Some(value.typ.into()),
+            typ: Some(value.typ.into()),
         }
     }
 }
