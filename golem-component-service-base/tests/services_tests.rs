@@ -248,5 +248,11 @@ mod tests {
             .await
             .unwrap();
         assert!(component2_result == vec![component2.clone()]);
+
+        let component_result = component_service
+            .find_by_name(None, &DefaultNamespace::default())
+            .await
+            .unwrap();
+        assert!(component_result.len() == 3);
     }
 }

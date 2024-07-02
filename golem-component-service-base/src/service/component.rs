@@ -174,8 +174,6 @@ where
 
         self.find_id_by_name(component_name, namespace)
             .await?
-            .into_iter()
-            .next()
             .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
         let metadata = process_component(&data)?;
