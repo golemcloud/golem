@@ -24,8 +24,8 @@ required-features = ["universal"]
 
 [dependencies]
 golem-cloud-client = { path = "../golem-cloud-client", version = "0.0.0"}
-golem-client = "0.0.113"
-golem-cli = "0.0.113"
+golem-client = "0.0.114"
+golem-cli = "0.0.114"
 
 async-trait = { workspace = true }
 chrono = { workspace = true }
