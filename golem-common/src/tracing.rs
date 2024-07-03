@@ -417,9 +417,11 @@ pub(crate) mod format {
 
                 serializer = visitor.take_serializer()?;
 
+                // TODO: deduplicate spans in release and fail in debug
                 if let Some(span) = ctx.lookup_current() {
                     for span in span.scope().from_root() {
                         let extensions = span.extensions();
+                        // TODO: fail in debug for these
                         let data = extensions
                             .get::<FormattedFields<N>>()
                             .expect("Unable to find FormattedFields in extensions");
