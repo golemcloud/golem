@@ -487,24 +487,26 @@ impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
 }
 
 pub mod record_data_serde {
-    use bincode::{Decode, Encode};
+    use crate::api_definition::http::Route;
     use bytes::Bytes;
     use golem_common::serialization::serialize_with_version;
+
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
-    pub fn serialize<T: Encode>(routes: &T) -> Result<Bytes, String> {
-        serialize_with_version(routes, SERIALIZATION_VERSION_V1)
+    pub fn serialize(value: &Vec<Route>) -> Result<Bytes, String> {
+        // TODO use golem_api_grpc::proto::golem::api_definition::http::Route
+        serialize_with_version(value, SERIALIZATION_VERSION_V1)
     }
 
-    pub fn deserialize<T: Decode>(bytes: &[u8]) -> Result<T, String> {
+    pub fn deserialize(bytes: &[u8]) -> Result<Vec<Route>, String> {
         let (version, data) = bytes.split_at(1);
 
         match version[0] {
             SERIALIZATION_VERSION_V1 => {
-                let (routes, _) = bincode::decode_from_slice(data, bincode::config::standard())
+                let (value, _) = bincode::decode_from_slice(data, bincode::config::standard())
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
 
-                Ok(routes)
+                Ok(value)
             }
             _ => Err("Unsupported serialization version".to_string()),
         }

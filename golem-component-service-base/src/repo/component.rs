@@ -32,9 +32,6 @@ pub struct ComponentRecord {
     pub name: String,
     pub size: i32,
     pub version: i64,
-    pub user_component: String,
-    pub protected_component: String,
-    pub protector_version: Option<i64>,
     pub metadata: Vec<u8>,
 }
 
@@ -84,9 +81,6 @@ impl ComponentRecord {
             name: component.component_name.0,
             size: component.component_size as i32,
             version: component.versioned_component_id.version as i64,
-            user_component: component.versioned_component_id.slug(),
-            protected_component: component.protected_component_id.slug(),
-            protector_version: None,
             metadata: metadata.into(),
         })
     }
@@ -153,7 +147,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
         if let Some(result) = result {
             let namespace: String = result.get("namespace");
             if namespace != component.namespace {
-                return Err(RepoError::Internal("Component id not unique".to_string()));
+                return Err(RepoError::Internal(
+                    "Component namespace invalid".to_string(),
+                ));
             }
         } else {
             sqlx::query(
@@ -174,20 +170,17 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
         sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, user_component, protected_component, protector_version, metadata)
+                (component_id, version, size, metadata)
               VALUES
-                ($1, $2, $3, $4, $5, $6, $7)
+                ($1, $2, $3, $4)
                "#,
         )
-            .bind(component.component_id)
-            .bind(component.version)
-            .bind(component.size)
-            .bind(component.user_component.clone())
-            .bind(component.protected_component.clone())
-            .bind(component.protector_version)
-            .bind(component.metadata.clone())
-            .execute(&mut *transaction)
-            .await?;
+        .bind(component.component_id)
+        .bind(component.version)
+        .bind(component.size)
+        .bind(component.metadata.clone())
+        .execute(&mut *transaction)
+        .await?;
 
         transaction.commit().await?;
 
@@ -207,9 +200,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.user_component AS user_component,
-                    cv.protected_component AS protected_component,
-                    cv.protector_version AS protector_version,
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
@@ -232,9 +222,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.user_component AS user_component,
-                    cv.protected_component AS protected_component,
-                    cv.protector_version AS protector_version,
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
@@ -260,9 +247,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.user_component AS user_component,
-                    cv.protected_component AS protected_component,
-                    cv.protector_version AS protector_version,
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
@@ -291,9 +275,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.user_component AS user_component,
-                    cv.protected_component AS protected_component,
-                    cv.protector_version AS protector_version,
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
@@ -321,9 +302,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.user_component AS user_component,
-                    cv.protected_component AS protected_component,
-                    cv.protector_version AS protector_version,
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
@@ -394,7 +372,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         if let Some(result) = result {
             let namespace: String = result.get("namespace");
             if namespace != component.namespace {
-                return Err(RepoError::Internal("Component id not unique".to_string()));
+                return Err(RepoError::Internal(
+                    "Component namespace invalid".to_string(),
+                ));
             }
         } else {
             sqlx::query(
@@ -415,20 +395,17 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, user_component, protected_component, protector_version, metadata)
+                (component_id, version, size, metadata)
               VALUES
-                ($1, $2, $3, $4, $5, $6, $7)
+                ($1, $2, $3, $4)
                "#,
         )
-            .bind(component.component_id)
-            .bind(component.version)
-            .bind(component.size)
-            .bind(component.user_component.clone())
-            .bind(component.protected_component.clone())
-            .bind(component.protector_version)
-            .bind(component.metadata.clone())
-            .execute(&mut *transaction)
-            .await?;
+        .bind(component.component_id)
+        .bind(component.version)
+        .bind(component.size)
+        .bind(component.metadata.clone())
+        .execute(&mut *transaction)
+        .await?;
 
         transaction.commit().await?;
 
@@ -448,9 +425,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.user_component AS user_component,
-                    cv.protected_component AS protected_component,
-                    cv.protector_version AS protector_version,
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
@@ -473,9 +447,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.user_component AS user_component,
-                    cv.protected_component AS protected_component,
-                    cv.protector_version AS protector_version,
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
@@ -501,9 +472,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.user_component AS user_component,
-                    cv.protected_component AS protected_component,
-                    cv.protector_version AS protector_version,
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
@@ -532,9 +500,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.user_component AS user_component,
-                    cv.protected_component AS protected_component,
-                    cv.protector_version AS protector_version,
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
@@ -562,9 +527,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.user_component AS user_component,
-                    cv.protected_component AS protected_component,
-                    cv.protector_version AS protector_version,
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
@@ -623,24 +585,26 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
 }
 
 pub mod record_metadata_serde {
-    use bincode::{Decode, Encode};
     use bytes::Bytes;
     use golem_common::serialization::serialize_with_version;
+    use golem_service_base::model::ComponentMetadata;
+
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
-    pub fn serialize<T: Encode>(routes: &T) -> Result<Bytes, String> {
-        serialize_with_version(routes, SERIALIZATION_VERSION_V1)
+    pub fn serialize(value: &ComponentMetadata) -> Result<Bytes, String> {
+        // TODO use golem_api_grpc::proto::golem::component::ComponentMetadata
+        serialize_with_version(value, SERIALIZATION_VERSION_V1)
     }
 
-    pub fn deserialize<T: Decode>(bytes: &[u8]) -> Result<T, String> {
+    pub fn deserialize(bytes: &[u8]) -> Result<ComponentMetadata, String> {
         let (version, data) = bytes.split_at(1);
 
         match version[0] {
             SERIALIZATION_VERSION_V1 => {
-                let (routes, _) = bincode::decode_from_slice(data, bincode::config::standard())
+                let (value, _) = bincode::decode_from_slice(data, bincode::config::standard())
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
 
-                Ok(routes)
+                Ok(value)
             }
             _ => Err("Unsupported serialization version".to_string()),
         }

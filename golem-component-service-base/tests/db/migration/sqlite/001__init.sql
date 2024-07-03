@@ -15,9 +15,6 @@ CREATE TABLE component_versions
     version             bigint  NOT NULL,
     size                integer NOT NULL,
     created_at          timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    user_component      text    NOT NULL,
-    protected_component text    NOT NULL,
-    protector_version   bigint,
     metadata            blob    NOT NULL,
     PRIMARY KEY (component_id, version)
 );
