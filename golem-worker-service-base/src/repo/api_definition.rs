@@ -488,14 +488,25 @@ impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
 
 pub mod record_data_serde {
     use crate::api_definition::http::Route;
-    use bytes::Bytes;
-    use golem_common::serialization::serialize_with_version;
+    use bytes::{BufMut, Bytes, BytesMut};
+    use golem_api_grpc::proto::golem::apidefinition::{HttpApiDefinition, HttpRoute};
+    use prost::Message;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
-    pub fn serialize(value: &Vec<Route>) -> Result<Bytes, String> {
-        // TODO use golem_api_grpc::proto::golem::api_definition::http::Route
-        serialize_with_version(value, SERIALIZATION_VERSION_V1)
+    pub fn serialize(value: &[Route]) -> Result<Bytes, String> {
+        let routes: Vec<HttpRoute> = value
+            .iter()
+            .cloned()
+            .map(HttpRoute::try_from)
+            .collect::<Result<Vec<HttpRoute>, String>>()?;
+
+        let proto_value: HttpApiDefinition = HttpApiDefinition { routes };
+
+        let mut bytes = BytesMut::new();
+        bytes.put_u8(SERIALIZATION_VERSION_V1);
+        bytes.extend_from_slice(&proto_value.encode_to_vec());
+        Ok(bytes.freeze())
     }
 
     pub fn deserialize(bytes: &[u8]) -> Result<Vec<Route>, String> {
@@ -503,8 +514,14 @@ pub mod record_data_serde {
 
         match version[0] {
             SERIALIZATION_VERSION_V1 => {
-                let (value, _) = bincode::decode_from_slice(data, bincode::config::standard())
+                let proto_value: HttpApiDefinition = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
+
+                let value = proto_value
+                    .routes
+                    .into_iter()
+                    .map(Route::try_from)
+                    .collect::<Result<Vec<Route>, String>>()?;
 
                 Ok(value)
             }

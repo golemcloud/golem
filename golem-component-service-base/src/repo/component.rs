@@ -585,15 +585,19 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
 }
 
 pub mod record_metadata_serde {
-    use bytes::Bytes;
-    use golem_common::serialization::serialize_with_version;
+    use bytes::{BufMut, Bytes, BytesMut};
+    use golem_api_grpc::proto::golem::component::ComponentMetadata as ComponentMetadataProto;
     use golem_service_base::model::ComponentMetadata;
+    use prost::Message;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
     pub fn serialize(value: &ComponentMetadata) -> Result<Bytes, String> {
-        // TODO use golem_api_grpc::proto::golem::component::ComponentMetadata
-        serialize_with_version(value, SERIALIZATION_VERSION_V1)
+        let proto_value: ComponentMetadataProto = value.clone().into();
+        let mut bytes = BytesMut::new();
+        bytes.put_u8(SERIALIZATION_VERSION_V1);
+        bytes.extend_from_slice(&proto_value.encode_to_vec());
+        Ok(bytes.freeze())
     }
 
     pub fn deserialize(bytes: &[u8]) -> Result<ComponentMetadata, String> {
@@ -601,9 +605,9 @@ pub mod record_metadata_serde {
 
         match version[0] {
             SERIALIZATION_VERSION_V1 => {
-                let (value, _) = bincode::decode_from_slice(data, bincode::config::standard())
+                let proto_value: ComponentMetadataProto = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
-
+                let value = proto_value.try_into()?;
                 Ok(value)
             }
             _ => Err("Unsupported serialization version".to_string()),

@@ -16,6 +16,7 @@ async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
 http_02 = { workspace = true }
+prost = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true, features = [
     "runtime-tokio",

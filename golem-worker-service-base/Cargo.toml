@@ -38,6 +38,7 @@ opentelemetry_sdk = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
+prost = { workspace = true }
 regex = { workspace = true }
 rustc-hash = "1.1.0"
 serde = { workspace = true }
