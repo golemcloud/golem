@@ -2,7 +2,7 @@ use golem_common::config::ConfigLoader;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 
 pub fn make_config_loader() -> ConfigLoader<WorkerServiceBaseConfig> {
-    ConfigLoader::new("config/worker-service.toml".to_owned())
+    ConfigLoader::new_with_examples("config/worker-service.toml".to_owned())
 }
 
 #[cfg(test)]

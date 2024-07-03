@@ -112,7 +112,7 @@ impl OutputConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Config {
+pub struct TracingConfig {
     pub stdout: OutputConfig,
     pub file: OutputConfig,
     pub file_dir: Option<String>,
@@ -120,7 +120,7 @@ pub struct Config {
     pub console: bool,
 }
 
-impl Config {
+impl TracingConfig {
     pub fn local_dev(service_name: &str) -> Self {
         Self {
             stdout: OutputConfig::text_ansi(),
@@ -135,7 +135,7 @@ impl Config {
     }
 }
 
-impl Default for Config {
+impl Default for TracingConfig {
     fn default() -> Self {
         Self {
             stdout: OutputConfig::json_flatten(),
@@ -277,7 +277,7 @@ pub mod filter {
     }
 }
 
-pub fn init<F>(config: &Config, make_filter: F)
+pub fn init<F>(config: &TracingConfig, make_filter: F)
 where
     F: Fn(Output) -> filter::Boxed,
 {
@@ -321,6 +321,14 @@ where
         tracing_config = serde_json::to_string(&config).expect("cannot serialize log config"),
         "Tracing initialized"
     );
+}
+
+pub fn init_with_default_env_filter(config: &TracingConfig) {
+    init(config, filter::for_all_outputs::DEFAULT_ENV);
+}
+
+pub fn init_with_default_debug_env_filter(config: &TracingConfig) {
+    init(config, filter::for_all_outputs::default_debug_env());
 }
 
 fn make_layer<W>(

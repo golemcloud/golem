@@ -20,13 +20,13 @@ use anyhow::Context;
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use http::Uri;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use golem_common::config::{RedisConfig, RetryConfig};
 
 /// The shared global Golem configuration
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GolemConfig {
     pub key_value_storage: KeyValueStorageConfig,
     pub indexed_storage: IndexedStorageConfig,
@@ -51,7 +51,7 @@ pub struct GolemConfig {
     pub http_port: u16,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Limits {
     pub max_active_workers: usize,
     pub concurrency_limit_per_connection: usize,
@@ -64,21 +64,21 @@ pub struct Limits {
     pub epoch_ticks: u64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentCacheConfig {
     pub max_capacity: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ComponentServiceConfig {
     Grpc(ComponentServiceGrpcConfig),
     Local(ComponentServiceLocalConfig),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceGrpcConfig {
     pub host: String,
     pub port: u16,
@@ -87,39 +87,39 @@ pub struct ComponentServiceGrpcConfig {
     pub max_component_size: usize,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceLocalConfig {
     pub root: PathBuf,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum CompiledComponentServiceConfig {
     Enabled(CompiledComponentServiceEnabledConfig),
     Disabled(CompiledComponentServiceDisabledConfig),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompiledComponentServiceEnabledConfig {}
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompiledComponentServiceDisabledConfig {}
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ShardManagerServiceConfig {
     Grpc(ShardManagerServiceGrpcConfig),
     SingleShard,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShardManagerServiceGrpcConfig {
     pub host: String,
     pub port: u16,
     pub retries: RetryConfig,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceGrpcConfig {
     pub host: String,
     pub port: u16,
@@ -197,26 +197,26 @@ impl WorkerServiceGrpcConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SuspendConfig {
     #[serde(with = "humantime_serde")]
     pub suspend_after: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActiveWorkersConfig {
     pub drop_when_full: f64,
     #[serde(with = "humantime_serde")]
     pub ttl: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SchedulerConfig {
     #[serde(with = "humantime_serde")]
     pub refresh_interval: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OplogConfig {
     pub max_operations_before_commit: u64,
     pub max_payload_size: usize,
@@ -227,14 +227,14 @@ pub struct OplogConfig {
     pub archive_interval: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum KeyValueStorageConfig {
     Redis(RedisConfig),
     InMemory,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum IndexedStorageConfig {
     KVStoreRedis,
@@ -242,7 +242,7 @@ pub enum IndexedStorageConfig {
     InMemory,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum BlobStorageConfig {
     S3(S3BlobStorageConfig),
@@ -250,7 +250,7 @@ pub enum BlobStorageConfig {
     InMemory,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct S3BlobStorageConfig {
     pub retries: RetryConfig,
     pub region: String,
@@ -263,12 +263,12 @@ pub struct S3BlobStorageConfig {
     pub use_minio_credentials: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalFileSystemBlobStorageConfig {
     pub root: PathBuf,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MemoryConfig {
     pub system_memory_override: Option<u64>,
     pub worker_memory_ratio: f64,
@@ -367,14 +367,24 @@ impl Default for ComponentServiceGrpcConfig {
 
 impl Default for CompiledComponentServiceConfig {
     fn default() -> Self {
+        Self::enabled()
+    }
+}
+
+impl CompiledComponentServiceConfig {
+    pub fn enabled() -> Self {
         Self::Enabled(CompiledComponentServiceEnabledConfig {})
+    }
+
+    pub fn disabled() -> Self {
+        Self::Disabled(CompiledComponentServiceDisabledConfig {})
     }
 }
 
 impl Default for S3BlobStorageConfig {
     fn default() -> Self {
         Self {
-            retries: RetryConfig::default(),
+            retries: RetryConfig::max_attempts_3(),
             region: "us-east-1".to_string(),
             compilation_cache_bucket: "golem-compiled-components".to_string(),
             custom_data_bucket: "custom-data".to_string(),
@@ -383,6 +393,14 @@ impl Default for S3BlobStorageConfig {
             aws_endpoint_url: None,
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
             use_minio_credentials: false,
+        }
+    }
+}
+
+impl Default for LocalFileSystemBlobStorageConfig {
+    fn default() -> Self {
+        Self {
+            root: PathBuf::from("../data/blob_storage"),
         }
     }
 }
@@ -466,6 +484,20 @@ impl Default for IndexedStorageConfig {
 impl Default for BlobStorageConfig {
     fn default() -> Self {
         Self::S3(S3BlobStorageConfig::default())
+    }
+}
+
+impl BlobStorageConfig {
+    pub fn default_s3() -> Self {
+        Self::default()
+    }
+
+    pub fn default_local_file_system() -> Self {
+        Self::LocalFileSystem(LocalFileSystemBlobStorageConfig::default())
+    }
+
+    pub fn default_in_memory() -> Self {
+        Self::InMemory
     }
 }
 

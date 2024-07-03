@@ -10,6 +10,7 @@ use prometheus::Registry;
 use tokio::select;
 use tracing::error;
 
+use golem_common::tracing::init_with_default_env_filter;
 use golem_service_base::config::DbConfig;
 use golem_service_base::db;
 use golem_worker_service::api;
@@ -115,6 +116,8 @@ pub async fn app(
 }
 
 fn init_tracing(config: &WorkerServiceBaseConfig, prometheus_registry: Registry) {
+    init_with_default_env_filter(&config.tracing);
+
     let exporter = opentelemetry_prometheus::exporter()
         .with_registry(prometheus_registry.clone())
         .build()
@@ -124,10 +127,5 @@ fn init_tracing(config: &WorkerServiceBaseConfig, prometheus_registry: Registry)
         MeterProviderBuilder::default()
             .with_reader(exporter)
             .build(),
-    );
-
-    golem_common::tracing::init(
-        &config.tracing,
-        golem_common::tracing::filter::for_all_outputs::DEFAULT_ENV,
     );
 }

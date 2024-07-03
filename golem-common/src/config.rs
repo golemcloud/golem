@@ -26,8 +26,15 @@ const ENV_VAR_NESTED_SEPARATOR: &str = "__";
 pub trait ConfigLoaderConfig: Default + Serialize + Deserialize<'static> {}
 impl<T: Default + Serialize + Deserialize<'static>> ConfigLoaderConfig for T {}
 
+pub type ConfigExample<T> = (&'static str, T);
+
+pub trait HasConfigExamples<T> {
+    fn examples() -> Vec<ConfigExample<T>>;
+}
+
 pub struct ConfigLoader<T: ConfigLoaderConfig> {
     pub config_file_name: String,
+    pub make_examples: Option<fn() -> Vec<ConfigExample<T>>>,
     config_type: std::marker::PhantomData<T>,
 }
 
@@ -35,12 +42,32 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
     pub fn new(config_file_name: String) -> ConfigLoader<T> {
         Self {
             config_file_name,
+            make_examples: None,
+            config_type: std::marker::PhantomData,
+        }
+    }
+
+    pub fn new_with_examples(config_file_name: String) -> ConfigLoader<T>
+    where
+        T: HasConfigExamples<T>,
+    {
+        Self {
+            config_file_name,
+            make_examples: Some(T::examples),
             config_type: std::marker::PhantomData,
         }
     }
 
     pub fn default_figment(&self) -> Figment {
         Figment::new().merge(Serialized::defaults(T::default()))
+    }
+
+    pub fn example_figments(&self) -> Vec<(&'static str, Figment)> {
+        self.make_examples
+            .map_or(Vec::new(), |make| make())
+            .into_iter()
+            .map(|(name, example)| (name, Figment::new().merge(Serialized::defaults(example))))
+            .collect()
     }
 
     pub fn figment(&self) -> Figment {
@@ -54,35 +81,76 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         self.figment().extract()
     }
 
-    pub fn load_or_dump_config(&self) -> Option<T> {
-        let args: Vec<String> = std::env::args().collect();
-        match args.get(1).map_or("", |a| a.as_str()) {
-            "--dump-default-config" => Self::dump(&self.default_figment(), dump::print(false)),
-            "--dump-default-config-env-var" => Self::dump(&self.default_figment(), dump::env_var()),
-            "--dump-default-config-toml" => Self::dump(&self.default_figment(), dump::toml()),
-            "--dump-config" => Self::dump(&self.figment(), dump::print(true)),
-            "--dump-config-env-var" => Self::dump(&self.figment(), dump::env_var()),
-            "--dump-config-toml" => Self::dump(&self.figment(), dump::toml()),
-            _ => Some(self.load().expect("Failed to load config")),
+    fn default_dump_source(&self) -> dump::Source {
+        dump::Source::Default {
+            default: self.default_figment(),
+            examples: self.example_figments(),
         }
     }
 
-    fn dump<U>(figment: &Figment, dump: dump::Dump) -> Option<U> {
-        let config: Value = figment
-            .extract()
-            .expect("Failed to extract config for dump");
+    fn loaded_dump_source(&self) -> dump::Source {
+        dump::Source::Loaded(self.figment())
+    }
 
-        match dump {
-            dump::Dump::RootValue(dump) => dump.root_value(&config),
+    pub fn load_or_dump_config(&self) -> Option<T> {
+        let args: Vec<String> = std::env::args().collect();
+        match args.get(1).map_or("", |a| a.as_str()) {
+            "--dump-config-default" => self.dump(self.default_dump_source(), &dump::print(false)),
+            "--dump-config-default-env-var" => {
+                self.dump(self.default_dump_source(), &dump::env_var())
+            }
+            "--dump-config-default-toml" => self.dump(self.default_dump_source(), &dump::toml()),
+            "--dump-config" => self.dump(self.loaded_dump_source(), &dump::print(true)),
+            "--dump-config-env-var" => self.dump(self.loaded_dump_source(), &dump::env_var()),
+            "--dump-config-toml" => self.dump(self.loaded_dump_source(), &dump::toml()),
+            other => {
+                if other.starts_with("--dump-config") {
+                    panic!("Unknown dump config parameter: {}", other);
+                } else {
+                    Some(self.load().expect("Failed to load config"))
+                }
+            }
+        }
+    }
+
+    fn dump<U>(&self, source: dump::Source, dump: &dump::Dump) -> Option<U> {
+        let extract =
+            |figment: &Figment| -> Value { figment.extract().expect("Failed to extract config") };
+
+        let dump_figment = |header: &str, is_example: bool, figment: &Figment| match dump {
+            dump::Dump::RootValue(dump) => dump.root_value(header, is_example, &extract(figment)),
             dump::Dump::Visitor(dump) => {
-                Self::dump_value(figment, &*dump, &mut Vec::new(), "", &config)
+                dump.begin(header, is_example);
+                Self::visit_dump(
+                    figment,
+                    dump.as_ref(),
+                    &mut Vec::new(),
+                    "",
+                    &extract(figment),
+                )
+            }
+        };
+
+        match source {
+            dump::Source::Default { default, examples } => {
+                dump_figment("Generated from default config", false, &default);
+                for (name, example) in examples {
+                    dump_figment(
+                        &format!("Generated from example config: {}", name),
+                        true,
+                        &example,
+                    );
+                }
+            }
+            dump::Source::Loaded(loaded) => {
+                dump_figment("Generated from loaded config", false, &loaded);
             }
         }
 
         None
     }
 
-    fn dump_value<'a>(
+    fn visit_dump<'a>(
         figment: &Figment,
         dump: &dyn dump::VisitorDump,
         path: &mut Vec<&'a str>,
@@ -95,23 +163,16 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
                     path.push(name);
                 }
 
-                for (name, value) in dict {
-                    if value.as_dict().is_none() {
-                        Self::dump_value(figment, dump, path, name, value)
-                    }
+                for (name, value) in dict.iter().filter(|(_, v)| v.as_dict().is_none()) {
+                    Self::visit_dump(figment, dump, path, name, value)
                 }
-                for (name, value) in dict {
-                    if value.as_dict().is_some() {
-                        Self::dump_value(figment, dump, path, name, value)
-                    }
+                for (name, value) in dict.iter().filter(|(_, v)| v.as_dict().is_some()) {
+                    Self::visit_dump(figment, dump, path, name, value)
                 }
 
                 if !name.is_empty() {
                     path.pop();
                 }
-            }
-            Value::Array(_, _) => {
-                panic!("Arrays are not supported in config dump");
             }
             value => dump.value(path, name, figment.get_metadata(value.tag()), value),
         }
@@ -121,7 +182,15 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
 pub(crate) mod dump {
     use crate::config::{ENV_VAR_NESTED_SEPARATOR, ENV_VAR_PREFIX};
     use figment::value::Value;
-    use figment::Metadata;
+    use figment::{Figment, Metadata};
+
+    pub enum Source {
+        Default {
+            default: Figment,
+            examples: Vec<(&'static str, Figment)>,
+        },
+        Loaded(Figment),
+    }
 
     pub fn print(show_source: bool) -> Dump {
         Dump::Visitor(Box::new(Print { show_source }))
@@ -141,10 +210,11 @@ pub(crate) mod dump {
     }
 
     pub trait RootValueDump {
-        fn root_value(&self, value: &Value);
+        fn root_value(&self, header: &str, is_example: bool, value: &Value);
     }
 
     pub trait VisitorDump {
+        fn begin(&self, header: &str, is_example: bool);
         fn value(&self, path: &[&str], name: &str, metadata: Option<&Metadata>, value: &Value);
     }
 
@@ -153,6 +223,13 @@ pub(crate) mod dump {
     }
 
     impl VisitorDump for Print {
+        fn begin(&self, header: &str, is_example: bool) {
+            if is_example {
+                println!();
+            }
+            println!(":: {}\n", header)
+        }
+
         fn value(&self, path: &[&str], name: &str, metadata: Option<&Metadata>, value: &Value) {
             if !path.is_empty() {
                 for elem in path {
@@ -183,6 +260,13 @@ pub(crate) mod dump {
     struct EnvVar;
 
     impl VisitorDump for EnvVar {
+        fn begin(&self, header: &str, is_example: bool) {
+            if is_example {
+                println!();
+            }
+            println!("### {}\n", header)
+        }
+
         fn value(&self, path: &[&str], name: &str, _metadata: Option<&Metadata>, value: &Value) {
             let is_empty_value = value.to_empty().is_some();
 
@@ -215,11 +299,24 @@ pub(crate) mod dump {
     pub struct Toml;
 
     impl RootValueDump for Toml {
-        fn root_value(&self, value: &Value) {
-            println!(
-                "{}",
-                toml::to_string(value).expect("Failed to serialize as TOML")
-            );
+        fn root_value(&self, header: &str, is_example: bool, value: &Value) {
+            if is_example {
+                println!();
+            }
+            println!("## {}", header);
+
+            let mut config_as_toml_str =
+                toml::to_string(value).expect("Failed to serialize as TOML");
+
+            if is_example {
+                config_as_toml_str = config_as_toml_str
+                    .lines()
+                    .map(|l| format!("# {}", l))
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            }
+
+            println!("{}", config_as_toml_str);
         }
     }
 }
@@ -275,6 +372,21 @@ pub struct RetryConfig {
 
 impl Default for RetryConfig {
     fn default() -> Self {
+        Self::max_attempts_5()
+    }
+}
+
+impl RetryConfig {
+    pub fn max_attempts_3() -> RetryConfig {
+        Self {
+            max_attempts: 3,
+            min_delay: Duration::from_millis(100),
+            max_delay: Duration::from_secs(1),
+            multiplier: 3,
+        }
+    }
+
+    pub fn max_attempts_5() -> RetryConfig {
         Self {
             max_attempts: 5,
             min_delay: Duration::from_millis(100),

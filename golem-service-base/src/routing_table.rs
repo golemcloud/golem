@@ -42,7 +42,7 @@ impl Default for RoutingTableConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
-            port: 9001,
+            port: 9002,
         }
     }
 }

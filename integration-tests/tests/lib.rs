@@ -15,7 +15,7 @@
 use std::ops::Deref;
 
 use ctor::{ctor, dtor};
-use golem_common::tracing;
+use golem_common::tracing::{init_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 
 mod worker;
@@ -42,8 +42,5 @@ unsafe fn drop_deps() {
 
 #[ctor]
 pub static TRACING: () = {
-    tracing::init(
-        &tracing::Config::local_dev("integration-tests"),
-        tracing::filter::for_all_outputs::default_debug_env(),
-    );
+    init_with_default_debug_env_filter(&TracingConfig::local_dev("integration-tests"));
 };

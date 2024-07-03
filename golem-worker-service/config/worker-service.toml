@@ -1,32 +1,112 @@
-# workspace
-environment = "local"
-
-port = 9005
+## Generated from default config
 custom_request_port = 9006
+environment = "local"
+port = 9005
 worker_grpc_port = 9007
+
+[component_service]
+access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+host = "localhost"
+port = 9090
+
+[component_service.retries]
+max_attempts = 3
+max_delay = "1s"
+min_delay = "100ms"
+multiplier = 3
 
 [db]
 type = "Sqlite"
 
 [db.config]
-max_connections = 10
 database = "../data/golem_worker.sqlite"
+max_connections = 10
 
-[component_service]
+[routing_table]
 host = "localhost"
-port = 9090
-access_token = "5C832D93-FF85-4A8F-9803-513950FDFDB1"
+port = 9002
 
-[component_service.retries]
-max_attempts = 3
-min_delay = "100ms"
-max_delay = "1s"
-multiplier = 3
+[tracing]
+console = false
+file_name = "worker-service.log"
+
+[tracing.file]
+ansi = false
+enabled = false
+json = true
+json_flatten = true
+json_flatten_span = false
+span_events_active = false
+span_events_full = false
+
+[tracing.stdout]
+ansi = true
+enabled = true
+json = false
+json_flatten = true
+json_flatten_span = false
+span_events_active = false
+span_events_full = false
 
 [worker_executor_client_cache]
 max_capacity = 1000
 time_to_idle = "4h"
 
-[routing_table]
-host = "localhost"
-port = 9002
+
+## Generated from example config: with postgres
+# custom_request_port = 9006
+# environment = "local"
+# port = 9005
+# worker_grpc_port = 9007
+# 
+# [component_service]
+# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+# host = "localhost"
+# port = 9090
+# 
+# [component_service.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# min_delay = "100ms"
+# multiplier = 3
+# 
+# [db]
+# type = "Postgres"
+# 
+# [db.config]
+# database = "postgres"
+# host = "localhost"
+# max_connections = 10
+# password = "postgres"
+# port = 5432
+# username = "postgres"
+# 
+# [routing_table]
+# host = "localhost"
+# port = 9002
+# 
+# [tracing]
+# console = false
+# file_name = "worker-service.log"
+# 
+# [tracing.file]
+# ansi = false
+# enabled = false
+# json = true
+# json_flatten = true
+# json_flatten_span = false
+# span_events_active = false
+# span_events_full = false
+# 
+# [tracing.stdout]
+# ansi = true
+# enabled = true
+# json = false
+# json_flatten = true
+# json_flatten_span = false
+# span_events_active = false
+# span_events_full = false
+# 
+# [worker_executor_client_cache]
+# max_capacity = 1000
+# time_to_idle = "4h"

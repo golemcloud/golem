@@ -532,3 +532,22 @@ kill $shard_manager_pid || true
 kill $router_pid || true
 kill $redis_pid || true
 '''
+
+[tasks.generate-configs]
+description = "Generates default and exmaple config files"
+dependencies = ["build"]
+
+script = '''
+export RUST_BACKTRACE=1
+
+#./target/debug/golem-shard-manager --dump-config-default-toml > golem-shard-manager/config/shard-manager.toml
+#./target/debug/golem-shard-manager --dump-config-default-env-var > golem-shard-manager/config/shard-manager.sample.env
+./target/debug/golem-component-compilation-service --dump-config-default-toml > golem-component-compilation-service/config/component-compilation-service.toml
+./target/debug/golem-component-compilation-service --dump-config-default-env-var > golem-component-compilation-service/config/component-compilation-service.sample.env
+#./target/debug/golem-component-service --dump-config-default-toml > golem-component-service/config/component-service.toml
+#./target/debug/golem-component-service --dump-config-default-env-var > golem-component-service/config/component-service.sample.env
+./target/debug/golem-worker-service --dump-config-default-toml > golem-worker-service/config/worker-service.toml
+./target/debug/golem-worker-service --dump-config-default-env-var > golem-worker-service/config/worker-service.sample.env
+#./target/debug/worker-executor --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
+#./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
+'''
