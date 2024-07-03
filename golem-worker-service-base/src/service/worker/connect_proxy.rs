@@ -23,7 +23,7 @@ pub async fn proxy_worker_connection(
     keep_alive_interval: Duration,
     max_pong_timeout: Duration,
 ) -> Result<(), ConnectProxyError> {
-    tracing::info!("Proxying worker connection {worker_id}");
+    tracing::info!("Proxying worker connection");
 
     let mut websocket = keep_alive::WebSocketKeepAlive::from_sink_and_stream(
         websocket_receiver,
@@ -39,12 +39,16 @@ pub async fn proxy_worker_connection(
             websocket_message = websocket.next() => {
                 match websocket_message {
                     Some(Ok(Message::Close(payload))) => {
-                        tracing::info!("Client closed WebSocket connection: {payload:?}");
+                        tracing::info!(
+                            close_code=payload.as_ref().map(|p| u16::from(p.0)),
+                            close_message=payload.as_ref().map(|p| &p.1),
+                            "Client closed WebSocket connection",
+                        );
                         break Ok(());
                     }
                     Some(Err(error)) => {
                         let error: ConnectProxyError = error.into();
-                        tracing::info!("Received WebSocket Error: {error}");
+                        tracing::info!(error=error.to_string(), "Received WebSocket Error");
                         break Err(error);
                     },
                     Some(Ok(_)) => {}
@@ -58,11 +62,11 @@ pub async fn proxy_worker_connection(
             worker_message = worker_stream.next() => {
                 if let Some(message) = worker_message {
                     if let Err(error) = forward_worker_message(message, &mut websocket).await {
-                        tracing::info!("Error forwarding message to WebSocket client: {error}");
+                        tracing::info!(error=error.to_string(), "Error forwarding message to WebSocket client");
                         break(Err(error))
                     }
                 } else {
-                    tracing::info!("Worker Stream ended");
+                    tracing::info!("Worker stream ended");
                     break Ok(());
                 }
             },
@@ -70,7 +74,10 @@ pub async fn proxy_worker_connection(
     };
 
     if let Err(error) = websocket.close().await {
-        tracing::info!("Error closing WebSocket connection: {error}");
+        tracing::error!(
+            error = error.to_string(),
+            "Error closing WebSocket connection"
+        );
     } else {
         tracing::info!("WebSocket connection successfully closed");
     }

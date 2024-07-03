@@ -390,7 +390,9 @@ impl WorkerGrpcApi {
             .component_service
             .get_latest(&component_id, &EmptyAuthCtx::default())
             .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
+            .tap_err(|error| {
+                tracing::error!(error = error.to_string(), "Error getting latest component")
+            })
             .map_err(|_| GrpcWorkerError {
                 error: Some(worker_error::Error::NotFound(ErrorBody {
                     error: format!("Component not found: {}", &component_id),

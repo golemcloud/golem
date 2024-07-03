@@ -38,7 +38,10 @@ impl ConnectWorkerStream {
                 async move {
                     while let Some(message) = streaming.next().await {
                         if let Err(error) = sender.send(message).await {
-                            tracing::info!("Failed to forward WorkerStream: {error}");
+                            tracing::error!(
+                                error = error.to_string(),
+                                "Failed to forward WorkerStream"
+                            );
                             break;
                         }
                     }

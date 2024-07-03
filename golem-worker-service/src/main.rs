@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
-use poem::EndpointExt;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
+use poem::EndpointExt;
 use prometheus::Registry;
 use tokio::select;
 use tracing::error;
@@ -48,7 +48,7 @@ pub async fn app(
             db::postgres_migrate(&c, "./db/migration/postgres")
                 .await
                 .map_err(|e| {
-                    dbg!("DB - init error: {}", e);
+                    error!(error = e, "DB - postgres - init error");
                     std::io::Error::new(std::io::ErrorKind::Other, "Init error")
                 })?;
         }
@@ -56,7 +56,7 @@ pub async fn app(
             db::sqlite_migrate(&c, "./db/migration/sqlite")
                 .await
                 .map_err(|e| {
-                    error!("DB - init error: {}", e);
+                    error!(error = e, "DB - sqlite - init error");
                     std::io::Error::new(std::io::ErrorKind::Other, "Init error")
                 })?;
         }
