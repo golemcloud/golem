@@ -5,9 +5,11 @@ mod tests {
     use golem_service_base::db;
 
     use golem_common::model::ComponentId;
-    use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
+    use golem_component_service_base::repo::component::{
+        ComponentRecord, ComponentRepo, DbComponentRepo,
+    };
     use golem_component_service_base::service::component::{
-        ComponentService, ComponentServiceDefault,
+        create_new_component, ComponentService, ComponentServiceDefault,
     };
     use golem_component_service_base::service::component_compilation::{
         ComponentCompilationService, ComponentCompilationServiceDisabled,
@@ -18,6 +20,7 @@ mod tests {
     use testcontainers::clients::Cli;
     use testcontainers::{Container, RunnableImage};
     use testcontainers_modules::postgres::Postgres;
+    use uuid::Uuid;
 
     fn start_docker_postgres<'d>(docker: &'d Cli) -> (DbPostgresConfig, Container<'d, Postgres>) {
         let image = RunnableImage::from(Postgres::default()).with_tag("14.7-alpine");
@@ -68,7 +71,8 @@ mod tests {
         let component_repo: Arc<dyn ComponentRepo + Sync + Send> =
             Arc::new(DbComponentRepo::new(db_pool.clone().into()));
 
-        test_services(component_repo).await;
+        test_repo(component_repo.clone()).await;
+        test_services(component_repo.clone()).await;
     }
 
     #[tokio::test]
@@ -88,7 +92,13 @@ mod tests {
         let component_repo: Arc<dyn ComponentRepo + Sync + Send> =
             Arc::new(DbComponentRepo::new(db_pool.clone().into()));
 
-        test_services(component_repo).await;
+        test_repo(component_repo.clone()).await;
+        test_services(component_repo.clone()).await;
+    }
+
+    fn get_component_data(name: &str) -> Vec<u8> {
+        let path = format!("../test-components/{}.wasm", name);
+        std::fs::read(path).unwrap()
     }
 
     async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
@@ -110,11 +120,6 @@ mod tests {
                 object_store.clone(),
                 compilation_service.clone(),
             ));
-
-        fn get_component_data(name: &str) -> Vec<u8> {
-            let path = format!("../test-components/{}.wasm", name);
-            std::fs::read(path).unwrap()
-        }
 
         let component_name1 = ComponentName("shopping-cart".to_string());
         let component_name2 = ComponentName("rust-echo".to_string());
@@ -254,5 +259,110 @@ mod tests {
             .await
             .unwrap();
         assert!(component_result.len() == 3);
+    }
+
+    async fn test_repo(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
+        test_repo_component_id_unique(component_repo.clone()).await;
+        test_repo_component_name_unique_in_namespace(component_repo.clone()).await;
+        test_repo_component_delete(component_repo.clone()).await;
+    }
+
+    async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
+        let namespace1 = Uuid::new_v4().to_string();
+        let namespace2 = Uuid::new_v4().to_string();
+
+        let component_name1 = ComponentName("shopping-cart1".to_string());
+        let data = get_component_data("shopping-cart");
+
+        let component1 =
+            create_new_component(&ComponentId::new_v4(), &component_name1, &data).unwrap();
+
+        let result1 = component_repo
+            .create(&ComponentRecord::new(namespace1.clone(), component1.clone()).unwrap())
+            .await;
+        let result2 = component_repo
+            .create(
+                &ComponentRecord::new(namespace1.clone(), component1.clone().next_version())
+                    .unwrap(),
+            )
+            .await;
+        let result3 = component_repo
+            .create(&ComponentRecord::new(namespace2.clone(), component1.clone()).unwrap())
+            .await;
+
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+        assert!(result3.is_err());
+    }
+
+    async fn test_repo_component_name_unique_in_namespace(
+        component_repo: Arc<dyn ComponentRepo + Sync + Send>,
+    ) {
+        let namespace1 = Uuid::new_v4().to_string();
+        let namespace2 = Uuid::new_v4().to_string();
+
+        let component_name1 = ComponentName("shopping-cart1".to_string());
+        let data = get_component_data("shopping-cart");
+
+        let component1 =
+            create_new_component(&ComponentId::new_v4(), &component_name1, &data).unwrap();
+        let component2 =
+            create_new_component(&ComponentId::new_v4(), &component_name1, &data).unwrap();
+
+        let result1 = component_repo
+            .create(&ComponentRecord::new(namespace1.clone(), component1.clone()).unwrap())
+            .await;
+        let result2 = component_repo
+            .create(&ComponentRecord::new(namespace1.clone(), component2.clone()).unwrap())
+            .await;
+        let result3 = component_repo
+            .create(&ComponentRecord::new(namespace2.clone(), component2.clone()).unwrap())
+            .await;
+
+        assert!(result1.is_ok());
+        assert!(result2.is_err());
+        assert!(result3.is_ok());
+    }
+
+    async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
+        let namespace1 = Uuid::new_v4().to_string();
+
+        let component_name1 = ComponentName("shopping-cart1".to_string());
+        let data = get_component_data("shopping-cart");
+
+        let component1 =
+            create_new_component(&ComponentId::new_v4(), &component_name1, &data).unwrap();
+
+        let result1 = component_repo
+            .create(&ComponentRecord::new(namespace1.clone(), component1.clone()).unwrap())
+            .await;
+
+        let result2 = component_repo
+            .get(
+                &namespace1,
+                &component1.versioned_component_id.component_id.0,
+            )
+            .await;
+
+        let result3 = component_repo
+            .delete(
+                &namespace1,
+                &component1.versioned_component_id.component_id.0,
+            )
+            .await;
+
+        let result4 = component_repo
+            .get(
+                &namespace1,
+                &component1.versioned_component_id.component_id.0,
+            )
+            .await;
+
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+        assert_eq!(result2.unwrap().len(), 1);
+        assert!(result3.is_ok());
+        assert!(result4.is_ok());
+        assert!(result4.unwrap().is_empty());
     }
 }

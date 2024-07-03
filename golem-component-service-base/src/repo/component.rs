@@ -201,36 +201,50 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
     ) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
-                SELECT c.namespace AS namespace, c.name AS name, c.component_id AS component_id,
-                  cv.version AS version, cv.size AS size, cv.user_component AS user_component,
-                  cv.protected_component AS protected_component, cv.protector_version AS protector_version,
-                  cv.metadata AS metadata
-                FROM components c JOIN component_versions cv ON c.component_id = cv.component_id
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.user_component AS user_component,
+                    cv.protected_component AS protected_component,
+                    cv.protector_version AS protector_version,
+                    cv.metadata AS metadata
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.component_id = $2
-                "#
+                "#,
         )
-            .bind(namespace)
-            .bind(component_id)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(namespace)
+        .bind(component_id)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
-                SELECT c.namespace AS namespace, c.name AS name, c.component_id AS component_id,
-                  cv.version AS version, cv.size AS size, cv.user_component AS user_component,
-                  cv.protected_component AS protected_component, cv.protector_version AS protector_version,
-                  cv.metadata AS metadata
-                FROM components c JOIN component_versions cv ON c.component_id = cv.component_id
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.user_component AS user_component,
+                    cv.protected_component AS protected_component,
+                    cv.protector_version AS protector_version,
+                    cv.metadata AS metadata
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
-                "#
+                "#,
         )
-            .bind(namespace)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(namespace)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_latest_version(
@@ -240,20 +254,27 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
     ) -> Result<Option<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
-                SELECT c.namespace AS namespace, c.name AS name, c.component_id AS component_id,
-                  cv.version AS version, cv.size AS size, cv.user_component AS user_component,
-                  cv.protected_component AS protected_component, cv.protector_version AS protector_version,
-                  cv.metadata AS metadata
-                FROM components c JOIN component_versions cv ON c.component_id = cv.component_id
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.user_component AS user_component,
+                    cv.protected_component AS protected_component,
+                    cv.protector_version AS protector_version,
+                    cv.metadata AS metadata
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.component_id = $2
                 ORDER BY cv.version DESC LIMIT 1
                 "#,
         )
-            .bind(namespace)
-            .bind(component_id)
-            .fetch_optional(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(namespace)
+        .bind(component_id)
+        .fetch_optional(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_by_version(
@@ -264,20 +285,27 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
     ) -> Result<Option<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
-                SELECT c.namespace AS namespace, c.name AS name, c.component_id AS component_id,
-                  cv.version AS version, cv.size AS size, cv.user_component AS user_component,
-                  cv.protected_component AS protected_component, cv.protector_version AS protector_version,
-                  cv.metadata AS metadata
-                FROM components c JOIN component_versions cv ON c.component_id = cv.component_id
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.user_component AS user_component,
+                    cv.protected_component AS protected_component,
+                    cv.protector_version AS protector_version,
+                    cv.metadata AS metadata
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.component_id = $2 AND cv.version = $3
                 "#,
         )
-            .bind(namespace)
-            .bind(component_id)
-            .bind(version as i64)
-            .fetch_optional(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(namespace)
+        .bind(component_id)
+        .bind(version as i64)
+        .fetch_optional(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_by_name(
@@ -287,19 +315,26 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
     ) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
-                SELECT c.namespace AS namespace, c.name AS name, c.component_id AS component_id,
-                  cv.version AS version, cv.size AS size, cv.user_component AS user_component,
-                  cv.protected_component AS protected_component, cv.protector_version AS protector_version,
-                  cv.metadata AS metadata
-                FROM components c JOIN component_versions cv ON c.component_id = cv.component_id
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.user_component AS user_component,
+                    cv.protected_component AS protected_component,
+                    cv.protector_version AS protector_version,
+                    cv.metadata AS metadata
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
                 "#,
         )
-            .bind(namespace)
-            .bind(name)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(namespace)
+        .bind(name)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {
@@ -324,11 +359,16 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
 
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
-        sqlx::query("DELETE FROM component_versions WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)")
-            .bind(namespace)
-            .bind(component_id)
-            .execute(&mut *transaction)
-            .await?;
+        sqlx::query(
+            r#"
+                DELETE FROM component_versions
+                WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
+            "#
+        )
+        .bind(namespace)
+        .bind(component_id)
+        .execute(&mut *transaction)
+        .await?;
 
         sqlx::query("DELETE FROM components WHERE namespace = $1 AND component_id = $2")
             .bind(namespace)
@@ -402,36 +442,50 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
     ) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
-                SELECT c.namespace AS namespace, c.name AS name, c.component_id AS component_id,
-                  cv.version AS version, cv.size AS size, cv.user_component AS user_component,
-                  cv.protected_component AS protected_component, cv.protector_version AS protector_version,
-                  cv.metadata AS metadata
-                FROM components c JOIN component_versions cv ON c.component_id = cv.component_id
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.user_component AS user_component,
+                    cv.protected_component AS protected_component,
+                    cv.protector_version AS protector_version,
+                    cv.metadata AS metadata
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.component_id = $2
-                "#
+                "#,
         )
-            .bind(namespace)
-            .bind(component_id)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(namespace)
+        .bind(component_id)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
-                SELECT c.namespace AS namespace, c.name AS name, c.component_id AS component_id,
-                  cv.version AS version, cv.size AS size, cv.user_component AS user_component,
-                  cv.protected_component AS protected_component, cv.protector_version AS protector_version,
-                  cv.metadata AS metadata
-                FROM components c JOIN component_versions cv ON c.component_id = cv.component_id
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.user_component AS user_component,
+                    cv.protected_component AS protected_component,
+                    cv.protector_version AS protector_version,
+                    cv.metadata AS metadata
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
-                "#
+                "#,
         )
-            .bind(namespace)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(namespace)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_latest_version(
@@ -441,20 +495,27 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
     ) -> Result<Option<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
-                SELECT c.namespace AS namespace, c.name AS name, c.component_id AS component_id,
-                  cv.version AS version, cv.size AS size, cv.user_component AS user_component,
-                  cv.protected_component AS protected_component, cv.protector_version AS protector_version,
-                  cv.metadata AS metadata
-                FROM components c JOIN component_versions cv ON c.component_id = cv.component_id
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.user_component AS user_component,
+                    cv.protected_component AS protected_component,
+                    cv.protector_version AS protector_version,
+                    cv.metadata AS metadata
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.component_id = $2
                 ORDER BY cv.version DESC LIMIT 1
                 "#,
         )
-            .bind(namespace)
-            .bind(component_id)
-            .fetch_optional(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(namespace)
+        .bind(component_id)
+        .fetch_optional(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_by_version(
@@ -465,20 +526,27 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
     ) -> Result<Option<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
-                SELECT c.namespace AS namespace, c.name AS name, c.component_id AS component_id,
-                  cv.version AS version, cv.size AS size, cv.user_component AS user_component,
-                  cv.protected_component AS protected_component, cv.protector_version AS protector_version,
-                  cv.metadata AS metadata
-                FROM components c JOIN component_versions cv ON c.component_id = cv.component_id
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.user_component AS user_component,
+                    cv.protected_component AS protected_component,
+                    cv.protector_version AS protector_version,
+                    cv.metadata AS metadata
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.component_id = $2 AND cv.version = $3
                 "#,
         )
-            .bind(namespace)
-            .bind(component_id)
-            .bind(version as i64)
-            .fetch_optional(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(namespace)
+        .bind(component_id)
+        .bind(version as i64)
+        .fetch_optional(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_by_name(
@@ -488,19 +556,26 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
     ) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
-                SELECT c.namespace AS namespace, c.name AS name, c.component_id AS component_id,
-                  cv.version AS version, cv.size AS size, cv.user_component AS user_component,
-                  cv.protected_component AS protected_component, cv.protector_version AS protector_version,
-                  cv.metadata AS metadata
-                FROM components c JOIN component_versions cv ON c.component_id = cv.component_id
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.user_component AS user_component,
+                    cv.protected_component AS protected_component,
+                    cv.protector_version AS protector_version,
+                    cv.metadata AS metadata
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
                 "#,
         )
-            .bind(namespace)
-            .bind(name)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(namespace)
+        .bind(name)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {
@@ -525,11 +600,16 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
 
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
-        sqlx::query("DELETE FROM component_versions WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)")
-            .bind(namespace)
-            .bind(component_id)
-            .execute(&mut *transaction)
-            .await?;
+        sqlx::query(
+            r#"
+                DELETE FROM component_versions
+                WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
+            "#
+        )
+        .bind(namespace)
+        .bind(component_id)
+        .execute(&mut *transaction)
+        .await?;
 
         sqlx::query("DELETE FROM components WHERE namespace = $1 AND component_id = $2")
             .bind(namespace)

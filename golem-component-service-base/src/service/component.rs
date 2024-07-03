@@ -58,6 +58,35 @@ impl From<RepoError> for ComponentError {
     }
 }
 
+pub fn create_new_component(
+    component_id: &ComponentId,
+    component_name: &ComponentName,
+    data: &[u8],
+) -> Result<Component, ComponentProcessingError> {
+    let metadata = process_component(data)?;
+
+    let versioned_component_id = VersionedComponentId {
+        component_id: component_id.clone(),
+        version: 0,
+    };
+
+    let user_component_id = UserComponentId {
+        versioned_component_id: versioned_component_id.clone(),
+    };
+    let protected_component_id = ProtectedComponentId {
+        versioned_component_id: versioned_component_id.clone(),
+    };
+
+    Ok(Component {
+        component_name: component_name.clone(),
+        component_size: data.len() as u64,
+        metadata,
+        versioned_component_id,
+        user_component_id,
+        protected_component_id,
+    })
+}
+
 #[async_trait]
 pub trait ComponentService<Namespace> {
     async fn create(
@@ -176,43 +205,16 @@ where
             .await?
             .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
-        let metadata = process_component(&data)?;
-
-        let versioned_component_id = VersionedComponentId {
-            component_id: component_id.clone(),
-            version: 0,
-        };
-
-        let user_component_id = UserComponentId {
-            versioned_component_id: versioned_component_id.clone(),
-        };
-        let protected_component_id = ProtectedComponentId {
-            versioned_component_id: versioned_component_id.clone(),
-        };
+        let component = create_new_component(component_id, component_name, &data)?;
 
         info!(
             "Uploaded component - namespace: {}, id: {}, version: 0, exports {:?}",
-            namespace, versioned_component_id.component_id, metadata.exports
+            namespace, component_id, component.metadata.exports
         );
-
-        let component_size: u64 = data
-            .len()
-            .try_into()
-            .map_err(|e| ComponentError::internal(e, "Failed to convert data length"))?;
-
         tokio::try_join!(
-            self.upload_user_component(&user_component_id, data.clone()),
-            self.upload_protected_component(&protected_component_id, data)
+            self.upload_user_component(&component.user_component_id, data.clone()),
+            self.upload_protected_component(&component.protected_component_id, data)
         )?;
-
-        let component = Component {
-            component_name: component_name.clone(),
-            component_size,
-            metadata,
-            versioned_component_id,
-            user_component_id,
-            protected_component_id,
-        };
 
         let record = ComponentRecord::new(namespace, component.clone())
             .map_err(|e| ComponentError::internal(e, "Failed to convert record"))?;
@@ -220,7 +222,7 @@ where
         self.component_repo.create(&record).await?;
 
         self.component_compilation
-            .enqueue_compilation(&component.versioned_component_id.component_id, 0)
+            .enqueue_compilation(component_id, component.versioned_component_id.version)
             .await;
 
         Ok(component)
