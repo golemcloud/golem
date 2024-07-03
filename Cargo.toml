@@ -158,6 +158,7 @@ tonic-reflection = "0.11.0"
 tonic-health = "0.11.0"
 tracing = { version = "0.1.40", features = ["log"] }
 tracing-opentelemetry = "0.24.0"
+tracing-serde = "0.1.3"
 tracing-subscriber = { version = "0.3.18", features = [
     "env-filter",
     "fmt",

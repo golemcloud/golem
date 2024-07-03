@@ -235,7 +235,6 @@ pub mod caching {
 
 pub mod grpc {
     use std::fmt::Debug;
-
     use lazy_static::lazy_static;
     use prometheus::*;
     use tracing::{error, info, Span};
@@ -306,7 +305,7 @@ pub mod grpc {
             match self.start_time.take() {
                 Some(start) => self.span.in_scope(|| {
                     let elapsed = start.elapsed();
-                    info!("gRPC request succeeded in {}ms", elapsed.as_millis());
+                    info!(elapsed_ms = elapsed.as_millis(), "gRPC request succeeded");
 
                     record_grpc_success(self.api_name, elapsed);
                     result
@@ -320,9 +319,9 @@ pub mod grpc {
                 Some(start) => self.span.in_scope(|| {
                     let elapsed = start.elapsed();
                     error!(
-                        "gRPC request failed in {}ms with error {:?}",
-                        elapsed.as_millis(),
-                        error
+                        elapsed_ms = elapsed.as_millis(),
+                        error = format!("{:?}", error),
+                        "gRPC request failed",
                     );
 
                     record_grpc_failure(self.api_name, error.trace_error_kind(), elapsed);

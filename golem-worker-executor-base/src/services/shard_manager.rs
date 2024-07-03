@@ -57,13 +57,10 @@ impl ShardManagerService for ShardManagerServiceGrpc {
     async fn register(&self, host: String, port: u16) -> Result<ShardAssignment, GolemError> {
         let uri: hyper::Uri = self.config.url().to_string().parse().unwrap();
         let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
-        let desc = format!(
-            "Registering worker executor with shard manager at {uri} using pod name {pod_name:?}"
-        );
         with_retries(
-            &desc,
             "shard_manager",
             "register",
+            Some(format!("{} - {:?}", uri, pod_name)),
             &self.config.retries,
             &(host, port),
             |(host, port)| {

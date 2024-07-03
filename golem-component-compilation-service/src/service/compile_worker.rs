@@ -163,12 +163,10 @@ async fn download_via_grpc(
     component_version: u64,
     max_component_size: usize,
 ) -> Result<Vec<u8>, CompilationError> {
-    let desc = format!("Downloading component {component_id}@{component_version}");
-    tracing::debug!("{}", &desc);
     with_retries(
-        &desc,
         "components",
         "download",
+        Some(format!("{component_id}@{component_version}")),
         retry_config,
         &(
             endpoint.clone(),

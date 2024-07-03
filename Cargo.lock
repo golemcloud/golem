@@ -3451,6 +3451,7 @@ dependencies = [
  "toml 0.8.14",
  "tonic",
  "tracing",
+ "tracing-serde",
  "tracing-subscriber",
  "url",
  "uuid",
