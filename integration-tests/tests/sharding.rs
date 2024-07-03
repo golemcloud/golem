@@ -113,6 +113,8 @@ async fn coordinated_scenario1() {
             Step::Sleep(Duration::from_secs(3)),
             Step::StartShards(4),
             Step::WaitForInvokeAndAwaitResult,
+            // TODO drop
+            Step::StopShards(4),
             // TODO: separate cases and add one which mixes them randomly
             /*Step::StopAllShards,
             Step::RestartShardManager,

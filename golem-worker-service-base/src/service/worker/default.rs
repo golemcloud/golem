@@ -1135,7 +1135,10 @@ where
                 Ok(())
             }
             Some(error) => {
-                error!(error = error.to_string(), "Non retryable GetWorkerExecutorClientError");
+                error!(
+                    error = error.to_string(),
+                    "Non retryable GetWorkerExecutorClientError"
+                );
                 Err(WorkerServiceError::internal(error))
             }
         }
