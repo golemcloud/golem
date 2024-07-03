@@ -35,14 +35,15 @@ pub enum DbInfo {
 }
 
 impl DbInfo {
-    pub fn env(&self) -> HashMap<String, String> {
+    pub fn env(&self, service_namespace: &str) -> HashMap<String, String> {
         match self {
-            DbInfo::Postgres(pg) => pg.env(),
+            DbInfo::Postgres(pg) => pg.env(service_namespace),
             DbInfo::Sqlite(db_path) => [
                 ("GOLEM__DB__TYPE".to_string(), "Sqlite".to_string()),
                 (
                     "GOLEM__DB__CONFIG__DATABASE".to_string(),
                     db_path
+                        .join(service_namespace)
                         .to_str()
                         .expect("Invalid Sqlite database path")
                         .to_string(),
@@ -81,7 +82,7 @@ impl PostgresInfo {
         )
     }
 
-    pub fn env(&self) -> HashMap<String, String> {
+    pub fn env(&self, service_namespace: &str) -> HashMap<String, String> {
         HashMap::from([
             ("DB_HOST".to_string(), self.host.clone()),
             ("DB_PORT".to_string(), self.port.to_string()),
@@ -96,6 +97,10 @@ impl PostgresInfo {
             ),
             ("GOLEM__DB__CONFIG__HOST".to_string(), self.host.clone()),
             ("GOLEM__DB__CONFIG__PORT".to_string(), self.port.to_string()),
+            (
+                "GOLEM__DB__CONFIG__SCHEMA".to_string(),
+                service_namespace.to_string(),
+            ),
             (
                 "GOLEM__DB__CONFIG__DATABASE".to_string(),
                 self.database_name.clone(),

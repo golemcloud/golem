@@ -42,7 +42,6 @@ use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
 
-pub mod function_name;
 pub mod oplog;
 pub mod regions;
 
@@ -835,6 +834,8 @@ pub struct WorkerStatusRecord {
     pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
     pub current_idempotency_key: Option<IdempotencyKey>,
     pub component_version: ComponentVersion,
+    pub component_size: u64,
+    pub total_linear_memory_size: u64,
     pub oplog_idx: OplogIndex,
 }
 
@@ -851,6 +852,8 @@ impl Default for WorkerStatusRecord {
             invocation_results: HashMap::new(),
             current_idempotency_key: None,
             component_version: 0,
+            component_size: 0,
+            total_linear_memory_size: 0,
             oplog_idx: OplogIndex::default(),
         }
     }
@@ -991,6 +994,15 @@ impl WorkerInvocation {
                 idempotency_key, ..
             } => idempotency_key == key,
             _ => false,
+        }
+    }
+
+    pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
+        match self {
+            Self::ExportedFunction {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            _ => None,
         }
     }
 }

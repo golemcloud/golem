@@ -420,6 +420,10 @@ pub struct WorkerMetadata {
     pub created_at: DateTime<Utc>,
     #[serde(rename = "lastError")]
     pub last_error: Option<String>,
+    #[serde(rename = "componentSize")]
+    pub component_size: u64,
+    #[serde(rename = "totalLinearMemorySize")]
+    pub total_linear_memory_size: u64,
 }
 
 impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
@@ -435,6 +439,8 @@ impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
             updates,
             created_at,
             last_error,
+            component_size,
+            total_linear_memory_size,
         } = value;
 
         WorkerMetadata {
@@ -449,6 +455,8 @@ impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
             updates,
             created_at,
             last_error,
+            component_size,
+            total_linear_memory_size,
         }
     }
 }

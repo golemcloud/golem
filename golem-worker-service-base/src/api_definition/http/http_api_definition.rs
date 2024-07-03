@@ -8,10 +8,7 @@ use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::api_definition::api_common::HasIsDraft;
-use crate::api_definition::{
-    ApiDefinitionId, ApiVersion, HasApiDefinitionId, HasGolemWorkerBindings, HasVersion,
-};
+use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::parser::path_pattern_parser::PathPatternParser;
 use crate::parser::{GolemParser, ParseError};
 use crate::worker_binding::GolemWorkerBinding;
@@ -32,28 +29,6 @@ impl HasGolemWorkerBindings for HttpApiDefinition {
             .iter()
             .map(|route| route.binding.clone())
             .collect()
-    }
-}
-
-impl HasApiDefinitionId for HttpApiDefinition {
-    fn get_api_definition_id(&self) -> ApiDefinitionId {
-        self.id.clone()
-    }
-}
-
-impl HasVersion for HttpApiDefinition {
-    fn get_version(&self) -> ApiVersion {
-        self.version.clone()
-    }
-}
-
-impl HasIsDraft for HttpApiDefinition {
-    fn is_draft(&self) -> bool {
-        self.draft
-    }
-
-    fn set_not_draft(&mut self) {
-        self.draft = false;
     }
 }
 
@@ -287,7 +262,6 @@ pub struct Route {
 
 #[cfg(test)]
 mod tests {
-    use crate::expression;
     use golem_common::serialization;
 
     use super::*;
@@ -381,9 +355,9 @@ mod tests {
 
     #[track_caller]
     fn test_string_expr_parse_and_encode(input: &str) {
-        let parsed_expr1 = expression::from_string(input).unwrap();
+        let parsed_expr1 = rib::from_string(input).unwrap();
         let encoded_expr = parsed_expr1.to_string();
-        let parsed_expr2 = expression::from_string(encoded_expr.as_str()).unwrap();
+        let parsed_expr2 = rib::from_string(encoded_expr.as_str()).unwrap();
 
         assert_eq!(
             parsed_expr1,

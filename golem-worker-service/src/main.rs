@@ -1,3 +1,5 @@
+use golem_service_base::config::DbConfig;
+use golem_service_base::db;
 use golem_worker_service::api;
 use golem_worker_service::api::make_open_api_service;
 use golem_worker_service::service::Services;
@@ -13,6 +15,7 @@ use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use tokio::select;
+use tracing::error;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -34,6 +37,25 @@ pub async fn app(
 ) -> std::io::Result<()> {
     init_tracing_metrics();
     let config = worker_config.clone();
+
+    match config.db.clone() {
+        DbConfig::Postgres(c) => {
+            db::postgres_migrate(&c, "./db/migration/postgres")
+                .await
+                .map_err(|e| {
+                    dbg!("DB - init error: {}", e);
+                    std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                })?;
+        }
+        DbConfig::Sqlite(c) => {
+            db::sqlite_migrate(&c, "./db/migration/sqlite")
+                .await
+                .map_err(|e| {
+                    error!("DB - init error: {}", e);
+                    std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                })?;
+        }
+    };
 
     let services: Services = Services::new(&config)
         .await

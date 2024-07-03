@@ -1134,6 +1134,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             updates,
             created_at: Some(metadata.created_at.into()),
             last_error: last_error_and_retry_count.map(|last_error| last_error.error.to_string()),
+            component_size: metadata.last_known_status.component_size,
+            total_linear_memory_size: metadata.last_known_status.total_linear_memory_size,
         }
     }
 }

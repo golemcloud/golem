@@ -108,7 +108,7 @@ pub struct GolemOssCommand<ProfileAdd: clap::Args> {
     #[command(flatten)]
     pub verbosity: Verbosity,
 
-    #[arg(short = 'F', long)]
+    #[arg(short = 'F', long, global = true)]
     pub format: Option<Format>,
 
     #[command(subcommand)]

@@ -13,6 +13,7 @@ description = "Base functionalities of Golem Worker Service"
 golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-service-base = { path = "../golem-service-base" }
+golem-rib = { path = "../golem-rib" }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 
@@ -44,6 +45,14 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
+sqlx = { version = "0.7", features = [
+    "runtime-tokio",
+    "sqlite",
+    "postgres",
+    "uuid",
+    "migrate",
+    "chrono",
+] }
 tap = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -61,6 +70,8 @@ wasm-wave = { workspace = true }
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }
 fastrand = "2.0.2"
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
 
 [[bench]]
 name = "tree"

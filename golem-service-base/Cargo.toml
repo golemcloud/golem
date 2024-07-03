@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-rib = { path = "../golem-rib", version = "0.0.0" }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 
@@ -25,6 +26,14 @@ poem-openapi = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { version = "0.7", features = [
+    "runtime-tokio",
+    "sqlite",
+    "postgres",
+    "uuid",
+    "migrate",
+    "chrono",
+] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }

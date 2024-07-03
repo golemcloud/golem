@@ -20,3 +20,4 @@ path = "wit"
 "golem:rpc" = { path = "wit/deps/wasm-rpc" }
 "rpc:counters" = { path = "wit/deps/rpc_counters" }
 "rpc:counters-stub" = { path = "wit/deps/counters-stub" }
+"wasi:io" = { path = "wit/deps/io" }

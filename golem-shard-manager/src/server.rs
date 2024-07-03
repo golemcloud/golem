@@ -13,5 +13,8 @@
 // limitations under the License.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install crypto provider");
     golem_shard_manager::server_main()
 }

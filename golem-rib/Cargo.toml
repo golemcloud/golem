@@ -1,0 +1,23 @@
+[package]
+name = "golem-rib"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Parser for Golem's Rib language"
+
+[dependencies]
+async-trait = { workspace = true }
+bincode = { workspace = true }
+combine = "4.6.7"
+golem-wasm-ast = { workspace = true }
+golem-wasm-rpc = { workspace = true }
+semver = "1.0.23"
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasm-wave = { workspace = true }
+
+[lib]
+name = "rib"
+path = "src/lib.rs"

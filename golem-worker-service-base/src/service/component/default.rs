@@ -183,7 +183,7 @@ fn is_retriable(error: &ComponentServiceError) -> bool {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ComponentServiceNoop {}
 
 impl ComponentServiceNoop {
@@ -211,6 +211,7 @@ impl ComponentServiceNoop {
             metadata: ComponentMetadata {
                 exports: vec![],
                 producers: vec![],
+                memories: vec![],
             },
         }
     }

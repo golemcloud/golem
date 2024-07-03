@@ -29,6 +29,7 @@ k8s-openapi = { workspace = true, optional = true }
 kube = { workspace = true, optional = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
+rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
