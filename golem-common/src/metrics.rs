@@ -234,9 +234,9 @@ pub mod caching {
 }
 
 pub mod grpc {
-    use std::fmt::Debug;
     use lazy_static::lazy_static;
     use prometheus::*;
+    use std::fmt::Debug;
     use tracing::{error, info, Span};
 
     lazy_static! {

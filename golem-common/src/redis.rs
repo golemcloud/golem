@@ -697,7 +697,7 @@ impl<'a> RedisLabelledApi<'a> {
         )?;
         let info: HashMap<&str, &str> =
             HashMap::from_iter(info.lines().filter_map(|line| line.trim().split_once(':')));
-        debug!(info=format!("{:?}", info), "Redis replication info");
+        debug!(info = format!("{:?}", info), "Redis replication info");
         let connected_slaves = info
             .get("connected_slaves")
             .and_then(|s| s.parse().ok())
