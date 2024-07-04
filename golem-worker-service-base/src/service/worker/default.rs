@@ -288,23 +288,14 @@ where
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id_clone.clone();
-                let arguments = arguments.clone();
-                let environment_variables = environment_variables.clone();
-                let metadata = metadata.clone();
-                Box::pin({
-                    async move {
-                        worker_executor_client
-                            .create_worker(CreateWorkerRequest {
-                                worker_id: Some(worker_id.into()),
-                                component_version,
-                                args: arguments.clone(),
-                                env: environment_variables.clone(),
-                                account_id: metadata.account_id.clone().map(|id| id.into()),
-                                account_limits: metadata.limits.clone().map(|id| id.into()),
-                            })
-                            .await
-                    }
-                })
+                Box::pin(worker_executor_client.create_worker(CreateWorkerRequest {
+                    worker_id: Some(worker_id.into()),
+                    component_version,
+                    args: arguments.clone(),
+                    env: environment_variables.clone(),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
+                    account_limits: metadata.limits.clone().map(|id| id.into()),
+                }))
             },
             |response| match response.into_inner() {
                 workerexecutor::CreateWorkerResponse {
@@ -332,17 +323,11 @@ where
             .call_worker_executor(
                 worker_id.clone(),
                 move |worker_executor_client| {
-                    let worker_id = worker_id.clone();
-                    let metadata = metadata.clone();
-                    Box::pin(async move {
-                        worker_executor_client
-                            .connect_worker(ConnectWorkerRequest {
-                                worker_id: Some(worker_id.clone().into()),
-                                account_id: metadata.account_id.clone().map(|id| id.into()),
-                                account_limits: metadata.limits.clone().map(|id| id.into()),
-                            })
-                            .await
-                    })
+                    Box::pin(worker_executor_client.connect_worker(ConnectWorkerRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
+                    }))
                 },
                 |response| Ok(ConnectWorkerStream::new(response.into_inner())),
             )
@@ -362,21 +347,14 @@ where
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                let metadata = metadata.clone();
-                Box::pin(async move {
-                    worker_executor_client
-                        .delete_worker(
-                            golem_api_grpc::proto::golem::workerexecutor::DeleteWorkerRequest {
-                                worker_id: Some(
-                                    golem_api_grpc::proto::golem::worker::WorkerId::from(
-                                        worker_id.clone(),
-                                    ),
-                                ),
-                                account_id: metadata.account_id.clone().map(|id| id.into()),
-                            },
-                        )
-                        .await
-                })
+                Box::pin(worker_executor_client.delete_worker(
+                    workerexecutor::DeleteWorkerRequest {
+                        worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(
+                            worker_id.clone(),
+                        )),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    },
+                ))
             },
             |response| match response.into_inner() {
                 workerexecutor::DeleteWorkerResponse {
@@ -532,17 +510,10 @@ where
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
-                let function_name = function_name.clone();
-                let params_val = params_val.clone();
-                let idempotency_key = idempotency_key.clone();
-                let metadata = metadata.clone();
-                let invocation_context = invocation_context.clone();
-                Box::pin(async move {
-                    info!("Invoking function on {}: {}", worker_id, function_name);
-                    worker_executor_client.invoke_and_await_worker(
+                info!("Invoking function on {}: {}", worker_id_clone, function_name);
+                Box::pin(worker_executor_client.invoke_and_await_worker(
                         InvokeAndAwaitWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
+                            worker_id: Some(worker_id_clone.clone().into()),
                             name: function_name.clone(),
                             input: params_val.clone(),
                             idempotency_key: idempotency_key.clone(),
@@ -551,8 +522,8 @@ where
                             account_limits: metadata.limits.clone().map(|id| id.into()),
                             context: invocation_context.clone()
                         }
-                    ).await
-                })
+                    )
+                )
             },
             move |response| {
                 match response.into_inner() {
@@ -564,18 +535,18 @@ where
                                  },
                              )),
                     } => {
-                        info!("Invoked function on {}: {}", worker_id_clone, function_name_clone);
+                        info!("Invoked function on {}: {}", worker_id, function_name_clone);
                         Ok(ProtoInvokeResult { result: output })
                     },
                     workerexecutor::InvokeAndAwaitWorkerResponse {
                         result:
                         Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(err)),
                     } => {
-                        error!("Invoked function on {}: {} failed with {err:?}", worker_id_clone, function_name_clone);
+                        error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
                         Err(err.into())
                     },
                     workerexecutor::InvokeAndAwaitWorkerResponse { .. } => {
-                        error!("Invoked function on {}: {} failed with empty response", worker_id_clone, function_name_clone);
+                        error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
                         Err("Empty response".into())
                     }
                 }
@@ -675,24 +646,17 @@ where
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                let function_name = function_name.clone();
-                let params_val = params_val.clone();
-                let idempotency_key = idempotency_key.clone();
-                let metadata = metadata.clone();
-                let invocation_context = invocation_context.clone();
-                Box::pin(async move {
-                    worker_executor_client
-                        .invoke_worker(workerexecutor::InvokeWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
-                            idempotency_key: idempotency_key.clone(),
-                            name: function_name.clone(),
-                            input: params_val.clone(),
-                            account_id: metadata.account_id.clone().map(|id| id.into()),
-                            account_limits: metadata.limits.clone().map(|id| id.into()),
-                            context: invocation_context.clone(),
-                        })
-                        .await
-                })
+                Box::pin(worker_executor_client.invoke_worker(
+                    workerexecutor::InvokeWorkerRequest {
+                        worker_id: Some(worker_id.into()),
+                        idempotency_key: idempotency_key.clone(),
+                        name: function_name.clone(),
+                        input: params_val.clone(),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
+                        context: invocation_context.clone(),
+                    },
+                ))
             },
             |response| match response.into_inner() {
                 workerexecutor::InvokeWorkerResponse {
@@ -727,16 +691,14 @@ where
                 move |worker_executor_client| {
                     let promise_id = promise_id.clone();
                     let data = data.clone();
-                    let metadata = metadata.clone();
-                    Box::pin(async move {
+                    Box::pin(
                         worker_executor_client
                             .complete_promise(CompletePromiseRequest {
-                                promise_id: Some(promise_id.clone().into()),
+                                promise_id: Some(promise_id.into()),
                                 data,
                                 account_id: metadata.account_id.clone().map(|id| id.into()),
                             })
-                            .await
-                    })
+                    )
                 },
                 |response| {
                     match response.into_inner() {
@@ -774,16 +736,13 @@ where
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                let metadata = metadata.clone();
-                Box::pin(async move {
-                    worker_executor_client
-                        .interrupt_worker(InterruptWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
-                            recover_immediately,
-                            account_id: metadata.account_id.clone().map(|id| id.into()),
-                        })
-                        .await
-                })
+                Box::pin(
+                    worker_executor_client.interrupt_worker(InterruptWorkerRequest {
+                        worker_id: Some(worker_id.into()),
+                        recover_immediately,
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    }),
+                )
             },
             |response| match response.into_inner() {
                 workerexecutor::InterruptWorkerResponse {
@@ -812,16 +771,13 @@ where
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                let metadata = metadata.clone();
-                Box::pin(async move {
-                    info!("Getting metadata for {}", worker_id);
-                    worker_executor_client.get_worker_metadata(
-                        golem_api_grpc::proto::golem::workerexecutor::GetWorkerMetadataRequest {
-                            worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id.clone())),
+                info!("Getting metadata for {}", worker_id);
+                Box::pin(worker_executor_client.get_worker_metadata(
+                        workerexecutor::GetWorkerMetadataRequest {
+                            worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
                             account_id: metadata.account_id.clone().map(|id| id.into()),
                         }
-                    ).await
-                })
+                    ))
             },
             |response| {
                 match response.into_inner() {
@@ -859,7 +815,7 @@ where
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
-        if filter.clone().is_some_and(is_filter_with_running_status) {
+        if filter.as_ref().is_some_and(is_filter_with_running_status) {
             let result = self
                 .find_running_metadata_internal(component_id, filter, auth_ctx)
                 .await?;
@@ -890,15 +846,10 @@ where
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                let metadata = metadata.clone();
-                Box::pin(async move {
-                    worker_executor_client
-                        .resume_worker(ResumeWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
-                            account_id: metadata.account_id.clone().map(|id| id.into()),
-                        })
-                        .await
-                })
+                Box::pin(worker_executor_client.resume_worker(ResumeWorkerRequest {
+                    worker_id: Some(worker_id.into()),
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
+                }))
             },
             |response| match response.into_inner() {
                 workerexecutor::ResumeWorkerResponse {
@@ -927,19 +878,12 @@ where
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                let metadata = metadata.clone();
-                Box::pin(async move {
-                    let worker_id = worker_id.clone();
-                    let metadata = metadata.clone();
-                    worker_executor_client
-                        .update_worker(UpdateWorkerRequest {
-                            worker_id: Some(worker_id.clone().into()),
-                            mode: update_mode.into(),
-                            target_version,
-                            account_id: metadata.account_id.clone().map(|id| id.into()),
-                        })
-                        .await
-                })
+                Box::pin(worker_executor_client.update_worker(UpdateWorkerRequest {
+                    worker_id: Some(worker_id.into()),
+                    mode: update_mode.into(),
+                    target_version,
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
+                }))
             },
             |response| match response.into_inner() {
                 workerexecutor::UpdateWorkerResponse {
@@ -1010,20 +954,18 @@ where
         let component_id = component_id.clone();
         let result = self.call_worker_executor(
             AllExecutors,
-            move |worker_executor_client|
-                Box::pin({
-                    let filter = filter.clone();
-                    let component_id: golem_api_grpc::proto::golem::component::ComponentId =
-                        component_id.clone().into();
-                    async move {
+            move |worker_executor_client| {
+                let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+                    component_id.clone().into();
+
+                Box::pin(
                         worker_executor_client.get_running_workers_metadata(
-                            golem_api_grpc::proto::golem::workerexecutor::GetRunningWorkersMetadataRequest {
+                            workerexecutor::GetRunningWorkersMetadataRequest {
                                 component_id: Some(component_id),
                                 filter: filter.clone().map(|f| f.into())
                             }
-                        ).await
-                    }
-                }),
+                        )
+                )},
                 |responses| {
                     responses.into_iter().map(|response| {
                         match response.into_inner() {
@@ -1066,16 +1008,11 @@ where
         let component_id = component_id.clone();
         let result = self.call_worker_executor(
             RandomExecutor,
-            move |worker_executor_client|
-                Box::pin({
-                    let cursor = cursor.clone();
-                    let filter = filter.clone();
-                    let component_id: golem_api_grpc::proto::golem::component::ComponentId =
-                        component_id.clone().into();
-                    let account_id = metadata.account_id.clone().map(|id| id.into());
-
-                    async move {
-                        worker_executor_client.get_workers_metadata(
+            move |worker_executor_client| {
+                let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+                    component_id.clone().into();
+                let account_id = metadata.account_id.clone().map(|id| id.into());
+                Box::pin(worker_executor_client.get_workers_metadata(
                             golem_api_grpc::proto::golem::workerexecutor::GetWorkersMetadataRequest {
                                 component_id: Some(component_id),
                                 filter: filter.clone().map(|f| f.into()),
@@ -1084,9 +1021,8 @@ where
                                 precise,
                                 account_id,
                             }
-                        ).await
-                    }
-                }),
+                        ))
+            },
                          |response| {
                              match response.into_inner() {
                                  workerexecutor::GetWorkersMetadataResponse {
@@ -1115,17 +1051,14 @@ where
     }
 }
 
-fn is_filter_with_running_status(filter: WorkerFilter) -> bool {
+fn is_filter_with_running_status(filter: &WorkerFilter) -> bool {
     match filter {
         WorkerFilter::Status(f)
             if f.value == WorkerStatus::Running && f.comparator == FilterComparator::Equal =>
         {
             true
         }
-        WorkerFilter::And(f) => f
-            .filters
-            .into_iter()
-            .any(|f| is_filter_with_running_status(f.clone())),
+        WorkerFilter::And(f) => f.filters.iter().any(|f| is_filter_with_running_status(f)),
         _ => false,
     }
 }
@@ -1277,7 +1210,7 @@ where
             worker_id: worker_id.clone(),
             args: vec![],
             env: Default::default(),
-            status: golem_common::model::WorkerStatus::Running,
+            status: WorkerStatus::Running,
             component_version: 0,
             retry_count: 0,
             pending_invocation_count: 0,
