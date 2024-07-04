@@ -277,7 +277,7 @@ pub mod filter {
     }
 }
 
-pub fn init<F>(config: &TracingConfig, make_filter: F)
+pub fn init_tracing<F>(config: &TracingConfig, make_filter: F)
 where
     F: Fn(Output) -> filter::Boxed,
 {
@@ -323,12 +323,12 @@ where
     );
 }
 
-pub fn init_with_default_env_filter(config: &TracingConfig) {
-    init(config, filter::for_all_outputs::DEFAULT_ENV);
+pub fn init_tracing_with_default_env_filter(config: &TracingConfig) {
+    init_tracing(config, filter::for_all_outputs::DEFAULT_ENV);
 }
 
-pub fn init_with_default_debug_env_filter(config: &TracingConfig) {
-    init(config, filter::for_all_outputs::default_debug_env());
+pub fn init_tracing_with_default_debug_env_filter(config: &TracingConfig) {
+    init_tracing(config, filter::for_all_outputs::default_debug_env());
 }
 
 fn make_layer<W>(

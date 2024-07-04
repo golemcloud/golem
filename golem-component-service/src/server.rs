@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::tracing::init_with_default_env_filter;
+use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_component_service::api::make_open_api_service;
 use golem_component_service::config::{make_config_loader, ComponentServiceConfig};
 use golem_component_service::service::Services;
@@ -35,7 +35,7 @@ fn main() -> Result<(), std::io::Error> {
         println!("{}", service.spec_yaml());
         Ok(())
     } else if let Some(config) = make_config_loader().load_or_dump_config() {
-        init_with_default_env_filter(&config.tracing);
+        init_tracing_with_default_env_filter(&config.tracing);
 
         let prometheus = metrics::register_all();
 

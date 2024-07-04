@@ -22,6 +22,7 @@ use tracing::info;
 
 use config::ServerConfig;
 use golem_api_grpc::proto::golem::componentcompilation::component_compilation_service_server::ComponentCompilationServiceServer;
+use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_executor_base::services::golem_config::BlobStorageConfig;
 use golem_worker_executor_base::storage::blob::s3::S3BlobStorage;
 use golem_worker_executor_base::storage::blob::BlobStorage;
@@ -41,17 +42,18 @@ mod model;
 mod service;
 
 pub fn server_main() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(config) = make_config_loader().load_or_dump_config() {
-        golem_common::tracing::init_with_default_env_filter(&config.tracing);
-        let prometheus = metrics::register_all();
+    match make_config_loader().load_or_dump_config() {
+        Some(config) => {
+            init_tracing_with_default_env_filter(&config.tracing);
+            let prometheus = metrics::register_all();
 
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(run(config, prometheus))
-    } else {
-        Ok(())
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(run(config, prometheus))
+        }
+        None => Ok(()),
     }
 }
 

@@ -14,37 +14,26 @@
 
 use std::sync::Arc;
 
+use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_executor::run;
 use golem_worker_executor_base::metrics;
-use golem_worker_executor_base::services::golem_config::GolemConfig;
-use tracing_subscriber::EnvFilter;
+use golem_worker_executor_base::services::golem_config::make_config_loader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let prometheus = metrics::register_all();
-    let config = GolemConfig::new();
+    match make_config_loader().load_or_dump_config() {
+        Some(config) => {
+            init_tracing_with_default_env_filter(&config.tracing);
 
-    if config.enable_tracing_console {
-        // NOTE: also requires RUSTFLAGS="--cfg tokio_unstable" cargo build
-        console_subscriber::init();
-    } else if config.enable_json_log {
-        tracing_subscriber::fmt()
-            .json()
-            .flatten_event(true)
-            // .with_span_events(FmtSpan::FULL) // NOTE: enable to see span events
-            .with_env_filter(EnvFilter::from_default_env())
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .with_ansi(true)
-            .init();
+            let prometheus = metrics::register_all();
+
+            let runtime = Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap(),
+            );
+            runtime.block_on(run(config, prometheus, runtime.handle().clone()))
+        }
+        None => Ok(()),
     }
-
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap(),
-    );
-    runtime.block_on(run(config, prometheus, runtime.handle().clone()))
 }
