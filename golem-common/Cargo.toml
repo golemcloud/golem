@@ -25,6 +25,7 @@ derive_more = { workspace = true }
 fred = { workspace = true }
 futures-core = { workspace = true }
 humantime-serde = { workspace = true }
+http_02 = { workspace = true }
 iso8601-timestamp = { workspace = true }
 lazy_static = { workspace = true }
 poem = { workspace = true }

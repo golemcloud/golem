@@ -16,29 +16,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use async_trait::async_trait;
-use futures_util::TryStreamExt;
-use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::{
-    download_component_response, get_component_metadata_response, DownloadComponentRequest,
-    GetLatestComponentRequest, GetVersionedComponentRequest,
-};
-use golem_api_grpc::proto::golem::component::{ComponentError, LinearMemory};
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::config::RetryConfig;
-use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-use golem_common::model::{ComponentId, ComponentVersion};
-use golem_common::retries::with_retries;
-use golem_wasm_ast::analysis::{AnalysisContext, AnalysisFailure};
-use golem_wasm_ast::IgnoreAll;
-use http::Uri;
-use prost::Message;
-use tokio::task::spawn_blocking;
-use tracing::{debug, info, warn};
-use uuid::Uuid;
-use wasmtime::component::Component;
-use wasmtime::Engine;
-
 use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError, UriBackConversion};
 use crate::metrics::component::record_compilation_time;
@@ -48,6 +25,30 @@ use crate::services::golem_config::{
     CompiledComponentServiceConfig, ComponentCacheConfig, ComponentServiceConfig,
 };
 use crate::storage::blob::BlobStorage;
+use async_trait::async_trait;
+use futures_util::TryStreamExt;
+use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::{
+    download_component_response, get_component_metadata_response, DownloadComponentRequest,
+    GetLatestComponentRequest, GetVersionedComponentRequest,
+};
+use golem_api_grpc::proto::golem::component::{ComponentError, LinearMemory};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::config::RetryConfig;
+use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
+use golem_common::model::{ComponentId, ComponentVersion};
+use golem_common::retries::with_retries;
+use golem_wasm_ast::analysis::{AnalysisContext, AnalysisFailure};
+use golem_wasm_ast::IgnoreAll;
+use http::Uri;
+use prost::Message;
+use tokio::task::spawn_blocking;
+use tonic::transport::Channel;
+use tracing::{debug, info, warn};
+use uuid::Uuid;
+use wasmtime::component::Component;
+use wasmtime::Engine;
 
 #[derive(Debug, Clone)]
 pub struct ComponentMetadata {
@@ -118,12 +119,11 @@ struct ComponentKey {
 }
 
 pub struct ComponentServiceGrpc {
-    endpoint: Uri,
     component_cache: Cache<ComponentKey, (), Component, GolemError>,
     access_token: Uuid,
     retry_config: RetryConfig,
     compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
-    max_component_size: usize,
+    client: GrpcClient<ComponentServiceClient<Channel>>,
 }
 
 impl ComponentServiceGrpc {
@@ -137,12 +137,21 @@ impl ComponentServiceGrpc {
         max_component_size: usize,
     ) -> Self {
         Self {
-            endpoint,
             component_cache: create_component_cache(max_capacity, time_to_idle),
             access_token,
-            retry_config,
+            retry_config: retry_config.clone(),
             compiled_component_service,
-            max_component_size,
+            client: GrpcClient::new(
+                move |channel| {
+                    ComponentServiceClient::new(channel)
+                        .max_decoding_message_size(max_component_size)
+                },
+                endpoint.as_http_02(),
+                GrpcClientConfig {
+                    retries_on_unavailable: retry_config.clone(),
+                    ..Default::default() // TODO
+                },
+            ),
         }
     }
 }
@@ -159,12 +168,11 @@ impl ComponentService for ComponentServiceGrpc {
             component_id: component_id.clone(),
             component_version,
         };
+        let client_clone = self.client.clone();
         let component_id_clone = component_id.clone();
         let engine = engine.clone();
-        let endpoint_clone = self.endpoint.clone();
         let access_token = self.access_token;
         let retry_config_clone = self.retry_config.clone();
-        let max_component_size = self.max_component_size;
         let compiled_component_service = self.compiled_component_service.clone();
         let component = self
             .component_cache
@@ -186,12 +194,11 @@ impl ComponentService for ComponentServiceGrpc {
                         Some(component) => Ok(component),
                         None => {
                             let bytes = download_via_grpc(
-                                &endpoint_clone,
+                                &client_clone,
                                 &access_token,
                                 &retry_config_clone,
                                 &component_id_clone,
                                 component_version,
-                                max_component_size,
                             )
                             .await?;
 
@@ -235,7 +242,7 @@ impl ComponentService for ComponentServiceGrpc {
             })
             .await?;
         let metadata = get_metadata_via_grpc(
-            &self.endpoint,
+            &self.client,
             &access_token,
             &self.retry_config,
             component_id,
@@ -252,7 +259,7 @@ impl ComponentService for ComponentServiceGrpc {
         component_id: &ComponentId,
     ) -> Result<(Component, ComponentMetadata), GolemError> {
         let metadata = get_metadata_via_grpc(
-            &self.endpoint,
+            &self.client,
             &self.access_token,
             &self.retry_config,
             component_id,
@@ -268,7 +275,7 @@ impl ComponentService for ComponentServiceGrpc {
         forced_version: Option<ComponentVersion>,
     ) -> Result<ComponentMetadata, GolemError> {
         get_metadata_via_grpc(
-            &self.endpoint,
+            &self.client,
             &self.access_token,
             &self.retry_config,
             component_id,
@@ -279,12 +286,11 @@ impl ComponentService for ComponentServiceGrpc {
 }
 
 async fn download_via_grpc(
-    endpoint: &Uri,
+    client: &GrpcClient<ComponentServiceClient<Channel>>,
     access_token: &Uuid,
     retry_config: &RetryConfig,
     component_id: &ComponentId,
     component_version: ComponentVersion,
-    max_component_size: usize,
 ) -> Result<Vec<u8>, GolemError> {
     let desc = format!("Downloading component {component_id}");
     debug!("{}", &desc);
@@ -294,25 +300,25 @@ async fn download_via_grpc(
         "download",
         retry_config,
         &(
-            endpoint.clone(),
+            client.clone(),
             component_id.clone(),
             access_token.to_owned(),
         ),
-        |(endpoint, component_id, access_token)| {
+        |(client, component_id, access_token)| {
             Box::pin(async move {
-                let mut client = ComponentServiceClient::connect(endpoint.as_http_02())
+                let response = client
+                    .call(move |client| {
+                        let request = authorised_grpc_request(
+                            DownloadComponentRequest {
+                                component_id: Some(component_id.clone().into()),
+                                version: Some(component_version),
+                            },
+                            access_token,
+                        );
+                        Box::pin(client.download_component(request))
+                    })
                     .await?
-                    .max_decoding_message_size(max_component_size);
-
-                let request = authorised_grpc_request(
-                    DownloadComponentRequest {
-                        component_id: Some(component_id.clone().into()),
-                        version: Some(component_version),
-                    },
-                    access_token,
-                );
-
-                let response = client.download_component(request).await?.into_inner();
+                    .into_inner();
 
                 let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
                 let bytes = chunks
@@ -340,7 +346,7 @@ async fn download_via_grpc(
 }
 
 async fn get_metadata_via_grpc(
-    endpoint: &Uri,
+    client: &GrpcClient<ComponentServiceClient<Channel>>,
     access_token: &Uuid,
     retry_config: &RetryConfig,
     component_id: &ComponentId,
@@ -354,37 +360,38 @@ async fn get_metadata_via_grpc(
         "get_metadata",
         retry_config,
         &(
-            endpoint.clone(),
+            client.clone(),
             component_id.clone(),
             access_token.to_owned(),
         ),
-        |(endpoint, component_id, access_token)| {
+        |(client, component_id, access_token)| {
             Box::pin(async move {
-                let mut client = ComponentServiceClient::connect(endpoint.as_http_02()).await?;
-
                 let response = match component_version {
-                    Some(component_version) => {
-                        let request = authorised_grpc_request(
-                            GetVersionedComponentRequest {
-                                component_id: Some(component_id.clone().into()),
-                                version: component_version,
-                            },
-                            access_token,
-                        );
-                        client.get_component_metadata(request).await?.into_inner()
-                    }
-                    None => {
-                        let request = authorised_grpc_request(
-                            GetLatestComponentRequest {
-                                component_id: Some(component_id.clone().into()),
-                            },
-                            access_token,
-                        );
-                        client
-                            .get_latest_component_metadata(request)
-                            .await?
-                            .into_inner()
-                    }
+                    Some(component_version) => client
+                        .call(move |client| {
+                            let request = authorised_grpc_request(
+                                GetVersionedComponentRequest {
+                                    component_id: Some(component_id.clone().into()),
+                                    version: component_version,
+                                },
+                                access_token,
+                            );
+                            Box::pin(client.get_component_metadata(request))
+                        })
+                        .await?
+                        .into_inner(),
+                    None => client
+                        .call(move |client| {
+                            let request = authorised_grpc_request(
+                                GetLatestComponentRequest {
+                                    component_id: Some(component_id.clone().into()),
+                                },
+                                access_token,
+                            );
+                            Box::pin(client.get_latest_component_metadata(request))
+                        })
+                        .await?
+                        .into_inner(),
                 };
                 let len = response.encoded_len();
                 let component = match response.result {

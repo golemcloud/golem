@@ -16,13 +16,15 @@ use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::{env_vars, WorkerService};
+use crate::components::worker_service::{env_vars, new_client, WorkerService};
 use crate::components::{DOCKER, NETWORK};
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use std::collections::HashMap;
 use std::sync::Arc;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
+use tonic::transport::Channel;
 use tracing::{info, Level};
 
 pub struct DockerWorkerService {
@@ -30,6 +32,7 @@ pub struct DockerWorkerService {
     public_http_port: u16,
     public_grpc_port: u16,
     public_custom_request_port: u16,
+    client: Option<WorkerServiceClient<Channel>>,
 }
 
 impl DockerWorkerService {
@@ -44,6 +47,7 @@ impl DockerWorkerService {
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         verbosity: Level,
+        shared_client: bool,
     ) -> Self {
         info!("Starting golem-worker-service container");
 
@@ -77,12 +81,28 @@ impl DockerWorkerService {
             public_http_port,
             public_grpc_port,
             public_custom_request_port,
+            client: if shared_client {
+                Some(
+                    new_client("localhost", public_grpc_port)
+                        .await
+                        .expect("Failed to create client"),
+                )
+            } else {
+                None
+            },
         }
     }
 }
 
 #[async_trait]
 impl WorkerService for DockerWorkerService {
+    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
+        match &self.client {
+            Some(client) => Ok(client.clone()),
+            None => Ok(new_client("localhost", self.public_grpc_port).await?),
+        }
+    }
+
     fn private_host(&self) -> String {
         Self::NAME.to_string()
     }

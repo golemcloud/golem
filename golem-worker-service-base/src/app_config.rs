@@ -24,7 +24,6 @@ pub struct WorkerServiceBaseConfig {
     pub custom_request_port: u16,
     pub worker_grpc_port: u16,
     pub routing_table: RoutingTableConfig,
-    pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -69,7 +68,6 @@ impl Default for WorkerServiceBaseConfig {
             custom_request_port: 9001,
             worker_grpc_port: 9092,
             routing_table: RoutingTableConfig::default(),
-            worker_executor_client_cache: WorkerExecutorClientCacheConfig::default(),
         }
     }
 }

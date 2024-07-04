@@ -44,9 +44,7 @@ pub mod spawned;
 
 #[async_trait]
 pub trait WorkerService {
-    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
-        Ok(new_client(&self.public_host(), self.public_grpc_port()).await?)
-    }
+    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>>;
 
     // Overridable client functions - using these instead of client() allows
     // testing worker executors directly without the need to start a worker service,

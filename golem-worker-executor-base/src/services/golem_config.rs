@@ -179,6 +179,15 @@ impl ShardManagerServiceGrpcConfig {
         Url::parse(&format!("http://{}:{}", self.host, self.port))
             .expect("Failed to parse shard manager URL")
     }
+
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build shard manager URI")
+    }
 }
 
 impl WorkerServiceGrpcConfig {

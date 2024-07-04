@@ -35,7 +35,7 @@ pub struct SpawnedWorkerService {
     custom_request_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
-    client: WorkerServiceClient<Channel>,
+    client: Option<WorkerServiceClient<Channel>>,
 }
 
 impl SpawnedWorkerService {
@@ -52,6 +52,7 @@ impl SpawnedWorkerService {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        shared_client: bool,
     ) -> Self {
         info!("Starting golem-worker-service process");
 
@@ -88,9 +89,15 @@ impl SpawnedWorkerService {
             custom_request_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
-            client: new_client("localhost", grpc_port)
-                .await
-                .expect("Failed to create client"),
+            client: if shared_client {
+                Some(
+                    new_client("localhost", grpc_port)
+                        .await
+                        .expect("Failed to create client"),
+                )
+            } else {
+                None
+            },
         }
     }
 }
@@ -98,7 +105,10 @@ impl SpawnedWorkerService {
 #[async_trait]
 impl WorkerService for SpawnedWorkerService {
     async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
-        Ok(self.client.clone())
+        match &self.client {
+            Some(client) => Ok(client.clone()),
+            None => Ok(new_client("localhost", self.grpc_port).await?),
+        }
     }
 
     fn private_host(&self) -> String {

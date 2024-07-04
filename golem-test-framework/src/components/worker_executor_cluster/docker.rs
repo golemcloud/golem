@@ -38,6 +38,7 @@ impl DockerWorkerExecutorCluster {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
+        shared_client: bool,
     ) -> Arc<dyn WorkerExecutor + Send + Sync + 'static> {
         Arc::new(
             DockerWorkerExecutor::new(
@@ -48,6 +49,7 @@ impl DockerWorkerExecutorCluster {
                 shard_manager,
                 worker_service,
                 verbosity,
+                shared_client,
             )
             .await,
         )
@@ -62,6 +64,7 @@ impl DockerWorkerExecutorCluster {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
+        shared_client: bool,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors_joins = Vec::new();
@@ -78,6 +81,7 @@ impl DockerWorkerExecutorCluster {
                 shard_manager.clone(),
                 worker_service.clone(),
                 verbosity,
+                shared_client,
             ));
 
             worker_executors_joins.push(worker_executor_join);

@@ -3432,6 +3432,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "http 0.2.12",
  "humantime-serde",
  "iso8601-timestamp",
  "lazy_static 1.4.0",
@@ -3533,6 +3534,7 @@ dependencies = [
  "http 0.2.12",
  "serde 1.0.203",
  "thiserror",
+ "tonic",
  "tracing",
 ]
 
@@ -4643,6 +4645,7 @@ dependencies = [
  "serde 1.0.203",
  "serde_json",
  "tokio",
+ "tokio-shared-rt",
  "tracing",
  "tracing-subscriber",
  "warp",
@@ -8690,6 +8693,28 @@ dependencies = [
  "rustls 0.23.10",
  "rustls-pki-types",
  "tokio",
+]
+
+[[package]]
+name = "tokio-shared-rt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a6bb03ec682a0bb16ce93d19301abc5b98a0d7936477175a156a213dcc47d85"
+dependencies = [
+ "once_cell",
+ "tokio",
+ "tokio-shared-rt-macro",
+]
+
+[[package]]
+name = "tokio-shared-rt-macro"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fe49a94e3a984b0d0ab97343dc3dcd52baae1ee13f005bfad39faea47d051dc"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.67",
 ]
 
 [[package]]

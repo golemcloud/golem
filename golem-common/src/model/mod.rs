@@ -542,6 +542,15 @@ impl Pod {
             .build()
             .expect("Failed to build URI")
     }
+
+    pub fn uri_02(&self) -> http_02::Uri {
+        http_02::Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build URI")
+    }
 }
 
 impl From<GrpcPod> for Pod {

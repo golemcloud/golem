@@ -350,6 +350,7 @@ impl CliTestDependencies {
                     component_compilation_service,
                     rdb.clone(),
                     params_clone.service_verbosity(),
+                    true,
                 )
                 .await,
             );
@@ -387,6 +388,7 @@ impl CliTestDependencies {
                 rdb.clone(),
                 redis.clone(),
                 params.service_verbosity(),
+                true,
             )
             .await,
         );
@@ -401,6 +403,7 @@ impl CliTestDependencies {
                     shard_manager.clone(),
                     worker_service.clone(),
                     params.service_verbosity(),
+                    true,
                 )
                 .await,
             );
@@ -473,6 +476,7 @@ impl CliTestDependencies {
                         params.service_verbosity(),
                         out_level,
                         Level::ERROR,
+                        true,
                     )
                     .await,
                 );
@@ -538,6 +542,7 @@ impl CliTestDependencies {
                 params.service_verbosity(),
                 out_level,
                 Level::ERROR,
+                true,
             )
             .await,
         );
@@ -556,6 +561,7 @@ impl CliTestDependencies {
                     params.service_verbosity(),
                     out_level,
                     Level::ERROR,
+                    true,
                 )
                 .await,
             );
@@ -608,6 +614,7 @@ impl CliTestDependencies {
                         rdb.clone(),
                         timeout,
                         None,
+                        true,
                     )
                     .await,
                 );
@@ -670,6 +677,7 @@ impl CliTestDependencies {
                 redis.clone(),
                 timeout,
                 None,
+                true,
             )
             .await,
         );
@@ -686,6 +694,7 @@ impl CliTestDependencies {
                     Level::INFO,
                     timeout,
                     None,
+                    true,
                 )
                 .await,
             );
@@ -748,6 +757,7 @@ impl CliTestDependencies {
                         rdb.clone(),
                         timeout,
                         service_annotations.clone(),
+                        true,
                     )
                     .await,
                 );
@@ -810,6 +820,7 @@ impl CliTestDependencies {
                 redis.clone(),
                 timeout,
                 service_annotations.clone(),
+                true,
             )
             .await,
         );
@@ -826,6 +837,7 @@ impl CliTestDependencies {
                     Level::INFO,
                     timeout,
                     service_annotations.clone(),
+                    true,
                 )
                 .await,
             );
@@ -883,12 +895,15 @@ impl CliTestDependencies {
                         *shard_manager_http_port,
                         *shard_manager_grpc_port,
                     ));
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
-                    Arc::new(ProvidedComponentService::new(
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                    ProvidedComponentService::new(
                         component_service_host.clone(),
                         *component_service_http_port,
                         *component_service_grpc_port,
-                    ));
+                        true,
+                    )
+                    .await,
+                );
                 let component_compilation_service: Arc<
                     dyn ComponentCompilationService + Send + Sync + 'static,
                 > = Arc::new(ProvidedComponentCompilationService::new(
@@ -896,19 +911,23 @@ impl CliTestDependencies {
                     *component_compilation_service_http_port,
                     *component_compilation_service_grpc_port,
                 ));
-                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
-                    Arc::new(ProvidedWorkerService::new(
+                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+                    ProvidedWorkerService::new(
                         worker_service_host.clone(),
                         *worker_service_http_port,
                         *worker_service_grpc_port,
                         *worker_service_custom_request_port,
-                    ));
+                        true,
+                    )
+                    .await,
+                );
                 let worker_executor_cluster: Arc<
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(ProvidedWorkerExecutorCluster::new(
                     worker_executor_host.clone(),
                     *worker_executor_http_port,
                     *worker_executor_grpc_port,
+                    true,
                 ));
 
                 Self {

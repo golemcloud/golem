@@ -15,11 +15,10 @@
 use anyhow::anyhow;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use tonic::Streaming;
-
 use crate::components::component_service::ComponentService;
+use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
+use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
     GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse,
@@ -31,6 +30,8 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_api_grpc::proto::golem::workerexecutor::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
 use golem_common::model::AccountId;
+use tonic::transport::Channel;
+use tonic::Streaming;
 
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_service::WorkerService;
@@ -54,6 +55,12 @@ impl ForwardingWorkerService {
 
 #[async_trait]
 impl WorkerService for ForwardingWorkerService {
+    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
+        Err(anyhow!(
+            "There is no worker-service, cannot create gRPC client"
+        ))
+    }
+
     async fn create_worker(
         &self,
         request: LaunchNewWorkerRequest,
