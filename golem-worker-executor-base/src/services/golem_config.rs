@@ -54,7 +54,7 @@ pub struct GolemConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct Limits {
     pub max_active_workers: usize,
-    pub concurrency_limit_per_connection: usize,
+    pub invocation_result_broadcast_capacity: usize,
     pub max_concurrent_streams: u32,
     pub event_broadcast_capacity: usize,
     pub event_history_size: usize,
@@ -337,7 +337,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_active_workers: 1024,
-            concurrency_limit_per_connection: 100000,
+            invocation_result_broadcast_capacity: 100000,
             max_concurrent_streams: 1024,
             event_broadcast_capacity: 16,
             event_history_size: 128,

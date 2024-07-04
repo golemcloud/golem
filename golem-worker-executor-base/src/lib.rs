@@ -337,7 +337,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 .expect("Access token must be an UUID"),
         ));
 
-        let events = Arc::new(Events::new());
+        let events = Arc::new(Events::new(
+            golem_config.limits.invocation_result_broadcast_capacity,
+        ));
 
         let services = self
             .create_services(
@@ -372,7 +374,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         info!("Starting gRPC server on port {}", addr.port());
         Server::builder()
-            .concurrency_limit_per_connection(golem_config.limits.concurrency_limit_per_connection)
             .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
             .add_service(reflection_service)
             .add_service(service)

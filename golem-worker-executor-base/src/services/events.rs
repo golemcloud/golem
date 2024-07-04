@@ -24,13 +24,13 @@ pub struct Events {
 
 impl Default for Events {
     fn default() -> Self {
-        Self::new()
+        Self::new(32768)
     }
 }
 
 impl Events {
-    pub fn new() -> Self {
-        let (sender, receiver) = tokio::sync::broadcast::channel(32768);
+    pub fn new(capacity: usize) -> Self {
+        let (sender, receiver) = tokio::sync::broadcast::channel(capacity);
         Self {
             sender,
             _receiver: receiver,
