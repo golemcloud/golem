@@ -22,12 +22,12 @@ For the most representation of the values are making use of WASM syntax.
 
 ### Rib Grammar
 
-`rib-expr` below defines the various possibilities of expressions that can be used in Rib.
+`rib-expr` below defines the various possibilities of expressions that can be used in Rib. Consider this as a reference.
+Probably all you need is to look at the examples further given below.
 
 ```bash filename="Terminal" copy
 rib-expr            ::= request
                    | let_binding
-                   | worker
                    | select_field
                    | select_index
                    | sequence
@@ -50,9 +50,7 @@ rib-expr            ::= request
                    | pattern_match
                    | option
                    | result
-
-request           ::= "request"
-worker            ::= "worker"
+                   | function-call
 let_binding       ::= "let" variable '=' rib-expr ';'
 select_field       ::= request_field | worker_field | (record | variable)'.'variable_sequence
 worker_field       := "worker.response" | "worker.response." variable_sequence
@@ -92,7 +90,6 @@ field              ::= variable ':' rib-expr
 pattern           ::= variable
                       | literal
                       | '_' // wildcard pattern
-
 ```
 
 Here are some examples of each construct
@@ -215,6 +212,9 @@ For example `foo[10]` is valid given `foo` is an `Rib` variable that gets evalua
 
 ### Request and selection of Fields
 
+If using worker-bridge of golem OSS, you can use the variable `request` as this is available in the runtime context of Rib in worker-bridge
+that points to the input request.
+
 ```bash filename="Terminal" copy
 request
 ```
@@ -242,6 +242,9 @@ request.body.user
 ```
 
 #### Worker Response and Selection of Fields
+
+This is again available only if you use Rib along with worker-bridge of Golem. It points to the response from the worker.
+However, mostly you wouldn't need this as Rib allows you to call the worker's function and assign it to a variable.
 
 ```bash filename="Terminal" copy
 worker
@@ -418,22 +421,28 @@ These variables are bound to the value that is being matched.
 Example, given the worker response is ok(1), the following match expression will result in `2`.
 
 ```bash filename="Terminal" copy
-  match worker.response {
+   let result = my-worker-function("foo");
+
+   match result {
     ok(x) => x + 1,
     err(msg) => 0
   }
 ```
 
-The following match expression will result in 'c', if the `worker.response` was variant value `foo(['a', 'b', 'c'])`,
+The following match expression will result in 'c', if the worker response was variant value `foo(['a', 'b', 'c'])`,
 and will result in 'a' if the `worker.response` was variant value `bar({a: 1, b: 'a'})`.
 
 ```bash filename="Terminal" copy
-  match worker.response {
+  let result = my-worker-function();
+
+  match result {
     bar(x) => x.b,
     foo(x) => x[1]
   }
 
 ```
+
+More on let binding below
 
 ##### Wild card patterns
 
