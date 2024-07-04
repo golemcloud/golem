@@ -131,6 +131,9 @@ mod conversion {
                 e @ ApiDeploymentError::ApiDeploymentConflict(_) => {
                     ApiEndpointError::already_exists(e)
                 }
+                e @ ApiDeploymentError::ApiDefinitionsConflict(_) => {
+                    ApiEndpointError::bad_request(e)
+                }
             }
         }
     }
