@@ -1019,7 +1019,6 @@ impl RunningWorker {
                             .unwrap()
                             .pop_front()
                             .expect("Message should be present");
-                        debug!("Invocation queue processing {message:?}");
 
                         let mut store_mutex = store.lock().await;
                         let store = store_mutex.deref_mut();
