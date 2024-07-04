@@ -53,3 +53,63 @@ impl RefinedWorkerResponse {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_service_base::model::{FunctionResult, Type, TypeU32};
+    use crate::service::worker::TypedResult;
+
+    use crate::worker_bridge_execution::WorkerResponse;
+    use crate::worker_bridge_execution::refined_worker_response::RefinedWorkerResponse;
+
+    #[test]
+    fn test_refined_worker_response_from_worker_response() {
+        let worker_response = WorkerResponse {
+            result: TypedResult {
+                result: TypeAnnotatedValue::U32(1),
+                function_result_types: vec![FunctionResult{
+                    name: None,
+                    typ: Type::U32(TypeU32)
+                }],
+            },
+        };
+
+        let refined_worker_response = RefinedWorkerResponse::from_worker_response(&worker_response).unwrap();
+        assert_eq!(refined_worker_response, RefinedWorkerResponse::SingleResult(TypeAnnotatedValue::U32(1)));
+
+        let worker_response = WorkerResponse {
+            result: TypedResult {
+                result: TypeAnnotatedValue::Tuple {
+                    value: vec![],
+                    typ: vec![],
+                },
+                function_result_types: vec![],
+            }
+        };
+
+        let refined_worker_response = RefinedWorkerResponse::from_worker_response(&worker_response).unwrap();
+        assert_eq!(refined_worker_response, RefinedWorkerResponse::Unit);
+
+        let worker_response = WorkerResponse {
+            result: TypedResult {
+                result: TypeAnnotatedValue::Record {
+                    typ: vec![("foo".to_string(), AnalysedType::U32)],
+                    value: vec![("foo".to_string(), TypeAnnotatedValue::U32(1))],
+                },
+                function_result_types: vec![FunctionResult{
+                    name: Some("name".to_string()),
+                    typ: Type::U32(TypeU32)
+                }],
+            },
+        };
+
+
+        let refined_worker_response = RefinedWorkerResponse::from_worker_response(&worker_response).unwrap();
+        assert_eq!(refined_worker_response, RefinedWorkerResponse::MultipleResults(TypeAnnotatedValue::Record {
+            typ: vec![("foo".to_string(), AnalysedType::U32)],
+            value: vec![("foo".to_string(), TypeAnnotatedValue::U32(1))],
+        }));
+    }
+}
