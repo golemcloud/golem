@@ -108,9 +108,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.29"
+version = "0.0.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ae26028226e258a3cfa04cd35b6e1fdcde4d86037ee7df4f1ec9dfc537447b7"
+checksum = "c69d84e580bde8e4c4b3f70610da9f1533faa0f772283170eb87bacb2ae8e4f7"
 dependencies = [
  "prost-build",
  "wit-bindgen-rt",
@@ -196,7 +196,7 @@ dependencies = [
  "common",
  "once_cell",
  "rand",
- "wit-bindgen",
+ "wit-bindgen-rt",
 ]
 
 [[package]]
@@ -512,15 +512,6 @@ name = "windows_x86_64_msvc"
 version = "0.52.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bec47e5bfd1bff0eeaf6d8b485cc1074891a197ab4225d504cb7a1ab88b02bf0"
-
-[[package]]
-name = "wit-bindgen"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6237168d93497b26dacdab157b08ad2787d74cdce10f89735f791b2a225eba4d"
-dependencies = [
- "bitflags",
-]
 
 [[package]]
 name = "wit-bindgen-rt"

@@ -16,8 +16,11 @@ path = "wit/deps/golem_it"
 [package.metadata.component.target.dependencies."golem:rpc"]
 path = "wit/deps/wasm-rpc"
 
+[package.metadata.component.target.dependencies."wasi:io"]
+path = "wit/deps/io"
+
 [dependencies.golem-wasm-rpc]
-version = "0.0.29"
+version = "0.0.33"
 features = ["stub"]
 default-features = false
 
