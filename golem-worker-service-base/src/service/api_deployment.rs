@@ -24,6 +24,11 @@ pub trait ApiDeploymentService<Namespace> {
         deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>>;
 
+    async fn undeploy(
+        &self,
+        deployment: &ApiDeployment<Namespace>,
+    ) -> Result<(), ApiDeploymentError<Namespace>>;
+
     // Example: A newer version of API definition is in dev site, and older version of the same definition-id is in prod site.
     // Therefore Vec<ApiDeployment>
     async fn get_by_id(
@@ -265,6 +270,63 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         }
     }
 
+    async fn undeploy(
+        &self,
+        deployment: &ApiDeployment<Namespace>,
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
+        info!(
+            "Undeploying API definitions - namespace: {}, site: {}",
+            deployment.namespace, deployment.site
+        );
+
+        // Existing deployment
+        let existing_deployment_records = self
+            .deployment_repo
+            .get_by_site(deployment.site.to_string().as_str())
+            .await?;
+
+        let mut remove_deployment_records: Vec<ApiDeploymentRecord> = vec![];
+
+        for deployment_record in existing_deployment_records {
+            if deployment_record.namespace != deployment.namespace.to_string()
+                || deployment_record.subdomain != deployment.site.subdomain
+                || deployment_record.host != deployment.site.host
+            {
+                error!(
+                    "Undeploying API definition - namespace: {}, site: {} - failed, site used by another API (under another namespace/API)",
+                    &deployment.namespace,
+                    &deployment.site,
+                );
+                return Err(ApiDeploymentError::ApiDeploymentConflict(
+                    ApiSiteString::from(&ApiSite {
+                        host: deployment_record.host,
+                        subdomain: deployment_record.subdomain,
+                    }),
+                ));
+            }
+
+            if deployment
+                .api_definition_keys
+                .clone()
+                .into_iter()
+                .any(|key| {
+                    deployment_record.definition_id == key.id.0
+                        && deployment_record.definition_version == key.version.0
+                })
+            {
+                remove_deployment_records.push(deployment_record);
+            }
+        }
+
+        if !remove_deployment_records.is_empty() {
+            self.deployment_repo
+                .delete(remove_deployment_records)
+                .await?;
+        }
+
+        Ok(())
+    }
+
     async fn get_by_id(
         &self,
         namespace: &Namespace,
@@ -430,6 +492,13 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
     ApiDeploymentService<Namespace> for ApiDeploymentServiceNoop
 {
     async fn deploy(
+        &self,
+        _deployment: &ApiDeployment<Namespace>,
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
+        Ok(())
+    }
+
+    async fn undeploy(
         &self,
         _deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {

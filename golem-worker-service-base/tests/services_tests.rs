@@ -295,6 +295,17 @@ mod tests {
                 && definitions.contains(&def3)
         );
 
+        let deployment = get_api_deployment("test.com", None, vec![&def3.id.0]);
+        deployment_service.undeploy(&deployment).await.unwrap();
+
+        let definitions = deployment_service
+            .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(definitions.len(), 2);
+        assert!(definitions.contains(&def1) && definitions.contains(&def2));
+
         deployment_service
             .delete(
                 &DefaultNamespace::default(),
