@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+
 // Copyright 2024 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,22 +14,23 @@ use std::collections::HashMap;
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use async_trait::async_trait;
+use golem_wasm_rpc::Value;
+use tokio::task::JoinSet;
+
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::GetRoutingTableRequest;
 use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm_rpc::Value;
 use integration_tests::benchmarks::data::Data;
 use integration_tests::benchmarks::{
-    invoke_and_await, run_benchmark, setup_benchmark, BenchmarkContext,
+    invoke_and_await, run_benchmark, setup_benchmark, warmup_workers, SimpleBenchmarkContext,
 };
-use tokio::task::JoinSet;
 
 struct Rpc {
     config: RunConfig,
-    params: CliParams,
+    _params: CliParams,
 }
 
 #[derive(Debug, Clone)]
@@ -56,7 +58,7 @@ struct RpcBenchmarkIteratorContext {
 
 #[async_trait]
 impl Benchmark for Rpc {
-    type BenchmarkContext = BenchmarkContext;
+    type BenchmarkContext = SimpleBenchmarkContext;
     type IterationContext = RpcBenchmarkIteratorContext;
 
     fn name() -> &'static str {
@@ -75,7 +77,10 @@ impl Benchmark for Rpc {
     }
 
     async fn create(params: CliParams, config: RunConfig) -> Self {
-        Self { config, params }
+        Self {
+            config,
+            _params: params,
+        }
     }
 
     async fn setup_iteration(
@@ -142,25 +147,17 @@ impl Benchmark for Rpc {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        let mut fibers = JoinSet::new();
-        for parent_child_worker_pair in context.worker_ids.iter().cloned() {
-            let context_clone = benchmark_context.clone();
-            let worker_id_clone = parent_child_worker_pair.parent.clone();
-
-            let _fiber = fibers.spawn(async move {
-                let _ = invoke_and_await(
-                    &context_clone.deps,
-                    &worker_id_clone,
-                    "golem:itrpc/rpc-api.{echo}",
-                    vec![Value::String("hello".to_string())],
-                )
-                .await;
-            });
-        }
-
-        while let Some(fiber) = fibers.join_next().await {
-            fiber.expect("fiber failed");
-        }
+        warmup_workers(
+            &benchmark_context.deps,
+            &context
+                .worker_ids
+                .iter()
+                .map(|w| w.parent.clone())
+                .collect::<Vec<WorkerId>>(),
+            "golem:itrpc/rpc-api.{echo}",
+            vec![Value::String("hello".to_string())],
+        )
+        .await;
     }
 
     async fn run(
@@ -196,121 +193,38 @@ impl Benchmark for Rpc {
             _ => panic!("Unable to fetch the routing table from shard-manager-service"),
         };
 
-        let mut fibers = JoinSet::new();
-        for parent_child_worker_pair in context.worker_ids.iter().cloned() {
-            let context_clone = benchmark_context.clone();
-            let worker_id_clone = parent_child_worker_pair.parent.clone();
-            let recorder_clone = recorder.clone();
-            let length = self.config.length;
+        self.benchmark_rpc_invocation(
+            benchmark_context,
+            context,
+            &recorder,
+            &shard_manager_routing_table,
+            "golem:itrpc/rpc-api.{echo}",
+            vec![Value::String("hello".to_string())],
+            "worker-echo-invocation",
+        )
+        .await;
 
-            let same_executor =
-                parent_child_worker_pair.at_same_worker_executor(&shard_manager_routing_table);
+        self.benchmark_rpc_invocation(
+            benchmark_context,
+            context,
+            &recorder,
+            &shard_manager_routing_table,
+            "golem:itrpc/rpc-api.{calculate}",
+            vec![Value::U64(calculate_iter)],
+            "worker-calculate-invocation",
+        )
+        .await;
 
-            let _ = fibers.spawn(async move {
-                for _ in 0..length {
-                    let result = invoke_and_await(
-                        &context_clone.deps,
-                        &worker_id_clone,
-                        "golem:itrpc/rpc-api.{echo}",
-                        vec![Value::String("hello".to_string())],
-                    )
-                    .await;
-
-                    if same_executor {
-                        recorder_clone.duration(
-                            &"worker-echo-invocation-local".to_string(),
-                            result.accumulated_time,
-                        );
-                    } else {
-                        recorder_clone.duration(
-                            &"worker-echo-invocation-remote".to_string(),
-                            result.accumulated_time,
-                        );
-                    }
-                }
-            });
-        }
-
-        while let Some(fiber) = fibers.join_next().await {
-            fiber.expect("fiber failed");
-        }
-
-        let mut fibers = JoinSet::new();
-        for parent_child_worker_pair in context.clone().worker_ids.iter().cloned() {
-            let context_clone = benchmark_context.clone();
-            let worker_id_clone = parent_child_worker_pair.parent.clone();
-            let recorder_clone = recorder.clone();
-            let length = self.config.length;
-            let same_executor =
-                parent_child_worker_pair.at_same_worker_executor(&shard_manager_routing_table);
-
-            let _ = fibers.spawn(async move {
-                for _ in 0..length {
-                    let result = invoke_and_await(
-                        &context_clone.deps,
-                        &worker_id_clone,
-                        "golem:itrpc/rpc-api.{calculate}",
-                        vec![Value::U64(calculate_iter)],
-                    )
-                    .await;
-
-                    if same_executor {
-                        recorder_clone.duration(
-                            &"worker-calculate-invocation-local".to_string(),
-                            result.accumulated_time,
-                        );
-                    } else {
-                        recorder_clone.duration(
-                            &"worker-calculate-invocation-remote".to_string(),
-                            result.accumulated_time,
-                        );
-                    }
-                }
-            });
-        }
-
-        while let Some(fiber) = fibers.join_next().await {
-            fiber.expect("fiber failed");
-        }
-
-        let mut fibers = JoinSet::new();
-        for parent_child_worker_pair in context.worker_ids.iter().cloned() {
-            let context_clone = benchmark_context.clone();
-            let worker_id_clone = parent_child_worker_pair.parent.clone();
-            let recorder_clone = recorder.clone();
-            let values_clone = values.clone();
-            let length = self.config.length;
-            let same_executor =
-                parent_child_worker_pair.at_same_worker_executor(&shard_manager_routing_table);
-
-            let _ = fibers.spawn(async move {
-                for _ in 0..length {
-                    let result = invoke_and_await(
-                        &context_clone.deps,
-                        &worker_id_clone,
-                        "golem:itrpc/rpc-api.{process}",
-                        vec![Value::List(values_clone.clone())],
-                    )
-                    .await;
-
-                    if same_executor {
-                        recorder_clone.duration(
-                            &"worker-process-invocation-local".to_string(),
-                            result.accumulated_time,
-                        );
-                    } else {
-                        recorder_clone.duration(
-                            &"worker-process-invocation-remote".to_string(),
-                            result.accumulated_time,
-                        );
-                    }
-                }
-            });
-        }
-
-        while let Some(fiber) = fibers.join_next().await {
-            fiber.expect("fiber failed");
-        }
+        self.benchmark_rpc_invocation(
+            benchmark_context,
+            context,
+            &recorder,
+            &shard_manager_routing_table,
+            "golem:itrpc/rpc-api.{process}",
+            vec![Value::List(values)],
+            "worker-process-invocation",
+        )
+        .await;
     }
 
     async fn cleanup_iteration(
@@ -329,6 +243,57 @@ impl Benchmark for Rpc {
                 .delete_worker(&worker_id.child)
                 .await
                 .expect("Failed to delete child worker");
+        }
+    }
+}
+
+impl Rpc {
+    async fn benchmark_rpc_invocation(
+        &self,
+        benchmark_context: &SimpleBenchmarkContext,
+        context: &RpcBenchmarkIteratorContext,
+        recorder: &BenchmarkRecorder,
+        shard_manager_routing_table: &RoutingTable,
+        function: &str,
+        params: Vec<Value>,
+        name: &str,
+    ) {
+        let mut fibers = JoinSet::new();
+        for parent_child_worker_pair in context.worker_ids.iter().cloned() {
+            let context_clone = benchmark_context.clone();
+            let worker_id_clone = parent_child_worker_pair.parent.clone();
+            let recorder_clone = recorder.clone();
+            let length = self.config.length;
+            let function_clone = function.to_string();
+            let params_clone = params.clone();
+            let name_clone = name.to_string();
+
+            let same_executor =
+                parent_child_worker_pair.at_same_worker_executor(shard_manager_routing_table);
+
+            let _ = fibers.spawn(async move {
+                for _ in 0..length {
+                    let result = invoke_and_await(
+                        &context_clone.deps,
+                        &worker_id_clone,
+                        &function_clone,
+                        params_clone.clone(),
+                    )
+                    .await;
+
+                    if same_executor {
+                        recorder_clone
+                            .duration(&format!("{name_clone}-local"), result.accumulated_time);
+                    } else {
+                        recorder_clone
+                            .duration(&format!("{name_clone}-remote"), result.accumulated_time);
+                    }
+                }
+            });
+        }
+
+        while let Some(fiber) = fibers.join_next().await {
+            fiber.expect("fiber failed");
         }
     }
 }

@@ -19,10 +19,10 @@ use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConf
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_rpc::Value;
 use integration_tests::benchmarks::{
-    get_worker_ids, invoke_and_await, run_benchmark, setup_benchmark, start, BenchmarkContext,
+    benchmark_invocations, delete_workers, generate_worker_ids, invoke_and_await, run_benchmark,
+    setup_benchmark, start_workers, SimpleBenchmarkContext,
 };
 use tokio::task::JoinSet;
-use tracing::warn;
 
 struct DurabilityOverhead {
     config: RunConfig,
@@ -36,7 +36,7 @@ pub struct Context {
 
 #[async_trait]
 impl Benchmark for DurabilityOverhead {
-    type BenchmarkContext = BenchmarkContext;
+    type BenchmarkContext = SimpleBenchmarkContext;
     type IterationContext = Context;
 
     fn name() -> &'static str {
@@ -67,18 +67,15 @@ impl Benchmark for DurabilityOverhead {
             .store_unique_component("shopping-cart")
             .await;
 
-        let durable_worker_ids = get_worker_ids(self.config.size, &component_id, "durable-worker");
+        let durable_worker_ids =
+            generate_worker_ids(self.config.size, &component_id, "durable-worker");
 
-        start(durable_worker_ids.clone(), benchmark_context.deps.clone()).await;
+        start_workers(&durable_worker_ids, &benchmark_context.deps).await;
 
         let not_durable_worker_ids =
-            get_worker_ids(self.config.size, &component_id, "not-durable-worker");
+            generate_worker_ids(self.config.size, &component_id, "not-durable-worker");
 
-        start(
-            not_durable_worker_ids.clone(),
-            benchmark_context.deps.clone(),
-        )
-        .await;
+        start_workers(&not_durable_worker_ids, &benchmark_context.deps).await;
 
         Context {
             durable_worker_ids,
@@ -93,10 +90,10 @@ impl Benchmark for DurabilityOverhead {
     ) {
         async fn initialize(
             worker_ids: Vec<WorkerId>,
-            context: &BenchmarkContext,
+            context: &SimpleBenchmarkContext,
             not_durable: bool,
         ) {
-            // Invoke each worker a few times in parallel
+            // Invoke each worker in parallel, and setup the durability setting
             let mut fibers = JoinSet::new();
             for worker_id in worker_ids.clone() {
                 let context_clone = context.clone();
@@ -144,84 +141,50 @@ impl Benchmark for DurabilityOverhead {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) {
-        async fn run_for(
-            worker_ids: Vec<WorkerId>,
-            prefix: String,
-            length: usize,
-            context: &BenchmarkContext,
-            recorder: &BenchmarkRecorder,
-        ) {
-            // Invoke each worker a 'length' times in parallel and record the duration
-            let mut fibers = JoinSet::new();
-            for (n, worker_id) in worker_ids.iter().enumerate() {
-                let prefix_clone = prefix.clone();
-                let context_clone = context.clone();
-                let worker_id_clone = worker_id.clone();
-                let recorder_clone = recorder.clone();
-                let _ = fibers.spawn(async move {
-                    for i in 0..length {
-                        let result = invoke_and_await(
-                            &context_clone.deps,
-                            &worker_id_clone,
-                            "golem:it/api.{add-item}",
-                            vec![Value::Record(vec![
-                                Value::String(i.to_string()),
-                                Value::String(format!("{} Golem T-Shirt M", i)),
-                                Value::F32(100.0 + i as f32),
-                                Value::U32(i as u32),
-                            ])],
-                        )
-                        .await;
-                        recorder_clone.duration(
-                            &format!("{prefix_clone}-invocation"),
-                            result.accumulated_time,
-                        );
-                        recorder_clone.duration(
-                            &format!("{prefix_clone}-worker-{n}"),
-                            result.accumulated_time,
-                        );
-                        recorder_clone.count(
-                            &format!("{prefix_clone}-invocation-retries"),
-                            result.retries as u64,
-                        );
-                        recorder_clone.count(
-                            &format!("{prefix_clone}-worker-{n}-retries"),
-                            result.retries as u64,
-                        );
-                        recorder_clone.count(
-                            &format!("{prefix_clone}-invocation-timeouts"),
-                            result.timeouts as u64,
-                        );
-                        recorder_clone.count(
-                            &format!("{prefix_clone}-worker-{n}-timeouts"),
-                            result.timeouts as u64,
-                        );
-                    }
-                });
-            }
-
-            while let Some(fiber) = fibers.join_next().await {
-                fiber.expect("fiber failed");
-            }
-        }
-
         let length = self.config.length;
         let bc = benchmark_context.clone();
         let ids = context.durable_worker_ids.clone();
         let rec = recorder.clone();
-        let set1 =
-            tokio::spawn(
-                async move { run_for(ids, "durable".to_string(), length, &bc, &rec).await },
-            );
+        let set1 = tokio::spawn(async move {
+            benchmark_invocations(
+                &bc.deps,
+                rec,
+                length,
+                &ids,
+                "golem:it/api.{add-item}",
+                vec![Value::Record(vec![
+                    Value::String("0".to_string()),
+                    Value::String("0 Golem T-Shirt M".to_string()),
+                    Value::F32(100.0),
+                    Value::U32(0),
+                ])],
+                "durable-",
+            )
+            .await
+        });
 
         let bc = benchmark_context.clone();
         let ids = context.not_durable_worker_ids.clone();
         let rec = recorder.clone();
         let set2 = tokio::spawn(async move {
-            run_for(ids, "not-durable".to_string(), length, &bc, &rec).await
+            benchmark_invocations(
+                &bc.deps,
+                rec,
+                length,
+                &ids,
+                "golem:it/api.{add-item}",
+                vec![Value::Record(vec![
+                    Value::String("0".to_string()),
+                    Value::String("0 Golem T-Shirt M".to_string()),
+                    Value::F32(100.0),
+                    Value::U32(0),
+                ])],
+                "not-durable-",
+            )
+            .await
         });
 
-        // Running the two types simulatenously to eliminate differences coming from ordering
+        // Running the two types simultaneously to eliminate differences coming from ordering
         set1.await.unwrap();
         set2.await.unwrap();
     }
@@ -231,17 +194,8 @@ impl Benchmark for DurabilityOverhead {
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
     ) {
-        for worker_id in &context.durable_worker_ids {
-            if let Err(err) = benchmark_context.deps.delete_worker(worker_id).await {
-                warn!("Failed to delete worker: {:?}", err);
-            }
-        }
-
-        for worker_id in &context.not_durable_worker_ids {
-            if let Err(err) = benchmark_context.deps.delete_worker(worker_id).await {
-                warn!("Failed to delete worker: {:?}", err);
-            }
-        }
+        delete_workers(&benchmark_context.deps, &context.durable_worker_ids).await;
+        delete_workers(&benchmark_context.deps, &context.not_durable_worker_ids).await;
     }
 }
 

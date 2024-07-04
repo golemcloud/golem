@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use integration_tests::benchmarks::{
-    cleanup_iteration, invoke_and_await, run_benchmark, setup_benchmark, setup_iteration,
-    BenchmarkContext, IterationContext,
+    benchmark_invocations, delete_workers, invoke_and_await, run_benchmark, setup_benchmark,
+    setup_simple_iteration, SimpleBenchmarkContext, SimpleIterationContext,
 };
-use tokio::task::JoinSet;
 
 struct LargeInitialMemory {
     config: RunConfig,
@@ -27,8 +27,8 @@ struct LargeInitialMemory {
 
 #[async_trait]
 impl Benchmark for LargeInitialMemory {
-    type BenchmarkContext = BenchmarkContext;
-    type IterationContext = IterationContext;
+    type BenchmarkContext = SimpleBenchmarkContext;
+    type IterationContext = SimpleIterationContext;
 
     fn name() -> &'static str {
         "large-initial-memory"
@@ -53,7 +53,7 @@ impl Benchmark for LargeInitialMemory {
         &self,
         benchmark_context: &Self::BenchmarkContext,
     ) -> Self::IterationContext {
-        setup_iteration(
+        setup_simple_iteration(
             benchmark_context,
             self.config.clone(),
             "large-initial-memory",
@@ -80,26 +80,16 @@ impl Benchmark for LargeInitialMemory {
         recorder: BenchmarkRecorder,
     ) {
         // Start each worker and invoke `run` - each worker takes an initial 512Mb memory
-        let mut fibers = JoinSet::new();
-        for (n, worker_id) in context.worker_ids.iter().enumerate() {
-            let context_clone = benchmark_context.clone();
-            let worker_id_clone = worker_id.clone();
-            let recorder_clone = recorder.clone();
-            let fiber = fibers.spawn(async move {
-                let result =
-                    invoke_and_await(&context_clone.deps, &worker_id_clone, "run", vec![]).await;
-                recorder_clone.duration(&"invocation".to_string(), result.accumulated_time);
-                recorder_clone.duration(&format!("worker-{n}"), result.accumulated_time);
-                recorder_clone.count(&"invocation-retries".to_string(), result.retries as u64);
-                recorder_clone.count(&format!("worker-{n}-retries"), result.retries as u64);
-                recorder_clone.count(&"invocation-timeouts".to_string(), result.timeouts as u64);
-                recorder_clone.count(&format!("worker-{n}-timeouts"), result.timeouts as u64);
-            });
-        }
-
-        while let Some(fiber) = fibers.join_next().await {
-            fiber.expect("fiber failed");
-        }
+        benchmark_invocations(
+            &benchmark_context.deps,
+            recorder,
+            1,
+            &context.worker_ids,
+            "run",
+            vec![],
+            "",
+        )
+        .await
     }
 
     async fn cleanup_iteration(
@@ -107,7 +97,7 @@ impl Benchmark for LargeInitialMemory {
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
     ) {
-        cleanup_iteration(benchmark_context, context).await
+        delete_workers(&benchmark_context.deps, &context.worker_ids).await
     }
 }
 

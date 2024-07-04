@@ -16,20 +16,20 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 use async_trait::async_trait;
-use golem_common::model::WorkerId;
 use golem_wasm_rpc::Value;
+use reqwest::Client;
+use reqwest::Url;
+use tokio::task::JoinSet;
 
+use golem_common::model::WorkerId;
 use golem_test_framework::config::{
     CliParams, CliTestDependencies, CliTestService, TestDependencies, TestService,
 };
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use golem_test_framework::dsl::TestDsl;
 use integration_tests::benchmarks::data::Data;
-use integration_tests::benchmarks::{invoke_and_await, run_benchmark, setup_with};
-use reqwest::Client;
-use reqwest::Url;
-use tokio::task::JoinSet;
-use tracing::warn;
+use integration_tests::benchmarks::{
+    benchmark_invocations, delete_workers, run_benchmark, setup_iteration, warmup_workers,
+};
 
 struct Throughput {
     config: RunConfig,
@@ -165,12 +165,12 @@ impl Benchmark for Throughput {
         &self,
         benchmark_context: &Self::BenchmarkContext,
     ) -> Self::IterationContext {
-        let worker_ids = setup_with(
+        let worker_ids = setup_iteration(
             1, //self.config.size,
             "rust_component_service",
             "worker",
             true,
-            benchmark_context.deps.clone(),
+            &benchmark_context.deps,
         )
         .await;
 
@@ -183,24 +183,13 @@ impl Benchmark for Throughput {
         context: &Self::IterationContext,
     ) {
         // Invoke each worker in parallel
-        let mut fibers = JoinSet::new();
-        for worker_id in &context.worker_ids {
-            let context_clone = benchmark_context.clone();
-            let worker_id_clone = worker_id.clone();
-            let _ = fibers.spawn(async move {
-                invoke_and_await(
-                    &context_clone.deps,
-                    &worker_id_clone,
-                    "golem:it/api.{echo}",
-                    vec![Value::String("hello".to_string())],
-                )
-                .await;
-            });
-        }
-
-        while let Some(res) = fibers.join_next().await {
-            res.expect("fiber failed");
-        }
+        warmup_workers(
+            &benchmark_context.deps,
+            &context.worker_ids,
+            "golem:it/api.{echo}",
+            vec![Value::String("hello".to_string())],
+        )
+        .await;
 
         benchmark_context.rust_client.echo("hello").await;
     }
@@ -212,96 +201,45 @@ impl Benchmark for Throughput {
         recorder: BenchmarkRecorder,
     ) {
         let calculate_iter: u64 = 200000;
-
         let data = Data::generate_list(2000);
-
         let values = data
             .clone()
             .into_iter()
             .map(|d| d.into())
             .collect::<Vec<Value>>();
 
-        let mut fibers = JoinSet::new();
-        for worker_id in context.worker_ids.iter() {
-            let context_clone = benchmark_context.clone();
-            let worker_id_clone = worker_id.clone();
-            let recorder_clone = recorder.clone();
-            let length = self.config.length;
-            let _ = fibers.spawn(async move {
-                for _ in 0..length {
-                    let result = invoke_and_await(
-                        &context_clone.deps,
-                        &worker_id_clone,
-                        "golem:it/api.{echo}",
-                        vec![Value::String("hello".to_string())],
-                    )
-                    .await;
-                    recorder_clone.duration(
-                        &"worker-echo-invocation".to_string(),
-                        result.accumulated_time,
-                    );
-                }
-            });
-        }
+        benchmark_invocations(
+            &benchmark_context.deps,
+            recorder.clone(),
+            self.config.length,
+            &context.worker_ids,
+            "golem:it/api.{echo}",
+            vec![Value::String("hello".to_string())],
+            "worker-echo-",
+        )
+        .await;
 
-        while let Some(res) = fibers.join_next().await {
-            res.expect("fiber failed");
-        }
+        benchmark_invocations(
+            &benchmark_context.deps,
+            recorder.clone(),
+            self.config.length,
+            &context.worker_ids,
+            "golem:it/api.{calculate}",
+            vec![Value::U64(calculate_iter)],
+            "worker-calculate-",
+        )
+        .await;
 
-        let mut fibers = JoinSet::new();
-        for worker_id in context.worker_ids.iter() {
-            let context_clone = benchmark_context.clone();
-            let worker_id_clone = worker_id.clone();
-            let recorder_clone = recorder.clone();
-            let length = self.config.length;
-            let _ = fibers.spawn(async move {
-                for _ in 0..length {
-                    let result = invoke_and_await(
-                        &context_clone.deps,
-                        &worker_id_clone,
-                        "golem:it/api.{calculate}",
-                        vec![Value::U64(calculate_iter)],
-                    )
-                    .await;
-                    recorder_clone.duration(
-                        &"worker-calculate-invocation".to_string(),
-                        result.accumulated_time,
-                    );
-                }
-            });
-        }
-
-        while let Some(res) = fibers.join_next().await {
-            res.expect("fiber failed");
-        }
-
-        let mut fibers = JoinSet::new();
-        for worker_id in context.worker_ids.iter() {
-            let context_clone = benchmark_context.clone();
-            let worker_id_clone = worker_id.clone();
-            let recorder_clone = recorder.clone();
-            let values_clone = values.clone();
-            let length = self.config.length;
-            let _ = fibers.spawn(async move {
-                for _ in 0..length {
-                    let result = invoke_and_await(
-                        &context_clone.deps,
-                        &worker_id_clone,
-                        "golem:it/api.{process}",
-                        vec![Value::List(values_clone.clone())],
-                    )
-                    .await;
-                    recorder_clone.duration(
-                        &"worker-process-invocation".to_string(),
-                        result.accumulated_time,
-                    );
-                }
-            });
-        }
-
-        while let Some(res) = fibers.join_next().await {
-            res.expect("fiber failed");
-        }
+        benchmark_invocations(
+            &benchmark_context.deps,
+            recorder.clone(),
+            self.config.length,
+            &context.worker_ids,
+            "golem:it/api.{process}",
+            vec![Value::List(values.clone())],
+            "worker-process-",
+        )
+        .await;
 
         let mut fibers = JoinSet::new();
         for _ in context.worker_ids.iter() {
@@ -330,8 +268,7 @@ impl Benchmark for Throughput {
             let _ = fibers.spawn(async move {
                 for _ in 0..length {
                     let start = SystemTime::now();
-                    let res = context_clone.rust_client.calculate(calculate_iter).await;
-                    println!("rust-http-calculate-res: {:?}", res);
+                    context_clone.rust_client.calculate(calculate_iter).await;
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
                     recorder_clone.duration(&"rust-http-calculate-invocation".to_string(), elapsed);
                 }
@@ -368,11 +305,7 @@ impl Benchmark for Throughput {
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
     ) {
-        for worker_id in &context.worker_ids {
-            if let Err(err) = benchmark_context.deps.delete_worker(worker_id).await {
-                warn!("Failed to delete worker: {:?}", err);
-            }
-        }
+        delete_workers(&benchmark_context.deps, &context.worker_ids).await;
     }
 }
 

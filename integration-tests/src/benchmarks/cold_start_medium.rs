@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
+use golem_wasm_rpc::Value;
 use integration_tests::benchmarks::{
-    cleanup_iteration, run_benchmark, run_echo, setup_benchmark, setup_iteration, BenchmarkContext,
-    IterationContext,
+    benchmark_invocations, delete_workers, run_benchmark, setup_benchmark, setup_simple_iteration,
+    SimpleBenchmarkContext, SimpleIterationContext,
 };
 
 struct ColdStartEchoMedium {
@@ -28,8 +28,8 @@ struct ColdStartEchoMedium {
 
 #[async_trait]
 impl Benchmark for ColdStartEchoMedium {
-    type BenchmarkContext = BenchmarkContext;
-    type IterationContext = IterationContext;
+    type BenchmarkContext = SimpleBenchmarkContext;
+    type IterationContext = SimpleIterationContext;
 
     fn name() -> &'static str {
         "cold-start-medium"
@@ -54,13 +54,13 @@ impl Benchmark for ColdStartEchoMedium {
         &self,
         benchmark_context: &Self::BenchmarkContext,
     ) -> Self::IterationContext {
-        setup_iteration(benchmark_context, self.config.clone(), "js-echo", false).await
+        setup_simple_iteration(benchmark_context, self.config.clone(), "js-echo", false).await
     }
 
     async fn warmup(
         &self,
-        benchmark_context: &Self::BenchmarkContext,
-        context: &Self::IterationContext,
+        _benchmark_context: &Self::BenchmarkContext,
+        _context: &Self::IterationContext,
     ) {
         if !self.params.mode.compilation_service_disabled() {
             // Waiting a bit so the component compilation service can precompile the component
@@ -75,7 +75,16 @@ impl Benchmark for ColdStartEchoMedium {
         recorder: BenchmarkRecorder,
     ) {
         // Invoking the echo function on each worker once
-        run_echo(1, benchmark_context, context, recorder).await
+        benchmark_invocations(
+            &benchmark_context.deps,
+            recorder,
+            1,
+            &context.worker_ids,
+            "golem:it/api.{echo}",
+            vec![Value::String("hello".to_string())],
+            "",
+        )
+        .await
     }
 
     async fn cleanup_iteration(
@@ -83,7 +92,7 @@ impl Benchmark for ColdStartEchoMedium {
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
     ) {
-        cleanup_iteration(benchmark_context, context).await
+        delete_workers(&benchmark_context.deps, &context.worker_ids).await
     }
 }
 
