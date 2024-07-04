@@ -17,17 +17,21 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
-use figment::providers::{Env, Format, Toml};
+use figment::providers::{Format, Toml};
 use figment::Figment;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use golem_common::config::{RedisConfig, RetryConfig};
+use golem_common::config::{
+    ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig, RetryConfig,
+};
+use golem_common::tracing::TracingConfig;
 
 /// The shared global Golem configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GolemConfig {
+    pub tracing: TracingConfig,
     pub key_value_storage: KeyValueStorageConfig,
     pub indexed_storage: IndexedStorageConfig,
     pub blob_storage: BlobStorageConfig,
@@ -43,8 +47,6 @@ pub struct GolemConfig {
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
-    pub enable_tracing_console: bool,
-    pub enable_json_log: bool,
     pub grpc_address: String,
     pub port: u16,
     pub http_address: String,
@@ -127,14 +129,6 @@ pub struct WorkerServiceGrpcConfig {
 }
 
 impl GolemConfig {
-    pub fn new() -> Self {
-        Figment::new()
-            .merge(Toml::file("config/worker-executor.toml"))
-            .merge(Env::prefixed("GOLEM__").split("__"))
-            .extract()
-            .expect("Failed to parse config")
-    }
-
     pub fn from_file(path: &str) -> Self {
         Figment::new()
             .merge(Toml::file(path))
@@ -298,11 +292,12 @@ impl MemoryConfig {
 impl Default for GolemConfig {
     fn default() -> Self {
         Self {
+            tracing: TracingConfig::local_dev("worker-executor"),
             key_value_storage: KeyValueStorageConfig::default(),
             indexed_storage: IndexedStorageConfig::default(),
             blob_storage: BlobStorageConfig::default(),
             limits: Limits::default(),
-            retry: RetryConfig::default(),
+            retry: RetryConfig::max_attempts_3(),
             component_cache: ComponentCacheConfig::default(),
             component_service: ComponentServiceConfig::default(),
             compiled_component_service: CompiledComponentServiceConfig::default(),
@@ -313,13 +308,37 @@ impl Default for GolemConfig {
             active_workers: ActiveWorkersConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
-            enable_tracing_console: false,
-            enable_json_log: false,
             grpc_address: "0.0.0.0".to_string(),
             port: 9000,
             http_address: "0.0.0.0".to_string(),
-            http_port: 8080,
+            http_port: 8082,
         }
+    }
+}
+
+impl HasConfigExamples<GolemConfig> for GolemConfig {
+    fn examples() -> Vec<ConfigExample<GolemConfig>> {
+        vec![
+            (
+                "with redis indexed_storage, s3 blob storage, single shard manager service",
+                Self {
+                    key_value_storage: KeyValueStorageConfig::InMemory,
+                    indexed_storage: IndexedStorageConfig::Redis(RedisConfig::default()),
+                    blob_storage: BlobStorageConfig::default_s3(),
+                    shard_manager_service: ShardManagerServiceConfig::SingleShard,
+                    ..Self::default()
+                },
+            ),
+            (
+                "with in-memory key value storage, indexed storage and blob storage",
+                Self {
+                    key_value_storage: KeyValueStorageConfig::InMemory,
+                    indexed_storage: IndexedStorageConfig::InMemory,
+                    blob_storage: BlobStorageConfig::default_in_memory(),
+                    ..Self::default()
+                },
+            ),
+        ]
     }
 }
 
@@ -341,7 +360,7 @@ impl Default for Limits {
 impl Default for ComponentCacheConfig {
     fn default() -> Self {
         Self {
-            max_capacity: 128,
+            max_capacity: 32,
             time_to_idle: Duration::from_secs(12 * 60 * 60),
         }
     }
@@ -358,8 +377,8 @@ impl Default for ComponentServiceGrpcConfig {
         Self {
             host: "localhost".to_string(),
             port: 9090,
-            access_token: "access_token".to_string(),
-            retries: RetryConfig::default(),
+            access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
+            retries: RetryConfig::max_attempts_3(),
             max_component_size: 50 * 1024 * 1024,
         }
     }
@@ -415,7 +434,7 @@ impl Default for ShardManagerServiceGrpcConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
-            port: 9020,
+            port: 9002,
             retries: RetryConfig::default(),
         }
     }
@@ -463,14 +482,20 @@ impl Default for WorkerServiceGrpcConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
-            port: 9090,
-            access_token: "access_token".to_string(),
+            port: 9007,
+            access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
         }
     }
 }
 
 impl Default for KeyValueStorageConfig {
     fn default() -> Self {
+        Self::default_redis()
+    }
+}
+
+impl KeyValueStorageConfig {
+    pub fn default_redis() -> Self {
         Self::Redis(RedisConfig::default())
     }
 }
@@ -483,13 +508,13 @@ impl Default for IndexedStorageConfig {
 
 impl Default for BlobStorageConfig {
     fn default() -> Self {
-        Self::S3(S3BlobStorageConfig::default())
+        Self::default_local_file_system()
     }
 }
 
 impl BlobStorageConfig {
     pub fn default_s3() -> Self {
-        Self::default()
+        Self::S3(S3BlobStorageConfig::default())
     }
 
     pub fn default_local_file_system() -> Self {
@@ -509,4 +534,8 @@ impl Default for MemoryConfig {
             worker_estimate_coefficient: 1.1,
         }
     }
+}
+
+pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
+    ConfigLoader::new_with_examples("config/worker-executor.toml".to_string())
 }

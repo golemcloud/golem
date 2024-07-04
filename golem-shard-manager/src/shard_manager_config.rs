@@ -14,34 +14,59 @@
 
 use std::time::Duration;
 
-use crate::model::Empty;
-use figment::providers::{Env, Format, Toml};
-use figment::Figment;
-use golem_common::config::{RedisConfig, RetryConfig};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize)]
+use golem_common::config::{
+    ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig, RetryConfig,
+};
+use golem_common::tracing::TracingConfig;
+
+use crate::model::Empty;
+use crate::shard_manager_config::HealthCheckMode::K8s;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShardManagerConfig {
+    pub tracing: TracingConfig,
     pub redis: RedisConfig,
     pub worker_executors: WorkerExecutorServiceConfig,
     pub health_check: HealthCheckConfig,
-    pub enable_json_log: bool,
     pub http_port: u16,
     pub number_of_shards: usize,
     pub rebalance_threshold: f64,
 }
 
-impl ShardManagerConfig {
-    pub fn new() -> Self {
-        Figment::new()
-            .merge(Toml::file("config/shard-manager.toml"))
-            .merge(Env::prefixed("GOLEM__").split("__"))
-            .extract()
-            .expect("Failed to parse config")
+impl Default for ShardManagerConfig {
+    fn default() -> Self {
+        Self {
+            tracing: TracingConfig::local_dev("shard-manager"),
+            redis: RedisConfig::default(),
+            worker_executors: WorkerExecutorServiceConfig::default(),
+            health_check: HealthCheckConfig::default(),
+            http_port: 8081,
+            number_of_shards: 1024,
+            rebalance_threshold: 0.1,
+        }
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl HasConfigExamples<ShardManagerConfig> for ShardManagerConfig {
+    fn examples() -> Vec<ConfigExample<ShardManagerConfig>> {
+        vec![(
+            "with k8s healthcheck",
+            Self {
+                health_check: HealthCheckConfig {
+                    delay: Duration::from_secs(1),
+                    mode: K8s(HealthCheckK8sConfig {
+                        namespace: "namespace".to_string(),
+                    }),
+                },
+                ..Self::default()
+            },
+        )]
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerExecutorServiceConfig {
     #[serde(with = "humantime_serde")]
     pub assign_shards_timeout: Duration,
@@ -52,14 +77,34 @@ pub struct WorkerExecutorServiceConfig {
     pub retries: RetryConfig,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl Default for WorkerExecutorServiceConfig {
+    fn default() -> Self {
+        Self {
+            assign_shards_timeout: Duration::from_secs(5),
+            health_check_timeout: Duration::from_secs(2),
+            revoke_shards_timeout: Duration::from_secs(5),
+            retries: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HealthCheckConfig {
     #[serde(with = "humantime_serde")]
     pub delay: Duration,
     pub mode: HealthCheckMode,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl Default for HealthCheckConfig {
+    fn default() -> Self {
+        Self {
+            delay: Duration::from_secs(10),
+            mode: HealthCheckMode::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum HealthCheckMode {
     Grpc(Empty),
@@ -67,15 +112,27 @@ pub enum HealthCheckMode {
     K8s(HealthCheckK8sConfig),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl Default for HealthCheckMode {
+    fn default() -> Self {
+        Self::Grpc(Empty {})
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HealthCheckK8sConfig {
     pub namespace: String,
 }
 
+pub fn make_config_loader() -> ConfigLoader<ShardManagerConfig> {
+    ConfigLoader::new_with_examples("config/shard-manager.toml".to_string())
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::shard_manager_config::make_config_loader;
+
     #[test]
     pub fn config_is_loadable() {
-        let _ = super::ShardManagerConfig::new();
+        let _ = make_config_loader().load().expect("Failed to load config");
     }
 }

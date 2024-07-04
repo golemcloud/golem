@@ -1,34 +1,6 @@
-enable_tracing_console = false
-enable_json_log = false
-number_of_shards = 1024
 http_port = 8081
-
+number_of_shards = 1024
 rebalance_threshold = 0.1
-
-[redis]
-host = "localhost"
-port = 6380
-database = 0
-tracing = false
-pool_size = 8
-key_prefix = ""
-
-[redis.retries]
-max_attempts = 5
-min_delay = "100ms"
-max_delay = "2s"
-multiplier = 2
-
-[worker_executors]
-assign_shards_timeout = "5s"
-health_check_timeout = "2s"
-revoke_shards_timeout = "5s"
-
-[worker_executors.retries]
-max_attempts = 5
-min_delay = "100ms"
-max_delay = "2s"
-multiplier = 2
 
 [health_check]
 delay = "10s"
@@ -39,3 +11,28 @@ type = "Grpc"
 
 [health_check.mode.config]
 #namespace = "default"
+
+[redis]
+database = 0
+host = "localhost"
+key_prefix = ""
+pool_size = 8
+port = 6380
+tracing = false
+
+[redis.retries]
+max_attempts = 5
+max_delay = "2s"
+min_delay = "100ms"
+multiplier = 2
+
+[worker_executors]
+assign_shards_timeout = "5s"
+health_check_timeout = "2s"
+revoke_shards_timeout = "5s"
+
+[worker_executors.retries]
+max_attempts = 5
+max_delay = "2s"
+min_delay = "100ms"
+multiplier = 2

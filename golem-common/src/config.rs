@@ -348,7 +348,7 @@ impl Default for RedisConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
-            port: 6379,
+            port: 6380,
             database: 0,
             tracing: false,
             pool_size: 8,
