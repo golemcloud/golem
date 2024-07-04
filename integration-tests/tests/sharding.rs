@@ -161,6 +161,8 @@ async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
     info!("All workers started");
 
     for step in steps {
+        let formatted_step = format!("{:?}", step);
+        info!("Executing step: {}", formatted_step);
         match step {
             Step::StartShards(n) => {
                 env_command_tx.send(EnvCommand::StartShards(n)).unwrap();
@@ -184,7 +186,6 @@ async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
                 tokio::time::sleep(duration).await;
             }
             Step::InvokeAndAwaitWorkersAsync(name) => {
-                info!("Invoke and await: {name}");
                 worker_command_tx
                     .send(WorkerCommand::InvokeAndAwaitWorkers {
                         name,
@@ -198,6 +199,7 @@ async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
                 info!("Invoke and await completed: {evt:?}");
             }
         }
+        info!("Executed step: {}", formatted_step);
     }
 
     info!("Sharding test completed");
@@ -278,22 +280,27 @@ async fn invoke_and_await_workers(workers: &[WorkerId]) -> Result<(), worker::wo
 
     for worker_id in workers {
         let worker_id_clone = worker_id.clone();
-        tasks.push(tokio::spawn(async move {
-            let idempotency_key = IdempotencyKey::fresh();
-            DEPS.invoke_and_await_with_key(
-                &worker_id_clone,
-                &idempotency_key,
-                "golem:it/api/echo",
-                vec![Value::Option(Some(Box::new(Value::String(
-                    "Hello".to_string(),
-                ))))],
-            )
-            .await
-        }));
+        tasks.push((
+            worker_id,
+            tokio::spawn(async move {
+                let idempotency_key = IdempotencyKey::fresh();
+                DEPS.invoke_and_await_with_key(
+                    &worker_id_clone,
+                    &idempotency_key,
+                    "golem:it/api.{echo}",
+                    vec![Value::Option(Some(Box::new(Value::String(
+                        "Hello".to_string(),
+                    ))))],
+                )
+                .await
+            }),
+        ));
     }
 
-    for task in tasks {
+    for (worker_id, task) in tasks {
+        info!("Awaiting worker: {}", worker_id);
         let _ = task.await.unwrap()?;
+        info!("Worker finished: {}", worker_id);
     }
 
     Ok(())

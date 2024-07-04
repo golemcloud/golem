@@ -351,7 +351,7 @@ impl Default for Limits {
 impl Default for ComponentCacheConfig {
     fn default() -> Self {
         Self {
-            max_capacity: 32,
+            max_capacity: 128,
             max_metadata_capacity: 16384,
             time_to_idle: Duration::from_secs(12 * 60 * 60),
         }

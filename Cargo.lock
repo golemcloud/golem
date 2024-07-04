@@ -3355,6 +3355,7 @@ dependencies = [
  "golem-client",
  "golem-common",
  "golem-examples",
+ "golem-rib",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3424,12 +3425,12 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes 1.6.0",
- "combine",
  "dashmap",
  "derive_more",
  "fred",
  "futures-core",
  "golem-api-grpc",
+ "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 0.2.12",
@@ -3443,7 +3444,6 @@ dependencies = [
  "prost-types",
  "rand 0.8.5",
  "range-set-blaze",
- "semver",
  "serde 1.0.203",
  "serde_json",
  "tokio",
@@ -3577,6 +3577,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-rib"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bincode",
+ "combine",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "semver",
+ "serde 1.0.203",
+ "serde_json",
+ "wasm-wave",
+]
+
+[[package]]
 name = "golem-service-base"
 version = "0.0.0"
 dependencies = [
@@ -3588,6 +3603,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 0.2.12",
@@ -3599,6 +3615,7 @@ dependencies = [
  "rand 0.8.5",
  "serde 1.0.203",
  "serde_json",
+ "sqlx",
  "thiserror",
  "tokio",
  "tonic",
@@ -3627,6 +3644,7 @@ dependencies = [
  "kube",
  "prometheus",
  "prost",
+ "rustls 0.23.10",
  "serde 1.0.203",
  "serde_json",
  "tokio",
@@ -3823,6 +3841,7 @@ dependencies = [
  "gethostname",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3844,6 +3863,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "prost",
+ "rand 0.8.5",
  "redis",
  "ringbuf",
  "rustls 0.23.10",
@@ -3939,6 +3959,7 @@ dependencies = [
  "futures-util",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3960,9 +3981,12 @@ dependencies = [
  "serde 1.0.203",
  "serde_json",
  "serde_yaml",
+ "sqlx",
  "strum",
  "strum_macros",
  "tap",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror",
  "tokio",
  "tokio-stream",

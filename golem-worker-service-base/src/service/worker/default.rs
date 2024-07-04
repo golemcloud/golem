@@ -35,7 +35,6 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
-use golem_common::model::function_name::ParsedFunctionName;
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
@@ -50,6 +49,7 @@ use golem_service_base::{
     model::{Component, GolemError},
     routing_table::RoutingTableService,
 };
+use rib::ParsedFunctionName;
 
 use super::{
     AllExecutors, ConnectWorkerStream, HasWorkerExecutorClients, RandomExecutor, ResponseMapResult,

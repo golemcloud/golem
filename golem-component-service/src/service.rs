@@ -19,12 +19,12 @@ use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
 };
-use golem_service_base::config::ComponentStoreConfig;
+use golem_service_base::config::{ComponentStoreConfig, DbConfig};
+use golem_service_base::db;
 use golem_service_base::service::component_object_store;
 use std::sync::Arc;
 
-use crate::config::{ComponentServiceConfig, DbConfig};
-use crate::db;
+use crate::config::ComponentServiceConfig;
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
 
 #[derive(Clone)]

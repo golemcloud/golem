@@ -14,6 +14,7 @@
 
 use std::time::Duration;
 
+use crate::model::Empty;
 use figment::providers::{Env, Format, Toml};
 use figment::Figment;
 use golem_common::config::{RedisConfig, RetryConfig};
@@ -61,11 +62,14 @@ pub struct HealthCheckConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum HealthCheckMode {
-    Grpc,
+    Grpc(Empty),
     #[cfg(feature = "kubernetes")]
-    K8s {
-        namespace: String,
-    },
+    K8s(HealthCheckK8sConfig),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct HealthCheckK8sConfig {
+    pub namespace: String,
 }
 
 #[cfg(test)]

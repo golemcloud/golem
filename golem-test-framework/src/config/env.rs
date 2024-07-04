@@ -195,7 +195,6 @@ impl EnvBasedTestDependencies {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
         shared_client: bool,
     ) -> Arc<dyn WorkerService + Send + Sync + 'static> {
         if Self::use_docker() {
@@ -204,7 +203,6 @@ impl EnvBasedTestDependencies {
                     component_service,
                     shard_manager,
                     rdb,
-                    redis,
                     Self::default_verbosity(),
                     shared_client,
                 )
@@ -221,7 +219,6 @@ impl EnvBasedTestDependencies {
                     component_service,
                     shard_manager,
                     rdb,
-                    redis,
                     Self::default_verbosity(),
                     Self::default_stdout_level(),
                     Self::default_stderr_level(),
@@ -301,7 +298,6 @@ impl EnvBasedTestDependencies {
             component_service.clone(),
             shard_manager.clone(),
             rdb.clone(),
-            redis.clone(),
             shared_client,
         )
         .await;

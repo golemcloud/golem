@@ -234,7 +234,7 @@ impl WorkerGrpcApi {
 
         let latest_component = self
             .component_service
-            .get_latest(&component_id, &EmptyAuthCtx {})
+            .get_latest(&component_id, &EmptyAuthCtx::default())
             .await
             .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
             .map_err(|_| GrpcWorkerError {
@@ -253,7 +253,7 @@ impl WorkerGrpcApi {
                 request.args,
                 request.env,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -267,7 +267,11 @@ impl WorkerGrpcApi {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         self.worker_service
-            .delete(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
+            .delete(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
             .await?;
 
         Ok(())
@@ -290,7 +294,7 @@ impl WorkerGrpcApi {
                 parameters.oplog_idx,
                 parameters.data,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -305,7 +309,11 @@ impl WorkerGrpcApi {
 
         let metadata = self
             .worker_service
-            .get_metadata(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
+            .get_metadata(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
             .await?;
 
         Ok(metadata.into())
@@ -338,7 +346,7 @@ impl WorkerGrpcApi {
                 request.count,
                 request.precise,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -358,7 +366,7 @@ impl WorkerGrpcApi {
                 &worker_id,
                 request.recover_immediately,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -380,7 +388,7 @@ impl WorkerGrpcApi {
                 params.params,
                 request.context,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -412,7 +420,7 @@ impl WorkerGrpcApi {
                 &calling_convention,
                 request.context,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -423,7 +431,11 @@ impl WorkerGrpcApi {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         self.worker_service
-            .resume(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
+            .resume(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
             .await?;
 
         Ok(())
@@ -436,7 +448,11 @@ impl WorkerGrpcApi {
         let worker_id = make_crate_worker_id(request.worker_id)?;
         let stream = self
             .worker_service
-            .connect(&worker_id, empty_worker_metadata(), &EmptyAuthCtx {})
+            .connect(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
             .await?;
 
         Ok(stream)
@@ -451,7 +467,7 @@ impl WorkerGrpcApi {
                 request.mode(),
                 request.target_version,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
+                &EmptyAuthCtx::default(),
             )
             .await?;
 

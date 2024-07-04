@@ -351,7 +351,7 @@ fn env_vars(
         }
     };
 
-    vars.extend(rdb.info().env().clone());
+    vars.extend(rdb.info().env("golem_component").clone());
     vars
 }
 

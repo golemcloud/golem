@@ -49,6 +49,7 @@ pub mod guest_languages;
 pub mod guest_languages2;
 pub mod hot_update;
 pub mod keyvalue;
+pub mod measure_test_component_mem;
 pub mod rpc;
 pub mod scalability;
 pub mod transactions;
