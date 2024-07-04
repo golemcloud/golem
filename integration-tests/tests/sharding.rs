@@ -59,7 +59,7 @@ unsafe fn drop_deps() {
 #[ctor]
 pub static TRACING: Tracing = Tracing::init();
 
-#[tokio_shared_rt::test]
+#[tokio::test]
 #[tracing::instrument]
 #[ignore] // TODO: Re-enable when sharding manager is fixed
 async fn service_is_responsive_to_shard_changes() {
@@ -98,7 +98,7 @@ async fn service_is_responsive_to_shard_changes() {
     chaos.join().unwrap();
 }
 
-#[tokio_shared_rt::test]
+#[tokio::test]
 #[tracing::instrument]
 #[ignore] // TODO: Re-enable when sharding manager is fixed
 async fn coordinated_scenario1() {

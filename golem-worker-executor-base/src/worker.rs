@@ -828,20 +828,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     >(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
-        component_version: Option<u64>,
+        component_version: Option<ComponentVersion>,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         parent: Option<WorkerId>,
     ) -> Result<WorkerMetadata, GolemError> {
-        let component_id = owned_worker_id.component_id();
-
-        let component_metadata = this
-            .component_service()
-            .get_metadata(&component_id, component_version)
-            .await?;
-
         match this.worker_service().get(owned_worker_id).await {
             None => {
+                let component_id = owned_worker_id.component_id();
+                let component_metadata = this
+                    .component_service()
+                    .get_metadata(&component_id, component_version)
+                    .await?;
+
                 let initial_status =
                     calculate_last_known_status(this, owned_worker_id, &None).await?;
                 let worker_metadata = WorkerMetadata {

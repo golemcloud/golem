@@ -80,6 +80,7 @@ multiplier = 3
 
 [component_cache]
 max_capacity = 32
+max_metadata_capacity = 16384
 time_to_idle = "12h"
 
 [component_service]

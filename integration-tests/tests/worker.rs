@@ -33,7 +33,7 @@ use warp::http::{Response, StatusCode};
 use warp::hyper::Body;
 use warp::Filter;
 
-#[tokio_shared_rt::test]
+#[tokio::test]
 #[tracing::instrument]
 async fn dynamic_worker_creation() {
     let component_id = DEPS.store_component("environment-service").await;
@@ -70,7 +70,7 @@ async fn dynamic_worker_creation() {
     );
 }
 
-#[tokio_shared_rt::test]
+#[tokio::test]
 #[tracing::instrument]
 async fn counter_resource_test_2() {
     let component_id = DEPS.store_component("counters").await;
@@ -145,7 +145,7 @@ async fn counter_resource_test_2() {
     );
 }
 
-#[tokio_shared_rt::test]
+#[tokio::test]
 #[tracing::instrument]
 async fn shopping_cart_example() {
     let component_id = DEPS.store_component("shopping-cart").await;
@@ -239,7 +239,7 @@ async fn shopping_cart_example() {
     );
 }
 
-#[tokio_shared_rt::test]
+#[tokio::test]
 #[tracing::instrument]
 async fn auction_example_1() {
     let registry_component_id = DEPS.store_component("auction_registry_composed").await;
@@ -301,7 +301,7 @@ fn get_worker_ids(workers: Vec<WorkerMetadata>) -> HashSet<WorkerId> {
         .collect::<HashSet<WorkerId>>()
 }
 
-#[tokio_shared_rt::test]
+#[tokio::test]
 #[tracing::instrument]
 async fn get_workers() {
     let component_id = DEPS.store_component("shopping-cart").await;
@@ -398,7 +398,7 @@ async fn get_workers() {
     }
 }
 
-#[tokio_shared_rt::test]
+#[tokio::test]
 #[tracing::instrument]
 async fn get_running_workers() {
     let component_id = DEPS.store_component("http-client-2").await;
@@ -528,7 +528,7 @@ async fn get_running_workers() {
     check!(found_worker_ids2.eq(&worker_ids));
 }
 
-#[tokio_shared_rt::test]
+#[tokio::test]
 #[tracing::instrument]
 async fn auto_update_on_idle() {
     let component_id = DEPS.store_unique_component("update-test-v1").await;
@@ -559,7 +559,7 @@ async fn auto_update_on_idle() {
     check!(metadata.last_known_status.successful_updates.len() == 1);
 }
 
-#[tokio_shared_rt::test]
+#[tokio::test]
 #[tracing::instrument]
 async fn auto_update_on_idle_via_host_function() {
     let component_id = DEPS.store_unique_component("update-test-v1").await;
