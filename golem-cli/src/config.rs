@@ -95,6 +95,8 @@ pub struct CloudProfile {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub custom_url: Option<Url>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub custom_cloud_url: Option<Url>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub custom_worker_url: Option<Url>,
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub allow_insecure: bool,

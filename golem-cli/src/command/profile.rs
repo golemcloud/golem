@@ -119,6 +119,10 @@ pub struct CloudProfileAdd {
     #[arg(long, hide = true)]
     dev_component_url: Option<Url>,
 
+    /// URL of Golem Cloud service
+    #[arg(long, hide = true)]
+    dev_cloud_url: Option<Url>,
+
     /// URL of Golem Worker service. If not provided - use component-url.
     #[arg(long, hide = true)]
     dev_worker_url: Option<Url>,
@@ -285,6 +289,7 @@ impl UniversalProfileAddSubCommand {
                     CloudProfileAdd {
                         name,
                         dev_component_url,
+                        dev_cloud_url,
                         dev_worker_url,
                         dev_allow_insecure,
                         default_format,
@@ -292,6 +297,7 @@ impl UniversalProfileAddSubCommand {
             } => {
                 let profile = Profile::GolemCloud(CloudProfile {
                     custom_url: dev_component_url,
+                    custom_cloud_url: dev_cloud_url,
                     custom_worker_url: dev_worker_url,
                     allow_insecure: dev_allow_insecure,
                     config: ProfileConfig { default_format },
@@ -404,6 +410,8 @@ pub struct ProfileView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub url: Option<Url>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cloud_url: Option<Url>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub worker_url: Option<Url>,
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub allow_insecure: bool,
@@ -433,6 +441,7 @@ impl ProfileView {
                 name,
                 typ: ProfileType::Golem,
                 url: Some(url),
+                cloud_url: None,
                 worker_url,
                 allow_insecure,
                 authenticated: None,
@@ -440,6 +449,7 @@ impl ProfileView {
             },
             Profile::GolemCloud(CloudProfile {
                 custom_url,
+                custom_cloud_url,
                 custom_worker_url,
                 allow_insecure,
                 auth,
@@ -449,6 +459,7 @@ impl ProfileView {
                 name,
                 typ: ProfileType::GolemCloud,
                 url: custom_url,
+                cloud_url: custom_cloud_url,
                 worker_url: custom_worker_url,
                 allow_insecure,
                 authenticated: Some(auth.is_some()),
