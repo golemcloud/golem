@@ -12,6 +12,7 @@ use tracing::{error, info};
 use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::repo::api_definition::ApiDefinitionRepo;
+use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::repo::RepoError;
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
@@ -39,6 +40,8 @@ pub enum ApiDefinitionError<E> {
     ApiDefinitionNotDraft(ApiDefinitionId),
     #[error("API definition already exists: {0}")]
     ApiDefinitionAlreadyExists(ApiDefinitionId),
+    #[error("API definition deployed: {0}")]
+    ApiDefinitionDeployed(String),
     #[error("Internal error: {0}")]
     InternalError(String),
 }
@@ -103,6 +106,7 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
 pub struct ApiDefinitionServiceDefault<AuthCtx, ValidationError> {
     pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
+    pub deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
     pub api_definition_validator:
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send>,
 }
@@ -111,6 +115,7 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
     pub fn new(
         component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
         definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
+        deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
         api_definition_validator: Arc<
             dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send,
         >,
@@ -118,6 +123,7 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
         Self {
             component_service,
             definition_repo,
+            deployment_repo,
             api_definition_validator,
         }
     }
@@ -300,14 +306,30 @@ where
             "Delete API definition - namespace: {}, id: {}, version: {}",
             namespace, id, version
         );
-        let deleted = self
-            .definition_repo
-            .delete(&namespace.to_string(), id.0.as_str(), version.0.as_str())
+
+        let deployments = self
+            .deployment_repo
+            .get_by_id_and_version(&namespace.to_string(), id.0.as_str(), version.0.as_str())
             .await?;
 
-        let value = if deleted { Some(id.clone()) } else { None };
+        if deployments.is_empty() {
+            let deleted = self
+                .definition_repo
+                .delete(&namespace.to_string(), id.0.as_str(), version.0.as_str())
+                .await?;
 
-        Ok(value)
+            let value = if deleted { Some(id.clone()) } else { None };
+
+            Ok(value)
+        } else {
+            Err(ApiDefinitionError::ApiDefinitionDeployed(
+                deployments
+                    .into_iter()
+                    .map(|d| d.site)
+                    .collect::<Vec<String>>()
+                    .join(", "),
+            ))
+        }
     }
 
     async fn get_all(

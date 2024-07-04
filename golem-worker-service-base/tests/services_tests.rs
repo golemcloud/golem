@@ -9,7 +9,8 @@ mod tests {
     use golem_worker_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
     use golem_worker_service_base::repo::{api_definition, api_deployment};
     use golem_worker_service_base::service::api_definition::{
-        ApiDefinitionIdWithVersion, ApiDefinitionService, ApiDefinitionServiceDefault,
+        ApiDefinitionError, ApiDefinitionIdWithVersion, ApiDefinitionService,
+        ApiDefinitionServiceDefault,
     };
     use golem_worker_service_base::service::api_deployment::{
         ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
@@ -124,6 +125,7 @@ mod tests {
         > = Arc::new(ApiDefinitionServiceDefault::new(
             component_service.clone(),
             api_definition_repo.clone(),
+            api_deployment_repo.clone(),
             api_definition_validator_service.clone(),
         ));
 
@@ -275,6 +277,12 @@ mod tests {
             .unwrap();
         assert!(deployment.is_some());
 
+        let deployments = deployment_service
+            .get_by_id(&DefaultNamespace::default(), &def3.id)
+            .await
+            .unwrap();
+        assert!(!deployments.is_empty());
+
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
             .await
@@ -381,6 +389,23 @@ mod tests {
             deployment_result.unwrap_err().to_string(),
             ApiDeploymentError::<DefaultNamespace>::ApiDefinitionsConflict("/api/get1".to_string())
                 .to_string()
+        );
+
+        let delete_result = definition_service
+            .delete(
+                &def1.id,
+                &def1.version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await;
+        assert!(delete_result.is_err());
+        assert_eq!(
+            delete_result.unwrap_err().to_string(),
+            ApiDefinitionError::<RouteValidationError>::ApiDefinitionDeployed(
+                "test-conflict.com".to_string()
+            )
+            .to_string()
         );
     }
 

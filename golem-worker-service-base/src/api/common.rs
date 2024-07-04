@@ -80,6 +80,11 @@ impl ApiEndpointError {
 }
 
 mod conversion {
+    use crate::service::api_definition::ApiDefinitionError as ApiDefinitionServiceError;
+    use crate::service::api_definition_validator::ValidationErrors;
+    use crate::service::api_deployment::ApiDeploymentError;
+    use crate::service::http::http_api_definition_validator::RouteValidationError;
+    use golem_api_grpc::proto::golem::common::ErrorsBody;
     use golem_api_grpc::proto::golem::{
         apidefinition,
         apidefinition::{api_definition_error, ApiDefinitionError, RouteValidationErrorsBody},
@@ -87,11 +92,6 @@ mod conversion {
     };
     use poem_openapi::payload::Json;
     use std::fmt::Display;
-
-    use crate::service::api_definition::ApiDefinitionError as ApiDefinitionServiceError;
-    use crate::service::api_definition_validator::ValidationErrors;
-    use crate::service::api_deployment::ApiDeploymentError;
-    use crate::service::http::http_api_definition_validator::RouteValidationError;
 
     use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
 
@@ -113,6 +113,9 @@ mod conversion {
                 }
                 ApiDefinitionServiceError::ApiDefinitionAlreadyExists(_) => {
                     ApiEndpointError::already_exists(error)
+                }
+                ApiDefinitionServiceError::ApiDefinitionDeployed(_) => {
+                    ApiEndpointError::bad_request(error)
                 }
             }
         }
@@ -195,6 +198,11 @@ mod conversion {
                 ApiDefinitionServiceError::ApiDefinitionAlreadyExists(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::AlreadyExists(ErrorBody {
                         error: error.to_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::ApiDefinitionDeployed(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error.to_string()],
                     })),
                 },
                 ApiDefinitionServiceError::InternalError(error) => ApiDefinitionError {
