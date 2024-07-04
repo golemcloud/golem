@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ComponentStoreConfig {
     S3(ComponentStoreS3Config),
@@ -30,13 +30,13 @@ impl Default for ComponentStoreConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentStoreS3Config {
     pub bucket_name: String,
     pub object_prefix: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentStoreLocalConfig {
     pub root_path: String,
     pub object_prefix: String,
@@ -54,6 +54,20 @@ impl Default for DbConfig {
         DbConfig::Sqlite(DbSqliteConfig {
             database: "golem_service.db".to_string(),
             max_connections: 10,
+        })
+    }
+}
+
+impl DbConfig {
+    pub fn postgres_example() -> Self {
+        Self::Postgres(DbPostgresConfig {
+            host: "localhost".to_string(),
+            database: "postgres".to_string(),
+            username: "postgres".to_string(),
+            password: "postgres".to_string(),
+            port: 5432,
+            max_connections: 10,
+            schema: None,
         })
     }
 }

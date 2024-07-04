@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use golem_common::config::{ConfigExample, HasConfigExamples, RetryConfig};
 use golem_common::tracing::TracingConfig;
-use golem_service_base::config::{DbConfig, DbPostgresConfig, DbSqliteConfig};
+use golem_service_base::config::{DbConfig, DbSqliteConfig};
 use golem_service_base::routing_table::RoutingTableConfig;
 
 // The base configuration for the worker service
@@ -73,15 +73,7 @@ impl HasConfigExamples<WorkerServiceBaseConfig> for WorkerServiceBaseConfig {
         vec![(
             "with postgres",
             Self {
-                db: DbConfig::Postgres(DbPostgresConfig {
-                    host: "localhost".to_string(),
-                    database: "postgres".to_string(),
-                    username: "postgres".to_string(),
-                    password: "postgres".to_string(),
-                    port: 5432,
-                    max_connections: 10,
-                    schema: None,
-                }),
+                db: DbConfig::postgres_example(),
                 ..Self::default()
             },
         )]
