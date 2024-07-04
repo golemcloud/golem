@@ -6,7 +6,7 @@ use crate::worker_bridge_execution::WorkerResponse;
 // Refined Worker response is different from WorkerResponse, because,
 // it ensures that we are not returning a vector of result if they are not named results
 // or unit
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RefinedWorkerResponse {
     Unit,
     SingleResult(TypeAnnotatedValue),
@@ -28,9 +28,7 @@ impl RefinedWorkerResponse {
         let result = &worker_response.result.result;
         let function_result_types = &worker_response.result.function_result_types;
 
-        if function_result_types.iter().all(|r| r.name.is_none())
-            && !function_result_types.is_empty()
-        {
+        if function_result_types.iter().all(|r| r.name.is_none()) {
             match result {
                 TypeAnnotatedValue::Tuple { value, .. } => {
                     if value.len() == 1 {
@@ -53,5 +51,76 @@ impl RefinedWorkerResponse {
                 ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Record if results are named. Obtained {:?}", AnalysedType::from(ty))),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::service::worker::TypedResult;
+    use golem_service_base::model::{FunctionResult, Type, TypeU32};
+    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::TypeAnnotatedValue;
+
+    use crate::worker_bridge_execution::refined_worker_response::RefinedWorkerResponse;
+    use crate::worker_bridge_execution::WorkerResponse;
+
+    #[test]
+    fn test_refined_worker_response_from_worker_response() {
+        let worker_response = WorkerResponse {
+            result: TypedResult {
+                result: TypeAnnotatedValue::Tuple {
+                    value: vec![TypeAnnotatedValue::U32(1)],
+                    typ: vec![AnalysedType::U32],
+                },
+                function_result_types: vec![FunctionResult {
+                    name: None,
+                    typ: Type::U32(TypeU32),
+                }],
+            },
+        };
+
+        let refined_worker_response =
+            RefinedWorkerResponse::from_worker_response(&worker_response).unwrap();
+        assert_eq!(
+            refined_worker_response,
+            RefinedWorkerResponse::SingleResult(TypeAnnotatedValue::U32(1))
+        );
+
+        let worker_response = WorkerResponse {
+            result: TypedResult {
+                result: TypeAnnotatedValue::Tuple {
+                    value: vec![],
+                    typ: vec![],
+                },
+                function_result_types: vec![],
+            },
+        };
+
+        let refined_worker_response =
+            RefinedWorkerResponse::from_worker_response(&worker_response).unwrap();
+        assert_eq!(refined_worker_response, RefinedWorkerResponse::Unit);
+
+        let worker_response = WorkerResponse {
+            result: TypedResult {
+                result: TypeAnnotatedValue::Record {
+                    typ: vec![("foo".to_string(), AnalysedType::U32)],
+                    value: vec![("foo".to_string(), TypeAnnotatedValue::U32(1))],
+                },
+                function_result_types: vec![FunctionResult {
+                    name: Some("name".to_string()),
+                    typ: Type::U32(TypeU32),
+                }],
+            },
+        };
+
+        let refined_worker_response =
+            RefinedWorkerResponse::from_worker_response(&worker_response).unwrap();
+        assert_eq!(
+            refined_worker_response,
+            RefinedWorkerResponse::MultipleResults(TypeAnnotatedValue::Record {
+                typ: vec![("foo".to_string(), AnalysedType::U32)],
+                value: vec![("foo".to_string(), TypeAnnotatedValue::U32(1))],
+            })
+        );
     }
 }
