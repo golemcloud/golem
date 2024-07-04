@@ -6,7 +6,7 @@ use crate::worker_bridge_execution::WorkerResponse;
 // Refined Worker response is different from WorkerResponse, because,
 // it ensures that we are not returning a vector of result if they are not named results
 // or unit
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RefinedWorkerResponse {
     Unit,
     SingleResult(TypeAnnotatedValue),
@@ -68,7 +68,10 @@ mod tests {
     fn test_refined_worker_response_from_worker_response() {
         let worker_response = WorkerResponse {
             result: TypedResult {
-                result: TypeAnnotatedValue::U32(1),
+                result: TypeAnnotatedValue::Tuple {
+                    value: vec![TypeAnnotatedValue::U32(1)],
+                    typ: vec![AnalysedType::U32],
+                },
                 function_result_types: vec![FunctionResult {
                     name: None,
                     typ: Type::U32(TypeU32),
