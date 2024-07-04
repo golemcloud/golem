@@ -22,7 +22,7 @@ use tracing::warn;
 use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
 use golem_test_framework::config::{CliParams, CliTestDependencies};
 use golem_test_framework::dsl::benchmark::{
-    BenchmarkApi, BenchmarkRecorder, BenchmarkResult, RunConfig,
+    BenchmarkApi, BenchmarkRecorder, BenchmarkResult, ResultKey, RunConfig,
 };
 use golem_test_framework::dsl::TestDsl;
 
@@ -162,27 +162,27 @@ pub async fn benchmark_invocations(
                 )
                 .await;
                 recorder_clone.duration(
-                    &format!("{prefix_clone}invocation"),
+                    &format!("{prefix_clone}invocation").into(),
                     result.accumulated_time,
                 );
                 recorder_clone.duration(
-                    &format!("{prefix_clone}worker-{n}"),
+                    &ResultKey::secondary(format!("{prefix_clone}worker-{n}")),
                     result.accumulated_time,
                 );
                 recorder_clone.count(
-                    &format!("{prefix_clone}invocation-retries"),
+                    &format!("{prefix_clone}invocation-retries").into(),
                     result.retries as u64,
                 );
                 recorder_clone.count(
-                    &format!("{prefix_clone}worker-{n}-retries"),
+                    &ResultKey::secondary(&format!("{prefix_clone}worker-{n}-retries")),
                     result.retries as u64,
                 );
                 recorder_clone.count(
-                    &format!("{prefix_clone}invocation-timeouts"),
+                    &format!("{prefix_clone}invocation-timeouts").into(),
                     result.timeouts as u64,
                 );
                 recorder_clone.count(
-                    &format!("{prefix_clone}worker-{n}-timeouts"),
+                    &ResultKey::secondary(&format!("{prefix_clone}worker-{n}-timeouts")),
                     result.timeouts as u64,
                 );
             }
@@ -196,7 +196,13 @@ pub async fn benchmark_invocations(
 
 pub async fn get_benchmark_results<A: BenchmarkApi>(params: CliParams) -> BenchmarkResult {
     CliTestDependencies::init_logging(&params);
-    A::run_benchmark(params).await
+    let primary_only = params.primary_only;
+    let results = A::run_benchmark(params).await;
+    if primary_only {
+        results.primary_only()
+    } else {
+        results
+    }
 }
 
 pub async fn run_benchmark<A: BenchmarkApi>() {

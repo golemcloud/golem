@@ -251,7 +251,7 @@ impl Benchmark for Throughput {
                     let start = SystemTime::now();
                     context_clone.rust_client.echo("hello").await;
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"rust-http-echo-invocation".to_string(), elapsed);
+                    recorder_clone.duration(&"rust-http-echo-invocation".into(), elapsed);
                 }
             });
         }
@@ -270,7 +270,7 @@ impl Benchmark for Throughput {
                     let start = SystemTime::now();
                     context_clone.rust_client.calculate(calculate_iter).await;
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"rust-http-calculate-invocation".to_string(), elapsed);
+                    recorder_clone.duration(&"rust-http-calculate-invocation".into(), elapsed);
                 }
             });
         }
@@ -290,7 +290,7 @@ impl Benchmark for Throughput {
                     let start = SystemTime::now();
                     context_clone.rust_client.process(data_clone.clone()).await;
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"rust-http-process-invocation".to_string(), elapsed);
+                    recorder_clone.duration(&"rust-http-process-invocation".into(), elapsed);
                 }
             });
         }

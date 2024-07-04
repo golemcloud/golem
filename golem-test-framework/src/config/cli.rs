@@ -100,6 +100,10 @@ pub struct CliParams {
     pub verbose: bool,
     #[arg(long, default_value = "false")]
     pub json: bool,
+
+    /// Only display the primary benchmark results (no per-worker measurements, for example)
+    #[arg(long, default_value = "false")]
+    pub primary_only: bool,
 }
 
 impl CliParams {

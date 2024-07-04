@@ -282,11 +282,15 @@ impl Rpc {
                     .await;
 
                     if same_executor {
-                        recorder_clone
-                            .duration(&format!("{name_clone}-local"), result.accumulated_time);
+                        recorder_clone.duration(
+                            &format!("{name_clone}-local").into(),
+                            result.accumulated_time,
+                        );
                     } else {
-                        recorder_clone
-                            .duration(&format!("{name_clone}-remote"), result.accumulated_time);
+                        recorder_clone.duration(
+                            &format!("{name_clone}-remote").into(),
+                            result.accumulated_time,
+                        );
                     }
                 }
             });

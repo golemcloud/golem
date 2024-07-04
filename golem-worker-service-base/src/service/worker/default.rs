@@ -1058,7 +1058,7 @@ fn is_filter_with_running_status(filter: &WorkerFilter) -> bool {
         {
             true
         }
-        WorkerFilter::And(f) => f.filters.iter().any(|f| is_filter_with_running_status(f)),
+        WorkerFilter::And(f) => f.filters.iter().any(is_filter_with_running_status),
         _ => false,
     }
 }
