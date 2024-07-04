@@ -89,9 +89,12 @@ pub async fn get_api_services(
     let (api_definition_repo, api_deployment_repo, api_certificate_repo, api_domain_repo) =
         match config.base_config.db.clone() {
             DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c)
-                    .await
-                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "Init error"))?;
+                let db_pool = db::create_postgres_pool(&c).await.map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Init error (pg pool): {e:?}"),
+                    )
+                })?;
                 let api_definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send> =
                     Arc::new(DbApiDefinitionRepo::new(db_pool.clone().into()));
                 let api_deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send> =
@@ -108,9 +111,12 @@ pub async fn get_api_services(
                 )
             }
             DbConfig::Sqlite(c) => {
-                let db_pool = db::create_sqlite_pool(&c)
-                    .await
-                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "Init error"))?;
+                let db_pool = db::create_sqlite_pool(&c).await.map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Init error (sqlite pool): {e:?}"),
+                    )
+                })?;
                 let api_definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send> =
                     Arc::new(DbApiDefinitionRepo::new(db_pool.clone().into()));
                 let api_deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send> =
@@ -174,7 +180,10 @@ pub async fn get_api_services(
             e
         );
 
-        std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Init error (aws domain): {e:?}"),
+        )
     })?;
 
     info!(
@@ -200,7 +209,7 @@ pub async fn get_api_services(
                 config.base_config.environment, config.cloud_specific_config.workspace, aws_config.region, e
             );
 
-            std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+            std::io::Error::new(std::io::ErrorKind::Other, format!("Init error (aws cert): {e:?}"))
         })?;
 
     info!(

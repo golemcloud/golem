@@ -70,11 +70,7 @@ async fn async_main(
     let grpc_port = config.grpc_port;
     let http_port = config.http_port;
 
-    dbg!(
-        "Starting cloud server on ports: http: {}, grpc: {}",
-        http_port,
-        grpc_port
-    );
+    dbg!("Starting cloud server", http_port, grpc_port);
 
     match config.db.clone() {
         DbConfig::Postgres(c) => {
@@ -82,7 +78,7 @@ async fn async_main(
                 .await
                 .map_err(|e| {
                     error!("DB - init error: {}", e);
-                    std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("Init error: {e:?}"))
                 })?;
         }
         DbConfig::Sqlite(c) => {
@@ -90,7 +86,7 @@ async fn async_main(
                 .await
                 .map_err(|e| {
                     error!("DB - init error: {}", e);
-                    std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("Init error: {e:?}"))
                 })?;
         }
     };

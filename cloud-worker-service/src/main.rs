@@ -38,8 +38,11 @@ async fn main() -> std::io::Result<()> {
                 db::postgres_migrate(&c, "./db/migration/postgres")
                     .await
                     .map_err(|e| {
-                        dbg!("DB - init error: {}", e);
-                        std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                        error!("DB - init error: {}", &e);
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Init error (pg): {e:?}"),
+                        )
                     })?;
             }
             DbConfig::Sqlite(c) => {
@@ -47,7 +50,10 @@ async fn main() -> std::io::Result<()> {
                     .await
                     .map_err(|e| {
                         error!("DB - init error: {}", e);
-                        std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Init error (sqlite): {e:?}"),
+                        )
                     })?;
             }
         };
