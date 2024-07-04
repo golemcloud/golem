@@ -46,6 +46,10 @@ jobs:
         run: |
           echo "Building all targets including benchmark-report job"
           cargo make build-release
+          pushd
+          cd test-components/rust-service
+          cargo build -p rust-http-service --release
+          popd
       - name: Run Benchmark
         run: |
           echo "Running all benchmark jobs and saving to files"
@@ -121,10 +125,10 @@ jobs:
           cat benchmark-data-current/benchmark_rpc.json
           echo "Successfully ran RPC benchmark"
           
-          # echo "Starting throughput benchmark"
-          # ./target/release/benchmark_throughput --quiet --json spawned > benchmark-data-current/benchmark_throughput.json
-          # cat benchmark-data-current/benchmark_throughput.json
-          # echo "Successfully ran throughput benchmark"
+          echo "Starting throughput benchmark"
+          ./target/release/benchmark_throughput --quiet --json spawned > benchmark-data-current/benchmark_throughput.json
+          cat benchmark-data-current/benchmark_throughput.json
+          echo "Successfully ran throughput benchmark"
                 
           echo "Finished Running Benchmark Jobs"
           
