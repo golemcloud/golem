@@ -37,7 +37,8 @@ use url::Url;
 
 #[derive(Debug, Clone)]
 pub struct CloudServiceFactory {
-    pub url: Url,
+    pub component_url: Url,
+    pub cloud_url: Url,
     pub worker_url: Url,
     pub allow_insecure: bool,
 }
@@ -49,6 +50,10 @@ fn default_url() -> Url {
 impl CloudServiceFactory {
     pub fn from_profile(profile: &CloudProfile) -> Self {
         let url = profile.custom_url.clone().unwrap_or_else(default_url);
+        let cloud_url = profile
+            .custom_cloud_url
+            .clone()
+            .unwrap_or_else(|| url.clone());
         let worker_url = profile
             .custom_worker_url
             .clone()
@@ -56,7 +61,8 @@ impl CloudServiceFactory {
         let allow_insecure = profile.allow_insecure;
 
         CloudServiceFactory {
-            url,
+            component_url: url,
+            cloud_url,
             worker_url,
             allow_insecure,
         }
@@ -73,7 +79,7 @@ impl CloudServiceFactory {
 
     fn login_context(&self) -> Result<Context, GolemError> {
         Ok(Context {
-            base_url: self.url.clone(),
+            base_url: self.cloud_url.clone(),
             client: self.client()?,
             security_token: Security::Empty,
         })
@@ -94,9 +100,17 @@ impl CloudServiceFactory {
         }))
     }
 
-    fn context(&self, auth: &CloudAuthentication) -> Result<Context, GolemError> {
+    fn cloud_context(&self, auth: &CloudAuthentication) -> Result<Context, GolemError> {
         Ok(Context {
-            base_url: self.url.clone(),
+            base_url: self.cloud_url.clone(),
+            client: self.client()?,
+            security_token: Security::Bearer(auth.0.secret.value.to_string()),
+        })
+    }
+
+    fn component_context(&self, auth: &CloudAuthentication) -> Result<Context, GolemError> {
+        Ok(Context {
+            base_url: self.component_url.clone(),
             client: self.client()?,
             security_token: Security::Bearer(auth.0.secret.value.to_string()),
         })
@@ -116,7 +130,7 @@ impl CloudServiceFactory {
     ) -> Result<Box<dyn ProjectClient + Send + Sync>, GolemError> {
         Ok(Box::new(ProjectClientLive {
             client: golem_cloud_client::api::ProjectClientLive {
-                context: self.context(auth)?,
+                context: self.cloud_context(auth)?,
             },
         }))
     }
@@ -137,7 +151,7 @@ impl CloudServiceFactory {
     ) -> Result<Box<dyn AccountClient + Send + Sync>, GolemError> {
         Ok(Box::new(AccountClientLive {
             client: golem_cloud_client::api::AccountClientLive {
-                context: self.context(auth)?,
+                context: self.cloud_context(auth)?,
             },
         }))
     }
@@ -158,7 +172,7 @@ impl CloudServiceFactory {
     ) -> Result<Box<dyn GrantClient + Send + Sync>, GolemError> {
         Ok(Box::new(GrantClientLive {
             client: golem_cloud_client::api::GrantClientLive {
-                context: self.context(auth)?,
+                context: self.cloud_context(auth)?,
             },
         }))
     }
@@ -179,7 +193,7 @@ impl CloudServiceFactory {
     ) -> Result<Box<dyn TokenClient + Send + Sync>, GolemError> {
         Ok(Box::new(TokenClientLive {
             client: golem_cloud_client::api::TokenClientLive {
-                context: self.context(auth)?,
+                context: self.cloud_context(auth)?,
             },
         }))
     }
@@ -200,7 +214,7 @@ impl CloudServiceFactory {
     ) -> Result<Box<dyn ProjectGrantClient + Send + Sync>, GolemError> {
         Ok(Box::new(ProjectGrantClientLive {
             client: golem_cloud_client::api::ProjectGrantClientLive {
-                context: self.context(auth)?,
+                context: self.cloud_context(auth)?,
             },
         }))
     }
@@ -221,7 +235,7 @@ impl CloudServiceFactory {
     ) -> Result<Box<dyn ProjectPolicyClient + Send + Sync>, GolemError> {
         Ok(Box::new(ProjectPolicyClientLive {
             client: golem_cloud_client::api::ProjectPolicyClientLive {
-                context: self.context(auth)?,
+                context: self.cloud_context(auth)?,
             },
         }))
     }
@@ -314,7 +328,7 @@ impl ServiceFactory for CloudServiceFactory {
     > {
         Ok(Box::new(ComponentClientLive {
             client: golem_cloud_client::api::ComponentClientLive {
-                context: self.context(auth)?,
+                context: self.component_context(auth)?,
             },
         }))
     }
@@ -367,7 +381,12 @@ impl ServiceFactory for CloudServiceFactory {
         Ok(vec![
             Box::new(crate::cloud::clients::health_check::HealthCheckClientLive {
                 client: golem_cloud_client::api::HealthCheckClientLive {
-                    context: self.context(auth)?,
+                    context: self.cloud_context(auth)?,
+                },
+            }),
+            Box::new(crate::cloud::clients::health_check::HealthCheckClientLive {
+                client: golem_cloud_client::api::HealthCheckClientLive {
+                    context: self.component_context(auth)?,
                 },
             }),
             Box::new(crate::cloud::clients::health_check::HealthCheckClientLive {

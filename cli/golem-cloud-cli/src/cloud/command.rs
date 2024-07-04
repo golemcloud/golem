@@ -177,13 +177,13 @@ pub enum CloudCommand<ProfileAdd: clap::Args> {
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Command line interface for Golem Cloud.", long_about = None, rename_all = "kebab-case")]
 pub struct GolemCloudCommand<ProfileAdd: clap::Args> {
-    #[arg(short = 'T', long)]
+    #[arg(short = 'T', long, global = true)]
     pub auth_token: Option<Uuid>,
 
     #[command(flatten)]
     pub verbosity: Verbosity,
 
-    #[arg(short = 'F', long)]
+    #[arg(short = 'F', long, global = true)]
     pub format: Option<Format>,
 
     #[command(subcommand)]
