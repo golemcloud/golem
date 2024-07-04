@@ -91,49 +91,50 @@ impl Benchmark for Rpc {
             .store_unique_component("parent_component_composed")
             .await;
 
-        // TODO: multiple pairs
+        let mut worker_ids = Vec::new();
+        for i in 0..self.config.size {
+            // Rpc parent worker-id
+            let parent_worker_id = WorkerId {
+                component_id: component_id.clone(),
+                worker_name: format!("parent_worker-{i}"),
+            };
 
-        // Rpc parent worker-id
-        let parent_worker_id = WorkerId {
-            component_id: component_id.clone(),
-            worker_name: "parent_worker".to_string(),
-        };
+            let child_worker_name = format!("child_worker-{i}");
 
-        let child_worker_name = "child_worker";
+            let child_worker_id = WorkerId {
+                component_id: child_component_id.clone(),
+                worker_name: child_worker_name.to_string(),
+            };
 
-        let child_worker_id = WorkerId {
-            component_id: child_component_id.clone(),
-            worker_name: child_worker_name.to_string(),
-        };
+            let mut env = HashMap::new();
 
-        let mut env = HashMap::new();
+            env.insert(
+                "CHILD_COMPONENT_ID".to_string(),
+                child_component_id.0.to_string(),
+            );
+            env.insert(
+                "CHILD_WORKER_NAME".to_string(),
+                child_worker_name.to_string(),
+            );
 
-        env.insert(
-            "CHILD_COMPONENT_ID".to_string(),
-            child_component_id.0.to_string(),
-        );
-        env.insert(
-            "CHILD_WORKER_NAME".to_string(),
-            child_worker_name.to_string(),
-        );
+            benchmark_context
+                .deps
+                .start_worker_with(
+                    &parent_worker_id.component_id,
+                    &parent_worker_id.worker_name,
+                    vec![],
+                    env,
+                )
+                .await
+                .expect("Failed to start parent worker");
 
-        benchmark_context
-            .deps
-            .start_worker_with(
-                &parent_worker_id.component_id,
-                &parent_worker_id.worker_name,
-                vec![],
-                env,
-            )
-            .await
-            .expect("Failed to start parent worker");
-
-        RpcBenchmarkIteratorContext {
-            worker_ids: vec![ParentChildWorkerId {
+            worker_ids.push(ParentChildWorkerId {
                 parent: parent_worker_id,
                 child: child_worker_id,
-            }],
+            });
         }
+
+        RpcBenchmarkIteratorContext { worker_ids }
     }
 
     async fn warmup(
@@ -141,7 +142,25 @@ impl Benchmark for Rpc {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        // TODO Warmup the workers
+        let mut fibers = JoinSet::new();
+        for parent_child_worker_pair in context.worker_ids.iter().cloned() {
+            let context_clone = benchmark_context.clone();
+            let worker_id_clone = parent_child_worker_pair.parent.clone();
+
+            let _fiber = fibers.spawn(async move {
+                let _ = invoke_and_await(
+                    &context_clone.deps,
+                    &worker_id_clone,
+                    "golem:itrpc/rpc-api.{echo}",
+                    vec![Value::String("hello".to_string())],
+                )
+                .await;
+            });
+        }
+
+        while let Some(fiber) = fibers.join_next().await {
+            fiber.expect("fiber failed");
+        }
     }
 
     async fn run(
@@ -182,9 +201,12 @@ impl Benchmark for Rpc {
             let context_clone = benchmark_context.clone();
             let worker_id_clone = parent_child_worker_pair.parent.clone();
             let recorder_clone = recorder.clone();
-            let rt_clone = shard_manager_routing_table.clone();
             let length = self.config.length;
-            let fiber = fibers.spawn(async move {
+
+            let same_executor =
+                parent_child_worker_pair.at_same_worker_executor(&shard_manager_routing_table);
+
+            let _ = fibers.spawn(async move {
                 for _ in 0..length {
                     let result = invoke_and_await(
                         &context_clone.deps,
@@ -194,8 +216,7 @@ impl Benchmark for Rpc {
                     )
                     .await;
 
-                    // TODO: move this out of the loop
-                    if parent_child_worker_pair.at_same_worker_executor(&rt_clone) {
+                    if same_executor {
                         recorder_clone.duration(
                             &"worker-echo-invocation-local".to_string(),
                             result.accumulated_time,
@@ -220,9 +241,10 @@ impl Benchmark for Rpc {
             let worker_id_clone = parent_child_worker_pair.parent.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
-            let rt_clone = shard_manager_routing_table.clone();
+            let same_executor =
+                parent_child_worker_pair.at_same_worker_executor(&shard_manager_routing_table);
 
-            let fiber = fibers.spawn(async move {
+            let _ = fibers.spawn(async move {
                 for _ in 0..length {
                     let result = invoke_and_await(
                         &context_clone.deps,
@@ -232,8 +254,7 @@ impl Benchmark for Rpc {
                     )
                     .await;
 
-                    // TODO: move this out of the loop
-                    if parent_child_worker_pair.at_same_worker_executor(&rt_clone) {
+                    if same_executor {
                         recorder_clone.duration(
                             &"worker-calculate-invocation-local".to_string(),
                             result.accumulated_time,
@@ -253,15 +274,16 @@ impl Benchmark for Rpc {
         }
 
         let mut fibers = JoinSet::new();
-        for parent_child_worker in context.worker_ids.iter().cloned() {
+        for parent_child_worker_pair in context.worker_ids.iter().cloned() {
             let context_clone = benchmark_context.clone();
-            let worker_id_clone = parent_child_worker.parent.clone();
+            let worker_id_clone = parent_child_worker_pair.parent.clone();
             let recorder_clone = recorder.clone();
             let values_clone = values.clone();
             let length = self.config.length;
-            let rt_clone = shard_manager_routing_table.clone();
+            let same_executor =
+                parent_child_worker_pair.at_same_worker_executor(&shard_manager_routing_table);
 
-            let fiber = fibers.spawn(async move {
+            let _ = fibers.spawn(async move {
                 for _ in 0..length {
                     let result = invoke_and_await(
                         &context_clone.deps,
@@ -271,8 +293,7 @@ impl Benchmark for Rpc {
                     )
                     .await;
 
-                    // TODO: moev this out of the loop
-                    if parent_child_worker.at_same_worker_executor(&rt_clone) {
+                    if same_executor {
                         recorder_clone.duration(
                             &"worker-process-invocation-local".to_string(),
                             result.accumulated_time,

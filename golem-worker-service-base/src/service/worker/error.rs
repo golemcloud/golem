@@ -87,3 +87,9 @@ impl From<WorkerServiceError> for worker_error::Error {
         }
     }
 }
+
+impl From<GolemError> for WorkerServiceError {
+    fn from(value: GolemError) -> Self {
+        WorkerServiceError::Golem(value)
+    }
+}

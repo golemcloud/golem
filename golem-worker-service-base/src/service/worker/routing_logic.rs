@@ -13,11 +13,17 @@
 // limitations under the License.
 
 use crate::service::worker::WorkerServiceError;
+use anyhow::anyhow;
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
-use golem_service_base::model::{GolemError, GolemErrorInvalidShardId, WorkerId};
+use golem_common::model::ShardId;
+use golem_service_base::model::{
+    GolemError, GolemErrorInvalidShardId, GolemErrorUnknown, WorkerId,
+};
 use golem_service_base::routing_table::{HasRoutingTableService, RoutingTableError};
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -47,7 +53,7 @@ pub trait RoutingLogic {
             + Sync
             + Clone
             + 'static,
-        G: Fn(Target::ResultOut) -> Result<R, GolemError> + Send;
+        G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send;
 }
 
 #[async_trait]
@@ -234,6 +240,49 @@ pub trait HasWorkerExecutorClients {
     fn worker_executor_clients(&self) -> &MultiTargetGrpcClient<WorkerExecutorClient<Channel>>;
 }
 
+#[derive(Debug)]
+pub enum ResponseMapResult {
+    InvalidShardId {
+        shard_id: ShardId,
+        shard_ids: HashSet<ShardId>,
+    },
+    Other(WorkerServiceError),
+}
+
+impl From<GolemError> for ResponseMapResult {
+    fn from(error: GolemError) -> Self {
+        match error {
+            GolemError::InvalidShardId(GolemErrorInvalidShardId {
+                shard_id,
+                shard_ids,
+            }) => ResponseMapResult::InvalidShardId {
+                shard_id,
+                shard_ids,
+            },
+            other => ResponseMapResult::Other(other.into()),
+        }
+    }
+}
+
+impl From<&'static str> for ResponseMapResult {
+    fn from(error: &'static str) -> Self {
+        ResponseMapResult::Other(WorkerServiceError::Internal(anyhow!(error)))
+    }
+}
+
+impl From<WorkerExecutionError> for ResponseMapResult {
+    fn from(error: WorkerExecutionError) -> Self {
+        let golem_error = error.clone().try_into().unwrap_or_else(|_| {
+            GolemError::Unknown(GolemErrorUnknown {
+                details: "Unknown worker execution error".to_string(),
+            })
+        });
+        let result = golem_error.clone().into();
+        debug!("Worker execution error {error:?} mapped to golem error {golem_error:?} and finally {result:?}");
+        result
+    }
+}
+
 #[async_trait]
 impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> RoutingLogic for T {
     async fn call_worker_executor<Target, F, G, Out, R>(
@@ -254,7 +303,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
             + Sync
             + Clone
             + 'static,
-        G: Fn(Target::ResultOut) -> Result<R, GolemError> + Send,
+        G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send,
     {
         loop {
             match target
@@ -271,10 +320,10 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                 }
                 Ok(Some(out)) => match response_map(out) {
                     Ok(result) => break Ok(result),
-                    Err(GolemError::InvalidShardId(GolemErrorInvalidShardId {
+                    Err(ResponseMapResult::InvalidShardId {
                         shard_id,
                         shard_ids,
-                    })) => {
+                    }) => {
                         info!("InvalidShardId: {} not in {:?}", shard_id, shard_ids);
                         info!("Invalidating routing table");
                         self.routing_table_service()
@@ -282,9 +331,9 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                             .await;
                         sleep(Duration::from_secs(1)).await;
                     }
-                    Err(other) => {
-                        debug!("Got {:?}, not retrying", other);
-                        break Err(WorkerServiceError::internal(other));
+                    Err(ResponseMapResult::Other(error)) => {
+                        debug!("Got {:?}, not retrying", error);
+                        break Err(error);
                     }
                 },
                 Err(GetWorkerExecutorClientError::FailedToGetRoutingTable(

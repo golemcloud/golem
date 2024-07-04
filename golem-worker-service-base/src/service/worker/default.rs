@@ -52,8 +52,8 @@ use golem_service_base::{
 };
 
 use super::{
-    AllExecutors, ConnectWorkerStream, HasWorkerExecutorClients, RandomExecutor, RoutingLogic,
-    WorkerServiceError,
+    AllExecutors, ConnectWorkerStream, HasWorkerExecutorClients, RandomExecutor, ResponseMapResult,
+    RoutingLogic, WorkerServiceError,
 };
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
@@ -312,12 +312,8 @@ where
                 } => Ok(()),
                 workerexecutor::CreateWorkerResponse {
                     result: Some(workerexecutor::create_worker_response::Result::Failure(err)),
-                } => Err(err.try_into().unwrap()),
-                workerexecutor::CreateWorkerResponse { .. } => {
-                    Err(GolemError::Unknown(GolemErrorUnknown {
-                        details: "Empty response".to_string(),
-                    }))
-                }
+                } => Err(err.into()),
+                workerexecutor::CreateWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -388,12 +384,8 @@ where
                 } => Ok(()),
                 workerexecutor::DeleteWorkerResponse {
                     result: Some(workerexecutor::delete_worker_response::Result::Failure(err)),
-                } => Err(err.try_into().unwrap()),
-                workerexecutor::DeleteWorkerResponse { .. } => {
-                    Err(GolemError::Unknown(GolemErrorUnknown {
-                        details: "Empty response".to_string(),
-                    }))
-                }
+                } => Err(err.into()),
+                workerexecutor::DeleteWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -580,13 +572,11 @@ where
                         Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(err)),
                     } => {
                         error!("Invoked function on {}: {} failed with {err:?}", worker_id_clone, function_name_clone);
-                        Err(err.try_into().unwrap())
+                        Err(err.into())
                     },
                     workerexecutor::InvokeAndAwaitWorkerResponse { .. } => {
                         error!("Invoked function on {}: {} failed with empty response", worker_id_clone, function_name_clone);
-                        Err(GolemError::Unknown(GolemErrorUnknown {
-                            details: "Empty response".to_string(),
-                        }))
+                        Err("Empty response".into())
                     }
                 }
             }
@@ -710,12 +700,8 @@ where
                 } => Ok(()),
                 workerexecutor::InvokeWorkerResponse {
                     result: Some(workerexecutor::invoke_worker_response::Result::Failure(err)),
-                } => Err(err.try_into().unwrap()),
-                workerexecutor::InvokeWorkerResponse { .. } => {
-                    Err(GolemError::Unknown(GolemErrorUnknown {
-                        details: "Empty response".to_string(),
-                    }))
-                }
+                } => Err(err.into()),
+                workerexecutor::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -765,11 +751,9 @@ where
                             Some(workerexecutor::complete_promise_response::Result::Failure(
                                      err,
                                  )),
-                        } => Err(err.try_into().unwrap()),
+                        } => Err(err.into()),
                         workerexecutor::CompletePromiseResponse { .. } => {
-                            Err(GolemError::Unknown(GolemErrorUnknown {
-                                details: "Empty response".to_string(),
-                            }))
+                            Err("Empty response".into())
                         }
                     }
                 }
@@ -807,12 +791,8 @@ where
                 } => Ok(()),
                 workerexecutor::InterruptWorkerResponse {
                     result: Some(workerexecutor::interrupt_worker_response::Result::Failure(err)),
-                } => Err(err.try_into().unwrap()),
-                workerexecutor::InterruptWorkerResponse { .. } => {
-                    Err(GolemError::Unknown(GolemErrorUnknown {
-                        details: "Empty response".to_string(),
-                    }))
-                }
+                } => Err(err.into()),
+                workerexecutor::InterruptWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -857,12 +837,10 @@ where
                         Some(workerexecutor::get_worker_metadata_response::Result::Failure(err)),
                     } => {
                         error!("Failed to get metadata for {}: {err:?}", worker_id_clone);
-                        Err(err.try_into().unwrap())
+                        Err(err.into())
                     },
                     workerexecutor::GetWorkerMetadataResponse { .. } => {
-                        Err(GolemError::Unknown(GolemErrorUnknown {
-                            details: "Empty response".to_string(),
-                        }))
+                        Err("Empty response".into())
                     }
                 }
             }
@@ -928,12 +906,8 @@ where
                 } => Ok(()),
                 workerexecutor::ResumeWorkerResponse {
                     result: Some(workerexecutor::resume_worker_response::Result::Failure(err)),
-                } => Err(err.try_into().unwrap()),
-                workerexecutor::ResumeWorkerResponse { .. } => {
-                    Err(GolemError::Unknown(GolemErrorUnknown {
-                        details: "Empty response".to_string(),
-                    }))
-                }
+                } => Err(err.into()),
+                workerexecutor::ResumeWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -973,12 +947,8 @@ where
                 } => Ok(()),
                 workerexecutor::UpdateWorkerResponse {
                     result: Some(workerexecutor::update_worker_response::Result::Failure(err)),
-                } => Err(err.try_into().unwrap()),
-                workerexecutor::UpdateWorkerResponse { .. } => {
-                    Err(GolemError::Unknown(GolemErrorUnknown {
-                        details: "Empty response".to_string(),
-                    }))
-                }
+                } => Err(err.into()),
+                workerexecutor::UpdateWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -1071,14 +1041,12 @@ where
                             workerexecutor::GetRunningWorkersMetadataResponse {
                                 result:
                                 Some(workerexecutor::get_running_workers_metadata_response::Result::Failure(err)),
-                            } => Err(err.try_into().unwrap()),
+                            } => Err(err.into()),
                             workerexecutor::GetRunningWorkersMetadataResponse { .. } => {
-                                Err(GolemError::Unknown(GolemErrorUnknown {
-                                    details: "Empty response".to_string(),
-                                }))
+                                Err("Empty response".into())
                             }
                         }
-                    }).collect::<Result<Vec<_>, GolemError>>()
+                    }).collect::<Result<Vec<_>, ResponseMapResult>>()
                 }
         ).await?;
 
@@ -1135,11 +1103,9 @@ where
                                  workerexecutor::GetWorkersMetadataResponse {
                                      result:
                                      Some(workerexecutor::get_workers_metadata_response::Result::Failure(err)),
-                                 } => Err(err.try_into().unwrap()),
+                                 } => Err(err.into()),
                                  workerexecutor::GetWorkersMetadataResponse { .. } => {
-                                     Err(GolemError::Unknown(GolemErrorUnknown {
-                                         details: "Empty response".to_string(),
-                                     }))
+                                     Err("Empty response".into())
                                  }
                              }
                          }
