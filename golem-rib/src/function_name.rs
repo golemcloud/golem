@@ -19,6 +19,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{TypeAnnotatedValue, Value};
 use semver::{BuildMetadata, Prerelease};
 use std::borrow::Cow;
+use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub enum ParsedFunctionSite {
@@ -289,6 +290,17 @@ pub struct ParsedFunctionName {
     pub function: ParsedFunctionReference,
 }
 
+impl Display for ParsedFunctionName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let function_name =
+            self.site.interface_name()
+                .map_or(self.function.function_name(),
+                        |interface| format!("{{{}}}.{}", interface, self.function.function_name())
+                );
+        write!(f, "{}", function_name)
+    }
+}
+
 impl ParsedFunctionName {
     pub fn new(site: ParsedFunctionSite, function: ParsedFunctionReference) -> Self {
         Self { site, function }
@@ -358,7 +370,7 @@ mod function_name_tests {
                 site: ParsedFunctionSite::Global,
                 function: ParsedFunctionReference::Function {
                     function: "run-example".to_string()
-                }
+                },
             }
         );
     }
@@ -380,7 +392,7 @@ mod function_name_tests {
                 },
                 function: ParsedFunctionReference::Function {
                     function: "fn1".to_string()
-                }
+                },
             }
         );
     }
@@ -400,11 +412,11 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::Function {
                     function: "fn1".to_string()
-                }
+                },
             }
         );
     }
@@ -424,11 +436,11 @@ mod function_name_tests {
                     namespace: "wasi".to_string(),
                     package: "cli".to_string(),
                     interface: "run".to_string(),
-                    version: Some(SemVer(semver::Version::new(0, 2, 0)))
+                    version: Some(SemVer(semver::Version::new(0, 2, 0))),
                 },
                 function: ParsedFunctionReference::Function {
                     function: "run".to_string()
-                }
+                },
             }
         );
     }
@@ -452,11 +464,11 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceConstructor {
                     resource: "resource1".to_string()
-                }
+                },
             }
         );
     }
@@ -480,11 +492,11 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceConstructor {
                     resource: "resource1".to_string()
-                }
+                },
             }
         );
     }
@@ -510,12 +522,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::IndexedResourceConstructor {
                     resource: "resource1".to_string(),
-                    resource_params: vec![]
-                }
+                    resource_params: vec![],
+                },
             }
         );
     }
@@ -568,7 +580,7 @@ mod function_name_tests {
         let parsed = ParsedFunctionName::parse(
             "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).new}",
         )
-        .expect("Parsing failed");
+            .expect("Parsing failed");
         assert_eq!(
             parsed.site().interface_name(),
             Some("ns:name/interface".to_string())
@@ -624,12 +636,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceMethod {
                     resource: "resource1".to_string(),
-                    method: "do-something".to_string()
-                }
+                    method: "do-something".to_string(),
+                },
             }
         );
     }
@@ -654,12 +666,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceMethod {
                     resource: "resource1".to_string(),
-                    method: "do-something".to_string()
-                }
+                    method: "do-something".to_string(),
+                },
             }
         );
     }
@@ -687,12 +699,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceStaticMethod {
                     resource: "resource1".to_string(),
-                    method: "do-something-static".to_string()
-                }
+                    method: "do-something-static".to_string(),
+                },
             }
         );
     }
@@ -717,12 +729,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceStaticMethod {
                     resource: "resource1".to_string(),
-                    method: "do-something-static".to_string()
-                }
+                    method: "do-something-static".to_string(),
+                },
             }
         );
     }
@@ -746,11 +758,11 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceDrop {
                     resource: "resource1".to_string()
-                }
+                },
             }
         );
     }
@@ -776,12 +788,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::IndexedResourceDrop {
                     resource: "resource1".to_string(),
-                    resource_params: vec![]
-                }
+                    resource_params: vec![],
+                },
             }
         )
     }
@@ -815,7 +827,7 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::IndexedResourceDrop {
                     resource: "resource1".to_string(),
@@ -823,8 +835,8 @@ mod function_name_tests {
                         "\"hello\"".to_string(),
                         "1".to_string(),
                         "true".to_string(),
-                    ]
-                }
+                    ],
+                },
             }
         );
     }
@@ -834,7 +846,7 @@ mod function_name_tests {
         let parsed = ParsedFunctionName::parse(
             "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).drop}",
         )
-        .expect("Parsing failed");
+            .expect("Parsing failed");
         assert_eq!(
             parsed.site().interface_name(),
             Some("ns:name/interface".to_string())
@@ -890,11 +902,11 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceDrop {
                     resource: "resource1".to_string()
-                }
+                },
             }
         );
     }

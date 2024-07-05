@@ -161,7 +161,6 @@ impl Services {
             http_definition_lookup_service,
             worker_to_http_service,
             component_service,
-            worker_metadata_fetcher,
             api_definition_validator_service,
         })
     }
@@ -206,7 +205,6 @@ impl Services {
             http_definition_lookup_service,
             worker_to_http_service,
             component_service,
-            worker_metadata_fetcher,
             api_definition_validator_service,
         }
     }
