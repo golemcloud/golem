@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug};
 
 use crate::evaluator::evaluator_context::internal::create_record;
 use crate::evaluator::getter::GetError;

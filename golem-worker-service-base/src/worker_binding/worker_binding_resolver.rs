@@ -1,8 +1,8 @@
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
 use crate::evaluator::{
-    DefaultEvaluator, EvaluationContext, EvaluationError, ExprEvaluationResult, MetadataFetchError,
+    DefaultEvaluator, EvaluationContext, EvaluationError, ExprEvaluationResult,
 };
-use crate::evaluator::{Evaluator, WorkerMetadataFetcher};
+use crate::evaluator::{Evaluator};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
@@ -15,8 +15,6 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
-
-use golem_service_base::model::{Id, WorkerId};
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::to_response::ToResponse;

@@ -119,8 +119,7 @@ mod tests {
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
     use crate::evaluator::{
-        DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult, MetadataFetchError,
-        WorkerMetadataFetcher, FQN,
+        DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult
     };
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
@@ -221,50 +220,6 @@ mod tests {
         )))
     }
 
-    struct TestMetadataFetcher {
-        test_fqn: FQN,
-    }
-
-    #[async_trait]
-    impl WorkerMetadataFetcher for TestMetadataFetcher {
-        async fn get_worker_metadata(
-            &self,
-            _worker_id: &WorkerId,
-        ) -> Result<ComponentMetadata, MetadataFetchError> {
-            Ok(ComponentMetadata {
-                exports: vec![Export::Instance(ExportInstance {
-                    name: self
-                        .test_fqn
-                        .clone()
-                        .parsed_function_name
-                        .site()
-                        .interface_name()
-                        .unwrap(),
-                    functions: vec![ExportFunction {
-                        name: self
-                            .test_fqn
-                            .parsed_function_name
-                            .function()
-                            .function_name()
-                            .clone(),
-                        parameters: vec![],
-                        results: vec![],
-                    }],
-                })],
-                producers: vec![],
-                memories: vec![],
-            })
-        }
-    }
-
-    fn get_test_metadata_fetcher(
-        function_name: &str,
-    ) -> Arc<dyn WorkerMetadataFetcher + Sync + Send> {
-        Arc::new(TestMetadataFetcher {
-            test_fqn: FQN::try_from(function_name).unwrap(),
-        })
-    }
-
     #[derive(Debug)]
     struct TestResponse {
         worker_name: String,
@@ -312,18 +267,11 @@ mod tests {
         }
     }
 
-    impl ToResponse<TestResponse> for MetadataFetchError {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
-            panic!("{}", self.to_string())
-        }
-    }
-
     async fn execute(
         api_request: &InputHttpRequest,
         api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
-        let worker_metadata_fetcher = get_test_metadata_fetcher("golem:it/api.{get-cart-contents}");
 
         let resolved_route = api_request
             .resolve(vec![api_specification.clone()])
@@ -331,7 +279,7 @@ mod tests {
             .unwrap();
 
         resolved_route
-            .execute_with(&evaluator, &worker_metadata_fetcher)
+            .execute_with(&evaluator)
             .await
     }
 
