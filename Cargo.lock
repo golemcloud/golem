@@ -3597,6 +3597,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "combine",
+ "golem-api-grpc",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "semver",

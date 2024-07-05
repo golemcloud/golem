@@ -106,6 +106,33 @@ impl<'de> BorrowDecode<'de> for SemVer {
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::rib::SemVersion> for SemVer {
+    type Error = String;
+
+    fn try_from(value: golem_api_grpc::proto::golem::rib::SemVersion) -> Result<Self, Self::Error> {
+        Ok(SemVer(semver::Version {
+            major: value.major,
+            minor: value.minor,
+            patch: value.patch,
+            pre: Prerelease::new(&value.pre).map_err(|_| "Invalid prerelease".to_string())?,
+            build: BuildMetadata::new(&value.build)
+                .map_err(|_| "Invalid build metadata".to_string())?,
+        }))
+    }
+}
+
+impl From<SemVer> for golem_api_grpc::proto::golem::rib::SemVersion {
+    fn from(value: SemVer) -> Self {
+        golem_api_grpc::proto::golem::rib::SemVersion {
+            major: value.0.major,
+            minor: value.0.minor,
+            patch: value.0.patch,
+            pre: value.0.pre.to_string(),
+            build: value.0.build.to_string(),
+        }
+    }
+}
+
 impl ParsedFunctionSite {
     pub fn interface_name(&self) -> Option<String> {
         match self {
@@ -124,6 +151,75 @@ impl ParsedFunctionSite {
                 version: Some(version),
             } => Some(format!("{namespace}:{package}/{interface}@{}", version.0)),
         }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionSite> for ParsedFunctionSite {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::rib::ParsedFunctionSite,
+    ) -> Result<Self, Self::Error> {
+        let site = value.site.ok_or("Missing site".to_string())?;
+        match site {
+            golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Global(_) => {
+                Ok(Self::Global)
+            }
+            golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Interface(
+                golem_api_grpc::proto::golem::rib::InterfaceFunctionSite { name },
+            ) => Ok(Self::Interface { name }),
+            golem_api_grpc::proto::golem::rib::parsed_function_site::Site::PackageInterface(
+                golem_api_grpc::proto::golem::rib::PackageInterfaceFunctionSite {
+                    namespace,
+                    package,
+                    interface,
+                    version,
+                },
+            ) => {
+                let version = match version {
+                    Some(version) => Some(version.try_into()?),
+                    None => None,
+                };
+
+                Ok(Self::PackagedInterface {
+                    namespace,
+                    package,
+                    interface,
+                    version,
+                })
+            }
+        }
+    }
+}
+
+impl From<ParsedFunctionSite> for golem_api_grpc::proto::golem::rib::ParsedFunctionSite {
+    fn from(value: ParsedFunctionSite) -> Self {
+        let site = match value {
+            ParsedFunctionSite::Global => {
+                golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Global(
+                    golem_api_grpc::proto::golem::rib::GlobalFunctionSite {},
+                )
+            }
+            ParsedFunctionSite::Interface { name } => {
+                golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Interface(
+                    golem_api_grpc::proto::golem::rib::InterfaceFunctionSite { name },
+                )
+            }
+            ParsedFunctionSite::PackagedInterface {
+                namespace,
+                package,
+                interface,
+                version,
+            } => golem_api_grpc::proto::golem::rib::parsed_function_site::Site::PackageInterface(
+                golem_api_grpc::proto::golem::rib::PackageInterfaceFunctionSite {
+                    namespace,
+                    package,
+                    interface,
+                    version: version.map(|v| v.into()),
+                },
+            ),
+        };
+        golem_api_grpc::proto::golem::rib::ParsedFunctionSite { site: Some(site) }
     }
 }
 
@@ -283,6 +379,168 @@ impl ParsedFunctionReference {
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionReference>
+    for ParsedFunctionReference
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::rib::ParsedFunctionReference,
+    ) -> Result<Self, Self::Error> {
+        let function = value
+            .function_reference
+            .ok_or("Missing function".to_string())?;
+        match function {
+            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::Function(golem_api_grpc::proto::golem::rib::FunctionFunctionReference {
+                                                                                                          function
+                                                                                                      }) => {
+                Ok(Self::Function { function })
+            }
+            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceConstructor(golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
+                                                                                                                        resource
+                                                                                                                    }) => {
+                Ok(Self::RawResourceConstructor { resource })
+            }
+            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceMethod(golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
+                                                                                                                   resource,
+                                                                                                                   method
+                                                                                                               }) => {
+                Ok(Self::RawResourceMethod { resource, method })
+            }
+            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceStaticMethod(golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
+                                                                                                                         resource,
+                                                                                                                         method
+                                                                                                                     }) => {
+                Ok(Self::RawResourceStaticMethod { resource, method })
+            }
+            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceDrop(golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference {
+                                                                                                                 resource
+                                                                                                             }) => {
+                Ok(Self::RawResourceDrop { resource })
+            }
+            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceConstructor(golem_api_grpc::proto::golem::rib::IndexedResourceConstructorFunctionReference {
+                                                                                                                            resource,
+                                                                                                                            resource_params
+                                                                                                                        }) => {
+                Ok(Self::IndexedResourceConstructor {
+                    resource,
+                    resource_params,
+                })
+            }
+            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::IndexedResourceMethodFunctionReference {
+                                                                                                                       resource,
+                                                                                                                       resource_params,
+                                                                                                                       method
+                                                                                                                   }) => {
+                Ok(Self::IndexedResourceMethod {
+                    resource,
+                    resource_params,
+                    method,
+                })
+            }
+            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::IndexedResourceStaticMethodFunctionReference {
+                                                                                                                             resource,
+                                                                                                                             resource_params,
+                                                                                                                             method
+                                                                                                                         }) => {
+                Ok(Self::IndexedResourceStaticMethod {
+                    resource,
+                    resource_params,
+                    method,
+                })
+            }
+            golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceDrop(golem_api_grpc::proto::golem::rib::IndexedResourceDropFunctionReference {
+                                                                                                                     resource,
+                                                                                                                     resource_params
+                                                                                                                 }) => {
+                Ok(Self::IndexedResourceDrop {
+                    resource,
+                    resource_params,
+                })
+            }
+        }
+    }
+}
+
+impl From<ParsedFunctionReference> for golem_api_grpc::proto::golem::rib::ParsedFunctionReference {
+    fn from(value: ParsedFunctionReference) -> Self {
+        let function = match value {
+            ParsedFunctionReference::Function { function } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::Function(
+                golem_api_grpc::proto::golem::rib::FunctionFunctionReference { function },
+            ),
+            ParsedFunctionReference::RawResourceConstructor { resource } => {
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceConstructor(
+                    golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
+                        resource,
+                    },
+                )
+            }
+            ParsedFunctionReference::RawResourceMethod { resource, method } => {
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceMethod(
+                    golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
+                        resource,
+                        method,
+                    },
+                )
+            }
+            ParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
+                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceStaticMethod(
+                    golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
+                        resource,
+                        method,
+                    },
+                )
+            }
+            ParsedFunctionReference::RawResourceDrop { resource } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceDrop(
+                golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference { resource },
+            ),
+            ParsedFunctionReference::IndexedResourceConstructor {
+                resource,
+                resource_params,
+            } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceConstructor(
+                golem_api_grpc::proto::golem::rib::IndexedResourceConstructorFunctionReference {
+                    resource,
+                    resource_params,
+                },
+            ),
+            ParsedFunctionReference::IndexedResourceMethod {
+                resource,
+                resource_params,
+                method,
+            } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceMethod(
+                golem_api_grpc::proto::golem::rib::IndexedResourceMethodFunctionReference {
+                    resource,
+                    resource_params,
+                    method,
+                },
+            ),
+            ParsedFunctionReference::IndexedResourceStaticMethod {
+                resource,
+                resource_params,
+                method,
+            } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceStaticMethod(
+                golem_api_grpc::proto::golem::rib::IndexedResourceStaticMethodFunctionReference {
+                    resource,
+                    resource_params,
+                    method,
+                },
+            ),
+            ParsedFunctionReference::IndexedResourceDrop {
+                resource,
+                resource_params,
+            } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceDrop(
+                golem_api_grpc::proto::golem::rib::IndexedResourceDropFunctionReference {
+                    resource,
+                    resource_params,
+                },
+            ),
+        };
+        golem_api_grpc::proto::golem::rib::ParsedFunctionReference {
+            function_reference: Some(function),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub struct ParsedFunctionName {
     pub site: ParsedFunctionSite,
@@ -343,6 +601,29 @@ impl ParsedFunctionName {
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionName> for ParsedFunctionName {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::rib::ParsedFunctionName,
+    ) -> Result<Self, Self::Error> {
+        let site = ParsedFunctionSite::try_from(value.site.ok_or("Missing site".to_string())?)?;
+        let function = ParsedFunctionReference::try_from(
+            value.function.ok_or("Missing function".to_string())?,
+        )?;
+        Ok(Self { site, function })
+    }
+}
+
+impl From<ParsedFunctionName> for golem_api_grpc::proto::golem::rib::ParsedFunctionName {
+    fn from(value: ParsedFunctionName) -> Self {
+        golem_api_grpc::proto::golem::rib::ParsedFunctionName {
+            site: Some(value.site.into()),
+            function: Some(value.function.into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod function_name_tests {
     use super::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
@@ -358,7 +639,7 @@ mod function_name_tests {
                 site: ParsedFunctionSite::Global,
                 function: ParsedFunctionReference::Function {
                     function: "run-example".to_string()
-                }
+                },
             }
         );
     }
@@ -380,7 +661,7 @@ mod function_name_tests {
                 },
                 function: ParsedFunctionReference::Function {
                     function: "fn1".to_string()
-                }
+                },
             }
         );
     }
@@ -400,11 +681,11 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::Function {
                     function: "fn1".to_string()
-                }
+                },
             }
         );
     }
@@ -424,11 +705,11 @@ mod function_name_tests {
                     namespace: "wasi".to_string(),
                     package: "cli".to_string(),
                     interface: "run".to_string(),
-                    version: Some(SemVer(semver::Version::new(0, 2, 0)))
+                    version: Some(SemVer(semver::Version::new(0, 2, 0))),
                 },
                 function: ParsedFunctionReference::Function {
                     function: "run".to_string()
-                }
+                },
             }
         );
     }
@@ -452,11 +733,11 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceConstructor {
                     resource: "resource1".to_string()
-                }
+                },
             }
         );
     }
@@ -480,11 +761,11 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceConstructor {
                     resource: "resource1".to_string()
-                }
+                },
             }
         );
     }
@@ -510,12 +791,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::IndexedResourceConstructor {
                     resource: "resource1".to_string(),
-                    resource_params: vec![]
-                }
+                    resource_params: vec![],
+                },
             }
         );
     }
@@ -624,12 +905,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceMethod {
                     resource: "resource1".to_string(),
-                    method: "do-something".to_string()
-                }
+                    method: "do-something".to_string(),
+                },
             }
         );
     }
@@ -654,12 +935,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceMethod {
                     resource: "resource1".to_string(),
-                    method: "do-something".to_string()
-                }
+                    method: "do-something".to_string(),
+                },
             }
         );
     }
@@ -687,12 +968,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceStaticMethod {
                     resource: "resource1".to_string(),
-                    method: "do-something-static".to_string()
-                }
+                    method: "do-something-static".to_string(),
+                },
             }
         );
     }
@@ -717,12 +998,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceStaticMethod {
                     resource: "resource1".to_string(),
-                    method: "do-something-static".to_string()
-                }
+                    method: "do-something-static".to_string(),
+                },
             }
         );
     }
@@ -746,11 +1027,11 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceDrop {
                     resource: "resource1".to_string()
-                }
+                },
             }
         );
     }
@@ -776,12 +1057,12 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::IndexedResourceDrop {
                     resource: "resource1".to_string(),
-                    resource_params: vec![]
-                }
+                    resource_params: vec![],
+                },
             }
         )
     }
@@ -815,7 +1096,7 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::IndexedResourceDrop {
                     resource: "resource1".to_string(),
@@ -823,8 +1104,8 @@ mod function_name_tests {
                         "\"hello\"".to_string(),
                         "1".to_string(),
                         "true".to_string(),
-                    ]
-                }
+                    ],
+                },
             }
         );
     }
@@ -890,11 +1171,11 @@ mod function_name_tests {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
-                    version: None
+                    version: None,
                 },
                 function: ParsedFunctionReference::RawResourceDrop {
                     resource: "resource1".to_string()
-                }
+                },
             }
         );
     }
