@@ -107,52 +107,23 @@ impl ResolvedWorkerBinding {
     pub async fn execute_with<R>(
         &self,
         evaluator: &Arc<dyn Evaluator + Sync + Send>,
-        worker_metadata_fetcher: &Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     ) -> R
-    where
-        ExprEvaluationResult: ToResponse<R>,
-        EvaluationError: ToResponse<R>,
-        MetadataFetchError: ToResponse<R>,
+        where
+            ExprEvaluationResult: ToResponse<R>,
+            EvaluationError: ToResponse<R>,
     {
-        let worker_name = match Id::try_from(self.worker_detail.worker_name.clone()) {
-            Ok(worker_name) => worker_name,
-            Err(err) => {
-                return EvaluationError::Message(err.to_string()).to_response(&self.request_details)
-            }
-        };
+        let runtime = EvaluationContext::from_all(
+            &self.worker_detail,
+            &self.request_details,
+        );
 
-        let worker_id = WorkerId {
-            component_id: self.worker_detail.component_id.clone(),
-            worker_name,
-        };
-
-        let functions_available = worker_metadata_fetcher
-            .get_worker_metadata(&worker_id)
+        let result = evaluator
+            .evaluate(&self.response_mapping.clone().0, &runtime)
             .await;
 
-        match functions_available {
-            Ok(functions) => {
-                let runtime = EvaluationContext::from_all(
-                    &self.worker_detail,
-                    &self.request_details,
-                    functions,
-                );
-
-                match runtime {
-                    Ok(context) => {
-                        let result = evaluator
-                            .evaluate(&self.response_mapping.clone().0, &context)
-                            .await;
-
-                        match result {
-                            Ok(worker_response) => {
-                                worker_response.to_response(&self.request_details)
-                            }
-                            Err(err) => err.to_response(&self.request_details),
-                        }
-                    }
-                    Err(err) => MetadataFetchError(err).to_response(&self.request_details),
-                }
+        match result {
+            Ok(worker_response) => {
+                worker_response.to_response(&self.request_details)
             }
             Err(err) => err.to_response(&self.request_details),
         }
@@ -201,7 +172,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             request_body,
             headers,
         )
-        .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
+            .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
         let request_evaluation_context = EvaluationContext::from_request_data(&request_details);
 

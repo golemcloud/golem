@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Display};
 
 use crate::evaluator::evaluator_context::internal::create_record;
 use crate::evaluator::getter::GetError;
@@ -7,101 +7,18 @@ use crate::evaluator::Getter;
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::RefinedWorkerResponse;
-use async_trait::async_trait;
-use golem_service_base::model::{ComponentMetadata, FunctionParameter, FunctionResult, WorkerId};
 use golem_wasm_rpc::TypeAnnotatedValue;
-use rib::ParsedFunctionName;
 
 #[derive(Debug, Clone)]
 pub struct EvaluationContext {
     pub variables: Option<TypeAnnotatedValue>,
-    pub functions: Vec<Function>,
-}
-
-#[derive(PartialEq, Debug, Clone)]
-pub struct FQN {
-    pub parsed_function_name: ParsedFunctionName,
-}
-
-impl TryFrom<&str> for FQN {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let parsed_function_name = ParsedFunctionName::parse(value)?;
-
-        Ok(FQN {
-            parsed_function_name,
-        })
-    }
-}
-
-impl Display for FQN {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let result = self.parsed_function_name.clone();
-        let site = result.site();
-        let site_str = site.interface_name();
-        let func_ref = result.function();
-        let function_name = func_ref.function_name();
-        let name = site_str.map_or(function_name.clone(), |s| {
-            format!("{}.{{{}}}", s.clone(), function_name)
-        });
-        write!(f, "{}", name)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Function {
-    pub fqn: FQN,
-    pub arguments: Vec<FunctionParameter>,
-    pub return_type: Vec<FunctionResult>,
-}
-
-#[async_trait]
-pub trait WorkerMetadataFetcher {
-    async fn get_worker_metadata(
-        &self,
-        worker_id: &WorkerId,
-    ) -> Result<ComponentMetadata, MetadataFetchError>;
-}
-
-pub struct MetadataFetchError(pub String);
-
-impl Display for MetadataFetchError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Worker component metadata fetch error: {}", self.0)
-    }
-}
-
-pub struct NoopWorkerMetadataFetcher;
-
-#[async_trait]
-impl WorkerMetadataFetcher for NoopWorkerMetadataFetcher {
-    async fn get_worker_metadata(
-        &self,
-        _worker_id: &WorkerId,
-    ) -> Result<ComponentMetadata, MetadataFetchError> {
-        Ok(ComponentMetadata {
-            exports: vec![],
-            producers: vec![],
-            memories: vec![],
-        })
-    }
 }
 
 impl EvaluationContext {
     pub fn empty() -> Self {
         EvaluationContext {
             variables: None,
-            functions: vec![],
         }
-    }
-
-    pub fn find_function(&self, function: ParsedFunctionName) -> Result<Option<Function>, String> {
-        Ok(self
-            .functions
-            .iter()
-            .find(|f| f.fqn.parsed_function_name == function)
-            .cloned())
     }
 
     pub fn merge(&mut self, that: &EvaluationContext) -> EvaluationContext {
@@ -133,51 +50,14 @@ impl EvaluationContext {
     pub fn from_all(
         worker_detail: &WorkerDetail,
         request: &RequestDetails,
-        component_metadata: ComponentMetadata,
-    ) -> Result<Self, String> {
+    ) -> Self {
         let mut request_data = internal::request_type_annotated_value(request);
         let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
         let merged = request_data.merge(&worker_data);
 
-        let top_level_functions = component_metadata.functions();
-
-        let functions = top_level_functions
-            .iter()
-            .map(|f| Function {
-                fqn: FQN {
-                    parsed_function_name: ParsedFunctionName::global(f.name.clone()),
-                },
-                arguments: f.parameters.clone(),
-                return_type: f.results.clone(),
-            })
-            .collect::<Vec<Function>>();
-
-        let function_of_interfaces = component_metadata
-            .instances()
-            .iter()
-            .flat_map(|i| {
-                i.functions.iter().map(move |f| Function {
-                    fqn: FQN {
-                        parsed_function_name: ParsedFunctionName::parse(format!(
-                            "{}.{{{}}}",
-                            i.name.clone(),
-                            f.name.clone()
-                        ))
-                        .unwrap(),
-                    },
-                    arguments: f.parameters.clone(),
-                    return_type: f.results.clone(),
-                })
-            })
-            .collect::<Vec<Function>>();
-
-        Ok(EvaluationContext {
-            variables: Some(merged.clone()),
-            functions: function_of_interfaces
-                .into_iter()
-                .chain(functions)
-                .collect(),
-        })
+        EvaluationContext {
+            variables: Some(merged.clone())
+        }
     }
 
     pub fn from_worker_detail(worker_detail: &WorkerDetail) -> Self {
@@ -186,7 +66,6 @@ impl EvaluationContext {
 
         EvaluationContext {
             variables: Some(worker_data),
-            functions: vec![],
         }
     }
 
@@ -195,7 +74,6 @@ impl EvaluationContext {
 
         EvaluationContext {
             variables: Some(variables),
-            functions: vec![],
         }
     }
 
@@ -209,7 +87,6 @@ impl EvaluationContext {
 
             EvaluationContext {
                 variables: Some(worker_data),
-                functions: vec![],
             }
         } else {
             EvaluationContext::empty()
