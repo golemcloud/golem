@@ -148,6 +148,7 @@ impl Services {
         > = Arc::new(ApiDefinitionServiceDefault::new(
             component_service.clone(),
             api_definition_repo.clone(),
+            api_deployment_repo.clone(),
             api_definition_validator_service.clone(),
         ));
 

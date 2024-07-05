@@ -238,34 +238,80 @@ impl RegisterApiDefinitionApi {
 
 #[cfg(test)]
 mod test {
+    use golem_service_base::config::DbSqliteConfig;
+    use golem_service_base::db;
+    use golem_worker_service_base::repo::api_definition::{ApiDefinitionRepo, DbApiDefinitionRepo};
+    use golem_worker_service_base::repo::api_deployment;
+    use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
     use golem_worker_service_base::service::component::ComponentServiceNoop;
     use http::StatusCode;
     use poem::test::TestClient;
-
-    use golem_worker_service_base::repo::api_definition::InMemoryApiDefinitionRepo;
-    use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
+    use std::marker::PhantomData;
 
     use crate::service::component::ComponentService;
 
     use super::*;
 
-    fn make_route() -> poem::Route {
+    struct SqliteDb<'c> {
+        db_path: String,
+        lifetime: PhantomData<&'c ()>,
+    }
+
+    impl<'c> Default for SqliteDb<'c> {
+        fn default() -> Self {
+            Self {
+                db_path: format!("/tmp/golem-worker-{}.db", uuid::Uuid::new_v4()),
+                lifetime: PhantomData,
+            }
+        }
+    }
+
+    impl<'c> Drop for SqliteDb<'c> {
+        fn drop(&mut self) {
+            std::fs::remove_file(&self.db_path).unwrap();
+        }
+    }
+
+    async fn make_route<'c>() -> (poem::Route, SqliteDb<'c>) {
+        let db = SqliteDb::default();
+        let db_config = DbSqliteConfig {
+            database: db.db_path.to_string(),
+            max_connections: 10,
+        };
+
+        db::sqlite_migrate(&db_config, "db/migration/sqlite")
+            .await
+            .unwrap();
+
+        let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
+
+        let api_definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send> =
+            Arc::new(DbApiDefinitionRepo::new(db_pool.clone().into()));
+        let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
+            Arc::new(api_deployment::DbApiDeploymentRepo::new(
+                db_pool.clone().into(),
+            ));
+
         let component_service: ComponentService = Arc::new(ComponentServiceNoop {});
         let definition_service = ApiDefinitionServiceDefault::new(
             component_service,
-            Arc::new(InMemoryApiDefinitionRepo::default()),
+            api_definition_repo,
+            api_deployment_repo,
             Arc::new(ApiDefinitionValidatorNoop {}),
         );
 
         let endpoint = RegisterApiDefinitionApi::new(Arc::new(definition_service));
 
-        poem::Route::new().nest("", OpenApiService::new(endpoint, "test", "1.0"))
+        (
+            poem::Route::new().nest("", OpenApiService::new(endpoint, "test", "1.0")),
+            db,
+        )
     }
 
     #[tokio::test]
     async fn conflict_error_returned() {
-        let api = make_route();
+        let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
         let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
@@ -294,7 +340,7 @@ mod test {
 
     #[tokio::test]
     async fn update_non_existant() {
-        let api = make_route();
+        let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
         let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
@@ -318,7 +364,7 @@ mod test {
 
     #[tokio::test]
     async fn get_all() {
-        let api = make_route();
+        let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
         let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
@@ -355,7 +401,7 @@ mod test {
 
     #[tokio::test]
     async fn decode_openapi_json() {
-        let api = make_route();
+        let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
         let response = client
