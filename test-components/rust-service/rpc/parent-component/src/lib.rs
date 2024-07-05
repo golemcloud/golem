@@ -1,8 +1,7 @@
-use std::env;
 use crate::bindings::exports::golem::itrpc::rpc_api::Guest;
 use crate::bindings::golem::it_stub::stub_child_component::{Api, Data};
 use crate::bindings::golem::rpc::types::Uri;
-
+use std::env;
 
 mod bindings;
 
@@ -13,42 +12,45 @@ impl Guest for Component {
         let remote_component_id =
             env::var("CHILD_COMPONENT_ID").expect("PARENT_COMPONENT_ID not set");
 
-        let remote_worker_name =
-            env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
+        let remote_worker_name = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
 
-        let uri = Uri { value: format!("worker://{remote_component_id}/{remote_worker_name}") };
+        let uri = Uri {
+            value: format!("worker://{remote_component_id}/{remote_worker_name}"),
+        };
 
         let api = Api::new(&uri);
 
-        api.echo(input.as_str())
+        api.blocking_echo(input.as_str())
     }
 
     fn calculate(input: u64) -> u64 {
         let remote_component_id =
             env::var("CHILD_COMPONENT_ID").expect("PARENT_COMPONENT_ID not set");
 
-        let remote_worker_name =
-            env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
+        let remote_worker_name = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
 
-        let uri = Uri { value: format!("worker://{remote_component_id}/{remote_worker_name}") };
+        let uri = Uri {
+            value: format!("worker://{remote_component_id}/{remote_worker_name}"),
+        };
 
         let api = Api::new(&uri);
 
-        api.calculate(input)
+        api.blocking_calculate(input)
     }
 
     fn process(input: Vec<Data>) -> Vec<Data> {
         let remote_component_id =
             env::var("CHILD_COMPONENT_ID").expect("PARENT_COMPONENT_ID not set");
 
-        let remote_worker_name =
-            env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
+        let remote_worker_name = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
 
-        let uri = Uri { value: format!("worker://{remote_component_id}/{remote_worker_name}") };
+        let uri = Uri {
+            value: format!("worker://{remote_component_id}/{remote_worker_name}"),
+        };
 
         let api = Api::new(&uri);
 
-        api.process(&input)
+        api.blocking_process(&input)
     }
 }
 

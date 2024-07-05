@@ -18,11 +18,12 @@ use crate::components::k8s::{
     Routing,
 };
 use crate::components::rdb::Rdb;
-use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::{env_vars, wait_for_startup, WorkerService};
+use crate::components::worker_service::{env_vars, new_client, wait_for_startup, WorkerService};
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
+use async_trait::async_trait;
+use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
@@ -30,6 +31,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tonic::transport::Channel;
 use tracing::{info, Level};
 
 pub struct K8sWorkerService {
@@ -39,6 +41,7 @@ pub struct K8sWorkerService {
     pod: Arc<Mutex<K8sPod>>,
     service: Arc<Mutex<K8sService>>,
     routing: Arc<Mutex<K8sRouting>>,
+    client: Option<WorkerServiceClient<Channel>>,
 }
 
 impl K8sWorkerService {
@@ -54,9 +57,9 @@ impl K8sWorkerService {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        shared_client: bool,
     ) -> Self {
         info!("Starting Golem Worker Service pod");
 
@@ -67,7 +70,6 @@ impl K8sWorkerService {
             component_service,
             shard_manager,
             rdb,
-            redis,
             verbosity,
         );
         let env_vars = env_vars
@@ -181,16 +183,33 @@ impl K8sWorkerService {
 
         Self {
             namespace: namespace.clone(),
-            local_host,
+            local_host: local_host.clone(),
             local_port,
             pod: Arc::new(Mutex::new(managed_pod)),
             service: Arc::new(Mutex::new(managed_service)),
             routing: Arc::new(Mutex::new(managed_routing)),
+            client: if shared_client {
+                Some(
+                    new_client(&local_host, local_port)
+                        .await
+                        .expect("Failed to create client"),
+                )
+            } else {
+                None
+            },
         }
     }
 }
 
+#[async_trait]
 impl WorkerService for K8sWorkerService {
+    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
+        match &self.client {
+            Some(client) => Ok(client.clone()),
+            None => Ok(new_client(&self.local_host, self.local_port).await?),
+        }
+    }
+
     fn private_host(&self) -> String {
         format!("{}.{}.svc.cluster.local", Self::NAME, &self.namespace.0)
     }

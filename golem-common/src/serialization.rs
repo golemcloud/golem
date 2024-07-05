@@ -22,13 +22,17 @@ pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 /// bincode 2 with bincode::config::standard()
 pub const SERIALIZATION_VERSION_V2: u8 = 2u8;
 
-pub fn serialize<T: Encode>(value: &T) -> Result<Bytes, String> {
+pub fn serialize_with_version<T: Encode>(value: &T, version: u8) -> Result<Bytes, String> {
     let data = bincode::encode_to_vec(value, bincode::config::standard())
         .map_err(|e| format!("Failed to serialize value: {e}"))?;
     let mut bytes = BytesMut::new();
-    bytes.put_u8(SERIALIZATION_VERSION_V2);
+    bytes.put_u8(version);
     bytes.extend_from_slice(&data);
     Ok(bytes.freeze())
+}
+
+pub fn serialize<T: Encode>(value: &T) -> Result<Bytes, String> {
+    serialize_with_version(value, SERIALIZATION_VERSION_V2)
 }
 
 pub fn deserialize<T: Decode>(bytes: &[u8]) -> Result<T, String> {

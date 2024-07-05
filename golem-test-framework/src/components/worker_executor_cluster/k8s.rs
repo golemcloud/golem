@@ -43,6 +43,7 @@ impl K8sWorkerExecutorCluster {
         verbosity: Level,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        shared_client: bool,
     ) -> Arc<dyn WorkerExecutor + Send + Sync + 'static> {
         Arc::new(
             K8sWorkerExecutor::new(
@@ -56,6 +57,7 @@ impl K8sWorkerExecutorCluster {
                 worker_service,
                 timeout,
                 service_annotations,
+                shared_client,
             )
             .await,
         )
@@ -72,6 +74,7 @@ impl K8sWorkerExecutorCluster {
         verbosity: Level,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        shared_client: bool,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors_joins = Vec::new();
@@ -88,6 +91,7 @@ impl K8sWorkerExecutorCluster {
                 verbosity,
                 timeout,
                 service_annotations.clone(),
+                shared_client,
             ));
 
             worker_executors_joins.push(worker_executor_join);

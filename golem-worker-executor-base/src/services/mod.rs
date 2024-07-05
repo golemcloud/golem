@@ -326,7 +326,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let scheduler_service = Arc::new(scheduler::SchedulerServiceMock::new());
         let worker_activator = Arc::new(worker_activator::WorkerActivatorMock::new());
         let worker_proxy = Arc::new(worker_proxy::WorkerProxyMock::new());
-        let events = Arc::new(Events::new());
+        let events = Arc::new(Events::new(32768));
         Self {
             active_workers,
             engine,

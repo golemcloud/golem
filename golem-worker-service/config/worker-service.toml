@@ -7,19 +7,12 @@ port = 9005
 custom_request_port = 9006
 worker_grpc_port = 9007
 
-[redis]
-host = "localhost"
-port = 6380
-database = 1
-tracing = false
-pool_size = 8
-key_prefix = ""
+[db]
+type = "Sqlite"
 
-[redis.retries]
-max_attempts = 5
-min_delay = "100ms"
-max_delay = "2s"
-multiplier = 2
+[db.config]
+max_connections = 10
+database = "../data/golem_worker.sqlite"
 
 [component_service]
 host = "localhost"

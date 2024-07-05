@@ -22,7 +22,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{info, Instrument};
@@ -60,7 +60,63 @@ pub struct RunConfig {
     pub length: usize,
 }
 
-pub type ResultKey = String;
+#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct ResultKey {
+    name: String,
+    primary: bool,
+}
+
+impl ResultKey {
+    pub fn primary(name: impl AsRef<str>) -> Self {
+        Self {
+            name: name.as_ref().to_string(),
+            primary: true,
+        }
+    }
+
+    pub fn secondary(name: impl AsRef<str>) -> Self {
+        Self {
+            name: name.as_ref().to_string(),
+            primary: false,
+        }
+    }
+}
+
+impl Debug for ResultKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl Display for ResultKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl PartialOrd<Self> for ResultKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ResultKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.name.cmp(&other.name)
+    }
+}
+
+impl From<String> for ResultKey {
+    fn from(name: String) -> Self {
+        Self::primary(name)
+    }
+}
+
+impl From<&str> for ResultKey {
+    fn from(name: &str) -> Self {
+        Self::primary(name)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DurationResult {
@@ -370,6 +426,17 @@ pub struct BenchmarkResult {
 }
 
 impl BenchmarkResult {
+    pub fn primary_only(self) -> Self {
+        Self {
+            runs: self.runs,
+            results: self
+                .results
+                .into_iter()
+                .map(|(run_config, run_result)| (run_config, run_result.primary_only()))
+                .collect(),
+        }
+    }
+
     pub fn view(&self) -> BenchmarkResultView {
         let show_cluster_size = self.runs.iter().map(|c| c.cluster_size).unique().count() > 1;
         let show_size = self.runs.iter().map(|c| c.size).unique().count() > 1;
@@ -432,6 +499,21 @@ impl BenchmarkRunResult {
         Self {
             duration_results: HashMap::new(),
             count_results: HashMap::new(),
+        }
+    }
+
+    pub fn primary_only(self) -> Self {
+        Self {
+            duration_results: self
+                .duration_results
+                .into_iter()
+                .filter(|(k, _)| k.primary)
+                .collect(),
+            count_results: self
+                .count_results
+                .into_iter()
+                .filter(|(k, _)| k.primary)
+                .collect(),
         }
     }
 

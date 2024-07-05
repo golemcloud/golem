@@ -7,7 +7,8 @@ use serde::Deserialize;
 use url::Url;
 use uuid::Uuid;
 
-use golem_common::config::{RedisConfig, RetryConfig};
+use golem_common::config::RetryConfig;
+use golem_service_base::config::DbConfig;
 use golem_service_base::routing_table::RoutingTableConfig;
 
 // The base configuration for the worker service
@@ -16,7 +17,7 @@ use golem_service_base::routing_table::RoutingTableConfig;
 #[derive(Clone, Debug, Deserialize)]
 pub struct WorkerServiceBaseConfig {
     pub environment: String,
-    pub redis: RedisConfig,
+    pub db: DbConfig,
     pub component_service: ComponentServiceConfig,
     pub enable_tracing_console: bool,
     pub enable_json_log: bool,
@@ -24,7 +25,6 @@ pub struct WorkerServiceBaseConfig {
     pub custom_request_port: u16,
     pub worker_grpc_port: u16,
     pub routing_table: RoutingTableConfig,
-    pub worker_executor_client_cache: WorkerExecutorClientCacheConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -61,7 +61,7 @@ impl Default for WorkerServiceBaseConfig {
     fn default() -> Self {
         Self {
             environment: "local".to_string(),
-            redis: RedisConfig::default(),
+            db: DbConfig::default(),
             component_service: ComponentServiceConfig::default(),
             enable_tracing_console: false,
             enable_json_log: false,
@@ -69,7 +69,6 @@ impl Default for WorkerServiceBaseConfig {
             custom_request_port: 9001,
             worker_grpc_port: 9092,
             routing_table: RoutingTableConfig::default(),
-            worker_executor_client_cache: WorkerExecutorClientCacheConfig::default(),
         }
     }
 }

@@ -18,7 +18,7 @@ pub mod model;
 pub mod routing_table;
 pub mod service;
 pub mod typechecker;
-pub mod worker_executor_clients;
 
+pub mod db;
 pub mod stream;
 pub mod type_inference;

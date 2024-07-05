@@ -15,6 +15,7 @@
 use crate::error::GolemError;
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_wasm_rpc::Value;
+use tokio::sync::broadcast::error::RecvError;
 
 pub struct Events {
     sender: tokio::sync::broadcast::Sender<Event>,
@@ -23,13 +24,13 @@ pub struct Events {
 
 impl Default for Events {
     fn default() -> Self {
-        Self::new()
+        Self::new(32768)
     }
 }
 
 impl Events {
-    pub fn new() -> Self {
-        let (sender, receiver) = tokio::sync::broadcast::channel(100);
+    pub fn new(capacity: usize) -> Self {
+        let (sender, receiver) = tokio::sync::broadcast::channel(capacity);
         Self {
             sender,
             _receiver: receiver,
@@ -40,21 +41,32 @@ impl Events {
         let _ = self.sender.send(event);
     }
 
-    pub async fn wait_for<F, R>(&self, f: F) -> R
+    pub fn subscribe(&self) -> EventsSubscription {
+        EventsSubscription {
+            receiver: self.sender.subscribe(),
+        }
+    }
+}
+
+pub struct EventsSubscription {
+    receiver: tokio::sync::broadcast::Receiver<Event>,
+}
+
+impl EventsSubscription {
+    pub async fn wait_for<F, R>(&mut self, f: F) -> Result<R, RecvError>
     where
         F: Fn(&Event) -> Option<R>,
     {
-        let mut receiver = self.sender.subscribe();
         loop {
-            match receiver.recv().await {
+            match self.receiver.recv().await {
                 Ok(event) => {
                     if let Some(result) = f(&event) {
-                        break result;
+                        break Ok(result);
                     } else {
                         continue;
                     }
                 }
-                Err(_) => continue,
+                Err(err) => break Err(err),
             }
         }
     }

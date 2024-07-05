@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime};
 use crate::common::{start, TestContext};
 use assert2::{assert, check};
 use golem_common::model::WorkerStatus;
-use golem_test_framework::dsl::{stderr_event, stdout_event, worker_error_message, TestDsl};
+use golem_test_framework::dsl::{stderr_event, stdout_event, worker_error_message, TestDslUnsafe};
 use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
 use tokio::spawn;

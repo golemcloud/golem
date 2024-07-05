@@ -149,7 +149,7 @@ impl WorkerExecutorTestDependencies {
         ));
         // Connecting to the worker executor started in-process
         let worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static> = Arc::new(
-            ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port),
+            ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port, true),
         );
         // Fake worker service forwarding all requests to the worker executor directly
         let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(

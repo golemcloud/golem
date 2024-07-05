@@ -45,7 +45,7 @@ use tracing_subscriber::EnvFilter;
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
 
 use crate::http_server::HttpServerImpl;
-use crate::shard_manager_config::HealthCheckMode;
+use crate::shard_manager_config::{HealthCheckK8sConfig, HealthCheckMode};
 
 pub struct ShardManagerServiceImpl {
     shard_management: ShardManagement,
@@ -247,12 +247,12 @@ async fn async_main(
 
     let health_check: Arc<dyn HealthCheck + Send + Sync> =
         match &shard_manager_config.health_check.mode {
-            HealthCheckMode::Grpc => Arc::new(GrpcHealthCheck::new(
+            HealthCheckMode::Grpc(_) => Arc::new(GrpcHealthCheck::new(
                 worker_executors.clone(),
                 shard_manager_config.worker_executors.retries.clone(),
             )),
             #[cfg(feature = "kubernetes")]
-            HealthCheckMode::K8s { namespace } => Arc::new(
+            HealthCheckMode::K8s(HealthCheckK8sConfig { namespace }) => Arc::new(
                 crate::healthcheck::kubernetes::KubernetesHealthCheck::new(
                     namespace.clone(),
                     shard_manager_config.worker_executors.retries.clone(),
@@ -272,10 +272,7 @@ async fn async_main(
 
     let service = ShardManagerServiceServer::new(shard_manager);
 
-    // TODO: configurable limits
     Server::builder()
-        .concurrency_limit_per_connection(1024)
-        .max_concurrent_streams(Some(1024))
         .add_service(reflection_service)
         .add_service(service)
         .add_service(health_service)

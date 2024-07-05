@@ -43,6 +43,44 @@ pub fn get_delay(config: &RetryConfig, attempts: u64) -> Option<Duration> {
     Some(delay)
 }
 
+/// Lower level support for performing the same retry logic configured by `RetryConfig`
+/// as `with_retries`, but without being a higher order function and without doing any
+/// logging and metrics.
+///
+/// Before attempting to perform the retriable action, call `start_attempt`. If it fails,
+/// call `failed_attempt` and if that returns true, start a new attempt immediately.
+pub struct RetryState<'a> {
+    attempts: u64,
+    retry_config: &'a RetryConfig,
+}
+
+impl<'a> RetryState<'a> {
+    /// Initializes the retry state.
+    pub fn new(retry_config: &'a RetryConfig) -> Self {
+        Self {
+            attempts: 0,
+            retry_config,
+        }
+    }
+
+    /// Indicates a new attempt has started
+    pub fn start_attempt(&mut self) {
+        self.attempts += 1;
+    }
+
+    /// Indicates that the started attempt has failed. If there are still retries possible,
+    /// this function will sleep for the calculated delay and then return true. If there
+    /// are no more retry attempts, it returns false
+    pub async fn failed_attempt(&self) -> bool {
+        if let Some(delay) = get_delay(self.retry_config, self.attempts) {
+            tokio::time::sleep(delay).await;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 pub async fn with_retries<'a, In, F, G, R, E>(
     description: &str,
     target_label: &'static str,

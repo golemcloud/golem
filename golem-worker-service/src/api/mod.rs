@@ -1,5 +1,5 @@
-pub mod deploy_api_definition;
-pub mod register_api_definition;
+pub mod api_definition;
+pub mod api_deployment;
 pub mod worker;
 pub mod worker_connect;
 
@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 type ApiServices = (
     WorkerApi,
-    register_api_definition::RegisterApiDefinitionApi,
-    deploy_api_definition::ApiDeploymentApi,
+    api_definition::RegisterApiDefinitionApi,
+    api_deployment::ApiDeploymentApi,
     HealthcheckApi,
 );
 
@@ -58,10 +58,8 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
                 component_service: services.component_service.clone(),
                 worker_service: services.worker_service.clone(),
             },
-            register_api_definition::RegisterApiDefinitionApi::new(
-                services.definition_service.clone(),
-            ),
-            deploy_api_definition::ApiDeploymentApi::new(services.deployment_service.clone()),
+            api_definition::RegisterApiDefinitionApi::new(services.definition_service.clone()),
+            api_deployment::ApiDeploymentApi::new(services.deployment_service.clone()),
             HealthcheckApi,
         ),
         "Golem API",

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::function_name::ParsedFunctionName;
 use golem_common::model::{
     ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use poem_openapi::{Enum, NewType, Object, Union};
+use rib::ParsedFunctionName;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 

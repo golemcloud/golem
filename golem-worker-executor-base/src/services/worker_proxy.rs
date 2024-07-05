@@ -23,12 +23,14 @@ use golem_api_grpc::proto::golem::worker::{
     InvokeParameters, InvokeRequest, InvokeResponse, UpdateMode, UpdateWorkerRequest,
     UpdateWorkerResponse, WorkerError,
 };
+use golem_common::client::GrpcClient;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_wasm_rpc::{Value, WitValue};
 use http::Uri;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use tonic::transport::Channel;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -139,14 +141,18 @@ impl From<GolemError> for WorkerProxyError {
 }
 
 pub struct RemoteWorkerProxy {
-    endpoint: Uri,
+    client: GrpcClient<WorkerServiceClient<Channel>>,
     access_token: Uuid,
 }
 
 impl RemoteWorkerProxy {
     pub fn new(endpoint: Uri, access_token: Uuid) -> Self {
         Self {
-            endpoint,
+            client: GrpcClient::new(
+                WorkerServiceClient::new,
+                endpoint.as_http_02(),
+                Default::default(), // TODO
+            ),
             access_token,
         }
     }
@@ -179,24 +185,25 @@ impl WorkerProxy for RemoteWorkerProxy {
             params: proto_params,
         });
 
-        let mut client = WorkerServiceClient::connect(self.endpoint.as_http_02()).await?;
-
-        let response: InvokeAndAwaitResponse = client
-            .invoke_and_await(authorised_grpc_request(
-                InvokeAndAwaitRequest {
-                    worker_id: Some(owned_worker_id.worker_id().into()),
-                    idempotency_key: idempotency_key.map(|k| k.into()),
-                    function: function_name,
-                    invoke_parameters,
-                    calling_convention: CallingConvention::Component as i32,
-                    context: Some(InvocationContext {
-                        parent: Some(caller_worker_id.into()),
-                        args: caller_args,
-                        env: caller_env,
-                    }),
-                },
-                &self.access_token,
-            ))
+        let response: InvokeAndAwaitResponse = self
+            .client
+            .call(move |client| {
+                Box::pin(client.invoke_and_await(authorised_grpc_request(
+                    InvokeAndAwaitRequest {
+                        worker_id: Some(owned_worker_id.worker_id().into()),
+                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
+                        function: function_name.clone(),
+                        invoke_parameters: invoke_parameters.clone(),
+                        calling_convention: CallingConvention::Component as i32,
+                        context: Some(InvocationContext {
+                            parent: Some(caller_worker_id.clone().into()),
+                            args: caller_args.clone(),
+                            env: caller_env.clone(),
+                        }),
+                    },
+                    &self.access_token,
+                )))
+            })
             .await?
             .into_inner();
 
@@ -244,23 +251,24 @@ impl WorkerProxy for RemoteWorkerProxy {
             params: proto_params,
         });
 
-        let mut client = WorkerServiceClient::connect(self.endpoint.as_http_02()).await?;
-
-        let response: InvokeResponse = client
-            .invoke(authorised_grpc_request(
-                InvokeRequest {
-                    worker_id: Some(owned_worker_id.worker_id().into()),
-                    idempotency_key: idempotency_key.map(|k| k.into()),
-                    function: function_name,
-                    invoke_parameters,
-                    context: Some(InvocationContext {
-                        parent: Some(caller_worker_id.into()),
-                        args: caller_args,
-                        env: caller_env,
-                    }),
-                },
-                &self.access_token,
-            ))
+        let response: InvokeResponse = self
+            .client
+            .call(move |client| {
+                Box::pin(client.invoke(authorised_grpc_request(
+                    InvokeRequest {
+                        worker_id: Some(owned_worker_id.worker_id().into()),
+                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
+                        function: function_name.clone(),
+                        invoke_parameters: invoke_parameters.clone(),
+                        context: Some(InvocationContext {
+                            parent: Some(caller_worker_id.clone().into()),
+                            args: caller_args.clone(),
+                            env: caller_env.clone(),
+                        }),
+                    },
+                    &self.access_token,
+                )))
+            })
             .await?
             .into_inner();
 
@@ -281,17 +289,18 @@ impl WorkerProxy for RemoteWorkerProxy {
     ) -> Result<(), WorkerProxyError> {
         debug!("Updating remote worker to version {target_version} in {mode:?} mode");
 
-        let mut client = WorkerServiceClient::connect(self.endpoint.as_http_02()).await?;
-
-        let response: UpdateWorkerResponse = client
-            .update_worker(authorised_grpc_request(
-                UpdateWorkerRequest {
-                    worker_id: Some(owned_worker_id.worker_id().into()),
-                    target_version,
-                    mode: mode as i32,
-                },
-                &self.access_token,
-            ))
+        let response: UpdateWorkerResponse = self
+            .client
+            .call(move |client| {
+                Box::pin(client.update_worker(authorised_grpc_request(
+                    UpdateWorkerRequest {
+                        worker_id: Some(owned_worker_id.worker_id().into()),
+                        target_version,
+                        mode: mode as i32,
+                    },
+                    &self.access_token,
+                )))
+            })
             .await?
             .into_inner();
 

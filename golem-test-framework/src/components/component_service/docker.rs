@@ -12,22 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{env_vars, ComponentService};
+use crate::components::component_service::{env_vars, new_client, ComponentService};
 use crate::components::rdb::Rdb;
 use crate::components::{DOCKER, NETWORK};
 use async_trait::async_trait;
 
+use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
 use std::collections::HashMap;
 use std::sync::Arc;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
-
+use tonic::transport::Channel;
 use tracing::{info, Level};
 
 pub struct DockerComponentService {
     container: Container<'static, GolemComponentServiceImage>,
     public_http_port: u16,
     public_grpc_port: u16,
+    client: Option<ComponentServiceClient<Channel>>,
 }
 
 impl DockerComponentService {
@@ -39,6 +41,7 @@ impl DockerComponentService {
         component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
+        shared_client: bool,
     ) -> Self {
         info!("Starting golem-component-service container");
 
@@ -67,12 +70,24 @@ impl DockerComponentService {
             container,
             public_http_port,
             public_grpc_port,
+            client: if shared_client {
+                Some(new_client("localhost", public_grpc_port).await)
+            } else {
+                None
+            },
         }
     }
 }
 
 #[async_trait]
 impl ComponentService for DockerComponentService {
+    async fn client(&self) -> ComponentServiceClient<Channel> {
+        match &self.client {
+            Some(client) => client.clone(),
+            None => new_client("localhost", self.public_grpc_port).await,
+        }
+    }
+
     fn private_host(&self) -> String {
         Self::NAME.to_string()
     }

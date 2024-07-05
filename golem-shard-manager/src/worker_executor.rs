@@ -15,19 +15,20 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::error::ShardManagerError;
+use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
+use crate::shard_manager_config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
 use tokio::time::timeout;
+use tonic::transport::Channel;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::HealthCheckRequest;
 use tracing::{debug, info, warn};
-
-use crate::error::ShardManagerError;
-use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
-use crate::shard_manager_config::WorkerExecutorServiceConfig;
 
 #[async_trait]
 pub trait WorkerExecutorService {
@@ -98,6 +99,7 @@ pub async fn assign_shards(
 
 pub struct WorkerExecutorServiceDefault {
     config: WorkerExecutorServiceConfig,
+    client: MultiTargetGrpcClient<WorkerExecutorClient<Channel>>,
 }
 
 #[async_trait]
@@ -170,38 +172,31 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
 
     async fn health_check(&self, pod: &Pod) -> bool {
         debug!("Health checking pod {pod}");
-        match pod.endpoint() {
-            Ok(endpoint) => {
-                let conn = timeout(self.config.health_check_timeout, endpoint.connect()).await;
-                match conn {
-                    Ok(conn) => match conn {
-                        Ok(conn) => {
-                            let request = HealthCheckRequest {
-                                service: "".to_string(),
-                            };
-                            match HealthClient::new(conn).check(request).await {
-                                Ok(response) => {
-                                    response.into_inner().status == ServingStatus::Serving as i32
-                                }
-                                Err(err) => {
-                                    warn!("Health request returned with an error: {:?}", err);
-                                    false
-                                }
-                            }
+        let endpoint = pod.endpoint();
+        let conn = timeout(self.config.health_check_timeout, endpoint.connect()).await;
+        match conn {
+            Ok(conn) => match conn {
+                Ok(conn) => {
+                    let request = HealthCheckRequest {
+                        service: "".to_string(),
+                    };
+                    match HealthClient::new(conn).check(request).await {
+                        Ok(response) => {
+                            response.into_inner().status == ServingStatus::Serving as i32
                         }
                         Err(err) => {
-                            warn!("Failed to connect to pod {pod}: {:?}", err);
+                            warn!("Health request returned with an error: {:?}", err);
                             false
                         }
-                    },
-                    Err(_) => {
-                        warn!("Connection to pod {pod} timed out");
-                        false
                     }
                 }
-            }
+                Err(err) => {
+                    warn!("Failed to connect to pod {pod}: {:?}", err);
+                    false
+                }
+            },
             Err(_) => {
-                warn!("Pod has an invalid URI: {pod}");
+                warn!("Connection to pod {pod} timed out");
                 false
             }
         }
@@ -210,7 +205,14 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
 
 impl WorkerExecutorServiceDefault {
     pub fn new(config: WorkerExecutorServiceConfig) -> Self {
-        Self { config }
+        let client = MultiTargetGrpcClient::new(
+            WorkerExecutorClient::new,
+            GrpcClientConfig {
+                retries_on_unavailable: config.retries.clone(),
+                ..Default::default() // TODO: configure
+            },
+        );
+        Self { config, client }
     }
 
     async fn assign_shards_internal(
@@ -226,12 +228,12 @@ impl WorkerExecutorServiceDefault {
                 .collect(),
         };
 
-        let mut worker_executor_client =
-            WorkerExecutorClient::new(pod.endpoint()?.connect().await?);
-
         let assign_shards_response = timeout(
             self.config.assign_shards_timeout,
-            worker_executor_client.assign_shards(assign_shards_request),
+            self.client.call(pod.uri(), move |client| {
+                let assign_shards_request = assign_shards_request.clone();
+                Box::pin(client.assign_shards(assign_shards_request))
+            }),
         )
         .await
         .map_err(|e| ShardManagerError::unknown(e.to_string()))?
@@ -267,12 +269,12 @@ impl WorkerExecutorServiceDefault {
                 .collect(),
         };
 
-        let mut worker_executor_client =
-            WorkerExecutorClient::new(pod.endpoint()?.connect().await?);
-
         let revoke_shards_response = timeout(
             self.config.revoke_shards_timeout,
-            worker_executor_client.revoke_shards(revoke_shards_request),
+            self.client.call(pod.uri(), move |client| {
+                let revoke_shards_request = revoke_shards_request.clone();
+                Box::pin(client.revoke_shards(revoke_shards_request))
+            }),
         )
         .await
         .map_err(|e| ShardManagerError::unknown(e.to_string()))?

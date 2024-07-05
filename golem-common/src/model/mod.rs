@@ -42,7 +42,6 @@ use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
 
-pub mod function_name;
 pub mod oplog;
 pub mod regions;
 
@@ -536,6 +535,15 @@ pub struct Pod {
 impl Pod {
     pub fn uri(&self) -> Uri {
         Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build URI")
+    }
+
+    pub fn uri_02(&self) -> http_02::Uri {
+        http_02::Uri::builder()
             .scheme("http")
             .authority(format!("{}:{}", self.host, self.port).as_str())
             .path_and_query("/")

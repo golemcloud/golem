@@ -14,9 +14,10 @@
 
 use crate::components::component_service::{AddComponentError, ComponentService};
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
-
+use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
 use golem_common::model::ComponentId;
+use std::path::{Path, PathBuf};
+use tonic::transport::Channel;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -35,6 +36,10 @@ impl FileSystemComponentService {
 
 #[async_trait]
 impl ComponentService for FileSystemComponentService {
+    async fn client(&self) -> ComponentServiceClient<Channel> {
+        panic!("No real component service running")
+    }
+
     async fn get_or_add_component(&self, local_path: &Path) -> ComponentId {
         self.add_component(local_path)
             .await

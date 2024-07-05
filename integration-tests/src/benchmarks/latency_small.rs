@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
+use golem_wasm_rpc::Value;
 use integration_tests::benchmarks::{
-    cleanup_iteration, run_benchmark, run_echo, setup_benchmark, setup_iteration, warmup_echo,
-    BenchmarkContext, IterationContext,
+    benchmark_invocations, delete_workers, run_benchmark, setup_benchmark, setup_simple_iteration,
+    warmup_workers, SimpleBenchmarkContext, SimpleIterationContext,
 };
 
 struct WorkerLatencySmall {
@@ -27,8 +27,8 @@ struct WorkerLatencySmall {
 
 #[async_trait]
 impl Benchmark for WorkerLatencySmall {
-    type BenchmarkContext = BenchmarkContext;
-    type IterationContext = IterationContext;
+    type BenchmarkContext = SimpleBenchmarkContext;
+    type IterationContext = SimpleIterationContext;
 
     fn name() -> &'static str {
         "latency-small"
@@ -53,7 +53,7 @@ impl Benchmark for WorkerLatencySmall {
         &self,
         benchmark_context: &Self::BenchmarkContext,
     ) -> Self::IterationContext {
-        setup_iteration(benchmark_context, self.config.clone(), "rust-echo", true).await
+        setup_simple_iteration(benchmark_context, self.config.clone(), "rust-echo", true).await
     }
 
     async fn warmup(
@@ -61,7 +61,13 @@ impl Benchmark for WorkerLatencySmall {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        warmup_echo(benchmark_context, context).await
+        warmup_workers(
+            &benchmark_context.deps,
+            &context.worker_ids,
+            "golem:it/api.{echo}",
+            vec![Value::String("hello".to_string())],
+        )
+        .await
     }
 
     async fn run(
@@ -70,7 +76,16 @@ impl Benchmark for WorkerLatencySmall {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) {
-        run_echo(self.config.length, benchmark_context, context, recorder).await
+        benchmark_invocations(
+            &benchmark_context.deps,
+            recorder,
+            self.config.length,
+            &context.worker_ids,
+            "golem:it/api.{echo}",
+            vec![Value::String("hello".to_string())],
+            "",
+        )
+        .await
     }
 
     async fn cleanup_iteration(
@@ -78,7 +93,7 @@ impl Benchmark for WorkerLatencySmall {
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
     ) {
-        cleanup_iteration(benchmark_context, context).await
+        delete_workers(&benchmark_context.deps, &context.worker_ids).await
     }
 }
 

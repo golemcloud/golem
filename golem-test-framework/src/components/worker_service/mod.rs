@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tonic::transport::Channel;
+use tonic::transport::{Channel, Endpoint};
 use tonic::Streaming;
 use tracing::Level;
 
@@ -32,7 +32,6 @@ use golem_api_grpc::proto::golem::worker::{
 
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
-use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::wait_for_startup_grpc;
 
@@ -44,107 +43,121 @@ pub mod spawned;
 
 #[async_trait]
 pub trait WorkerService {
-    async fn client(&self) -> WorkerServiceClient<Channel> {
-        new_client(&self.public_host(), self.public_grpc_port()).await
-    }
+    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>>;
 
     // Overridable client functions - using these instead of client() allows
     // testing worker executors directly without the need to start a worker service,
     // when the `WorkerService` implementation is `ForwardingWorkerService`.
-    async fn create_worker(&self, request: LaunchNewWorkerRequest) -> LaunchNewWorkerResponse {
-        self.client()
-            .await
+    async fn create_worker(
+        &self,
+        request: LaunchNewWorkerRequest,
+    ) -> crate::Result<LaunchNewWorkerResponse> {
+        Ok(self
+            .client()
+            .await?
             .launch_new_worker(request)
-            .await
-            .expect("Failed to call golem-worker-service")
-            .into_inner()
+            .await?
+            .into_inner())
     }
 
-    async fn delete_worker(&self, request: DeleteWorkerRequest) -> DeleteWorkerResponse {
-        self.client()
-            .await
+    async fn delete_worker(
+        &self,
+        request: DeleteWorkerRequest,
+    ) -> crate::Result<DeleteWorkerResponse> {
+        Ok(self
+            .client()
+            .await?
             .delete_worker(request)
-            .await
-            .expect("Failed to call golem-worker-service")
-            .into_inner()
+            .await?
+            .into_inner())
     }
 
     async fn get_worker_metadata(
         &self,
         request: GetWorkerMetadataRequest,
-    ) -> GetWorkerMetadataResponse {
-        self.client()
-            .await
+    ) -> crate::Result<GetWorkerMetadataResponse> {
+        Ok(self
+            .client()
+            .await?
             .get_worker_metadata(request)
-            .await
-            .expect("Failed to call golem-worker-service")
-            .into_inner()
+            .await?
+            .into_inner())
     }
 
     async fn get_workers_metadata(
         &self,
         request: GetWorkersMetadataRequest,
-    ) -> GetWorkersMetadataResponse {
-        self.client()
-            .await
+    ) -> crate::Result<GetWorkersMetadataResponse> {
+        Ok(self
+            .client()
+            .await?
             .get_workers_metadata(request)
-            .await
-            .expect("Failed to call golem-worker-service")
-            .into_inner()
+            .await?
+            .into_inner())
     }
 
-    async fn invoke(&self, request: InvokeRequest) -> InvokeResponse {
-        self.client()
-            .await
-            .invoke(request)
-            .await
-            .expect("Failed to call golem-worker-service")
-            .into_inner()
+    async fn invoke(&self, request: InvokeRequest) -> crate::Result<InvokeResponse> {
+        Ok(self.client().await?.invoke(request).await?.into_inner())
     }
 
-    async fn invoke_and_await(&self, request: InvokeAndAwaitRequest) -> InvokeAndAwaitResponse {
-        self.client()
-            .await
+    async fn invoke_and_await(
+        &self,
+        request: InvokeAndAwaitRequest,
+    ) -> crate::Result<InvokeAndAwaitResponse> {
+        Ok(self
+            .client()
+            .await?
             .invoke_and_await(request)
-            .await
-            .expect("Failed to call golem-worker-service")
-            .into_inner()
+            .await?
+            .into_inner())
     }
 
-    async fn connect_worker(&self, request: ConnectWorkerRequest) -> Streaming<LogEvent> {
-        self.client()
-            .await
+    async fn connect_worker(
+        &self,
+        request: ConnectWorkerRequest,
+    ) -> crate::Result<Streaming<LogEvent>> {
+        Ok(self
+            .client()
+            .await?
             .connect_worker(request)
-            .await
-            .expect("Failed to call golem-worker-service")
-            .into_inner()
+            .await?
+            .into_inner())
     }
 
-    async fn resume_worker(&self, request: ResumeWorkerRequest) -> ResumeWorkerResponse {
-        self.client()
-            .await
+    async fn resume_worker(
+        &self,
+        request: ResumeWorkerRequest,
+    ) -> crate::Result<ResumeWorkerResponse> {
+        Ok(self
+            .client()
+            .await?
             .resume_worker(request)
-            .await
-            .expect("Failed to call golem-worker-service")
-            .into_inner()
+            .await?
+            .into_inner())
     }
 
-    async fn interrupt_worker(&self, request: InterruptWorkerRequest) -> InterruptWorkerResponse {
-        self.client()
-            .await
+    async fn interrupt_worker(
+        &self,
+        request: InterruptWorkerRequest,
+    ) -> crate::Result<InterruptWorkerResponse> {
+        Ok(self
+            .client()
+            .await?
             .interrupt_worker(request)
-            .await
-            .expect("Failed to call golem-worker-service")
-            .into_inner()
+            .await?
+            .into_inner())
     }
 
-    async fn update_worker(&self, request: UpdateWorkerRequest) -> UpdateWorkerResponse {
-        self.client()
-            .await
+    async fn update_worker(
+        &self,
+        request: UpdateWorkerRequest,
+    ) -> crate::Result<UpdateWorkerResponse> {
+        Ok(self
+            .client()
+            .await?
             .update_worker(request)
-            .await
-            .expect("Failed to call golem-worker-service")
-            .into_inner()
+            .await?
+            .into_inner())
     }
 
     fn private_host(&self) -> String;
@@ -171,10 +184,14 @@ pub trait WorkerService {
     fn kill(&self);
 }
 
-async fn new_client(host: &str, grpc_port: u16) -> WorkerServiceClient<Channel> {
-    WorkerServiceClient::connect(format!("http://{host}:{grpc_port}"))
-        .await
-        .expect("Failed to connect to golem-worker-service")
+async fn new_client(
+    host: &str,
+    grpc_port: u16,
+) -> Result<WorkerServiceClient<Channel>, tonic::transport::Error> {
+    let endpoint = Endpoint::new(format!("http://{host}:{grpc_port}"))?
+        .connect_timeout(Duration::from_secs(10));
+    let channel = endpoint.connect().await?;
+    Ok(WorkerServiceClient::new(channel))
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
@@ -188,7 +205,6 @@ fn env_vars(
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
     verbosity: Level,
 ) -> HashMap<String, String> {
     let log_level = verbosity.as_str().to_lowercase();
@@ -196,9 +212,6 @@ fn env_vars(
     let vars: &[(&str, &str)] = &[
         ("RUST_LOG"                                   , &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
         ("RUST_BACKTRACE"                             , "1"),
-        ("GOLEM__REDIS__HOST"                         , &redis.private_host()),
-        ("GOLEM__REDIS__PORT"                         , &redis.private_port().to_string()),
-        ("GOLEM__REDIS__DATABASE"                     , "1"),
         ("GOLEM__COMPONENT_SERVICE__HOST"             , &component_service.private_host()),
         ("GOLEM__COMPONENT_SERVICE__PORT"             , &component_service.private_grpc_port().to_string()),
         ("GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN"     , "5C832D93-FF85-4A8F-9803-513950FDFDB1"),
@@ -214,6 +227,6 @@ fn env_vars(
 
     let mut vars: HashMap<String, String> =
         HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-    vars.extend(rdb.info().env().clone());
+    vars.extend(rdb.info().env("golem_worker").clone());
     vars
 }

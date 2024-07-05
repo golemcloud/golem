@@ -47,9 +47,7 @@ pub mod spawned;
 
 #[async_trait]
 pub trait ComponentService {
-    async fn client(&self) -> ComponentServiceClient<Channel> {
-        new_client(&self.public_host(), self.public_grpc_port()).await
-    }
+    async fn client(&self) -> ComponentServiceClient<Channel>;
 
     async fn get_or_add_component(&self, local_path: &Path) -> ComponentId {
         let mut retries = 3;
@@ -353,7 +351,7 @@ fn env_vars(
         }
     };
 
-    vars.extend(rdb.info().env().clone());
+    vars.extend(rdb.info().env("golem_component").clone());
     vars
 }
 

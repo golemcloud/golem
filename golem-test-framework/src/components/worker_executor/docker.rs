@@ -13,18 +13,19 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
-use crate::components::worker_executor::{env_vars, WorkerExecutor};
+use crate::components::worker_executor::{env_vars, new_client, WorkerExecutor};
 use crate::components::{DOCKER, NETWORK};
 use async_trait::async_trait;
-
-use std::collections::HashMap;
-use std::sync::Arc;
-use testcontainers::core::WaitFor;
-use testcontainers::{Container, Image, RunnableImage};
 
 use crate::components::component_service::ComponentService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::WorkerService;
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use std::collections::HashMap;
+use std::sync::Arc;
+use testcontainers::core::WaitFor;
+use testcontainers::{Container, Image, RunnableImage};
+use tonic::transport::Channel;
 use tracing::{info, Level};
 
 pub struct DockerWorkerExecutor {
@@ -34,6 +35,7 @@ pub struct DockerWorkerExecutor {
     public_http_port: u16,
     public_grpc_port: u16,
     container: Container<'static, WorkerExecutorImage>,
+    client: Option<WorkerExecutorClient<Channel>>,
 }
 
 impl DockerWorkerExecutor {
@@ -45,6 +47,7 @@ impl DockerWorkerExecutor {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
+        shared_client: bool,
     ) -> Self {
         info!("Starting golem-worker-executor container");
 
@@ -75,12 +78,28 @@ impl DockerWorkerExecutor {
             public_http_port,
             public_grpc_port,
             container,
+            client: if shared_client {
+                Some(
+                    new_client("localhost", public_grpc_port)
+                        .await
+                        .expect("Failed to create client"),
+                )
+            } else {
+                None
+            },
         }
     }
 }
 
 #[async_trait]
 impl WorkerExecutor for DockerWorkerExecutor {
+    async fn client(&self) -> crate::Result<WorkerExecutorClient<Channel>> {
+        match &self.client {
+            Some(client) => Ok(client.clone()),
+            None => Ok(new_client("localhost", self.public_grpc_port).await?),
+        }
+    }
+
     fn private_host(&self) -> String {
         self.name.clone()
     }

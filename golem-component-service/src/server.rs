@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use golem_component_service::api::make_open_api_service;
-use golem_component_service::config::{ComponentServiceConfig, DbConfig};
+use golem_component_service::config::ComponentServiceConfig;
 use golem_component_service::service::Services;
-use golem_component_service::{api, db, grpcapi, metrics};
+use golem_component_service::{api, grpcapi, metrics};
+use golem_service_base::config::DbConfig;
+use golem_service_base::db;
 use opentelemetry::global;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
@@ -87,16 +89,20 @@ async fn async_main(
 
     match config.db.clone() {
         DbConfig::Postgres(c) => {
-            db::postgres_migrate(&c).await.map_err(|e| {
-                dbg!("DB - init error: {}", e);
-                std::io::Error::new(std::io::ErrorKind::Other, "Init error")
-            })?;
+            db::postgres_migrate(&c, "./db/migration/postgres")
+                .await
+                .map_err(|e| {
+                    dbg!("DB - init error: {}", e);
+                    std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                })?;
         }
         DbConfig::Sqlite(c) => {
-            db::sqlite_migrate(&c).await.map_err(|e| {
-                error!("DB - init error: {}", e);
-                std::io::Error::new(std::io::ErrorKind::Other, "Init error")
-            })?;
+            db::sqlite_migrate(&c, "./db/migration/sqlite")
+                .await
+                .map_err(|e| {
+                    error!("DB - init error: {}", e);
+                    std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                })?;
         }
     };
 

@@ -110,14 +110,17 @@ async fn measure_component(
         let before_memory = process.memory();
         let before_vmemory = process.virtual_memory();
 
-        let worker_id = executor.start_worker(&component_id, "measure").await;
+        let worker_id = executor
+            .start_worker(&component_id, "measure")
+            .await
+            .unwrap();
 
         system.refresh_process(pid);
         let process = system.process(pid).unwrap();
         let after_memory = process.memory();
         let after_vmemory = process.virtual_memory();
 
-        executor.delete_worker(&worker_id).await;
+        executor.delete_worker(&worker_id).await.unwrap();
 
         // Not substracting total_initial_mem because it is only allocated runtime
         let delta_memory = after_memory as i64 - before_memory as i64;

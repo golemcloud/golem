@@ -3355,6 +3355,7 @@ dependencies = [
  "golem-client",
  "golem-common",
  "golem-examples",
+ "golem-rib",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3424,14 +3425,15 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes 1.6.0",
- "combine",
  "dashmap",
  "derive_more",
  "fred",
  "futures-core",
  "golem-api-grpc",
+ "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "http 0.2.12",
  "humantime-serde",
  "iso8601-timestamp",
  "lazy_static 1.4.0",
@@ -3442,7 +3444,6 @@ dependencies = [
  "prost-types",
  "rand 0.8.5",
  "range-set-blaze",
- "semver",
  "serde 1.0.203",
  "serde_json",
  "tokio",
@@ -3533,6 +3534,7 @@ dependencies = [
  "http 0.2.12",
  "serde 1.0.203",
  "thiserror",
+ "tonic",
  "tracing",
 ]
 
@@ -3575,6 +3577,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-rib"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bincode",
+ "combine",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "semver",
+ "serde 1.0.203",
+ "serde_json",
+ "wasm-wave",
+]
+
+[[package]]
 name = "golem-service-base"
 version = "0.0.0"
 dependencies = [
@@ -3586,6 +3603,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 0.2.12",
@@ -3597,6 +3615,7 @@ dependencies = [
  "rand 0.8.5",
  "serde 1.0.203",
  "serde_json",
+ "sqlx",
  "thiserror",
  "tokio",
  "tonic",
@@ -3625,6 +3644,7 @@ dependencies = [
  "kube",
  "prometheus",
  "prost",
+ "rustls 0.23.10",
  "serde 1.0.203",
  "serde_json",
  "tokio",
@@ -3650,6 +3670,7 @@ dependencies = [
  "clap 4.5.7",
  "cli-table",
  "colored",
+ "console-subscriber",
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
@@ -3820,6 +3841,7 @@ dependencies = [
  "gethostname",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3878,6 +3900,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes 1.6.0",
+ "console-subscriber",
  "derive_more",
  "figment",
  "futures",
@@ -3936,6 +3959,7 @@ dependencies = [
  "futures-util",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -3957,9 +3981,12 @@ dependencies = [
  "serde 1.0.203",
  "serde_json",
  "serde_yaml",
+ "sqlx",
  "strum",
  "strum_macros",
  "tap",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -4625,6 +4652,7 @@ dependencies = [
 name = "integration-tests"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "assert2",
  "async-trait",
  "clap 4.5.7",

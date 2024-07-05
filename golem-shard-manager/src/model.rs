@@ -22,7 +22,7 @@ use std::{fmt, vec};
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use tonic::transport::Endpoint;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use golem_api_grpc::proto::golem;
 use golem_common::model::ShardId;
@@ -51,10 +51,17 @@ impl Pod {
         }
     }
 
-    pub fn endpoint(&self) -> Result<Endpoint, tonic::transport::Error> {
-        let e = Endpoint::try_from(format!("http://{}:{}", self.ip, self.port));
-        debug!("Pod.address: http://{}:{} => {:?}", self.ip, self.port, e);
-        e
+    pub fn endpoint(&self) -> Endpoint {
+        Endpoint::from(self.uri())
+    }
+
+    pub fn uri(&self) -> http_02::Uri {
+        http_02::Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build URI")
     }
 
     pub fn address(&self) -> Result<vec::IntoIter<SocketAddr>, std::io::Error> {
@@ -501,3 +508,6 @@ fn shard_ids_to_ranges<'a, T: Iterator<Item = &'a ShardId>>(ids: T) -> Vec<Shard
 
     result
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Empty {}
