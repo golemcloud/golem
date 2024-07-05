@@ -116,7 +116,6 @@ where
 
         let delay = match r {
             Ok(result) => {
-                // TODO: should be debug?
                 info!(duration_ms = duration.as_millis(), "op success");
                 record_external_call_success(target_label, op_label, duration);
                 return Ok(result);
