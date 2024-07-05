@@ -43,7 +43,10 @@ tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tracing-serde = {workspace = true }
+tracing-serde = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
+
+[dev-dependencies]
+tracing-test = { workspace = true }

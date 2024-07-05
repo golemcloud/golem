@@ -165,6 +165,7 @@ tracing-subscriber = { version = "0.3.18", features = [
     "std",
     "json",
 ] }
+tracing-test = "0.2.5"
 url = "2.5.0"
 uuid = { version = "1.7.0", features = ["serde", "v4"] }
 warp = "0.3.6"

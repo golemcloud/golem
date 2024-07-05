@@ -378,6 +378,7 @@ where
 }
 
 pub(crate) mod format {
+    use std::collections::BTreeSet;
     use std::{fmt, io};
 
     use serde::ser::{SerializeMap, Serializer as _};
@@ -425,11 +426,15 @@ pub(crate) mod format {
 
                 serializer = visitor.take_serializer()?;
 
-                // TODO: deduplicate spans in release and fail in debug
+                let mut spans = BTreeSet::new();
                 if let Some(span) = ctx.lookup_current() {
-                    for span in span.scope().from_root() {
+                    for span in span.scope() {
+                        if spans.contains(span.name()) {
+                            continue;
+                        }
+                        spans.insert(span.name());
+
                         let extensions = span.extensions();
-                        // TODO: fail in debug for these
                         let data = extensions
                             .get::<FormattedFields<N>>()
                             .expect("Unable to find FormattedFields in extensions");
@@ -473,6 +478,68 @@ pub(crate) mod format {
 
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    pub fn make_mock_writer<'a>() -> tracing_test::internal::MockWriter<'a> {
+        tracing_test::internal::MockWriter::new(tracing_test::internal::global_buf())
+    }
+
+    pub fn get_logs() -> String {
+        String::from_utf8(
+            tracing_test::internal::global_buf()
+                .lock()
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    }
+
+    mod json_flatten_span_formatter {
+        use tracing;
+        use tracing::{field, info, span, Level};
+        use tracing_subscriber::FmtSubscriber;
+
+        use crate::tracing::format::JsonFlattenSpanFormatter;
+        use crate::tracing::test::{get_logs, make_mock_writer};
+
+        #[test]
+        fn json_flatten_span_formatter_duplicated_spans_are_removed() {
+            let writer = make_mock_writer();
+            let subscriber = FmtSubscriber::builder()
+                .json()
+                .flatten_event(true)
+                .event_format(JsonFlattenSpanFormatter)
+                .with_writer(writer)
+                .finish();
+
+            tracing::subscriber::with_default(subscriber, || {
+                const SPAN_NAME: &str = "custom_span";
+                let span1 = span!(Level::INFO, SPAN_NAME, span_prop = field::Empty);
+                let _enter = span1.enter();
+                span1.record("span_prop", "value_1");
+                span1.record("span_prop", "value_2");
+
+                let span2 = span!(Level::INFO, SPAN_NAME, span_prop = field::Empty);
+                let _enter = span2.enter();
+                span2.record("span_prop", "value_3");
+                span2.record("span_prop", "value_4");
+
+                info!(value = "value", "hello");
+            });
+
+            let logs = get_logs();
+
+            assert_eq!(logs.matches("\"custom_span\"").count(), 1);
+            assert_eq!(logs.matches("\"span_prop\"").count(), 1);
+            assert_eq!(logs.matches("\"value_1\"").count(), 0);
+            assert_eq!(logs.matches("\"value_2\"").count(), 0);
+            assert_eq!(logs.matches("\"value_3\"").count(), 0);
+            assert_eq!(logs.matches("\"value_4\"").count(), 1);
         }
     }
 }
