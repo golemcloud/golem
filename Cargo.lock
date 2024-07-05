@@ -3526,9 +3526,12 @@ dependencies = [
 name = "golem-component-service-base"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bincode",
  "bytes 1.6.0",
+ "criterion",
+ "fastrand 2.1.0",
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
@@ -3537,7 +3540,13 @@ dependencies = [
  "prost",
  "serde 1.0.203",
  "sqlx",
+ "tap",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tonic",
  "tracing",
  "uuid",
