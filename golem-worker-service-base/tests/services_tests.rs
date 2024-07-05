@@ -9,10 +9,11 @@ mod tests {
     use golem_worker_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
     use golem_worker_service_base::repo::{api_definition, api_deployment};
     use golem_worker_service_base::service::api_definition::{
-        ApiDefinitionIdWithVersion, ApiDefinitionService, ApiDefinitionServiceDefault,
+        ApiDefinitionError, ApiDefinitionIdWithVersion, ApiDefinitionService,
+        ApiDefinitionServiceDefault,
     };
     use golem_worker_service_base::service::api_deployment::{
-        ApiDeploymentService, ApiDeploymentServiceDefault,
+        ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
     };
     use golem_worker_service_base::service::component::{ComponentService, ComponentServiceNoop};
     use golem_worker_service_base::service::http::http_api_definition_validator::{
@@ -22,6 +23,7 @@ mod tests {
     use testcontainers::clients::Cli;
     use testcontainers::{Container, RunnableImage};
     use testcontainers_modules::postgres::Postgres;
+    use uuid::Uuid;
 
     fn start_docker_postgres<'d>(docker: &'d Cli) -> (DbPostgresConfig, Container<'d, Postgres>) {
         let image = RunnableImage::from(Postgres::default()).with_tag("14.7-alpine");
@@ -123,6 +125,7 @@ mod tests {
         > = Arc::new(ApiDefinitionServiceDefault::new(
             component_service.clone(),
             api_definition_repo.clone(),
+            api_deployment_repo.clone(),
             api_definition_validator_service.clone(),
         ));
 
@@ -132,12 +135,234 @@ mod tests {
                 api_definition_repo.clone(),
             ));
 
-        let def1 = get_api_definition("def1", "0.0.1", "/api/get1", "worker1", "[]", "[]");
-        let def2 = get_api_definition("def2", "0.0.1", "/api/get2", "worker2", "[]", "[]");
-        let def3 = get_api_definition("def3", "0.0.1", "/api/get3", "worker3", "[]", "[]");
-        let def4 = get_api_definition("def4", "0.0.1", "/api/get4", "worker4", "[]", "[]");
-        let def5 = get_api_definition("def5", "0.0.1", "/api/get5", "worker5", "[]", "[]");
-        let def5v2 = get_api_definition("def5", "0.0.2", "/api/get5/2", "worker5", "[]", "[]");
+        test_definition_create_and_delete(definition_service.clone()).await;
+        test_deployment(definition_service.clone(), deployment_service.clone()).await;
+        test_deployment_conflict(definition_service.clone(), deployment_service.clone()).await;
+    }
+
+    async fn test_deployment(
+        definition_service: Arc<
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+                + Sync
+                + Send,
+        >,
+        deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
+    ) {
+        let def1 = get_api_definition(
+            &Uuid::new_v4().to_string(),
+            "0.0.1",
+            "/api/get1",
+            "worker1",
+            "[]",
+            "[]",
+            false,
+        );
+        let def2draft = get_api_definition(
+            &Uuid::new_v4().to_string(),
+            "0.0.1",
+            "/api/get2",
+            "worker2",
+            "[]",
+            "[]",
+            true,
+        );
+        let def2 = HttpApiDefinition {
+            draft: false,
+            ..def2draft.clone()
+        };
+        let def3 = get_api_definition(
+            &Uuid::new_v4().to_string(),
+            "0.0.1",
+            "/api/get3",
+            "worker3",
+            "[]",
+            "[]",
+            false,
+        );
+        let def4 = get_api_definition(
+            &Uuid::new_v4().to_string(),
+            "0.0.1",
+            "/api/get4",
+            "worker4",
+            "[]",
+            "[]",
+            false,
+        );
+
+        definition_service
+            .create(
+                &def1,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+        definition_service
+            .create(
+                &def2draft,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+        definition_service
+            .create(
+                &def3,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+        definition_service
+            .create(
+                &def4,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+
+        let definitions = definition_service
+            .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
+            .await
+            .unwrap();
+        assert_eq!(definitions.len(), 4);
+        assert!(
+            definitions.contains(&def2draft)
+                && definitions.contains(&def1)
+                && definitions.contains(&def3)
+                && definitions.contains(&def4)
+        );
+
+        let deployment = get_api_deployment("test.com", None, vec![&def1.id.0, &def2.id.0]);
+        deployment_service.deploy(&deployment).await.unwrap();
+
+        let definitions = definition_service
+            .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
+            .await
+            .unwrap();
+        assert_eq!(definitions.len(), 4);
+        assert!(
+            definitions.contains(&def2)
+                && definitions.contains(&def1)
+                && definitions.contains(&def3)
+                && definitions.contains(&def4)
+        );
+
+        let definitions = deployment_service
+            .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(definitions.len(), 2);
+        assert!(definitions.contains(&def1) && definitions.contains(&def2));
+
+        let deployment = get_api_deployment("test.com", Some("my"), vec![&def4.id.0]);
+        deployment_service.deploy(&deployment).await.unwrap();
+
+        let definitions = deployment_service
+            .get_definitions_by_site(&ApiSiteString("my.test.com".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(definitions.len(), 1);
+        assert!(definitions.contains(&def4));
+
+        let deployment = get_api_deployment("test.com", None, vec![&def3.id.0]);
+        deployment_service.deploy(&deployment).await.unwrap();
+
+        let deployment = deployment_service
+            .get_by_site(&ApiSiteString("test.com".to_string()))
+            .await
+            .unwrap();
+        assert!(deployment.is_some());
+
+        let deployments = deployment_service
+            .get_by_id(&DefaultNamespace::default(), &def3.id)
+            .await
+            .unwrap();
+        assert!(!deployments.is_empty());
+
+        let definitions = deployment_service
+            .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(definitions.len(), 3);
+        assert!(
+            definitions.contains(&def1)
+                && definitions.contains(&def2)
+                && definitions.contains(&def3)
+        );
+
+        let deployment = get_api_deployment("test.com", None, vec![&def3.id.0]);
+        deployment_service.undeploy(&deployment).await.unwrap();
+
+        let definitions = deployment_service
+            .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(definitions.len(), 2);
+        assert!(definitions.contains(&def1) && definitions.contains(&def2));
+
+        deployment_service
+            .delete(
+                &DefaultNamespace::default(),
+                &ApiSiteString("test.com".to_string()),
+            )
+            .await
+            .unwrap();
+
+        let definitions = deployment_service
+            .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
+            .await
+            .unwrap();
+        assert!(definitions.is_empty());
+
+        let deployment = deployment_service
+            .get_by_site(&ApiSiteString("test.com".to_string()))
+            .await
+            .unwrap();
+        assert!(deployment.is_none());
+    }
+
+    async fn test_deployment_conflict(
+        definition_service: Arc<
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+                + Sync
+                + Send,
+        >,
+        deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
+    ) {
+        let def1 = get_api_definition(
+            &Uuid::new_v4().to_string(),
+            "0.0.1",
+            "/api/get1",
+            "worker1",
+            "[]",
+            "[]",
+            false,
+        );
+        let def2 = get_api_definition(
+            &Uuid::new_v4().to_string(),
+            "0.0.1",
+            "/api/get2",
+            "worker2",
+            "[]",
+            "[]",
+            true,
+        );
+
+        let def3 = get_api_definition(
+            &Uuid::new_v4().to_string(),
+            "0.0.1",
+            "/api/get1",
+            "worker2",
+            "[]",
+            "[]",
+            false,
+        );
 
         definition_service
             .create(
@@ -163,84 +388,120 @@ mod tests {
             )
             .await
             .unwrap();
-        definition_service
-            .create(
-                &def4,
-                &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
-            )
-            .await
-            .unwrap();
-        definition_service
-            .create(
-                &def5,
-                &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
-            )
-            .await
-            .unwrap();
-        definition_service
-            .create(
-                &def5v2,
-                &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
-            )
-            .await
-            .unwrap();
 
-        let deployment = get_api_deployment("test.com", None, vec!["def1", "def2"]);
+        let deployment =
+            get_api_deployment("test-conflict.com", None, vec![&def1.id.0, &def2.id.0]);
         deployment_service.deploy(&deployment).await.unwrap();
 
-        let definitions = definition_service
-            .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
+        let deployment = get_api_deployment("test-conflict.com", None, vec![&def3.id.0]);
+        let deployment_result = deployment_service.deploy(&deployment).await;
+        assert!(deployment_result.is_err());
+        assert_eq!(
+            deployment_result.unwrap_err().to_string(),
+            ApiDeploymentError::<DefaultNamespace>::ApiDefinitionsConflict("/api/get1".to_string())
+                .to_string()
+        );
+
+        let delete_result = definition_service
+            .delete(
+                &def1.id,
+                &def1.version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await;
+        assert!(delete_result.is_err());
+        assert_eq!(
+            delete_result.unwrap_err().to_string(),
+            ApiDefinitionError::<RouteValidationError>::ApiDefinitionDeployed(
+                "test-conflict.com".to_string()
+            )
+            .to_string()
+        );
+    }
+
+    async fn test_definition_create_and_delete(
+        definition_service: Arc<
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+                + Sync
+                + Send,
+        >,
+    ) {
+        let def1 = get_api_definition(
+            &Uuid::new_v4().to_string(),
+            "0.0.1",
+            "/api/get1",
+            "worker1",
+            "[]",
+            "[]",
+            false,
+        );
+        let def1v2 = get_api_definition(
+            &def1.id.0,
+            "0.0.2",
+            "/api/get1/2",
+            "worker1",
+            "[]",
+            "[]",
+            true,
+        );
+
+        definition_service
+            .create(
+                &def1,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .unwrap();
-        assert_eq!(definitions.len(), 6);
+        definition_service
+            .create(
+                &def1v2,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
 
         let definitions = definition_service
             .get_all_versions(
-                &def5.id,
+                &def1.id,
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
             .await
             .unwrap();
         assert_eq!(definitions.len(), 2);
-        assert!(definitions.contains(&def5) && definitions.contains(&def5v2));
+        assert!(definitions.contains(&def1) && definitions.contains(&def1v2));
 
-        let definitions = deployment_service
-            .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
+        definition_service
+            .delete(
+                &def1.id,
+                &def1.version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+        definition_service
+            .delete(
+                &def1v2.id,
+                &def1v2.version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .unwrap();
 
-        assert_eq!(definitions.len(), 2);
-        assert!(definitions.contains(&def1) && definitions.contains(&def2));
-
-        let deployment = get_api_deployment("test.com", Some("my"), vec!["def4"]);
-        deployment_service.deploy(&deployment).await.unwrap();
-
-        let definitions = deployment_service
-            .get_definitions_by_site(&ApiSiteString("my.test.com".to_string()))
+        let definitions = definition_service
+            .get_all_versions(
+                &def1.id,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
             .await
             .unwrap();
-
-        assert_eq!(definitions.len(), 1);
-        assert!(definitions.contains(&def4));
-
-        let deployment = get_api_deployment("test.com", None, vec!["def3"]);
-        deployment_service.deploy(&deployment).await.unwrap();
-
-        let definitions = deployment_service
-            .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
-            .await
-            .unwrap();
-
-        assert_eq!(definitions.len(), 3);
-        assert!(
-            definitions.contains(&def1)
-                && definitions.contains(&def2)
-                && definitions.contains(&def3)
-        );
+        assert!(definitions.is_empty());
     }
 
     fn get_api_deployment(
@@ -273,11 +534,13 @@ mod tests {
         worker_id: &str,
         function_params: &str,
         response_mapping: &str,
+        draft: bool,
     ) -> HttpApiDefinition {
         let yaml_string = format!(
             r#"
           id: {}
           version: {}
+          draft: {}
           routes:
           - method: Get
             path: {}
@@ -288,7 +551,7 @@ mod tests {
               functionParams: {}
               response: '{}'
         "#,
-            id, version, path_pattern, worker_id, function_params, response_mapping
+            id, version, draft, path_pattern, worker_id, function_params, response_mapping
         );
 
         serde_yaml::from_str(yaml_string.as_str()).unwrap()

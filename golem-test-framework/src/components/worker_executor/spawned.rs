@@ -13,18 +13,19 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
-use crate::components::worker_executor::{env_vars, wait_for_startup, WorkerExecutor};
+use crate::components::worker_executor::{env_vars, new_client, wait_for_startup, WorkerExecutor};
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
-
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use crate::components::component_service::ComponentService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::WorkerService;
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tonic::transport::Channel;
 use tracing::info;
 use tracing::Level;
 
@@ -42,6 +43,7 @@ pub struct SpawnedWorkerExecutor {
     verbosity: Level,
     out_level: Level,
     err_level: Level,
+    client: Option<WorkerExecutorClient<Channel>>,
 }
 
 impl SpawnedWorkerExecutor {
@@ -57,6 +59,7 @@ impl SpawnedWorkerExecutor {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        shared_client: bool,
     ) -> Self {
         info!("Starting golem-worker-executor process");
 
@@ -93,6 +96,15 @@ impl SpawnedWorkerExecutor {
             verbosity,
             out_level,
             err_level,
+            client: if shared_client {
+                Some(
+                    new_client("localhost", grpc_port)
+                        .await
+                        .expect("Failed to create client"),
+                )
+            } else {
+                None
+            },
         }
     }
 
@@ -141,6 +153,13 @@ impl SpawnedWorkerExecutor {
 
 #[async_trait]
 impl WorkerExecutor for SpawnedWorkerExecutor {
+    async fn client(&self) -> crate::Result<WorkerExecutorClient<Channel>> {
+        match &self.client {
+            Some(client) => Ok(client.clone()),
+            None => Ok(new_client("localhost", self.grpc_port).await?),
+        }
+    }
+
     fn private_host(&self) -> String {
         "localhost".to_string()
     }

@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use serde::Deserialize;
+use serde::Serialize;
+use tonic::transport::Channel;
+
 use golem_api_grpc::proto::golem::shardmanager;
-use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client;
+use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::cache::*;
+use golem_common::client::GrpcClient;
 use golem_common::model::RoutingTable;
-use serde::{Deserialize, Serialize};
-use url::Url;
 
 #[derive(Debug, Clone)]
 pub enum RoutingTableError {
@@ -32,8 +37,9 @@ pub struct RoutingTableConfig {
 }
 
 impl RoutingTableConfig {
-    pub fn url(&self) -> Url {
-        Url::parse(&format!("http://{}:{}", self.host, self.port))
+    pub fn url(&self) -> http_02::Uri {
+        format!("http://{}:{}", self.host, self.port)
+            .parse()
             .expect("Failed to parse shard manager URL")
     }
 }
@@ -59,13 +65,22 @@ pub trait RoutingTableService {
     async fn invalidate_routing_table(&self);
 }
 
+pub trait HasRoutingTableService {
+    fn routing_table_service(&self) -> &Arc<dyn RoutingTableService + Send + Sync>;
+}
+
 pub struct RoutingTableServiceDefault {
     cache: Cache<(), (), RoutingTable, RoutingTableError>,
-    routing_table_config: RoutingTableConfig,
+    client: GrpcClient<ShardManagerServiceClient<Channel>>,
 }
 
 impl RoutingTableServiceDefault {
     pub fn new(routing_table_config: RoutingTableConfig) -> Self {
+        let client = GrpcClient::new(
+            ShardManagerServiceClient::new,
+            routing_table_config.url(),
+            Default::default(), // TODO
+        );
         Self {
             cache: Cache::new(
                 Some(1),
@@ -73,7 +88,7 @@ impl RoutingTableServiceDefault {
                 BackgroundEvictionMode::None,
                 "routing_table",
             ),
-            routing_table_config,
+            client,
         }
     }
 }
@@ -81,18 +96,13 @@ impl RoutingTableServiceDefault {
 #[async_trait]
 impl RoutingTableService for RoutingTableServiceDefault {
     async fn get_routing_table(&self) -> Result<RoutingTable, RoutingTableError> {
-        let uri: http_02::Uri = self.routing_table_config.url().to_string().parse().unwrap();
+        let client = self.client.clone();
         self.cache
             .get_or_insert_simple(&(), || {
                 Box::pin(async move {
-                    let mut shard_manager_client =
-                        shard_manager_service_client::ShardManagerServiceClient::connect(uri)
-                            .await
-                            .map_err(|err| {
-                                RoutingTableError::unexpected(format!("Connecting to shard manager failed with {}", err))
-                            })?;
-                    let response = shard_manager_client
-                        .get_routing_table(shardmanager::GetRoutingTableRequest {})
+                    let response =
+                        client.call(|client| Box::pin(client
+                        .get_routing_table(shardmanager::GetRoutingTableRequest {})))
                         .await
                         .map_err(|err| {
                             RoutingTableError::unexpected(format!(

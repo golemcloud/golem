@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tonic::transport::Channel;
+use tonic::transport::{Channel, Endpoint};
 use tracing::Level;
 
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
@@ -35,9 +35,7 @@ pub mod spawned;
 
 #[async_trait]
 pub trait WorkerExecutor {
-    async fn client(&self) -> WorkerExecutorClient<Channel> {
-        new_client(&self.public_host(), self.public_grpc_port()).await
-    }
+    async fn client(&self) -> crate::Result<WorkerExecutorClient<Channel>>;
 
     fn private_host(&self) -> String;
     fn private_http_port(&self) -> u16;
@@ -59,10 +57,14 @@ pub trait WorkerExecutor {
     async fn restart(&self);
 }
 
-async fn new_client(host: &str, grpc_port: u16) -> WorkerExecutorClient<Channel> {
-    WorkerExecutorClient::connect(format!("http://{host}:{grpc_port}"))
-        .await
-        .expect("Failed to connect to golem-worker-executor")
+async fn new_client(host: &str, grpc_port: u16) -> crate::Result<WorkerExecutorClient<Channel>> {
+    Ok(WorkerExecutorClient::connect(format!("http://{host}:{grpc_port}")).await?)
+}
+
+fn new_client_lazy(host: &str, grpc_port: u16) -> crate::Result<WorkerExecutorClient<Channel>> {
+    Ok(WorkerExecutorClient::new(
+        Endpoint::try_from(format!("http://{host}:{grpc_port}"))?.connect_lazy(),
+    ))
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {

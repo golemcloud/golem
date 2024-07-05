@@ -61,7 +61,7 @@ impl EnvBasedTestDependencies {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(async move { Self::new(worker_executor_cluster_size).await })
+            .block_on(async move { Self::new(worker_executor_cluster_size, false).await })
     }
 
     async fn make_rdb() -> Arc<dyn Rdb + Send + Sync + 'static> {
@@ -129,6 +129,7 @@ impl EnvBasedTestDependencies {
 
     async fn make_component_service(
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        shared_client: bool,
     ) -> Arc<dyn ComponentService + Send + Sync + 'static> {
         if Self::use_docker() {
             Arc::new(
@@ -139,6 +140,7 @@ impl EnvBasedTestDependencies {
                     )),
                     rdb,
                     Self::default_verbosity(),
+                    shared_client,
                 )
                 .await,
             )
@@ -154,6 +156,7 @@ impl EnvBasedTestDependencies {
                     Self::default_verbosity(),
                     Self::default_stdout_level(),
                     Self::default_stderr_level(),
+                    shared_client,
                 )
                 .await,
             )
@@ -192,6 +195,7 @@ impl EnvBasedTestDependencies {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        shared_client: bool,
     ) -> Arc<dyn WorkerService + Send + Sync + 'static> {
         if Self::use_docker() {
             Arc::new(
@@ -200,6 +204,7 @@ impl EnvBasedTestDependencies {
                     shard_manager,
                     rdb,
                     Self::default_verbosity(),
+                    shared_client,
                 )
                 .await,
             )
@@ -217,6 +222,7 @@ impl EnvBasedTestDependencies {
                     Self::default_verbosity(),
                     Self::default_stdout_level(),
                     Self::default_stderr_level(),
+                    shared_client,
                 )
                 .await,
             )
@@ -229,6 +235,7 @@ impl EnvBasedTestDependencies {
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
+        shared_client: bool,
     ) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         if Self::use_docker() {
             Arc::new(
@@ -241,6 +248,7 @@ impl EnvBasedTestDependencies {
                     shard_manager,
                     worker_service,
                     Self::default_verbosity(),
+                    shared_client,
                 )
                 .await,
             )
@@ -259,16 +267,17 @@ impl EnvBasedTestDependencies {
                     Self::default_verbosity(),
                     Self::default_stdout_level(),
                     Self::default_stderr_level(),
+                    shared_client,
                 )
                 .await,
             )
         }
     }
 
-    pub async fn new(worker_executor_cluster_size: usize) -> Self {
-        let rdb_and_component_service_join = tokio::spawn(async {
+    pub async fn new(worker_executor_cluster_size: usize, shared_client: bool) -> Self {
+        let rdb_and_component_service_join = tokio::spawn(async move {
             let rdb = Self::make_rdb().await;
-            let component_service = Self::make_component_service(rdb.clone()).await;
+            let component_service = Self::make_component_service(rdb.clone(), shared_client).await;
             let component_compilation_service =
                 Self::make_component_compilation_service(component_service.clone()).await;
             (rdb, component_service, component_compilation_service)
@@ -289,6 +298,7 @@ impl EnvBasedTestDependencies {
             component_service.clone(),
             shard_manager.clone(),
             rdb.clone(),
+            shared_client,
         )
         .await;
         let worker_executor_cluster = Self::make_worker_executor_cluster(
@@ -297,6 +307,7 @@ impl EnvBasedTestDependencies {
             shard_manager.clone(),
             worker_service.clone(),
             redis.clone(),
+            shared_client,
         )
         .await;
 

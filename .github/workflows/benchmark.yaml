@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # https://github.com/actions/checkout/issues/331#issuecomment-1567674767
-      - id: 'get-branch'
+      - id: "get-branch"
         run: echo ::set-output name=branch::$(gh pr view $PR_NO --repo $REPO --json headRefName --jq '.headRefName')
         env:
           REPO: ${{ github.repository }}
@@ -45,7 +45,10 @@ jobs:
       - name: Build Benchmark Report Job
         run: |
           echo "Building all targets including benchmark-report job"
-          cargo build
+          cargo make build-release
+          pushd test-components/rust-service
+          cargo build -p rust-http-service --release
+          popd
       - name: Run Benchmark
         run: |
           echo "Running all benchmark jobs and saving to files"
@@ -57,79 +60,79 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           #! /bin/bash
-          
+
           # Create a dummy benchmark result
           mkdir -p ./benchmark-data-current
-          
+
           echo "Starting cold start large benchmark"
-          ./target/debug/benchmark_cold_start_large --quiet --json spawned > benchmark-data-current/benchmark_cold_start_large.json
+          ./target/release/benchmark_cold_start_large --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 100 --size 250 --size 500 --length 10 spawned --mute-child > benchmark-data-current/benchmark_cold_start_large.json
           cat benchmark-data-current/benchmark_cold_start_large.json
           echo "Successfully ran cold start large benchmark"
-          
+
           echo "Starting cold start medium benchmark"
-          ./target/debug/benchmark_cold_start_medium --quiet --json spawned > benchmark-data-current/benchmark_cold_start_medium.json
+          ./target/release/benchmark_cold_start_medium --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_cold_start_medium.json
           cat benchmark-data-current/benchmark_cold_start_medium.json
           echo "Successfully ran cold start medium benchmark"
-          
+
           echo "Starting cold start small benchmark"
-          ./target/debug/benchmark_cold_start_small --quiet --json spawned > benchmark-data-current/benchmark_cold_start_small.json
+          ./target/release/benchmark_cold_start_small --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_cold_start_small.json
           cat benchmark-data-current/benchmark_cold_start_small.json
           echo "Successfully ran cold start small benchmark"
-          
+
           echo "Starting cold start large benchmark without component compilation"
-          ./target/debug/benchmark_cold_start_large --quiet --json spawned --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_large_no_compilation.json
+          ./target/release/benchmark_cold_start_large --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_large_no_compilation.json
           cat benchmark-data-current/benchmark_cold_start_large_no_compilation.json
           echo "Successfully ran cold start large benchmark without component compilation"
-          
+
           echo "Starting cold start medium benchmark without component compilation"
-          ./target/debug/benchmark_cold_start_medium --quiet --json spawned --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
+          ./target/release/benchmark_cold_start_medium --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --length 10 spawned --mute-child --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
           cat benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
           echo "Successfully ran cold start medium benchmark without component compilation"
-          
+
           echo "Starting cold start small benchmark without component compilation"
-          ./target/debug/benchmark_cold_start_small  --quiet --json  spawned --component-compilation-disabled> benchmark-data-current/benchmark_cold_start_small_no_compilation.json
+          ./target/release/benchmark_cold_start_small --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_small_no_compilation.json
           cat benchmark-data-current/benchmark_cold_start_small_no_compilation.json
           echo "Successfully ran cold start small benchmark without component compilation"
-          
+
           echo "Starting durability overhead benchmark"
-          ./target/debug/benchmark_durability_overhead --quiet --json spawned > benchmark-data-current/benchmark_durability_overhead.json
+          ./target/release/benchmark_durability_overhead --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_durability_overhead.json
           cat benchmark-data-current/benchmark_durability_overhead.json
           echo "Successfully durability overhead benchmark"
-          
+
           echo "Starting latency large benchmark"
-          ./target/debug/benchmark_latency_large --quiet --json spawned > benchmark-data-current/benchmark_latency_large.json
+          ./target/release/benchmark_latency_large --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_latency_large.json
           cat benchmark-data-current/benchmark_latency_large.json
           echo "Successfully ran latency large benchmark"
-          
+
           echo "Starting latency medium benchmark"
-          ./target/debug/benchmark_latency_medium --quiet --json spawned > benchmark-data-current/benchmark_latency_medium.json
+          ./target/release/benchmark_latency_medium --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_latency_medium.json
           cat benchmark-data-current/benchmark_latency_medium.json
           echo "Successfully ran latency medium benchmark"
-          
+
           echo "Starting latency small benchmark"
-          ./target/debug/benchmark_latency_small --quiet --json spawned > benchmark-data-current/benchmark_latency_small.json
+          ./target/release/benchmark_latency_small --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_latency_small.json
           cat benchmark-data-current/benchmark_latency_small.json
           echo "Successfully ran latency small benchmark"
-          
+
           echo "Starting suspend benchmark"
-          ./target/debug/benchmark_suspend_worker --quiet --json spawned > benchmark-data-current/benchmark_suspend_worker.json
+          ./target/release/benchmark_suspend_worker --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_suspend_worker.json
           cat benchmark-data-current/benchmark_suspend_worker.json
           echo "Successfully ran suspend benchmark"
-          
+
           echo "Starting RPC benchmark"
-          ./target/debug/benchmark_rpc --quiet --json spawned > benchmark-data-current/benchmark_rpc.json
+          ./target/release/benchmark_rpc --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 50 --size 100 --size 250 --length 10 spawned --mute-child > benchmark-data-current/benchmark_rpc.json
           cat benchmark-data-current/benchmark_rpc.json
           echo "Successfully ran RPC benchmark"
-          
-          # echo "Starting throughput benchmark"
-          # ./target/debug/benchmark_throughput --quiet --json spawned > benchmark-data-current/benchmark_throughput.json
-          # cat benchmark-data-current/benchmark_throughput.json
-          # echo "Successfully ran throughput benchmark"
-                
+
+          echo "Starting throughput benchmark"
+          ./target/release/benchmark_throughput --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 50 --size 100 --size 250 --length 10 spawned --mute-child > benchmark-data-current/benchmark_throughput.json
+          cat benchmark-data-current/benchmark_throughput.json
+          echo "Successfully ran throughput benchmark"
+
           echo "Finished Running Benchmark Jobs"
-          
+
           files=$(ls benchmark-data-current)
-          
+
           echo "Checking the following files if it already exists in a previous benchmark run"
           for str in ${files[@]}; do
             echo $str
@@ -137,11 +140,11 @@ jobs:
           # Initialize arrays to store present and absent files
           present_files=()
           absent_files=()
-          compare_command="./target/debug/benchmark_report compare-benchmarks"
-          get_report_command="./target/debug/benchmark_report get-report"
+          compare_command="./target/release/benchmark_report compare-benchmarks"
+          get_report_command="./target/release/benchmark_report get-report"
           echo "Starting to pull the existing benchmark results if exists"
-          
-          if git fetch origin main:main && [[ ! "$COMMENT_BODY" =~ refresh ]]; then                              
+
+          if git fetch origin main:main && [[ ! "$COMMENT_BODY" =~ refresh ]]; then
              # Check each file
              for file in ${files[@]}; do
                 if git checkout main -- "benchmark-data/$file"; then
@@ -158,10 +161,10 @@ jobs:
                 get_report_command="$get_report_command --files $file=$(pwd)/benchmark-data-current/$file"
              done
           fi
-          
+
           echo $compare_command
           echo $get_report_command
-          
+
           # If there are present files, run the comparison
             if [ ${#present_files[@]} -ne 0 ]; then
                echo "Running comparison with command: $compare_command"
@@ -176,7 +179,7 @@ jobs:
                https://api.github.com/repos/golemcloud/golem/issues/$ISSUE_NUMBER/comments \
                -d "{\"body\":\"$COMPARISON_MD \n RunID: $WORKFLOW_ID \"}"
             fi
-          
+
           # Process absent files
           if [ ${#absent_files[@]} -ne 0 ]; then
                echo "Running report"
@@ -192,7 +195,7 @@ jobs:
                https://api.github.com/repos/golemcloud/golem/issues/$ISSUE_NUMBER/comments \
                -d "{\"body\":\"$REPORT_MD \n RunID: $WORKFLOW_ID \"}"
           fi
-          
+
           echo "Done processing files."
 
       - name: "Move benchmark-data-current to benchmark-data"
@@ -208,7 +211,7 @@ jobs:
           git branch -a
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git pull 
+          git pull
           git add benchmark-data
           git commit -m "Adding benchmarking data"
           if git push; then
@@ -216,4 +219,3 @@ jobs:
           else
             echo "Benchmark data hasn't been pushed probably due to zero changes"
           fi
-

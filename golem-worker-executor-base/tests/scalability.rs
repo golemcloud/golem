@@ -17,7 +17,7 @@ use assert2::check;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use golem_common::model::ComponentId;
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::future::Future;
 use std::time::Duration;

@@ -24,6 +24,7 @@ async-trait = { workspace = true }
 clap = { workspace = true }
 cli-table = { workspace = true }
 colored = "2.1.0"
+console-subscriber = { workspace = true }
 itertools = { workspace = true }
 k8s-openapi = { workspace = true }
 kill_tree = { version = "0.2.4", features = ["tokio"] }

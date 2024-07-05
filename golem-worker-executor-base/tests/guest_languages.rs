@@ -22,7 +22,7 @@ use http_02::{Response, StatusCode};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use golem_test_framework::dsl::{events_to_lines, log_event_to_string, TestDsl};
+use golem_test_framework::dsl::{events_to_lines, log_event_to_string, TestDslUnsafe};
 use tonic::transport::Body;
 use warp::Filter;
 

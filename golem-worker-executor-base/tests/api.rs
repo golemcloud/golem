@@ -39,7 +39,7 @@ use crate::common::{start, TestContext, TestWorkerExecutor};
 use golem_common::model::oplog::OplogIndex;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
-    drain_connection, is_worker_execution_error, stdout_event, worker_error_message, TestDsl,
+    drain_connection, is_worker_execution_error, stdout_event, worker_error_message, TestDslUnsafe,
 };
 use tokio::time::sleep;
 use tonic::transport::Body;
@@ -305,6 +305,7 @@ async fn promise() {
     executor
         .client()
         .await
+        .expect("Failed to get client")
         .complete_promise(CompletePromiseRequest {
             promise_id: Some(
                 PromiseId {

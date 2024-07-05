@@ -542,7 +542,7 @@ dependencies = ["build"]
 script = '''
 export RUST_BACKTRACE=1
 
-./target/debug/golem-shard-manager --dump-config-default-toml > golem-shard-manager/config/shard-manager.toml.2
+./target/debug/golem-shard-manager --dump-config-default-toml > golem-shard-manager/config/shard-manager.toml
 ./target/debug/golem-shard-manager --dump-config-default-env-var > golem-shard-manager/config/shard-manager.sample.env
 ./target/debug/golem-component-compilation-service --dump-config-default-toml > golem-component-compilation-service/config/component-compilation-service.toml
 ./target/debug/golem-component-compilation-service --dump-config-default-env-var > golem-component-compilation-service/config/component-compilation-service.sample.env

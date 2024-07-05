@@ -12,16 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{env_vars, wait_for_startup, ComponentService};
+use crate::components::component_service::{
+    env_vars, new_client, wait_for_startup, ComponentService,
+};
 use crate::components::rdb::Rdb;
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 
+use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
+use tonic::transport::Channel;
 use tracing::info;
 use tracing::Level;
 
@@ -30,6 +33,7 @@ pub struct SpawnedComponentService {
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
+    client: Option<ComponentServiceClient<Channel>>,
 }
 
 impl SpawnedComponentService {
@@ -43,6 +47,7 @@ impl SpawnedComponentService {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        shared_client: bool,
     ) -> Self {
         info!("Starting golem-component-service process");
 
@@ -79,12 +84,24 @@ impl SpawnedComponentService {
             grpc_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
+            client: if shared_client {
+                Some(new_client("localhost", grpc_port).await)
+            } else {
+                None
+            },
         }
     }
 }
 
 #[async_trait]
 impl ComponentService for SpawnedComponentService {
+    async fn client(&self) -> ComponentServiceClient<Channel> {
+        match &self.client {
+            Some(client) => client.clone(),
+            None => new_client("localhost", self.grpc_port).await,
+        }
+    }
+
     fn private_host(&self) -> String {
         "localhost".to_string()
     }

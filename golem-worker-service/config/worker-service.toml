@@ -48,10 +48,6 @@ json_flatten_span = false
 span_events_active = false
 span_events_full = false
 
-[worker_executor_client_cache]
-max_capacity = 1000
-time_to_idle = "4h"
-
 
 ## Generated from example config: with postgres
 # custom_request_port = 9006
@@ -106,7 +102,3 @@ time_to_idle = "4h"
 # json_flatten_span = false
 # span_events_active = false
 # span_events_full = false
-# 
-# [worker_executor_client_cache]
-# max_capacity = 1000
-# time_to_idle = "4h"

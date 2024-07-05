@@ -47,6 +47,13 @@ pub trait ApiDeploymentRepo {
         definition_id: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
 
+    async fn get_by_id_and_version(
+        &self,
+        namespace: &str,
+        definition_id: &str,
+        definition_version: &str,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
+
     async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError>;
 
     async fn get_definitions_by_site(
@@ -119,12 +126,39 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Sqlite> {
         namespace: &str,
         definition_id: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>("SELECT namespace, site, host, subdomain, definition_id, definition_version FROM api_deployments WHERE namespace = $1 AND definition_id = $2")
-            .bind(namespace)
-            .bind(definition_id)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        sqlx::query_as::<_, ApiDeploymentRecord>(
+            r#"
+                SELECT namespace, site, host, subdomain, definition_id, definition_version
+                FROM api_deployments
+                WHERE namespace = $1 AND definition_id = $2
+                "#,
+        )
+        .bind(namespace)
+        .bind(definition_id)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
+    }
+
+    async fn get_by_id_and_version(
+        &self,
+        namespace: &str,
+        definition_id: &str,
+        definition_version: &str,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDeploymentRecord>(
+            r#"
+                SELECT namespace, site, host, subdomain, definition_id, definition_version
+                FROM api_deployments
+                WHERE namespace = $1 AND definition_id = $2 AND definition_version = $3
+                "#,
+        )
+        .bind(namespace)
+        .bind(definition_id)
+        .bind(definition_version)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
@@ -215,12 +249,39 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
         namespace: &str,
         definition_id: &str,
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDeploymentRecord>("SELECT namespace, site, host, subdomain, definition_id, definition_version FROM api_deployments WHERE namespace = $1 AND definition_id = $2")
-            .bind(namespace)
-            .bind(definition_id)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        sqlx::query_as::<_, ApiDeploymentRecord>(
+            r#"
+                SELECT namespace, site, host, subdomain, definition_id, definition_version
+                FROM api_deployments
+                WHERE namespace = $1 AND definition_id = $2
+                "#,
+        )
+        .bind(namespace)
+        .bind(definition_id)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
+    }
+
+    async fn get_by_id_and_version(
+        &self,
+        namespace: &str,
+        definition_id: &str,
+        definition_version: &str,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDeploymentRecord>(
+            r#"
+                SELECT namespace, site, host, subdomain, definition_id, definition_version
+                FROM api_deployments
+                WHERE namespace = $1 AND definition_id = $2 AND definition_version = $3
+                "#,
+        )
+        .bind(namespace)
+        .bind(definition_id)
+        .bind(definition_version)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {

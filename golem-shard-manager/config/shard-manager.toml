@@ -1,3 +1,4 @@
+## Generated from default config
 http_port = 8081
 number_of_shards = 1024
 rebalance_threshold = 0.1
@@ -7,10 +8,8 @@ delay = "10s"
 
 [health_check.mode]
 type = "Grpc"
-#type = "K8s"
 
 [health_check.mode.config]
-#namespace = "default"
 
 [redis]
 database = 0
@@ -26,6 +25,28 @@ max_delay = "2s"
 min_delay = "100ms"
 multiplier = 2
 
+[tracing]
+console = false
+file_name = "shard-manager.log"
+
+[tracing.file]
+ansi = false
+enabled = false
+json = true
+json_flatten = true
+json_flatten_span = false
+span_events_active = false
+span_events_full = false
+
+[tracing.stdout]
+ansi = true
+enabled = true
+json = false
+json_flatten = true
+json_flatten_span = false
+span_events_active = false
+span_events_full = false
+
 [worker_executors]
 assign_shards_timeout = "5s"
 health_check_timeout = "2s"
@@ -36,3 +57,65 @@ max_attempts = 5
 max_delay = "2s"
 min_delay = "100ms"
 multiplier = 2
+
+
+## Generated from example config: with k8s healthcheck
+# http_port = 8081
+# number_of_shards = 1024
+# rebalance_threshold = 0.1
+# 
+# [health_check]
+# delay = "1s"
+# 
+# [health_check.mode]
+# type = "K8s"
+# 
+# [health_check.mode.config]
+# namespace = "namespace"
+# 
+# [redis]
+# database = 0
+# host = "localhost"
+# key_prefix = ""
+# pool_size = 8
+# port = 6380
+# tracing = false
+# 
+# [redis.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# min_delay = "100ms"
+# multiplier = 2
+# 
+# [tracing]
+# console = false
+# file_name = "shard-manager.log"
+# 
+# [tracing.file]
+# ansi = false
+# enabled = false
+# json = true
+# json_flatten = true
+# json_flatten_span = false
+# span_events_active = false
+# span_events_full = false
+# 
+# [tracing.stdout]
+# ansi = true
+# enabled = true
+# json = false
+# json_flatten = true
+# json_flatten_span = false
+# span_events_active = false
+# span_events_full = false
+# 
+# [worker_executors]
+# assign_shards_timeout = "5s"
+# health_check_timeout = "2s"
+# revoke_shards_timeout = "5s"
+# 
+# [worker_executors.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# min_delay = "100ms"
+# multiplier = 2

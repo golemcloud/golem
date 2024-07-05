@@ -12,31 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use golem_wasm_rpc::Value;
+use tokio::task::JoinSet;
+use tracing::warn;
 
-use golem_common::model::{ComponentId, WorkerId};
+use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
 use golem_test_framework::config::{CliParams, CliTestDependencies};
 use golem_test_framework::dsl::benchmark::{
-    BenchmarkApi, BenchmarkRecorder, BenchmarkResult, RunConfig,
+    BenchmarkApi, BenchmarkRecorder, BenchmarkResult, ResultKey, RunConfig,
 };
 use golem_test_framework::dsl::TestDsl;
 
 pub mod data;
 
 #[derive(Clone)]
-pub struct BenchmarkContext {
+pub struct SimpleBenchmarkContext {
     pub deps: CliTestDependencies,
 }
 
 #[derive(Clone)]
-pub struct IterationContext {
+pub struct SimpleIterationContext {
     pub worker_ids: Vec<WorkerId>,
 }
 
-pub fn get_worker_ids(size: usize, component_id: &ComponentId, prefix: &str) -> Vec<WorkerId> {
+pub fn generate_worker_ids(size: usize, component_id: &ComponentId, prefix: &str) -> Vec<WorkerId> {
     let mut worker_ids = Vec::new();
     for i in 0..size {
         let worker_name = format!("{prefix}-{i}");
@@ -48,28 +50,28 @@ pub fn get_worker_ids(size: usize, component_id: &ComponentId, prefix: &str) -> 
     worker_ids
 }
 
-pub async fn setup_with(
+pub async fn setup_iteration(
     size: usize,
     component_name: &str,
     worker_name_prefix: &str,
     start_workers: bool,
-    deps: CliTestDependencies,
+    deps: &CliTestDependencies,
 ) -> Vec<WorkerId> {
     // Initialize infrastructure
 
     // Upload test component
     let component_id = deps.store_unique_component(component_name).await;
     // Create 'size' workers
-    let worker_ids = get_worker_ids(size, &component_id, worker_name_prefix);
+    let worker_ids = generate_worker_ids(size, &component_id, worker_name_prefix);
 
     if start_workers {
-        start(worker_ids.clone(), deps.clone()).await
+        crate::benchmarks::start_workers(&worker_ids, deps).await
     }
 
     worker_ids
 }
 
-pub async fn start(worker_ids: Vec<WorkerId>, deps: CliTestDependencies) {
+pub async fn start_workers(worker_ids: &[WorkerId], deps: &CliTestDependencies) {
     for worker_id in worker_ids {
         let _ = deps
             .start_worker(&worker_id.component_id, &worker_id.worker_name)
@@ -77,104 +79,130 @@ pub async fn start(worker_ids: Vec<WorkerId>, deps: CliTestDependencies) {
     }
 }
 
-pub async fn setup_benchmark(params: CliParams, cluster_size: usize) -> BenchmarkContext {
+pub async fn setup_benchmark(params: CliParams, cluster_size: usize) -> SimpleBenchmarkContext {
     // Initialize infrastructure
     let deps = CliTestDependencies::new(params.clone(), cluster_size).await;
 
-    BenchmarkContext { deps }
+    SimpleBenchmarkContext { deps }
 }
 
-pub async fn setup_iteration(
-    benchmark_context: &BenchmarkContext,
+pub async fn setup_simple_iteration(
+    benchmark_context: &SimpleBenchmarkContext,
     config: RunConfig,
     component_name: &str,
     start_workers: bool,
-) -> IterationContext {
-    let worker_ids = setup_with(
+) -> SimpleIterationContext {
+    let worker_ids = setup_iteration(
         config.size,
         component_name,
         "worker",
         start_workers,
-        benchmark_context.deps.clone(),
+        &benchmark_context.deps,
     )
     .await;
 
-    IterationContext { worker_ids }
+    SimpleIterationContext { worker_ids }
 }
 
-pub async fn cleanup_iteration(benchmark_context: &BenchmarkContext, context: IterationContext) {
-    for worker_id in &context.worker_ids {
-        benchmark_context.deps.delete_worker(worker_id).await
+pub async fn delete_workers(deps: &CliTestDependencies, worker_ids: &[WorkerId]) {
+    for worker_id in worker_ids {
+        if let Err(err) = deps.delete_worker(worker_id).await {
+            warn!("Failed to delete worker: {:?}", err);
+        }
     }
 }
 
-pub async fn warmup_echo(
-    benchmark_context: &BenchmarkContext,
-    iteration_context: &IterationContext,
+pub async fn warmup_workers(
+    deps: &CliTestDependencies,
+    worker_ids: &[WorkerId],
+    function: &str,
+    params: Vec<Value>,
 ) {
-    let mut fibers = Vec::new();
-    for worker_id in &iteration_context.worker_ids {
-        let context_clone = benchmark_context.clone();
+    let mut fibers = JoinSet::new();
+    for worker_id in worker_ids {
+        let deps_clone = deps.clone();
         let worker_id_clone = worker_id.clone();
-        let fiber = tokio::task::spawn(async move {
-            context_clone
-                .deps
-                .invoke_and_await(
-                    &worker_id_clone,
-                    "golem:it/api.{echo}",
-                    vec![Value::String("hello".to_string())],
-                )
-                .await
-                .expect("invoke_and_await failed");
+        let params_clone = params.clone();
+        let function_clone = function.to_string();
+        let _ = fibers.spawn(async move {
+            invoke_and_await(&deps_clone, &worker_id_clone, &function_clone, params_clone).await
         });
-        fibers.push(fiber);
     }
 
-    for fiber in fibers {
-        fiber.await.expect("fiber failed");
+    while let Some(res) = fibers.join_next().await {
+        let _ = res.expect("Failed to warmup");
     }
 }
 
-pub async fn run_echo(
-    length: usize,
-    benchmark_context: &BenchmarkContext,
-    iteration_context: &IterationContext,
+pub async fn benchmark_invocations(
+    deps: &CliTestDependencies,
     recorder: BenchmarkRecorder,
+    length: usize,
+    worker_ids: &[WorkerId],
+    function: &str,
+    params: Vec<Value>,
+    prefix: &str,
 ) {
     // Invoke each worker a 'length' times in parallel and record the duration
-    let mut fibers = Vec::new();
-    for (n, worker_id) in iteration_context.worker_ids.iter().enumerate() {
-        let context_clone = benchmark_context.clone();
+    let mut fibers = JoinSet::new();
+    for (n, worker_id) in worker_ids.iter().enumerate() {
+        let deps_clone = deps.clone();
+        let function_clone = function.to_string();
+        let params_clone = params.clone();
         let worker_id_clone = worker_id.clone();
         let recorder_clone = recorder.clone();
-        let fiber = tokio::task::spawn(async move {
+        let prefix_clone = prefix.to_string();
+        let _ = fibers.spawn(async move {
             for _ in 0..length {
-                let start = SystemTime::now();
-                context_clone
-                    .deps
-                    .invoke_and_await(
-                        &worker_id_clone,
-                        "golem:it/api.{echo}",
-                        vec![Value::String("hello".to_string())],
-                    )
-                    .await
-                    .expect("invoke_and_await failed");
-                let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                recorder_clone.duration(&"invocation".to_string(), elapsed);
-                recorder_clone.duration(&format!("worker-{n}"), elapsed);
+                let result = invoke_and_await(
+                    &deps_clone,
+                    &worker_id_clone,
+                    &function_clone,
+                    params_clone.clone(),
+                )
+                .await;
+                recorder_clone.duration(
+                    &format!("{prefix_clone}invocation").into(),
+                    result.accumulated_time,
+                );
+                recorder_clone.duration(
+                    &ResultKey::secondary(format!("{prefix_clone}worker-{n}")),
+                    result.accumulated_time,
+                );
+                recorder_clone.count(
+                    &format!("{prefix_clone}invocation-retries").into(),
+                    result.retries as u64,
+                );
+                recorder_clone.count(
+                    &ResultKey::secondary(&format!("{prefix_clone}worker-{n}-retries")),
+                    result.retries as u64,
+                );
+                recorder_clone.count(
+                    &format!("{prefix_clone}invocation-timeouts").into(),
+                    result.timeouts as u64,
+                );
+                recorder_clone.count(
+                    &ResultKey::secondary(&format!("{prefix_clone}worker-{n}-timeouts")),
+                    result.timeouts as u64,
+                );
             }
         });
-        fibers.push(fiber);
     }
 
-    for fiber in fibers {
-        fiber.await.expect("fiber failed");
+    while let Some(res) = fibers.join_next().await {
+        res.unwrap();
     }
 }
 
 pub async fn get_benchmark_results<A: BenchmarkApi>(params: CliParams) -> BenchmarkResult {
     CliTestDependencies::init_logging(&params);
-    A::run_benchmark(params).await
+    let primary_only = params.primary_only;
+    let results = A::run_benchmark(params).await;
+    if primary_only {
+        results.primary_only()
+    } else {
+        results
+    }
 }
 
 pub async fn run_benchmark<A: BenchmarkApi>() {
@@ -185,5 +213,70 @@ pub async fn run_benchmark<A: BenchmarkApi>() {
         println!("{}", str);
     } else {
         println!("{}", result.view());
+    }
+}
+
+pub struct InvokeResult {
+    pub value: Vec<Value>,
+    pub retries: usize,
+    pub timeouts: usize,
+    pub accumulated_time: Duration,
+}
+
+pub async fn invoke_and_await(
+    deps: &impl TestDsl,
+    worker_id: &WorkerId,
+    function_name: &str,
+    params: Vec<Value>,
+) -> InvokeResult {
+    const TIMEOUT: Duration = Duration::from_secs(180);
+    const RETRY_DELAY: Duration = Duration::from_millis(100);
+
+    let key = IdempotencyKey::fresh();
+
+    let mut accumulated_time = Duration::from_secs(0);
+    let mut retries = 0;
+    let mut timeouts = 0;
+
+    loop {
+        let start = SystemTime::now();
+        let result = tokio::time::timeout(
+            TIMEOUT,
+            deps.invoke_and_await_with_key(worker_id, &key, function_name, params.clone()),
+        )
+        .await;
+        let duration = start.elapsed().expect("SystemTime elapsed failed");
+
+        match result {
+            Ok(Ok(Ok(r))) => {
+                accumulated_time += duration;
+                break InvokeResult {
+                    value: r,
+                    retries,
+                    timeouts,
+                    accumulated_time,
+                };
+            }
+            Ok(Ok(Err(e))) => {
+                // worker error
+                println!("Invocation failed, retrying: {:?}", e);
+                retries += 1;
+                accumulated_time += duration;
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+            Ok(Err(e)) => {
+                // client error
+                println!("Invocation failed, retrying: {:?}", e);
+                retries += 1;
+                accumulated_time += duration;
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+            Err(e) => {
+                // timeout
+                // not counting timeouts into the accumulated time
+                timeouts += 1;
+                println!("Invocation timed out, retrying: {:?}", e);
+            }
+        }
     }
 }

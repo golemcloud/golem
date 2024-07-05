@@ -94,7 +94,7 @@ pub struct TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
-    pub async fn client(&self) -> WorkerExecutorClient<Channel> {
+    pub async fn client(&self) -> golem_test_framework::Result<WorkerExecutorClient<Channel>> {
         self.deps.worker_executor.client().await
     }
 
@@ -108,6 +108,7 @@ impl TestWorkerExecutor {
         let response = self
             .client()
             .await
+            .expect("Failed to get client")
             .get_running_workers_metadata(GetRunningWorkersMetadataRequest {
                 component_id: Some(component_id),
                 filter: filter.map(|f| f.into()),
@@ -141,6 +142,7 @@ impl TestWorkerExecutor {
         let response = self
             .client()
             .await
+            .expect("Failed to get client")
             .get_workers_metadata(GetWorkersMetadataRequest {
                 component_id: Some(component_id),
                 filter: filter.map(|f| f.into()),

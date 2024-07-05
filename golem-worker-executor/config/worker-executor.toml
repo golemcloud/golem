@@ -21,6 +21,7 @@ type = "Enabled"
 
 [component_cache]
 max_capacity = 32
+max_metadata_capacity = 16384
 time_to_idle = "12h"
 
 [component_service]
@@ -59,12 +60,12 @@ min_delay = "100ms"
 multiplier = 2
 
 [limits]
-concurrency_limit_per_connection = 1024
 epoch_interval = "10ms"
 epoch_ticks = 1
 event_broadcast_capacity = 16
 event_history_size = 128
 fuel_to_borrow = 10000
+invocation_result_broadcast_capacity = 100000
 max_active_workers = 1024
 max_concurrent_streams = 1024
 
@@ -168,6 +169,7 @@ span_events_full = false
 # 
 # [component_cache]
 # max_capacity = 32
+# max_metadata_capacity = 16384
 # time_to_idle = "12h"
 # 
 # [component_service]
@@ -206,12 +208,12 @@ span_events_full = false
 # type = "InMemory"
 # 
 # [limits]
-# concurrency_limit_per_connection = 1024
 # epoch_interval = "10ms"
 # epoch_ticks = 1
 # event_broadcast_capacity = 16
 # event_history_size = 128
 # fuel_to_borrow = 10000
+# invocation_result_broadcast_capacity = 100000
 # max_active_workers = 1024
 # max_concurrent_streams = 1024
 # 
@@ -289,6 +291,7 @@ span_events_full = false
 # 
 # [component_cache]
 # max_capacity = 32
+# max_metadata_capacity = 16384
 # time_to_idle = "12h"
 # 
 # [component_service]
@@ -313,12 +316,12 @@ span_events_full = false
 # type = "InMemory"
 # 
 # [limits]
-# concurrency_limit_per_connection = 1024
 # epoch_interval = "10ms"
 # epoch_ticks = 1
 # event_broadcast_capacity = 16
 # event_history_size = 128
 # fuel_to_borrow = 10000
+# invocation_result_broadcast_capacity = 100000
 # max_active_workers = 1024
 # max_concurrent_streams = 1024
 # 

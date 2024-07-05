@@ -15,7 +15,7 @@
 use crate::common::{start, TestContext};
 use assert2::{check, let_assert};
 use chrono::Datelike;
-use golem_test_framework::dsl::{events_to_lines, TestDsl};
+use golem_test_framework::dsl::{events_to_lines, TestDslUnsafe};
 use golem_wasm_rpc::Value;
 use std::time::Duration;
 

@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use http::Uri;
+use tonic::transport::Channel;
 
 use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::{
     get_component_metadata_response, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
+use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::model::ComponentId;
 use golem_common::retries::with_retries;
@@ -34,13 +36,23 @@ pub trait ComponentService<AuthCtx> {
 
 #[derive(Clone)]
 pub struct RemoteComponentService {
-    uri: Uri,
+    client: GrpcClient<ComponentServiceClient<Channel>>,
     retry_config: RetryConfig,
 }
 
 impl RemoteComponentService {
     pub fn new(uri: Uri, retry_config: RetryConfig) -> Self {
-        Self { uri, retry_config }
+        Self {
+            client: GrpcClient::new(
+                ComponentServiceClient::new,
+                uri.as_http_02(),
+                GrpcClientConfig {
+                    retries_on_unavailable: retry_config.clone(),
+                    ..Default::default() // TODO
+                },
+            ),
+            retry_config,
+        }
     }
 }
 
@@ -59,17 +71,18 @@ where
             "get_latest",
             Some(component_id.to_string()),
             &self.retry_config,
-            &(self.uri.clone(), component_id.clone(), metadata.clone()),
-            |(uri, id, metadata)| {
+            &(self.client.clone(), component_id.clone(), metadata.clone()),
+            |(client, id, metadata)| {
                 Box::pin(async move {
-                    let mut client = ComponentServiceClient::connect(uri.as_http_02()).await?;
-                    let request = GetLatestComponentRequest {
-                        component_id: Some(id.clone().into()),
-                    };
-                    let request = with_metadata(request, metadata.clone());
-
                     let response = client
-                        .get_latest_component_metadata(request)
+                        .call(move |client| {
+                            let request = GetLatestComponentRequest {
+                                component_id: Some(id.clone().into()),
+                            };
+                            let request = with_metadata(request, metadata.clone());
+
+                            Box::pin(client.get_latest_component_metadata(request))
+                        })
                         .await?
                         .into_inner();
 
@@ -119,18 +132,22 @@ where
             "get_component",
             Some(component_id.to_string()),
             &self.retry_config,
-            &(self.uri.clone(), component_id.clone(), metadata.clone()),
-            |(uri, id, metadata)| {
+            &(self.client.clone(), component_id.clone(), metadata.clone()),
+            |(client, id, metadata)| {
                 Box::pin(async move {
-                    let mut client = ComponentServiceClient::connect(uri.as_http_02()).await?;
-                    let request = GetVersionedComponentRequest {
-                        component_id: Some(id.clone().into()),
-                        version,
-                    };
+                    let response = client
+                        .call(move |client| {
+                            let request = GetVersionedComponentRequest {
+                                component_id: Some(id.clone().into()),
+                                version,
+                            };
 
-                    let request = with_metadata(request, metadata.clone());
+                            let request = with_metadata(request, metadata.clone());
 
-                    let response = client.get_component_metadata(request).await?.into_inner();
+                            Box::pin(client.get_component_metadata(request))
+                        })
+                        .await?
+                        .into_inner();
 
                     match response.result {
                         None => Err(ComponentServiceError::internal("Empty response")),

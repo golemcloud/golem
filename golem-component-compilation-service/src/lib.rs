@@ -34,6 +34,7 @@ use service::CompilationService;
 
 use crate::config::make_config_loader;
 use crate::service::compile_service::ComponentCompilationServiceImpl;
+use wasmtime::WasmBacktraceDetails;
 
 mod config;
 mod grpc;
@@ -139,6 +140,7 @@ fn create_wasmtime_config() -> wasmtime::Config {
     config.wasm_component_model(true);
     config.epoch_interruption(true);
     config.consume_fuel(true);
+    config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
 
     config
 }
