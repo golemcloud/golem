@@ -80,17 +80,17 @@ jobs:
           echo "Successfully ran cold start small benchmark"
 
           echo "Starting cold start large benchmark without component compilation"
-          ./target/release/benchmark_cold_start_large --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_large_no_compilation.json
+          ./target/release/benchmark_cold_start_large --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child --compilation-service-disabled > benchmark-data-current/benchmark_cold_start_large_no_compilation.json
           cat benchmark-data-current/benchmark_cold_start_large_no_compilation.json
           echo "Successfully ran cold start large benchmark without component compilation"
 
           echo "Starting cold start medium benchmark without component compilation"
-          ./target/release/benchmark_cold_start_medium --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --length 10 spawned --mute-child --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
+          ./target/release/benchmark_cold_start_medium --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --length 10 spawned --mute-child --compilation-service-disabled > benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
           cat benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
           echo "Successfully ran cold start medium benchmark without component compilation"
 
           echo "Starting cold start small benchmark without component compilation"
-          ./target/release/benchmark_cold_start_small --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child --component-compilation-disabled > benchmark-data-current/benchmark_cold_start_small_no_compilation.json
+          ./target/release/benchmark_cold_start_small --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child --compilation-service-disabled > benchmark-data-current/benchmark_cold_start_small_no_compilation.json
           cat benchmark-data-current/benchmark_cold_start_small_no_compilation.json
           echo "Successfully ran cold start small benchmark without component compilation"
 
