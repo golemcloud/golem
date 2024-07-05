@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use golem_wasm_rpc::Value;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
@@ -480,15 +481,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 debug!("Idempotency key lookup result: {:?}", result);
                 match result {
-                    LookupResult::Complete(Ok(output)) => Ok(output),
-                    LookupResult::Complete(Err(err)) => Err(err),
-                    LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
-                    LookupResult::Pending => Err(GolemError::unknown(
+                    Ok(LookupResult::Complete(Ok(output))) => Ok(output),
+                    Ok(LookupResult::Complete(Err(err))) => Err(err),
+                    Ok(LookupResult::Interrupted) => Err(InterruptKind::Interrupt.into()),
+                    Ok(LookupResult::Pending) => Err(GolemError::unknown(
                         "Unexpected pending result after invoke",
                     )),
-                    LookupResult::New => Err(GolemError::unknown(
+                    Ok(LookupResult::New) => Err(GolemError::unknown(
                         "Unexpected missing result after invoke",
                     )),
+                    Err(recv_error) => Err(GolemError::unknown(format!(
+                        "Failed waiting for invocation result: {recv_error}"
+                    ))),
                 }
             }
         }
@@ -697,30 +701,45 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    async fn wait_for_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        match self.lookup_invocation_result(key).await {
-            LookupResult::Interrupted => LookupResult::Interrupted,
-            LookupResult::New | LookupResult::Pending => {
-                self.events()
-                    .wait_for(|event| match event {
-                        Event::InvocationCompleted {
-                            worker_id,
-                            idempotency_key,
-                            result,
-                        } if *worker_id == self.owned_worker_id.worker_id
-                            && idempotency_key == key =>
-                        {
-                            debug!("wait_for_invocation_result: accepting event {:?}", event);
-                            Some(LookupResult::Complete(result.clone()))
+    async fn wait_for_invocation_result(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<LookupResult, RecvError> {
+        let mut subscription = self.events().subscribe();
+        loop {
+            match self.lookup_invocation_result(key).await {
+                LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
+                LookupResult::New | LookupResult::Pending => {
+                    let wait_result = subscription
+                        .wait_for(|event| match event {
+                            Event::InvocationCompleted {
+                                worker_id,
+                                idempotency_key,
+                                result,
+                            } if *worker_id == self.owned_worker_id.worker_id
+                                && idempotency_key == key =>
+                            {
+                                debug!("wait_for_invocation_result: accepting event {:?}", event);
+                                Some(LookupResult::Complete(result.clone()))
+                            }
+                            _ => {
+                                debug!("wait_for_invocation_result: skipping event {:?}", event);
+                                None
+                            }
+                        })
+                        .await;
+                    match wait_result {
+                        Ok(result) => break Ok(result),
+                        Err(RecvError::Lagged(_)) => {
+                            debug!("invocation event queue is full, retrying with backoff");
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            continue;
                         }
-                        _ => {
-                            debug!("wait_for_invocation_result: skipping event {:?}", event);
-                            None
-                        }
-                    })
-                    .await
+                        Err(RecvError::Closed) => break Err(RecvError::Closed),
+                    }
+                }
+                LookupResult::Complete(result) => break Ok(LookupResult::Complete(result)),
             }
-            LookupResult::Complete(result) => LookupResult::Complete(result),
         }
     }
 
@@ -809,20 +828,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     >(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
-        component_version: Option<u64>,
+        component_version: Option<ComponentVersion>,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         parent: Option<WorkerId>,
     ) -> Result<WorkerMetadata, GolemError> {
-        let component_id = owned_worker_id.component_id();
-
-        let component_metadata = this
-            .component_service()
-            .get_metadata(&component_id, component_version)
-            .await?;
-
         match this.worker_service().get(owned_worker_id).await {
             None => {
+                let component_id = owned_worker_id.component_id();
+                let component_metadata = this
+                    .component_service()
+                    .get_metadata(&component_id, component_version)
+                    .await?;
+
                 let initial_status =
                     calculate_last_known_status(this, owned_worker_id, &None).await?;
                 let worker_metadata = WorkerMetadata {
@@ -1001,7 +1019,6 @@ impl RunningWorker {
                             .unwrap()
                             .pop_front()
                             .expect("Message should be present");
-                        debug!("Invocation queue processing {message:?}");
 
                         let mut store_mutex = store.lock().await;
                         let store = store_mutex.deref_mut();

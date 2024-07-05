@@ -29,12 +29,16 @@ use golem_worker_service_base::service::worker::{
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 
 use crate::worker_component_metadata_fetcher::DefaultWorkerComponentMetadataFetcher;
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
+use golem_common::config::RetryConfig;
 use golem_worker_service_base::evaluator::WorkerMetadataFetcher;
 
 use golem_worker_service_base::service::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault, ApiDeploymentServiceNoop,
 };
 use std::sync::Arc;
+use std::time::Duration;
 
 use golem_service_base::config::DbConfig;
 use golem_service_base::db;
@@ -68,13 +72,18 @@ impl Services {
             ),
         );
 
-        let worker_executor_grpc_clients: Arc<
-            dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
-        > = Arc::new(
-            golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault::new(
-                config.worker_executor_client_cache.max_capacity,
-                config.worker_executor_client_cache.time_to_idle,
-            ),
+        let worker_executor_grpc_clients = MultiTargetGrpcClient::new(
+            WorkerExecutorClient::new,
+            GrpcClientConfig {
+                // TODO
+                retries_on_unavailable: RetryConfig {
+                    max_attempts: 0, // we want to invalidate the routing table asap
+                    min_delay: Duration::from_millis(100),
+                    max_delay: Duration::from_secs(2),
+                    multiplier: 2,
+                },
+                connect_timeout: Duration::from_secs(10),
+            },
         );
 
         let component_service: component::ComponentService = {

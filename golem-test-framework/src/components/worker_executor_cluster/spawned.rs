@@ -43,6 +43,7 @@ impl SpawnedWorkerExecutorCluster {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        shared_client: bool,
     ) -> Arc<dyn WorkerExecutor + Send + Sync + 'static> {
         Arc::new(
             SpawnedWorkerExecutor::new(
@@ -57,6 +58,7 @@ impl SpawnedWorkerExecutorCluster {
                 verbosity,
                 out_level,
                 err_level,
+                shared_client,
             )
             .await,
         )
@@ -75,6 +77,7 @@ impl SpawnedWorkerExecutorCluster {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        shared_client: bool,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors_joins = Vec::new();
@@ -95,6 +98,7 @@ impl SpawnedWorkerExecutorCluster {
                 verbosity,
                 out_level,
                 err_level,
+                shared_client,
             ));
 
             worker_executors_joins.push(worker_executor_join);

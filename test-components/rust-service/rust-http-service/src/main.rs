@@ -12,10 +12,14 @@ fn echo(Path(input): Path<String>) -> String {
 }
 
 #[handler]
-fn calculate(Path(input): Path<u64>) -> Json<u64> {
-    let (i, s) = common::calculate_sum(10000, input);
-    let result = (s / i as u128) as u64;
-    Json(result)
+async fn calculate(Path(input): Path<u64>) -> Json<u64> {
+    tokio::task::spawn_blocking(move || {
+        let (i, s) = common::calculate_sum(10000, input);
+        let result = (s / i as u128) as u64;
+        Json(result)
+    })
+    .await
+    .unwrap()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,10 +53,14 @@ impl From<common::CommonData> for Data {
 }
 
 #[handler]
-fn process(req: Json<Vec<Data>>) -> Json<Vec<Data>> {
-    let input = req.0.into_iter().map(|i| i.into()).collect();
-    let result = common::process_data(input);
-    Json(result.into_iter().map(|i| i.into()).collect())
+async fn process(req: Json<Vec<Data>>) -> Json<Vec<Data>> {
+    tokio::task::spawn_blocking(move || {
+        let input = req.0.into_iter().map(|i| i.into()).collect();
+        let result = common::process_data(input);
+        Json(result.into_iter().map(|i| i.into()).collect())
+    })
+    .await
+    .unwrap()
 }
 
 #[tokio::main]

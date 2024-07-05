@@ -15,6 +15,7 @@
 pub mod benchmark;
 
 use crate::config::TestDependencies;
+use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::ErrorsBody;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
@@ -43,6 +44,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::oneshot::Sender;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -53,27 +55,31 @@ pub trait TestDsl {
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
 
-    async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
+    async fn start_worker(&self, component_id: &ComponentId, name: &str)
+        -> crate::Result<WorkerId>;
     async fn try_start_worker(
         &self,
         component_id: &ComponentId,
         name: &str,
-    ) -> Result<WorkerId, Error>;
+    ) -> crate::Result<Result<WorkerId, Error>>;
     async fn start_worker_with(
         &self,
         component_id: &ComponentId,
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
-    ) -> WorkerId;
+    ) -> crate::Result<WorkerId>;
     async fn try_start_worker_with(
         &self,
         component_id: &ComponentId,
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
-    ) -> Result<WorkerId, Error>;
-    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> Option<WorkerMetadata>;
+    ) -> crate::Result<Result<WorkerId, Error>>;
+    async fn get_worker_metadata(
+        &self,
+        worker_id: &WorkerId,
+    ) -> crate::Result<Option<WorkerMetadata>>;
     async fn get_workers_metadata(
         &self,
         component_id: &ComponentId,
@@ -81,48 +87,48 @@ pub trait TestDsl {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> (Option<ScanCursor>, Vec<WorkerMetadata>);
-    async fn delete_worker(&self, worker_id: &WorkerId);
+    ) -> crate::Result<(Option<ScanCursor>, Vec<WorkerMetadata>)>;
+    async fn delete_worker(&self, worker_id: &WorkerId) -> crate::Result<()>;
 
     async fn invoke(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<(), Error>;
+    ) -> crate::Result<Result<(), Error>>;
     async fn invoke_with_key(
         &self,
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<(), Error>;
+    ) -> crate::Result<Result<(), Error>>;
     async fn invoke_and_await(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<Vec<Value>, Error>;
+    ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_with_key(
         &self,
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<Vec<Value>, Error>;
+    ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_stdio(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: serde_json::Value,
-    ) -> Result<serde_json::Value, Error>;
+    ) -> crate::Result<Result<serde_json::Value, Error>>;
     async fn invoke_and_await_custom(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<Value>,
         cc: CallingConvention,
-    ) -> Result<Vec<Value>, Error>;
+    ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_custom_with_key(
         &self,
         worker_id: &WorkerId,
@@ -130,7 +136,7 @@ pub trait TestDsl {
         function_name: &str,
         params: Vec<Value>,
         cc: CallingConvention,
-    ) -> Result<Vec<Value>, Error>;
+    ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent>;
     async fn capture_output_forever(
         &self,
@@ -144,11 +150,19 @@ pub trait TestDsl {
         worker_id: &WorkerId,
     ) -> UnboundedReceiver<Option<LogEvent>>;
     async fn log_output(&self, worker_id: &WorkerId);
-    async fn resume(&self, worker_id: &WorkerId);
-    async fn interrupt(&self, worker_id: &WorkerId);
-    async fn simulated_crash(&self, worker_id: &WorkerId);
-    async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
-    async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
+    async fn resume(&self, worker_id: &WorkerId) -> crate::Result<()>;
+    async fn interrupt(&self, worker_id: &WorkerId) -> crate::Result<()>;
+    async fn simulated_crash(&self, worker_id: &WorkerId) -> crate::Result<()>;
+    async fn auto_update_worker(
+        &self,
+        worker_id: &WorkerId,
+        target_version: ComponentVersion,
+    ) -> crate::Result<()>;
+    async fn manual_update_worker(
+        &self,
+        worker_id: &WorkerId,
+        target_version: ComponentVersion,
+    ) -> crate::Result<()>;
 }
 
 #[async_trait]
@@ -187,18 +201,20 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .await
     }
 
-    async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId {
-        self.start_worker_with(component_id, name, vec![], HashMap::new())
-            .await
+    async fn start_worker(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+    ) -> crate::Result<WorkerId> {
+        TestDsl::start_worker_with(self, component_id, name, vec![], HashMap::new()).await
     }
 
     async fn try_start_worker(
         &self,
         component_id: &ComponentId,
         name: &str,
-    ) -> Result<WorkerId, Error> {
-        self.try_start_worker_with(component_id, name, vec![], HashMap::new())
-            .await
+    ) -> crate::Result<Result<WorkerId, Error>> {
+        TestDsl::try_start_worker_with(self, component_id, name, vec![], HashMap::new()).await
     }
 
     async fn start_worker_with(
@@ -207,10 +223,9 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
-    ) -> WorkerId {
-        self.try_start_worker_with(component_id, name, args, env)
-            .await
-            .expect("Failed to start worker")
+    ) -> crate::Result<WorkerId> {
+        let result = TestDsl::try_start_worker_with(self, component_id, name, args, env).await?;
+        Ok(result.map_err(|err| anyhow!("Failed to start worker: {err:?}"))?)
     }
 
     async fn try_start_worker_with(
@@ -219,7 +234,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         name: &str,
         args: Vec<String>,
         env: HashMap<String, String>,
-    ) -> Result<WorkerId, Error> {
+    ) -> crate::Result<Result<WorkerId, Error>> {
         let response = self
             .worker_service()
             .create_worker(LaunchNewWorkerRequest {
@@ -228,49 +243,52 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 args,
                 env,
             })
-            .await;
+            .await?;
 
         match response.result {
             None => panic!("No response from create_worker"),
-            Some(launch_new_worker_response::Result::Success(response)) => Ok(response
+            Some(launch_new_worker_response::Result::Success(response)) => Ok(Ok(response
                 .worker_id
-                .expect("No worker id in response")
+                .ok_or(anyhow!("worker_id is missing"))?
                 .try_into()
-                .expect("Failed to parse result worker id")),
+                .map_err(|err: String| anyhow!(err))?)),
             Some(launch_new_worker_response::Result::Error(WorkerError { error: Some(error) })) => {
-                Err(error)
+                Ok(Err(error))
             }
             Some(launch_new_worker_response::Result::Error(_)) => {
-                panic!("Error response without any details")
+                Err(anyhow!("Error response without any details"))
             }
         }
     }
 
-    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> Option<WorkerMetadata> {
+    async fn get_worker_metadata(
+        &self,
+        worker_id: &WorkerId,
+    ) -> crate::Result<Option<WorkerMetadata>> {
         let worker_id: golem_api_grpc::proto::golem::worker::WorkerId = worker_id.clone().into();
         let response = self
             .worker_service()
             .get_worker_metadata(GetWorkerMetadataRequest {
                 worker_id: Some(worker_id),
             })
-            .await;
+            .await?;
 
         match response.result {
-            None => panic!("No response from connect_worker"),
+            None => Err(anyhow!("No response from connect_worker")),
             Some(get_worker_metadata_response::Result::Success(metadata)) => {
-                Some(to_worker_metadata(&metadata))
+                Ok(Some(to_worker_metadata(&metadata)))
             }
             Some(get_worker_metadata_response::Result::Error(WorkerError {
                 error: Some(Error::NotFound { .. }),
-            })) => None,
+            })) => Ok(None),
             Some(get_worker_metadata_response::Result::Error(WorkerError {
                 error:
                     Some(Error::InternalError(WorkerExecutionError {
                         error: Some(worker_execution_error::Error::WorkerNotFound(_)),
                     })),
-            })) => None,
+            })) => Ok(None),
             Some(get_worker_metadata_response::Result::Error(error)) => {
-                panic!("Failed to get worker metadata: {error:?}")
+                Err(anyhow!("Failed to get worker metadata: {error:?}"))
             }
         }
     }
@@ -282,7 +300,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> (Option<ScanCursor>, Vec<WorkerMetadata>) {
+    ) -> crate::Result<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         let component_id: golem_api_grpc::proto::golem::component::ComponentId =
             component_id.clone().into();
         let response = self
@@ -294,27 +312,29 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 count,
                 precise,
             })
-            .await;
+            .await?;
         match response.result {
-            None => panic!("No response from get_workers_metadata"),
+            None => Err(anyhow!("No response from get_workers_metadata")),
             Some(get_workers_metadata_response::Result::Success(
                 GetWorkersMetadataSuccessResponse { workers, cursor },
-            )) => (
+            )) => Ok((
                 cursor.map(|c| c.into()),
                 workers.iter().map(to_worker_metadata).collect(),
-            ),
+            )),
             Some(get_workers_metadata_response::Result::Error(error)) => {
-                panic!("Failed to get workers metadata: {error:?}")
+                Err(anyhow!("Failed to get workers metadata: {error:?}"))
             }
         }
     }
 
-    async fn delete_worker(&self, worker_id: &WorkerId) {
-        self.worker_service()
+    async fn delete_worker(&self, worker_id: &WorkerId) -> crate::Result<()> {
+        let _ = self
+            .worker_service()
             .delete_worker(DeleteWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
             })
-            .await;
+            .await?;
+        Ok(())
     }
 
     async fn invoke(
@@ -322,7 +342,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<(), Error> {
+    ) -> crate::Result<Result<(), Error>> {
         let invoke_response = self
             .worker_service()
             .invoke(InvokeRequest {
@@ -334,14 +354,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 }),
                 context: None,
             })
-            .await;
+            .await?;
 
         match invoke_response.result {
-            None => panic!("No response from invoke_worker"),
-            Some(invoke_response::Result::Success(_)) => Ok(()),
-            Some(invoke_response::Result::Error(WorkerError { error: Some(error) })) => Err(error),
+            None => Err(anyhow!("No response from invoke_worker")),
+            Some(invoke_response::Result::Success(_)) => Ok(Ok(())),
+            Some(invoke_response::Result::Error(WorkerError { error: Some(error) })) => {
+                Ok(Err(error))
+            }
             Some(invoke_response::Result::Error(_)) => {
-                panic!("Empty error response from invoke_worker")
+                Err(anyhow!("Empty error response from invoke_worker"))
             }
         }
     }
@@ -352,7 +374,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<(), Error> {
+    ) -> crate::Result<Result<(), Error>> {
         let invoke_response = self
             .worker_service()
             .invoke(InvokeRequest {
@@ -364,14 +386,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 }),
                 context: None,
             })
-            .await;
+            .await?;
 
         match invoke_response.result {
-            None => panic!("No response from invoke_worker"),
-            Some(invoke_response::Result::Success(_)) => Ok(()),
-            Some(invoke_response::Result::Error(WorkerError { error: Some(error) })) => Err(error),
+            None => Err(anyhow!("No response from invoke_worker")),
+            Some(invoke_response::Result::Success(_)) => Ok(Ok(())),
+            Some(invoke_response::Result::Error(WorkerError { error: Some(error) })) => {
+                Ok(Err(error))
+            }
             Some(invoke_response::Result::Error(_)) => {
-                panic!("Empty error response from invoke_worker")
+                Err(anyhow!("Empty error response from invoke_worker"))
             }
         }
     }
@@ -381,8 +405,9 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<Vec<Value>, Error> {
-        self.invoke_and_await_custom(
+    ) -> crate::Result<Result<Vec<Value>, Error>> {
+        TestDsl::invoke_and_await_custom(
+            self,
             worker_id,
             function_name,
             params,
@@ -397,8 +422,9 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<Vec<Value>, Error> {
-        self.invoke_and_await_custom_with_key(
+    ) -> crate::Result<Result<Vec<Value>, Error>> {
+        TestDsl::invoke_and_await_custom_with_key(
+            self,
             worker_id,
             idempotency_key,
             function_name,
@@ -413,20 +439,21 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: &WorkerId,
         function_name: &str,
         params: serde_json::Value,
-    ) -> Result<serde_json::Value, Error> {
+    ) -> crate::Result<Result<serde_json::Value, Error>> {
         let json_string = params.to_string();
-        self.invoke_and_await_custom(
+        let vals = TestDsl::invoke_and_await_custom(
+            self,
             worker_id,
             function_name,
             vec![Value::String(json_string)],
             CallingConvention::Stdio,
         )
-            .await
-            .and_then(|vals| {
-                if vals.len() == 1 {
-                    let value_opt = &vals[0];
+        .await?;
+        Ok(vals.and_then(|vals| {
+        if vals.len() == 1 {
+            let value_opt = &vals[0];
 
-                    match value_opt {
+            match value_opt {
                         Value::String(s) => {
                             if s.is_empty() {
                                 Ok(serde_json::Value::Null)
@@ -439,11 +466,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                             ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }
                         )),
                     }
-                } else {
-                    Err(Error::BadRequest(
+        } else {
+            Err(Error::BadRequest(
                         ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }))
-                }
-            })
+        }}))
     }
 
     async fn invoke_and_await_custom(
@@ -452,9 +478,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         function_name: &str,
         params: Vec<Value>,
         cc: CallingConvention,
-    ) -> Result<Vec<Value>, Error> {
+    ) -> crate::Result<Result<Vec<Value>, Error>> {
         let idempotency_key = IdempotencyKey::fresh();
-        self.invoke_and_await_custom_with_key(
+        TestDsl::invoke_and_await_custom_with_key(
+            self,
             worker_id,
             &idempotency_key,
             function_name,
@@ -471,7 +498,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         function_name: &str,
         params: Vec<Value>,
         cc: CallingConvention,
-    ) -> Result<Vec<Value>, Error> {
+    ) -> crate::Result<Result<Vec<Value>, Error>> {
         let invoke_response = self
             .worker_service()
             .invoke_and_await(InvokeAndAwaitRequest {
@@ -484,21 +511,21 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 calling_convention: cc.into(),
                 context: None,
             })
-            .await;
+            .await?;
 
         match invoke_response.result {
-            None => panic!("No response from invoke_and_await"),
-            Some(invoke_and_await_response::Result::Success(response)) => Ok(response
+            None => Err(anyhow!("No response from invoke_and_await")),
+            Some(invoke_and_await_response::Result::Success(response)) => Ok(Ok(response
                 .result
                 .into_iter()
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<Value>, String>>()
-                .expect("Invocation result had unexpected format")),
+                .map_err(|err| anyhow!("Invocation result had unexpected format: {err}"))?)),
             Some(invoke_and_await_response::Result::Error(WorkerError { error: Some(error) })) => {
-                Err(error)
+                Ok(Err(error))
             }
             Some(invoke_and_await_response::Result::Error(_)) => {
-                panic!("Empty error response from invoke_and_await")
+                Err(anyhow!("Empty error response from invoke_and_await"))
             }
         }
     }
@@ -512,7 +539,8 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 .connect_worker(ConnectWorkerRequest {
                     worker_id: Some(worker_id.clone().into()),
                 })
-                .await;
+                .await
+                .expect("Failed to connect worker");
 
             while let Some(event) = response.message().await.expect("Failed to get message") {
                 debug!("Received event: {:?}", event);
@@ -543,7 +571,8 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                     .connect_worker(ConnectWorkerRequest {
                         worker_id: Some(worker_id.clone().into()),
                     })
-                    .await;
+                    .await
+                    .expect("Failed to connect worker");
 
                 loop {
                     select! {
@@ -588,7 +617,8 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 .connect_worker(ConnectWorkerRequest {
                     worker_id: Some(worker_id.clone().into()),
                 })
-                .await;
+                .await
+                .expect("Failed to connect to worker");
 
             while let Some(event) = response.message().await.expect("Failed to get message") {
                 debug!("Received event: {:?}", event);
@@ -610,7 +640,8 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 .connect_worker(ConnectWorkerRequest {
                     worker_id: Some(worker_id.clone().into()),
                 })
-                .await;
+                .await
+                .expect("Failed to connect worker");
 
             while let Some(event) = response.message().await.expect("Failed to get message") {
                 info!("Received event: {:?}", event);
@@ -618,36 +649,36 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         });
     }
 
-    async fn resume(&self, worker_id: &WorkerId) {
+    async fn resume(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let response = self
             .worker_service()
             .resume_worker(ResumeWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
             })
-            .await;
+            .await?;
 
         match response.result {
-            None => panic!("No response from connect_worker"),
-            Some(resume_worker_response::Result::Success(_)) => {}
+            None => Err(anyhow!("No response from connect_worker")),
+            Some(resume_worker_response::Result::Success(_)) => Ok(()),
             Some(resume_worker_response::Result::Error(error)) => {
-                panic!("Failed to connect worker: {error:?}")
+                Err(anyhow!("Failed to connect worker: {error:?}"))
             }
         }
     }
 
-    async fn interrupt(&self, worker_id: &WorkerId) {
+    async fn interrupt(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let response = self
             .worker_service()
             .interrupt_worker(InterruptWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
                 recover_immediately: false,
             })
-            .await;
+            .await?;
 
         match response {
             InterruptWorkerResponse {
                 result: Some(interrupt_worker_response::Result::Success(_)),
-            } => {}
+            } => Ok(()),
             InterruptWorkerResponse {
                 result: Some(interrupt_worker_response::Result::Error(error)),
             } => panic!("Failed to interrupt worker: {error:?}"),
@@ -655,27 +686,31 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         }
     }
 
-    async fn simulated_crash(&self, worker_id: &WorkerId) {
+    async fn simulated_crash(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let response = self
             .worker_service()
             .interrupt_worker(InterruptWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
                 recover_immediately: true,
             })
-            .await;
+            .await?;
 
         match response {
             InterruptWorkerResponse {
                 result: Some(interrupt_worker_response::Result::Success(_)),
-            } => {}
+            } => Ok(()),
             InterruptWorkerResponse {
                 result: Some(interrupt_worker_response::Result::Error(error)),
-            } => panic!("Failed to crash worker: {error:?}"),
-            _ => panic!("Failed to crash worker: unknown error"),
+            } => Err(anyhow!("Failed to crash worker: {error:?}")),
+            _ => Err(anyhow!("Failed to crash worker: unknown error")),
         }
     }
 
-    async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion) {
+    async fn auto_update_worker(
+        &self,
+        worker_id: &WorkerId,
+        target_version: ComponentVersion,
+    ) -> crate::Result<()> {
         let response = self
             .worker_service()
             .update_worker(UpdateWorkerRequest {
@@ -683,20 +718,24 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 target_version,
                 mode: UpdateMode::Automatic.into(),
             })
-            .await;
+            .await?;
 
         match response {
             UpdateWorkerResponse {
                 result: Some(update_worker_response::Result::Success(_)),
-            } => {}
+            } => Ok(()),
             UpdateWorkerResponse {
                 result: Some(update_worker_response::Result::Error(error)),
-            } => panic!("Failed to update worker: {error:?}"),
-            _ => panic!("Failed to update worker: unknown error"),
+            } => Err(anyhow!("Failed to update worker: {error:?}")),
+            _ => Err(anyhow!("Failed to update worker: unknown error")),
         }
     }
 
-    async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion) {
+    async fn manual_update_worker(
+        &self,
+        worker_id: &WorkerId,
+        target_version: ComponentVersion,
+    ) -> crate::Result<()> {
         let response = self
             .worker_service()
             .update_worker(UpdateWorkerRequest {
@@ -704,16 +743,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 target_version,
                 mode: UpdateMode::Manual.into(),
             })
-            .await;
+            .await?;
 
         match response {
             UpdateWorkerResponse {
                 result: Some(update_worker_response::Result::Success(_)),
-            } => {}
+            } => Ok(()),
             UpdateWorkerResponse {
                 result: Some(update_worker_response::Result::Error(error)),
-            } => panic!("Failed to update worker: {error:?}"),
-            _ => panic!("Failed to update worker: unknown error"),
+            } => Err(anyhow!("Failed to update worker: {error:?}")),
+            _ => Err(anyhow!("Failed to update worker: unknown error")),
         }
     }
 }
@@ -987,4 +1026,340 @@ fn dump_component_info(path: &Path) {
     info!("Exports of {path:?}: {exports:?}");
     info!("Linear memories of {path:?}: {mems:?}");
     let _ = exports.unwrap();
+}
+
+#[async_trait]
+pub trait TestDslUnsafe {
+    async fn store_component(&self, name: &str) -> ComponentId;
+    async fn store_unique_component(&self, name: &str) -> ComponentId;
+    async fn store_component_unverified(&self, name: &str) -> ComponentId;
+    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
+
+    async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
+    async fn try_start_worker(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+    ) -> Result<WorkerId, Error>;
+    async fn start_worker_with(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> WorkerId;
+    async fn try_start_worker_with(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> Result<WorkerId, Error>;
+    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> Option<WorkerMetadata>;
+    async fn get_workers_metadata(
+        &self,
+        component_id: &ComponentId,
+        filter: Option<WorkerFilter>,
+        cursor: ScanCursor,
+        count: u64,
+        precise: bool,
+    ) -> (Option<ScanCursor>, Vec<WorkerMetadata>);
+    async fn delete_worker(&self, worker_id: &WorkerId) -> ();
+
+    async fn invoke(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<(), Error>;
+    async fn invoke_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<(), Error>;
+    async fn invoke_and_await(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<Vec<Value>, Error>;
+    async fn invoke_and_await_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<Vec<Value>, Error>;
+    async fn invoke_and_await_stdio(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, Error>;
+    async fn invoke_and_await_custom(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<Value>,
+        cc: CallingConvention,
+    ) -> Result<Vec<Value>, Error>;
+    async fn invoke_and_await_custom_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+        cc: CallingConvention,
+    ) -> Result<Vec<Value>, Error>;
+    async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent>;
+    async fn capture_output_forever(
+        &self,
+        worker_id: &WorkerId,
+    ) -> (
+        UnboundedReceiver<Option<LogEvent>>,
+        tokio::sync::oneshot::Sender<()>,
+    );
+    async fn capture_output_with_termination(
+        &self,
+        worker_id: &WorkerId,
+    ) -> UnboundedReceiver<Option<LogEvent>>;
+    async fn log_output(&self, worker_id: &WorkerId);
+    async fn resume(&self, worker_id: &WorkerId);
+    async fn interrupt(&self, worker_id: &WorkerId);
+    async fn simulated_crash(&self, worker_id: &WorkerId);
+    async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
+    async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
+}
+
+#[async_trait]
+impl<T: TestDsl + Sync> TestDslUnsafe for T {
+    async fn store_component(&self, name: &str) -> ComponentId {
+        <T as TestDsl>::store_component(self, name).await
+    }
+
+    async fn store_unique_component(&self, name: &str) -> ComponentId {
+        <T as TestDsl>::store_unique_component(self, name).await
+    }
+
+    async fn store_component_unverified(&self, name: &str) -> ComponentId {
+        <T as TestDsl>::store_component_unverified(self, name).await
+    }
+
+    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
+        <T as TestDsl>::update_component(self, component_id, name).await
+    }
+
+    async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId {
+        <T as TestDsl>::start_worker(self, component_id, name)
+            .await
+            .expect("Failed to start worker")
+    }
+
+    async fn try_start_worker(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+    ) -> Result<WorkerId, Error> {
+        <T as TestDsl>::try_start_worker(self, component_id, name)
+            .await
+            .expect("Failed to start worker")
+    }
+
+    async fn start_worker_with(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> WorkerId {
+        <T as TestDsl>::start_worker_with(self, component_id, name, args, env)
+            .await
+            .expect("Failed to start worker")
+    }
+
+    async fn try_start_worker_with(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> Result<WorkerId, Error> {
+        <T as TestDsl>::try_start_worker_with(self, component_id, name, args, env)
+            .await
+            .expect("Failed to start worker")
+    }
+
+    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> Option<WorkerMetadata> {
+        <T as TestDsl>::get_worker_metadata(self, worker_id)
+            .await
+            .expect("Failed to get worker metadata")
+    }
+
+    async fn get_workers_metadata(
+        &self,
+        component_id: &ComponentId,
+        filter: Option<WorkerFilter>,
+        cursor: ScanCursor,
+        count: u64,
+        precise: bool,
+    ) -> (Option<ScanCursor>, Vec<WorkerMetadata>) {
+        <T as TestDsl>::get_workers_metadata(self, component_id, filter, cursor, count, precise)
+            .await
+            .expect("Failed to get workers metadata")
+    }
+
+    async fn delete_worker(&self, worker_id: &WorkerId) -> () {
+        <T as TestDsl>::delete_worker(self, worker_id)
+            .await
+            .expect("Failed to delete worker")
+    }
+
+    async fn invoke(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<(), Error> {
+        <T as TestDsl>::invoke(self, worker_id, function_name, params)
+            .await
+            .expect("Failed to invoke function")
+    }
+
+    async fn invoke_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<(), Error> {
+        <T as TestDsl>::invoke_with_key(self, worker_id, idempotency_key, function_name, params)
+            .await
+            .expect("Failed to invoke function")
+    }
+
+    async fn invoke_and_await(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<Vec<Value>, Error> {
+        <T as TestDsl>::invoke_and_await(self, worker_id, function_name, params)
+            .await
+            .expect("Failed to invoke function")
+    }
+
+    async fn invoke_and_await_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<Vec<Value>, Error> {
+        <T as TestDsl>::invoke_and_await_with_key(
+            self,
+            worker_id,
+            idempotency_key,
+            function_name,
+            params,
+        )
+        .await
+        .expect("Failed to invoke function")
+    }
+
+    async fn invoke_and_await_stdio(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, Error> {
+        <T as TestDsl>::invoke_and_await_stdio(self, worker_id, function_name, params)
+            .await
+            .expect("Failed to invoke function")
+    }
+
+    async fn invoke_and_await_custom(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<Value>,
+        cc: CallingConvention,
+    ) -> Result<Vec<Value>, Error> {
+        <T as TestDsl>::invoke_and_await_custom(self, worker_id, function_name, params, cc)
+            .await
+            .expect("Failed to invoke function")
+    }
+
+    async fn invoke_and_await_custom_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+        cc: CallingConvention,
+    ) -> Result<Vec<Value>, Error> {
+        <T as TestDsl>::invoke_and_await_custom_with_key(
+            self,
+            worker_id,
+            idempotency_key,
+            function_name,
+            params,
+            cc,
+        )
+        .await
+        .expect("Failed to invoke function")
+    }
+
+    async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent> {
+        <T as TestDsl>::capture_output(self, worker_id).await
+    }
+
+    async fn capture_output_forever(
+        &self,
+        worker_id: &WorkerId,
+    ) -> (UnboundedReceiver<Option<LogEvent>>, Sender<()>) {
+        <T as TestDsl>::capture_output_forever(self, worker_id).await
+    }
+
+    async fn capture_output_with_termination(
+        &self,
+        worker_id: &WorkerId,
+    ) -> UnboundedReceiver<Option<LogEvent>> {
+        <T as TestDsl>::capture_output_with_termination(self, worker_id).await
+    }
+
+    async fn log_output(&self, worker_id: &WorkerId) {
+        <T as TestDsl>::log_output(self, worker_id).await
+    }
+
+    async fn resume(&self, worker_id: &WorkerId) {
+        <T as TestDsl>::resume(self, worker_id)
+            .await
+            .expect("Failed to resume worker")
+    }
+
+    async fn interrupt(&self, worker_id: &WorkerId) {
+        <T as TestDsl>::interrupt(self, worker_id)
+            .await
+            .expect("Failed to interrupt worker")
+    }
+
+    async fn simulated_crash(&self, worker_id: &WorkerId) {
+        <T as TestDsl>::simulated_crash(self, worker_id)
+            .await
+            .expect("Failed to crash worker")
+    }
+
+    async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion) {
+        <T as TestDsl>::auto_update_worker(self, worker_id, target_version)
+            .await
+            .expect("Failed to update worker")
+    }
+
+    async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion) {
+        <T as TestDsl>::manual_update_worker(self, worker_id, target_version)
+            .await
+            .expect("Failed to update worker")
+    }
 }

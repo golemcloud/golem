@@ -15,7 +15,7 @@
 use crate::DEPS;
 use assert2::check;
 
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -32,6 +32,118 @@ use tracing::log::info;
 use warp::http::{Response, StatusCode};
 use warp::hyper::Body;
 use warp::Filter;
+
+#[tokio::test]
+#[tracing::instrument]
+async fn dynamic_worker_creation() {
+    let component_id = DEPS.store_component("environment-service").await;
+    let worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "dynamic-worker-creation-1".to_string(),
+    };
+
+    let args = DEPS
+        .invoke_and_await(&worker_id, "golem:it/api.{get-arguments}", vec![])
+        .await
+        .unwrap();
+    let env = DEPS
+        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+
+    check!(args == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![])))))]);
+    check!(
+        env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+            Value::Tuple(vec![
+                Value::String("GOLEM_WORKER_NAME".to_string()),
+                Value::String("dynamic-worker-creation-1".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_ID".to_string()),
+                Value::String(format!("{}", component_id))
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+                Value::String("0".to_string())
+            ]),
+        ])))))]
+    );
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn counter_resource_test_2() {
+    let component_id = DEPS.store_component("counters").await;
+    let worker_id = DEPS.start_worker(&component_id, "counters-2").await;
+    DEPS.log_output(&worker_id).await;
+
+    let _ = DEPS
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").inc-by}",
+            vec![Value::U64(5)],
+        )
+        .await;
+
+    let _ = DEPS
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").inc-by}",
+            vec![Value::U64(1)],
+        )
+        .await;
+    let _ = DEPS
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").inc-by}",
+            vec![Value::U64(2)],
+        )
+        .await;
+
+    let result1 = DEPS
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+    let result2 = DEPS
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").get-value}",
+            vec![],
+        )
+        .await;
+
+    let _ = DEPS
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").drop}",
+            vec![],
+        )
+        .await;
+    let _ = DEPS
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").drop}",
+            vec![],
+        )
+        .await;
+
+    let result3 = DEPS
+        .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
+        .await;
+
+    check!(result1 == Ok(vec![Value::U64(5)]));
+    check!(result2 == Ok(vec![Value::U64(3)]));
+    check!(
+        result3
+            == Ok(vec![Value::List(vec![
+                Value::Tuple(vec![Value::String("counter1".to_string()), Value::U64(5)]),
+                Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)])
+            ])])
+    );
+}
 
 #[tokio::test]
 #[tracing::instrument]

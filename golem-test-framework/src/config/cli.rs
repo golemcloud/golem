@@ -100,6 +100,10 @@ pub struct CliParams {
     pub verbose: bool,
     #[arg(long, default_value = "false")]
     pub json: bool,
+
+    /// Only display the primary benchmark results (no per-worker measurements, for example)
+    #[arg(long, default_value = "false")]
+    pub primary_only: bool,
 }
 
 impl CliParams {
@@ -117,7 +121,7 @@ impl CliParams {
         if self.verbose {
             Level::DEBUG
         } else {
-            Level::INFO
+            Level::ERROR
         }
     }
 
@@ -226,13 +230,13 @@ pub enum TestMode {
         #[arg(long, default_value = "9100")]
         worker_executor_base_grpc_port: u16,
         #[arg(long, default_value = "false")]
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     },
     #[command()]
     Spawned {
         #[arg(long, default_value = ".")]
         workspace_root: String,
-        #[arg(long, default_value = "target/debug")]
+        #[arg(long, default_value = "target/release")]
         build_target: String,
         #[arg(long, default_value = "6379")]
         redis_port: u16,
@@ -251,7 +255,7 @@ pub enum TestMode {
         #[arg(long, default_value = "9094")]
         component_compilation_service_grpc_port: u16,
         #[arg(long, default_value = "false")]
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
         #[arg(long, default_value = "8082")]
         worker_service_http_port: u16,
         #[arg(long, default_value = "9092")]
@@ -272,7 +276,7 @@ pub enum TestMode {
         #[arg(long, default_value = "")]
         redis_prefix: String,
         #[arg(long, default_value = "false")]
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     },
     #[command()]
     Aws {
@@ -281,36 +285,38 @@ pub enum TestMode {
         #[arg(long, default_value = "")]
         redis_prefix: String,
         #[arg(long, default_value = "false")]
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     },
 }
 
 impl TestMode {
-    pub fn component_compilation_disabled(&self) -> bool {
+    pub fn compilation_service_disabled(&self) -> bool {
         match self {
             TestMode::Provided { .. } => false,
             TestMode::Docker {
-                component_compilation_disabled,
+                compilation_service_disabled,
                 ..
-            } => *component_compilation_disabled,
+            } => *compilation_service_disabled,
             TestMode::Minikube {
-                component_compilation_disabled,
+                compilation_service_disabled,
                 ..
-            } => *component_compilation_disabled,
+            } => *compilation_service_disabled,
             TestMode::Aws {
-                component_compilation_disabled,
+                compilation_service_disabled,
                 ..
-            } => *component_compilation_disabled,
+            } => *compilation_service_disabled,
             TestMode::Spawned {
-                component_compilation_disabled,
+                compilation_service_disabled,
                 ..
-            } => *component_compilation_disabled,
+            } => *compilation_service_disabled,
         }
     }
 }
 
 impl CliTestDependencies {
     pub fn init_logging(params: &CliParams) {
+        // console_subscriber::init();
+
         let ansi_layer = tracing_subscriber::fmt::layer()
             .with_ansi(true)
             .with_filter(
@@ -326,7 +332,7 @@ impl CliTestDependencies {
         redis_prefix: &str,
         worker_executor_base_http_port: u16,
         worker_executor_base_grpc_port: u16,
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     ) -> Self {
         let params_clone = params.clone();
 
@@ -334,7 +340,7 @@ impl CliTestDependencies {
             let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                 Arc::new(DockerPostgresRdb::new(true).await);
 
-            let component_compilation_service = if !component_compilation_disabled {
+            let component_compilation_service = if !compilation_service_disabled {
                 Some((
                     DockerComponentCompilationService::NAME,
                     DockerComponentCompilationService::GRPC_PORT,
@@ -348,6 +354,7 @@ impl CliTestDependencies {
                     component_compilation_service,
                     rdb.clone(),
                     params_clone.service_verbosity(),
+                    true,
                 )
                 .await,
             );
@@ -384,6 +391,7 @@ impl CliTestDependencies {
                 shard_manager.clone(),
                 rdb.clone(),
                 params.service_verbosity(),
+                true,
             )
             .await,
         );
@@ -398,6 +406,7 @@ impl CliTestDependencies {
                     shard_manager.clone(),
                     worker_service.clone(),
                     params.service_verbosity(),
+                    true,
                 )
                 .await,
             );
@@ -428,7 +437,7 @@ impl CliTestDependencies {
         component_service_grpc_port: u16,
         component_compilation_service_http_port: u16,
         component_compilation_service_grpc_port: u16,
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
         worker_service_http_port: u16,
         worker_service_grpc_port: u16,
         worker_service_custom_request_port: u16,
@@ -454,7 +463,7 @@ impl CliTestDependencies {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(DockerPostgresRdb::new(true).await);
 
-                let component_compilation_service_port = if !component_compilation_disabled {
+                let component_compilation_service_port = if !compilation_service_disabled {
                     Some(component_compilation_service_grpc_port)
                 } else {
                     None
@@ -470,6 +479,7 @@ impl CliTestDependencies {
                         params.service_verbosity(),
                         out_level,
                         Level::ERROR,
+                        true,
                     )
                     .await,
                 );
@@ -534,6 +544,7 @@ impl CliTestDependencies {
                 params.service_verbosity(),
                 out_level,
                 Level::ERROR,
+                true,
             )
             .await,
         );
@@ -552,6 +563,7 @@ impl CliTestDependencies {
                     params.service_verbosity(),
                     out_level,
                     Level::ERROR,
+                    true,
                 )
                 .await,
             );
@@ -574,7 +586,7 @@ impl CliTestDependencies {
         cluster_size: usize,
         namespace: &str,
         redis_prefix: &str,
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     ) -> Self {
         let routing_type = K8sRoutingType::Minikube;
         let namespace = K8sNamespace(namespace.to_string());
@@ -587,7 +599,7 @@ impl CliTestDependencies {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
 
-                let component_compilation_service = if !component_compilation_disabled {
+                let component_compilation_service = if !compilation_service_disabled {
                     Some((
                         K8sComponentCompilationService::NAME,
                         K8sComponentCompilationService::GRPC_PORT,
@@ -604,6 +616,7 @@ impl CliTestDependencies {
                         rdb.clone(),
                         timeout,
                         None,
+                        true,
                     )
                     .await,
                 );
@@ -665,6 +678,7 @@ impl CliTestDependencies {
                 rdb.clone(),
                 timeout,
                 None,
+                true,
             )
             .await,
         );
@@ -681,6 +695,7 @@ impl CliTestDependencies {
                     Level::INFO,
                     timeout,
                     None,
+                    true,
                 )
                 .await,
             );
@@ -703,7 +718,7 @@ impl CliTestDependencies {
         cluster_size: usize,
         namespace: &str,
         redis_prefix: &str,
-        component_compilation_disabled: bool,
+        compilation_service_disabled: bool,
     ) -> Self {
         let routing_type = K8sRoutingType::Service;
         let namespace = K8sNamespace(namespace.to_string());
@@ -726,7 +741,7 @@ impl CliTestDependencies {
                     .await,
                 );
 
-                let component_compilation_service = if !component_compilation_disabled {
+                let component_compilation_service = if !compilation_service_disabled {
                     Some((
                         K8sComponentCompilationService::NAME,
                         K8sComponentCompilationService::GRPC_PORT,
@@ -743,6 +758,7 @@ impl CliTestDependencies {
                         rdb.clone(),
                         timeout,
                         service_annotations.clone(),
+                        true,
                     )
                     .await,
                 );
@@ -804,6 +820,7 @@ impl CliTestDependencies {
                 rdb.clone(),
                 timeout,
                 service_annotations.clone(),
+                true,
             )
             .await,
         );
@@ -820,6 +837,7 @@ impl CliTestDependencies {
                     Level::INFO,
                     timeout,
                     service_annotations.clone(),
+                    true,
                 )
                 .await,
             );
@@ -877,12 +895,15 @@ impl CliTestDependencies {
                         *shard_manager_http_port,
                         *shard_manager_grpc_port,
                     ));
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
-                    Arc::new(ProvidedComponentService::new(
+                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                    ProvidedComponentService::new(
                         component_service_host.clone(),
                         *component_service_http_port,
                         *component_service_grpc_port,
-                    ));
+                        true,
+                    )
+                    .await,
+                );
                 let component_compilation_service: Arc<
                     dyn ComponentCompilationService + Send + Sync + 'static,
                 > = Arc::new(ProvidedComponentCompilationService::new(
@@ -890,19 +911,23 @@ impl CliTestDependencies {
                     *component_compilation_service_http_port,
                     *component_compilation_service_grpc_port,
                 ));
-                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
-                    Arc::new(ProvidedWorkerService::new(
+                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+                    ProvidedWorkerService::new(
                         worker_service_host.clone(),
                         *worker_service_http_port,
                         *worker_service_grpc_port,
                         *worker_service_custom_request_port,
-                    ));
+                        true,
+                    )
+                    .await,
+                );
                 let worker_executor_cluster: Arc<
                     dyn WorkerExecutorCluster + Send + Sync + 'static,
                 > = Arc::new(ProvidedWorkerExecutorCluster::new(
                     worker_executor_host.clone(),
                     *worker_executor_http_port,
                     *worker_executor_grpc_port,
+                    true,
                 ));
 
                 Self {
@@ -921,7 +946,7 @@ impl CliTestDependencies {
                 redis_prefix,
                 worker_executor_base_http_port,
                 worker_executor_base_grpc_port,
-                component_compilation_disabled,
+                compilation_service_disabled,
             } => {
                 Self::make_docker(
                     params.clone(),
@@ -929,7 +954,7 @@ impl CliTestDependencies {
                     redis_prefix,
                     *worker_executor_base_http_port,
                     *worker_executor_base_grpc_port,
-                    *component_compilation_disabled,
+                    *compilation_service_disabled,
                 )
                 .await
             }
@@ -944,7 +969,7 @@ impl CliTestDependencies {
                 component_service_grpc_port,
                 component_compilation_service_http_port,
                 component_compilation_service_grpc_port,
-                component_compilation_disabled,
+                compilation_service_disabled,
                 worker_service_http_port,
                 worker_service_grpc_port,
                 worker_service_custom_request_port,
@@ -965,7 +990,7 @@ impl CliTestDependencies {
                     *component_service_grpc_port,
                     *component_compilation_service_http_port,
                     *component_compilation_service_grpc_port,
-                    *component_compilation_disabled,
+                    *compilation_service_disabled,
                     *worker_service_http_port,
                     *worker_service_grpc_port,
                     *worker_service_custom_request_port,
@@ -978,28 +1003,28 @@ impl CliTestDependencies {
             TestMode::Minikube {
                 namespace,
                 redis_prefix,
-                component_compilation_disabled,
+                compilation_service_disabled,
             } => {
                 Self::make_minikube(
                     params.clone(),
                     cluster_size,
                     namespace,
                     redis_prefix,
-                    *component_compilation_disabled,
+                    *compilation_service_disabled,
                 )
                 .await
             }
             TestMode::Aws {
                 namespace,
                 redis_prefix,
-                component_compilation_disabled,
+                compilation_service_disabled,
             } => {
                 Self::make_aws(
                     params.clone(),
                     cluster_size,
                     namespace,
                     redis_prefix,
-                    *component_compilation_disabled,
+                    *compilation_service_disabled,
                 )
                 .await
             }

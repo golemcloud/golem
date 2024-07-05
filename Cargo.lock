@@ -3433,6 +3433,7 @@ dependencies = [
  "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "http 0.2.12",
  "humantime-serde",
  "iso8601-timestamp",
  "lazy_static 1.4.0",
@@ -3533,6 +3534,7 @@ dependencies = [
  "http 0.2.12",
  "serde 1.0.203",
  "thiserror",
+ "tonic",
  "tracing",
 ]
 
@@ -3668,6 +3670,7 @@ dependencies = [
  "clap 4.5.7",
  "cli-table",
  "colored",
+ "console-subscriber",
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
@@ -3897,6 +3900,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes 1.6.0",
+ "console-subscriber",
  "derive_more",
  "figment",
  "futures",
@@ -4648,6 +4652,7 @@ dependencies = [
 name = "integration-tests"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "assert2",
  "async-trait",
  "clap 4.5.7",

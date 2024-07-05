@@ -63,5 +63,9 @@ unsafe fn drop_deps() {
     (*base_deps_ptr).kill_all()
 }
 
+// Note: by having it after DEPS, we don't see logs during setting up the env. But moving it before
+// it crashes the dropping of the tracing subscriber with
+// cannot access a Thread Local Storage value during or after destruction: AccessError
+// This will be solved by our new test library in the future
 #[ctor]
 pub static TRACING: Tracing = Tracing::init();

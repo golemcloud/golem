@@ -12,30 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::ComponentService;
+use crate::components::component_service::{new_client, ComponentService};
 use async_trait::async_trait;
-
+use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
+use tonic::transport::Channel;
 use tracing::info;
 
 pub struct ProvidedComponentService {
     host: String,
     http_port: u16,
     grpc_port: u16,
+    client: Option<ComponentServiceClient<Channel>>,
 }
 
 impl ProvidedComponentService {
-    pub fn new(host: String, http_port: u16, grpc_port: u16) -> Self {
+    pub async fn new(host: String, http_port: u16, grpc_port: u16, shared_client: bool) -> Self {
         info!("Using already running golem-component-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
-            host,
+            host: host.clone(),
             http_port,
             grpc_port,
+            client: if shared_client {
+                Some(new_client(&host, grpc_port).await)
+            } else {
+                None
+            },
         }
     }
 }
 
 #[async_trait]
 impl ComponentService for ProvidedComponentService {
+    async fn client(&self) -> ComponentServiceClient<Channel> {
+        match &self.client {
+            Some(client) => client.clone(),
+            None => new_client(&self.host, self.grpc_port).await,
+        }
+    }
+
     fn private_host(&self) -> String {
         self.host.clone()
     }

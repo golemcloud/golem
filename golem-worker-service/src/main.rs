@@ -16,9 +16,17 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use tokio::select;
 use tracing::error;
+use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
+fn main() -> std::io::Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async_main())
+}
+
+async fn async_main() -> std::io::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
         let services = Services::noop();
         let api_service = make_open_api_service(&services);
@@ -37,6 +45,23 @@ pub async fn app(
 ) -> std::io::Result<()> {
     init_tracing_metrics();
     let config = worker_config.clone();
+
+    if config.enable_tracing_console {
+        // NOTE: also requires RUSTFLAGS="--cfg tokio_unstable" cargo build
+        console_subscriber::init();
+    } else if config.enable_json_log {
+        tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            // .with_span_events(FmtSpan::FULL) // NOTE: enable to see span events
+            .with_env_filter(EnvFilter::from_default_env())
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::from_default_env())
+            .with_ansi(true)
+            .init();
+    }
 
     match config.db.clone() {
         DbConfig::Postgres(c) => {
@@ -121,9 +146,4 @@ fn init_tracing_metrics() {
             .with_reader(exporter)
             .build(),
     );
-
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_ansi(true)
-        .init();
 }

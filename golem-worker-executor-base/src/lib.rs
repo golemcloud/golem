@@ -40,7 +40,7 @@ use tonic::transport::Server;
 use tracing::info;
 use uuid::Uuid;
 use wasmtime::component::Linker;
-use wasmtime::{Config, Engine};
+use wasmtime::{Config, Engine, WasmBacktraceDetails};
 
 use crate::grpc::WorkerExecutorImpl;
 use crate::http_server::HttpServerImpl;
@@ -120,6 +120,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         config.wasm_component_model(true);
         config.epoch_interruption(true);
         config.consume_fuel(true);
+        config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
 
         config
     }
@@ -336,7 +337,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 .expect("Access token must be an UUID"),
         ));
 
-        let events = Arc::new(Events::new());
+        let events = Arc::new(Events::new(
+            golem_config.limits.invocation_result_broadcast_capacity,
+        ));
 
         let services = self
             .create_services(
@@ -371,7 +374,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         info!("Starting gRPC server on port {}", addr.port());
         Server::builder()
-            .concurrency_limit_per_connection(golem_config.limits.concurrency_limit_per_connection)
             .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
             .add_service(reflection_service)
             .add_service(service)

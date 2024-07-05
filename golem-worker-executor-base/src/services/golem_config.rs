@@ -54,7 +54,7 @@ pub struct GolemConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct Limits {
     pub max_active_workers: usize,
-    pub concurrency_limit_per_connection: usize,
+    pub invocation_result_broadcast_capacity: usize,
     pub max_concurrent_streams: u32,
     pub event_broadcast_capacity: usize,
     pub event_history_size: usize,
@@ -67,6 +67,7 @@ pub struct Limits {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ComponentCacheConfig {
     pub max_capacity: usize,
+    pub max_metadata_capacity: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
 }
@@ -178,6 +179,15 @@ impl ShardManagerServiceGrpcConfig {
     pub fn url(&self) -> Url {
         Url::parse(&format!("http://{}:{}", self.host, self.port))
             .expect("Failed to parse shard manager URL")
+    }
+
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build shard manager URI")
     }
 }
 
@@ -327,7 +337,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_active_workers: 1024,
-            concurrency_limit_per_connection: 1024,
+            invocation_result_broadcast_capacity: 100000,
             max_concurrent_streams: 1024,
             event_broadcast_capacity: 16,
             event_history_size: 128,
@@ -342,6 +352,7 @@ impl Default for ComponentCacheConfig {
     fn default() -> Self {
         Self {
             max_capacity: 128,
+            max_metadata_capacity: 16384,
             time_to_idle: Duration::from_secs(12 * 60 * 60),
         }
     }

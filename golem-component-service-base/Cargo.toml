@@ -15,4 +15,5 @@ async-trait = { workspace = true }
 http_02 = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+tonic = { workspace = true }
 tracing = { workspace = true }
