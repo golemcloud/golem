@@ -298,9 +298,14 @@ impl From<WorkerExecutionError> for ResponseMapResult {
                 details: "Unknown worker execution error".to_string(),
             })
         });
-        let result = golem_error.clone().into();
-        debug!("Worker execution error {error:?} mapped to golem error {golem_error:?} and finally {result:?}");
-        result
+        let response_map_result = golem_error.clone().into();
+        debug!(
+            error = format!("{:?}", error),
+            golem_error = golem_error.to_string(),
+            response_map_result = format!("{:?}", response_map_result),
+            "ResponseMapResult from WorkerExecutionError"
+        );
+        response_map_result
     }
 }
 
