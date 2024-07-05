@@ -484,28 +484,34 @@ redis_pid=$!
 
 export RUST_BACKTRACE=1
 
+export GOLEM__TRACING__FILE_DIR=../logs
+export GOLEM__TRACING__FILE__ANSI=true
+export GOLEM__TRACING__FILE__ENABLED=true
+export GOLEM__TRACING__FILE__JSON=false
+export GOLEM__TRACING__STDOUT__ENABLED=false
+
 pushd golem-shard-manager || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn GOLEM_SHARD_MANAGER_PORT=9002 ../target/debug/golem-shard-manager &> ../logs/shard-manager.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn GOLEM_SHARD_MANAGER_PORT=9002 ../target/debug/golem-shard-manager &
 shard_manager_pid=$!
 popd || exit
 
 pushd golem-component-compilation-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-compilation-service &> ../logs/component-compilation-service.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-compilation-service &
 component_compilation_service_pid=$!
 popd || exit
 
 pushd golem-component-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-service &> ../logs/component-service.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-service &
 component_service_pid=$!
 popd || exit
 
 pushd golem-worker-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-worker-service &> ../logs/worker-service.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-worker-service &
 worker_service_pid=$!
 popd || exit
 
 pushd golem-worker-executor || exit
-RUST_LOG=info ../target/debug/worker-executor &> ../logs/worker-executor.log &
+RUST_LOG=info ../target/debug/worker-executor &
 worker_executor_pid=$!
 popd || exit
 
