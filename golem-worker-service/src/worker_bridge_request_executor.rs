@@ -53,7 +53,7 @@ mod internal {
         let worker_id = WorkerId::new(component_id.clone(), worker_name.clone())?;
 
         info!(
-            "Executing request for component: {}, worker: {}, function: {}",
+            "Executing request for component: {}, worker: {}, function: {:?}",
             component_id,
             worker_name.clone(),
             worker_request_params.function_name
