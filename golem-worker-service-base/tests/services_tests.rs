@@ -135,7 +135,7 @@ mod tests {
                 api_definition_repo.clone(),
             ));
 
-        test_definition_create_and_delete(definition_service.clone()).await;
+        test_definition_crud(definition_service.clone()).await;
         test_deployment(definition_service.clone(), deployment_service.clone()).await;
         test_deployment_conflict(definition_service.clone(), deployment_service.clone()).await;
     }
@@ -151,19 +151,19 @@ mod tests {
         let def1 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
-            "/api/get1",
-            "worker1",
-            "[]",
-            "[]",
+            "/api/1/foo/{user-id}",
+            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
+            "[\"${request.path.user-id}\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
             false,
         );
         let def2draft = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
-            "/api/get2",
-            "worker2",
-            "[]",
-            "[]",
+            "/api/2/foo/{user-id}",
+            "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
+            "[ \"data\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
             true,
         );
         let def2 = HttpApiDefinition {
@@ -173,19 +173,19 @@ mod tests {
         let def3 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
-            "/api/get3",
-            "worker3",
-            "[]",
-            "[]",
+            "/api/3/foo/{user-id}?{id}",
+            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
+            "[\"${request.body}\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
             false,
         );
         let def4 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
-            "/api/get4",
-            "worker4",
-            "[]",
-            "[]",
+            "/api/4/foo/{user-id}",
+            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
+            "[\"${request.path.user-id}\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
             false,
         );
 
@@ -420,35 +420,54 @@ mod tests {
         );
     }
 
-    async fn test_definition_create_and_delete(
+    async fn test_definition_crud(
         definition_service: Arc<
             dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
                 + Sync
                 + Send,
         >,
     ) {
-        let def1 = get_api_definition(
+        let def1v1 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/get1",
-            "worker1",
-            "[]",
-            "[]",
+            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
+            "[\"${request.body.foo}\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
+            false,
+        );
+        let def1v1_upd = get_api_definition(
+            &def1v1.id.0,
+            "0.0.1",
+            "/api/get1/1",
+            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
+            "[\"${request.body.foo}\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
             false,
         );
         let def1v2 = get_api_definition(
-            &def1.id.0,
+            &def1v1.id.0,
             "0.0.2",
             "/api/get1/2",
-            "worker1",
-            "[]",
-            "[]",
+            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
+            "[\"${request.body.foo}\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
+            true,
+        );
+
+        let def1v2_upd = get_api_definition(
+            &def1v1.id.0,
+            "0.0.2",
+            "/api/get1/22",
+            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
+            "[\"${request.body.foo}\"]",
+            "{status: if (worker.response.user == admin) then 401 else 200}",
             true,
         );
 
         definition_service
             .create(
-                &def1,
+                &def1v1,
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
@@ -465,19 +484,54 @@ mod tests {
 
         let definitions = definition_service
             .get_all_versions(
-                &def1.id,
+                &def1v1.id,
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
             .await
             .unwrap();
         assert_eq!(definitions.len(), 2);
-        assert!(definitions.contains(&def1) && definitions.contains(&def1v2));
+        assert!(definitions.contains(&def1v1) && definitions.contains(&def1v2));
+
+        let update_result = definition_service
+            .update(
+                &def1v1_upd,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await;
+
+        assert!(update_result.is_err());
+        assert_eq!(
+            update_result.unwrap_err().to_string(),
+            ApiDefinitionError::<RouteValidationError>::ApiDefinitionNotDraft(def1v1_upd.id)
+                .to_string()
+        );
+
+        let update_result = definition_service
+            .update(
+                &def1v2_upd,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await;
+        assert!(update_result.is_ok());
+
+        let definitions = definition_service
+            .get_all_versions(
+                &def1v1.id,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(definitions.len(), 2);
+        assert!(definitions.contains(&def1v1) && definitions.contains(&def1v2_upd));
 
         definition_service
             .delete(
-                &def1.id,
-                &def1.version,
+                &def1v1.id,
+                &def1v1.version,
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
@@ -495,7 +549,7 @@ mod tests {
 
         let definitions = definition_service
             .get_all_versions(
-                &def1.id,
+                &def1v1.id,
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
@@ -547,7 +601,7 @@ mod tests {
             binding:
               componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
               workerName: '{}'
-              functionName: golem:it/api/get-cart-contents
+              functionName: golem:it/api.{{get-cart-contents}}
               functionParams: {}
               response: '{}'
         "#,
