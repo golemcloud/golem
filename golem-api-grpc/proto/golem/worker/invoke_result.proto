@@ -169,23 +169,17 @@ message FieldType {
     AnalysedType type = 2;
 }
 
-message VariantType {
-    repeated VariantTypeItem items = 1;
-}
-
 message VariantTypeItem {
     string name = 1;
     AnalysedType type = 2;
 }
 
 message AnalysedResourceId {
-    // Define fields according to your needs
+    uint64 value = 1;
 }
 
-message AnalysedResourceMode {
-    // Define fields according to your needs
+enum AnalysedResourceMode {
+    OWNED = 0;
+    BORROWED = 1;
 }
 
-message Uri {
-    // Define fields according to your needs
-}
