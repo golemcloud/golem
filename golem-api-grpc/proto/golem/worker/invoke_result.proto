@@ -7,3 +7,185 @@ import "wasm/rpc/val.proto";
 message InvokeResult {
   repeated wasm.rpc.Val result = 1;
 }
+
+message InvokeResultTyped {
+  TypeAnnotatedValue result = 1;
+}
+
+message TypeAnnotatedValue {
+    oneof value {
+        bool bool_value = 1;
+        int32 s8_value = 2;
+        uint32 u8_value = 3;
+        int32 s16_value = 4;
+        uint32 u16_value = 5;
+        int32 s32_value = 6;
+        uint32 u32_value = 7;
+        int64 s64_value = 8;
+        uint64 u64_value = 9;
+        float f32_value = 10;
+        double f64_value = 11;
+        string chr_value = 12; // Since protobuf doesn't support char, we use string
+        string str_value = 13;
+        List list_value = 14;
+        Tuple tuple_value = 15;
+        Record record_value = 16;
+        Flags flags_value = 17;
+        Variant variant_value = 18;
+        Enum enum_value = 19;
+        Option option_value = 20;
+        Result result_value = 21;
+        Handle handle_value = 22;
+    }
+}
+
+message List {
+    AnalysedType typ = 1;
+    repeated TypeAnnotatedValue values = 2;
+}
+
+message Tuple {
+    repeated AnalysedType typ = 1;
+    repeated TypeAnnotatedValue value = 2;
+}
+
+message Record {
+    repeated Field typ = 1;
+    repeated Field value = 2;
+}
+
+message Flags {
+    repeated string typ = 1;
+    repeated string values = 2;
+}
+
+message Variant {
+    repeated VariantType typ = 1;
+    string case_name = 2;
+    TypeAnnotatedValue case_value = 3;
+}
+
+message Enum {
+    repeated string typ = 1;
+    string value = 2;
+}
+
+message Option {
+    AnalysedType typ = 1;
+    TypeAnnotatedValue value = 2;
+}
+
+message Result {
+    AnalysedType ok = 1;
+    AnalysedType error = 2;
+    ResultValue value = 3;
+}
+
+message Handle {
+    AnalysedResourceId id = 1;
+    AnalysedResourceMode resource_mode = 2;
+    string uri = 3;
+    uint64 resource_id = 4;
+}
+
+message Field {
+    string name = 1;
+    AnalysedType type = 2;
+}
+
+message VariantType {
+    string name = 1;
+    AnalysedType type = 2;
+}
+
+message ResultValue {
+    TypeAnnotatedValue ok = 1;
+    TypeAnnotatedValue error = 2;
+}
+
+message AnalysedType {
+    oneof type {
+        bool bool_type = 1;
+        int32 s8_type = 2;
+        uint32 u8_type = 3;
+        int32 s16_type = 4;
+        uint32 u16_type = 5;
+        int32 s32_type = 6;
+        uint32 u32_type = 7;
+        int64 s64_type = 8;
+        uint64 u64_type = 9;
+        float f32_type = 10;
+        double f64_type = 11;
+        string chr_type = 12;
+        string str_type = 13;
+        ListType list_type = 14;
+        TupleType tuple_type = 15;
+        RecordType record_type = 16;
+        FlagsType flags_type = 17;
+        EnumType enum_type = 18;
+        OptionType option_type = 19;
+        ResultType result_type = 20;
+        VariantType variant_type = 21;
+        ResourceType resource_type = 22;
+    }
+}
+
+message ListType {
+    AnalysedType item_type = 1;
+}
+
+message TupleType {
+    repeated AnalysedType items = 1;
+}
+
+message RecordType {
+    repeated FieldType fields = 1;
+}
+
+message FlagsType {
+    repeated string flags = 1;
+}
+
+message EnumType {
+    repeated string values = 1;
+}
+
+message OptionType {
+    AnalysedType item_type = 1;
+}
+
+message ResultType {
+    AnalysedType ok = 1;
+    AnalysedType error = 2;
+}
+
+message ResourceType {
+    AnalysedResourceId id = 1;
+    AnalysedResourceMode mode = 2;
+}
+
+message FieldType {
+    string name = 1;
+    AnalysedType type = 2;
+}
+
+message VariantType {
+    repeated VariantTypeItem items = 1;
+}
+
+message VariantTypeItem {
+    string name = 1;
+    AnalysedType type = 2;
+}
+
+message AnalysedResourceId {
+    // Define fields according to your needs
+}
+
+message AnalysedResourceMode {
+    // Define fields according to your needs
+}
+
+message Uri {
+    // Define fields according to your needs
+}
