@@ -19,11 +19,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
+use golem_service_base::model::{
+    ComponentMetadata, ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
+};
 use sqlx::{Database, Pool, Row};
 use uuid::Uuid;
 
+use crate::model::Component;
 use crate::repo::RepoError;
-use golem_service_base::model::*;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ComponentRecord {
@@ -35,7 +38,11 @@ pub struct ComponentRecord {
     pub metadata: Vec<u8>,
 }
 
-impl TryFrom<ComponentRecord> for Component {
+impl<Namespace> TryFrom<ComponentRecord> for Component<Namespace>
+where
+    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
+    <Namespace as TryFrom<String>>::Error: Display + Send + Sync + 'static,
+{
     type Error = String;
     fn try_from(value: ComponentRecord) -> Result<Self, Self::Error> {
         let metadata: ComponentMetadata = record_metadata_serde::deserialize(&value.metadata)?;
@@ -49,7 +56,9 @@ impl TryFrom<ComponentRecord> for Component {
         let user_component_id: UserComponentId = UserComponentId {
             versioned_component_id: versioned_component_id.clone(),
         };
+        let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
         Ok(Component {
+            namespace,
             component_name: ComponentName(value.name),
             component_size: value.size as u64,
             metadata,
@@ -69,18 +78,20 @@ impl From<ComponentRecord> for VersionedComponentId {
     }
 }
 
-impl ComponentRecord {
-    pub fn new<Namespace: Display>(
-        namespace: Namespace,
-        component: Component,
-    ) -> Result<Self, String> {
-        let metadata = record_metadata_serde::serialize(&component.metadata)?;
+impl<Namespace> TryFrom<Component<Namespace>> for ComponentRecord
+where
+    Namespace: Display,
+{
+    type Error = String;
+
+    fn try_from(value: Component<Namespace>) -> Result<Self, Self::Error> {
+        let metadata = record_metadata_serde::serialize(&value.metadata)?;
         Ok(Self {
-            namespace: namespace.to_string(),
-            component_id: component.versioned_component_id.component_id.0,
-            name: component.component_name.0,
-            size: component.component_size as i32,
-            version: component.versioned_component_id.version as i64,
+            namespace: value.namespace.to_string(),
+            component_id: value.versioned_component_id.component_id.0,
+            name: value.component_name.0,
+            size: value.component_size as i32,
+            version: value.versioned_component_id.version as i64,
             metadata: metadata.into(),
         })
     }
@@ -343,10 +354,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                 WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
             "#
         )
-        .bind(namespace)
-        .bind(component_id)
-        .execute(&mut *transaction)
-        .await?;
+            .bind(namespace)
+            .bind(component_id)
+            .execute(&mut *transaction)
+            .await?;
 
         sqlx::query("DELETE FROM components WHERE namespace = $1 AND component_id = $2")
             .bind(namespace)
@@ -568,10 +579,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                 WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
             "#
         )
-        .bind(namespace)
-        .bind(component_id)
-        .execute(&mut *transaction)
-        .await?;
+            .bind(namespace)
+            .bind(component_id)
+            .execute(&mut *transaction)
+            .await?;
 
         sqlx::query("DELETE FROM components WHERE namespace = $1 AND component_id = $2")
             .bind(namespace)

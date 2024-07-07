@@ -22,9 +22,12 @@ use golem_common::model::ComponentId;
 use tap::TapFallible;
 use tracing::{error, info};
 
-use crate::repo::component::{ComponentRecord, ComponentRepo};
+use crate::model::Component;
+use crate::repo::component::ComponentRepo;
 use crate::repo::RepoError;
-use golem_service_base::model::*;
+use golem_service_base::model::{
+    ComponentMetadata, ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
+};
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
 
@@ -58,11 +61,15 @@ impl From<RepoError> for ComponentError {
     }
 }
 
-pub fn create_new_component(
+pub fn create_new_component<Namespace>(
     component_id: &ComponentId,
     component_name: &ComponentName,
     data: &[u8],
-) -> Result<Component, ComponentProcessingError> {
+    namespace: &Namespace,
+) -> Result<Component<Namespace>, ComponentProcessingError>
+where
+    Namespace: Eq + Clone + Send + Sync,
+{
     let metadata = process_component(data)?;
 
     let versioned_component_id = VersionedComponentId {
@@ -78,6 +85,7 @@ pub fn create_new_component(
     };
 
     Ok(Component {
+        namespace: namespace.clone(),
         component_name: component_name.clone(),
         component_size: data.len() as u64,
         metadata,
@@ -95,14 +103,14 @@ pub trait ComponentService<Namespace> {
         component_name: &ComponentName,
         data: Vec<u8>,
         namespace: &Namespace,
-    ) -> Result<Component, ComponentError>;
+    ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn update(
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
         namespace: &Namespace,
-    ) -> Result<Component, ComponentError>;
+    ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn download(
         &self,
@@ -129,7 +137,7 @@ pub trait ComponentService<Namespace> {
         &self,
         component_name: Option<ComponentName>,
         namespace: &Namespace,
-    ) -> Result<Vec<Component>, ComponentError>;
+    ) -> Result<Vec<Component<Namespace>>, ComponentError>;
 
     async fn find_id_by_name(
         &self,
@@ -141,19 +149,19 @@ pub trait ComponentService<Namespace> {
         &self,
         component_id: &VersionedComponentId,
         namespace: &Namespace,
-    ) -> Result<Option<Component>, ComponentError>;
+    ) -> Result<Option<Component<Namespace>>, ComponentError>;
 
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
         namespace: &Namespace,
-    ) -> Result<Option<Component>, ComponentError>;
+    ) -> Result<Option<Component<Namespace>>, ComponentError>;
 
     async fn get(
         &self,
         component_id: &ComponentId,
         namespace: &Namespace,
-    ) -> Result<Vec<Component>, ComponentError>;
+    ) -> Result<Vec<Component<Namespace>>, ComponentError>;
 
     async fn get_namespace(
         &self,
@@ -193,7 +201,7 @@ where
         component_name: &ComponentName,
         data: Vec<u8>,
         namespace: &Namespace,
-    ) -> Result<Component, ComponentError> {
+    ) -> Result<Component<Namespace>, ComponentError> {
         info!(
             "Creating component - namespace: {}, id: {}, name: {}",
             namespace,
@@ -205,7 +213,7 @@ where
             .await?
             .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
-        let component = create_new_component(component_id, component_name, &data)?;
+        let component = create_new_component(component_id, component_name, &data, namespace)?;
 
         info!(
             "Uploaded component - namespace: {}, id: {}, version: 0, exports {:?}",
@@ -216,7 +224,9 @@ where
             self.upload_protected_component(&component.protected_component_id, data)
         )?;
 
-        let record = ComponentRecord::new(namespace, component.clone())
+        let record = component
+            .clone()
+            .try_into()
             .map_err(|e| ComponentError::internal(e, "Failed to convert record"))?;
 
         self.component_repo.create(&record).await?;
@@ -233,7 +243,7 @@ where
         component_id: &ComponentId,
         data: Vec<u8>,
         namespace: &Namespace,
-    ) -> Result<Component, ComponentError> {
+    ) -> Result<Component<Namespace>, ComponentError> {
         info!(
             "Updating component - namespace: {}, id: {}",
             namespace, component_id
@@ -275,7 +285,9 @@ where
             metadata,
             ..next_component
         };
-        let record = ComponentRecord::new(namespace, component.clone())
+        let record = component
+            .clone()
+            .try_into()
             .map_err(|e| ComponentError::internal(e, "Failed to convert record"))?;
 
         self.component_repo.create(&record).await?;
@@ -445,7 +457,7 @@ where
         &self,
         component_name: Option<ComponentName>,
         namespace: &Namespace,
-    ) -> Result<Vec<Component>, ComponentError> {
+    ) -> Result<Vec<Component<Namespace>>, ComponentError> {
         let cn = component_name.clone().map_or("N/A".to_string(), |n| n.0);
         info!(
             "Find component by name - namespace: {}, name: {}",
@@ -465,10 +477,10 @@ where
             }
         };
 
-        let values: Vec<Component> = records
+        let values: Vec<Component<Namespace>> = records
             .iter()
             .map(|d| d.clone().try_into())
-            .collect::<Result<Vec<Component>, _>>()
+            .collect::<Result<Vec<Component<Namespace>>, _>>()
             .map_err(|e| ComponentError::internal(e, "Failed to convert record".to_string()))?;
 
         Ok(values)
@@ -478,7 +490,7 @@ where
         &self,
         component_id: &ComponentId,
         namespace: &Namespace,
-    ) -> Result<Vec<Component>, ComponentError> {
+    ) -> Result<Vec<Component<Namespace>>, ComponentError> {
         info!(
             "Getting component - namespace: {}, id: {}",
             namespace, component_id
@@ -488,10 +500,10 @@ where
             .get(namespace.to_string().as_str(), &component_id.0)
             .await?;
 
-        let values: Vec<Component> = records
+        let values: Vec<Component<Namespace>> = records
             .iter()
             .map(|d| d.clone().try_into())
-            .collect::<Result<Vec<Component>, _>>()
+            .collect::<Result<Vec<Component<Namespace>>, _>>()
             .map_err(|e| ComponentError::internal(e, "Failed to convert record".to_string()))?;
 
         Ok(values)
@@ -501,7 +513,7 @@ where
         &self,
         component_id: &VersionedComponentId,
         namespace: &Namespace,
-    ) -> Result<Option<Component>, ComponentError> {
+    ) -> Result<Option<Component<Namespace>>, ComponentError> {
         info!(
             "Getting component - namespace: {}, id: {}, version: {}",
             namespace, component_id.component_id, component_id.version
@@ -531,7 +543,7 @@ where
         &self,
         component_id: &ComponentId,
         namespace: &Namespace,
-    ) -> Result<Option<Component>, ComponentError> {
+    ) -> Result<Option<Component<Namespace>>, ComponentError> {
         info!(
             "Getting component - namespace: {}, id: {}, version: latest",
             namespace, component_id
@@ -628,9 +640,10 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
         component_id: &ComponentId,
         component_name: &ComponentName,
         _data: Vec<u8>,
-        _namespace: &Namespace,
-    ) -> Result<Component, ComponentError> {
+        namespace: &Namespace,
+    ) -> Result<Component<Namespace>, ComponentError> {
         let fake_component = Component {
+            namespace: namespace.clone(),
             component_name: component_name.clone(),
             component_size: 0,
             metadata: ComponentMetadata {
@@ -663,9 +676,10 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
         &self,
         component_id: &ComponentId,
         _data: Vec<u8>,
-        _namespace: &Namespace,
-    ) -> Result<Component, ComponentError> {
+        namespace: &Namespace,
+    ) -> Result<Component<Namespace>, ComponentError> {
         let fake_component = Component {
+            namespace: namespace.clone(),
             component_name: ComponentName("fake".to_string()),
             component_size: 0,
             metadata: ComponentMetadata {
@@ -733,7 +747,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
         &self,
         _component_name: Option<ComponentName>,
         _namespace: &Namespace,
-    ) -> Result<Vec<Component>, ComponentError> {
+    ) -> Result<Vec<Component<Namespace>>, ComponentError> {
         Ok(vec![])
     }
 
@@ -741,7 +755,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
         &self,
         _component_id: &VersionedComponentId,
         _namespace: &Namespace,
-    ) -> Result<Option<Component>, ComponentError> {
+    ) -> Result<Option<Component<Namespace>>, ComponentError> {
         Ok(None)
     }
 
@@ -749,7 +763,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
         &self,
         _component_id: &ComponentId,
         _namespace: &Namespace,
-    ) -> Result<Option<Component>, ComponentError> {
+    ) -> Result<Option<Component<Namespace>>, ComponentError> {
         Ok(None)
     }
 
@@ -757,7 +771,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
         &self,
         _component_id: &ComponentId,
         _namespace: &Namespace,
-    ) -> Result<Vec<Component>, ComponentError> {
+    ) -> Result<Vec<Component<Namespace>>, ComponentError> {
         Ok(vec![])
     }
 

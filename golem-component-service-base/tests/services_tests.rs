@@ -5,9 +5,8 @@ mod tests {
     use golem_service_base::db;
 
     use golem_common::model::ComponentId;
-    use golem_component_service_base::repo::component::{
-        ComponentRecord, ComponentRepo, DbComponentRepo,
-    };
+    use golem_component_service_base::model::Component;
+    use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
     use golem_component_service_base::service::component::{
         create_new_component, ComponentService, ComponentServiceDefault,
     };
@@ -295,19 +294,24 @@ mod tests {
         let data = get_component_data("shopping-cart");
 
         let component1 =
-            create_new_component(&ComponentId::new_v4(), &component_name1, &data).unwrap();
+            create_new_component(&ComponentId::new_v4(), &component_name1, &data, &namespace1)
+                .unwrap();
 
         let result1 = component_repo
-            .create(&ComponentRecord::new(namespace1.clone(), component1.clone()).unwrap())
+            .create(&component1.clone().try_into().unwrap())
             .await;
         let result2 = component_repo
-            .create(
-                &ComponentRecord::new(namespace1.clone(), component1.clone().next_version())
-                    .unwrap(),
-            )
+            .create(&component1.clone().next_version().try_into().unwrap())
             .await;
         let result3 = component_repo
-            .create(&ComponentRecord::new(namespace2.clone(), component1.clone()).unwrap())
+            .create(
+                &Component {
+                    namespace: namespace2.clone(),
+                    ..component1.clone()
+                }
+                .try_into()
+                .unwrap(),
+            )
             .await;
 
         assert!(result1.is_ok());
@@ -325,18 +329,27 @@ mod tests {
         let data = get_component_data("shopping-cart");
 
         let component1 =
-            create_new_component(&ComponentId::new_v4(), &component_name1, &data).unwrap();
+            create_new_component(&ComponentId::new_v4(), &component_name1, &data, &namespace1)
+                .unwrap();
         let component2 =
-            create_new_component(&ComponentId::new_v4(), &component_name1, &data).unwrap();
+            create_new_component(&ComponentId::new_v4(), &component_name1, &data, &namespace2)
+                .unwrap();
 
         let result1 = component_repo
-            .create(&ComponentRecord::new(namespace1.clone(), component1.clone()).unwrap())
+            .create(&component1.clone().try_into().unwrap())
             .await;
         let result2 = component_repo
-            .create(&ComponentRecord::new(namespace1.clone(), component2.clone()).unwrap())
+            .create(
+                &Component {
+                    namespace: namespace2.clone(),
+                    ..component1.clone()
+                }
+                .try_into()
+                .unwrap(),
+            )
             .await;
         let result3 = component_repo
-            .create(&ComponentRecord::new(namespace2.clone(), component2.clone()).unwrap())
+            .create(&component2.clone().try_into().unwrap())
             .await;
 
         assert!(result1.is_ok());
@@ -351,10 +364,11 @@ mod tests {
         let data = get_component_data("shopping-cart");
 
         let component1 =
-            create_new_component(&ComponentId::new_v4(), &component_name1, &data).unwrap();
+            create_new_component(&ComponentId::new_v4(), &component_name1, &data, &namespace1)
+                .unwrap();
 
         let result1 = component_repo
-            .create(&ComponentRecord::new(namespace1.clone(), component1.clone()).unwrap())
+            .create(&component1.clone().try_into().unwrap())
             .await;
 
         let result2 = component_repo

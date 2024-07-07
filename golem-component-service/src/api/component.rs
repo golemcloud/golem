@@ -116,7 +116,7 @@ impl ComponentApi {
                 &DefaultNamespace::default(),
             )
             .await?;
-        Ok(Json(response))
+        Ok(Json(response.into()))
     }
 
     #[oai(
@@ -134,7 +134,7 @@ impl ComponentApi {
             .component_service
             .update(&component_id.0, data, &DefaultNamespace::default())
             .await?;
-        Ok(Json(response))
+        Ok(Json(response.into()))
     }
 
     #[oai(
@@ -169,7 +169,7 @@ impl ComponentApi {
             .component_service
             .get(&component_id.0, &DefaultNamespace::default())
             .await?;
-        Ok(Json(response))
+        Ok(Json(response.into_iter().map(|c| c.into()).collect()))
     }
 
     #[oai(
@@ -202,7 +202,7 @@ impl ComponentApi {
             .await?;
 
         match response {
-            Some(component) => Ok(Json(component)),
+            Some(component) => Ok(Json(component.into())),
             None => Err(ComponentError::NotFound(Json(ErrorBody {
                 error: "Component not found".to_string(),
             }))),
@@ -224,7 +224,7 @@ impl ComponentApi {
             .await?;
 
         match response {
-            Some(component) => Ok(Json(component)),
+            Some(component) => Ok(Json(component.into())),
             None => Err(ComponentError::NotFound(Json(ErrorBody {
                 error: "Component not found".to_string(),
             }))),
@@ -241,6 +241,6 @@ impl ComponentApi {
             .find_by_name(component_name.0, &DefaultNamespace::default())
             .await?;
 
-        Ok(Json(response))
+        Ok(Json(response.into_iter().map(|c| c.into()).collect()))
     }
 }
