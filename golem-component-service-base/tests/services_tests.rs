@@ -225,6 +225,26 @@ mod tests {
         assert_eq!(component2_result.unwrap(), DefaultNamespace::default());
 
         let component1_result = component_service
+            .download(
+                &component1v2.versioned_component_id.component_id,
+                Some(component1v2.versioned_component_id.version),
+                &DefaultNamespace::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!component1_result.is_empty());
+
+        let component2_result = component_service
+            .download(
+                &component2.versioned_component_id.component_id,
+                None,
+                &DefaultNamespace::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!component2_result.is_empty());
+
+        let component1_result = component_service
             .find_id_by_name(&component1.component_name, &DefaultNamespace::default())
             .await
             .unwrap();

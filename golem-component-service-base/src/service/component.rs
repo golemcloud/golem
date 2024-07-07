@@ -45,7 +45,7 @@ pub enum ComponentError {
 impl ComponentError {
     fn internal<E, C>(error: E, context: C) -> Self
     where
-        E: Display + std::fmt::Debug + Send + Sync + 'static,
+        E: Display + Debug + Send + Sync + 'static,
         C: Display + Send + Sync + 'static,
     {
         ComponentError::Internal(anyhow::Error::msg(error).context(context))
@@ -295,10 +295,19 @@ where
     ) -> Result<Vec<u8>, ComponentError> {
         let versioned_component_id = {
             match version {
-                Some(version) => VersionedComponentId {
-                    component_id: component_id.clone(),
-                    version,
-                },
+                Some(version) => {
+                    let stored_namespace: Option<Namespace> =
+                        self.get_namespace(component_id).await?;
+                    match stored_namespace {
+                        Some(stored_namespace) if stored_namespace == namespace.clone() => {
+                            VersionedComponentId {
+                                component_id: component_id.clone(),
+                                version,
+                            }
+                        }
+                        _ => return Err(ComponentError::UnknownComponentId(component_id.clone())),
+                    }
+                }
                 None => self
                     .component_repo
                     .get_latest_version(namespace.to_string().as_str(), &component_id.0)
@@ -331,10 +340,19 @@ where
     ) -> Result<ByteStream, ComponentError> {
         let versioned_component_id = {
             match version {
-                Some(version) => VersionedComponentId {
-                    component_id: component_id.clone(),
-                    version,
-                },
+                Some(version) => {
+                    let stored_namespace: Option<Namespace> =
+                        self.get_namespace(component_id).await?;
+                    match stored_namespace {
+                        Some(stored_namespace) if stored_namespace == namespace.clone() => {
+                            VersionedComponentId {
+                                component_id: component_id.clone(),
+                                version,
+                            }
+                        }
+                        _ => return Err(ComponentError::UnknownComponentId(component_id.clone())),
+                    }
+                }
                 None => self
                     .component_repo
                     .get_latest_version(namespace.to_string().as_str(), &component_id.0)
@@ -351,7 +369,6 @@ where
         let id = ProtectedComponentId {
             versioned_component_id,
         };
-
         let stream = self
             .object_store
             .get_stream(&self.get_protected_object_store_key(&id))
